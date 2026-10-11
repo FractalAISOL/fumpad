@@ -16,7 +16,10 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 
+import bs58 from "bs58";
+
 import {
+  accountDiscriminator,
   type ClaimQueueAccount,
   type CoinAccount,
   decodeClaimQueue,
@@ -35,6 +38,7 @@ import {
 } from "./accounts.js";
 import {
   CU,
+  FUMPAD_PROGRAM_ID,
   MAX_QUEUE_ENTRIES_PER_TX,
   PUMPSWAP_DEFAULT_FEE_BPS,
   PUMPSWAP_FEE_CONFIG,
@@ -71,6 +75,7 @@ import { computeBudgetIxs, createAtaIdempotentIx } from "./instructions/spl.js";
 import type { PoolReserves } from "./math/pumpswap.js";
 import {
   coinAddresses,
+  coinAta,
   coinPda,
   globalPda,
   poolAuthorityPda,
@@ -88,6 +93,9 @@ export interface ClientOptions {
   /** Priority fee (micro-lamports per CU) added to every built transaction. */
   priorityMicroLamports?: number;
 }
+
+/** Ticket.status byte: 8 disc + bump 1 + owner 32 + mint 32 + seq 8 + tokens 8 + original 8 + price 16 + usd 8 + ts 8. */
+export const TICKET_STATUS_OFFSET = 129;
 
 export interface BuiltTx {
   instructions: TransactionInstruction[];
@@ -375,22 +383,53 @@ export class FumpadClient {
   }
 
   /**
-   * process_queue over the first `maxTriples` (≤ 13) queue entries, in queue order.
-   * Owners' ATAs are (re)created idempotently first so payouts land directly instead of
-   * in escrow (D16: a missing ATA now escrows rather than failing the crank).
+   * process_queue over the first `maxEntries` (≤ 13) queue entries, in queue order. Create
+   * missing owner ATAs first with `buildCreateAtas` (separate tx: 13 quadruples + owners
+   * would exceed 64 account locks) so payouts land directly instead of in escrow (D16).
    */
-  async buildProcessQueue(a: { cranker: PublicKey; mint: PublicKey; maxEntries?: number; maxTriples?: number }): Promise<BuiltTx | null> {
+  async buildProcessQueue(a: { cranker: PublicKey; mint: PublicKey; maxEntries?: number }): Promise<(BuiltTx & { owners: PublicKey[] }) | null> {
     const q = await this.claimQueue(a.mint);
     if (!q || q.len === 0) return null;
-    const entries = q.entries.slice(0, Math.min(a.maxTriples ?? MAX_QUEUE_ENTRIES_PER_TX, MAX_QUEUE_ENTRIES_PER_TX));
-    const owners = [...new Map(entries.map((e) => [e.owner.toBase58(), e.owner])).values()];
+    const entries = q.entries.slice(0, Math.min(a.maxEntries ?? MAX_QUEUE_ENTRIES_PER_TX, MAX_QUEUE_ENTRIES_PER_TX));
     return {
-      instructions: [
-        ...this.cb(CU.processQueue),
-        ...owners.map((o) => createAtaIdempotentIx(a.cranker, o, a.mint, TOKEN_2022_PROGRAM_ID)),
-        processQueueIx({ cranker: a.cranker, mint: a.mint, maxEntries: a.maxEntries ?? entries.length, entries }),
-      ],
+      owners: [...new Map(entries.map((e) => [e.owner.toBase58(), e.owner])).values()],
+      instructions: [...this.cb(CU.processQueue), processQueueIx({ cranker: a.cranker, mint: a.mint, maxEntries: entries.length, entries })],
     };
+  }
+
+  /** Idempotent create of owners' Token-2022 ATAs for `mint` that don't exist yet (≤ 8 per tx). */
+  async buildCreateAtas(a: { payer: PublicKey; mint: PublicKey; owners: PublicKey[] }): Promise<BuiltTx[]> {
+    const atas = a.owners.map((o) => coinAta(o, a.mint));
+    const infos = await this.connection.getMultipleAccountsInfo(atas, this.commitment);
+    const missing = a.owners.filter((_, i) => !infos[i]);
+    const out: BuiltTx[] = [];
+    for (let i = 0; i < missing.length; i += 8) {
+      out.push({ instructions: missing.slice(i, i + 8).map((o) => createAtaIdempotentIx(a.payer, o, a.mint, TOKEN_2022_PROGRAM_ID)) });
+    }
+    return out;
+  }
+
+  // ── scans (getProgramAccounts) ─────────────────────────────────────────────
+
+  /** Every Coin account (keeper discovery; the indexer DB is the scalable alternative). */
+  async scanCoins(): Promise<CoinAccount[]> {
+    const disc = accountDiscriminator("Coin");
+    const res = await this.connection.getProgramAccounts(FUMPAD_PROGRAM_ID, {
+      commitment: this.commitment,
+      filters: [{ memcmp: { offset: 0, bytes: bs58.encode(disc) } }],
+    });
+    return res.map((r) => decodeCoin(new Uint8Array(r.account.data)));
+  }
+
+  /** Open tickets (status byte at offset 129 = Open), optionally for one mint. */
+  async scanOpenTickets(mint?: PublicKey): Promise<{ key: PublicKey; ticket: TicketAccount }[]> {
+    const filters: { memcmp: { offset: number; bytes: string } }[] = [
+      { memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Ticket")) } },
+      { memcmp: { offset: TICKET_STATUS_OFFSET, bytes: bs58.encode(Uint8Array.from([0])) } },
+    ];
+    if (mint) filters.push({ memcmp: { offset: 41, bytes: mint.toBase58() } });
+    const res = await this.connection.getProgramAccounts(FUMPAD_PROGRAM_ID, { commitment: this.commitment, filters });
+    return res.map((r) => ({ key: r.pubkey, ticket: decodeTicket(new Uint8Array(r.account.data)) }));
   }
 
   /** WSOL ATA a PumpSwap buyback-fee recipient must have (exists on mainnet/devnet; local validators need it). */

@@ -10,6 +10,7 @@ export * from "./borsh.js";
 export * from "./client.js";
 export * from "./coder.js";
 export * from "./constants.js";
+export * from "./errors.js";
 export * from "./events.js";
 export * from "./instructions/index.js";
 export * from "./math/index.js";
