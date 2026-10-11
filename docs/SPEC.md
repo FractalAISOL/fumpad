@@ -16,7 +16,7 @@ Status: v0.2 — matches the merged contracts · 2026-10-11 · Source concept: `
 | D8 | Graduation fee = **0 SOL** during beta (covers nothing but rent; param stays tunable). |
 | D9 | Creator exclusion is **wallet-based**; suspected creator alt wallets are flagged publicly and excluded from leaderboards, not blocked from claiming. |
 | D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). Rule and analysis: §5.3. |
-| D11 | **LP locked forever, fees skimmed.** At graduation the LP tokens go to a separate, **immutable** `fumpad_lp_locker` program (upgrade authority removed at deploy) instead of being burned. It can only skim fee growth (principal measured in √k per LP stays constant); skimmed base tokens go to the coin's reward pool and skimmed SOL is split 60/40 platform/creator, ≈50/30/20 by value. Earns PumpSwap's 0.20% LP fee on all post-graduation volume, including trades routed by other apps. |
+| D11 | **LP locked forever, fees skimmed.** At graduation the LP tokens go to a separate, **immutable** `fumpad_lp_locker` program (upgrade authority removed at deploy) instead of being burned. It can only skim fee growth (principal measured in √k per LP — `Pool.lp_supply` as denominator — stays constant, re-checked after every skim); skimmed base tokens go to the coin's reward pool and skimmed SOL is split 60/40 platform/creator, ≈50/30/20 by value. Earns PumpSwap's 0.20% LP fee on all post-graduation volume, including trades routed by other apps. Details §3.1. |
 | D12 | **Slippage-fair floor.** Refines D10: ticket price = max(execution price, reference × execution ÷ pre-trade spot), rounded up. Honest sellers get their real fill; a staged crash makes the ratio ≈ 1 so the floor stays at the reference. Residual: an inventory-backed sell-big-then-rebuy-elsewhere round trip is priced like an honest exit of that size (bounded, costs ≈1.85% of the sale) — §5.3. |
 
 ## 1. Verified facts (Phase 0 check)
@@ -25,7 +25,8 @@ Status: v0.2 — matches the merged contracts · 2026-10-11 · Source concept: `
 - Non-canonical pools (not created by pump's migrate) pay **0.20% LP + 0.05% protocol = 0.25%**; no creator fee; pump's market-cap fee tiers apply only to canonical pools.
 - Supports Token-2022 base mints.
 - **Risk:** PumpSwap has shipped several breaking account-list upgrades (e.g. Apr 28, Sep 1). Its admin can also change fees or disable instructions. → Router must be upgrade-tolerant (§5.2), and the design keeps a venue abstraction (Raydium CPMM / Meteora fallback).
-- Pump.fun reference curve: 1B supply, 6 decimals, virtual 30 SOL / 1,073M tokens, 793.1M sold on curve, ~85 SOL raised at completion, LP burned.
+- Pump.fun reference curve: 1B supply, 6 decimals, virtual 30 SOL / 1,073M tokens, 793.1M sold on curve, ~85 SOL raised at completion, LP burned. (FUMPAD locks its LP instead, D11.)
+- PumpSwap LP (checked against the real program): `create_pool` mints `lp_supply` LP (9 decimals) to the creator minus a small permanently locked minimum; `withdraw` pays `lp_in × reserve ÷ Pool.lp_supply` and accepts destination token accounts the signer doesn't own; `Pool.lp_supply` ignores direct burns (stays at the minted total after every LP is burned); no fees on deposit/withdraw.
 
 ## 2. Architecture
 
@@ -37,14 +38,15 @@ Status: v0.2 — matches the merged contracts · 2026-10-11 · Source concept: `
  (Phantom…) │                 │ Postgres       │
             │                 └───────▲────────┘
             ▼                         │ events
-   ┌──────────────────── fumpad program (Anchor, single program) ─────────────────────┐
+   ┌──────────────────── fumpad program (Anchor, upgradeable by multisig) ────────────┐
    │ curve  │ router (post-grad) │ rewards (tickets, claims, queue) │ oracle (samples) │
-   └────┬───────────────┬──────────────────────────────────────────────────▲──────────┘
-        │ CPI           │ CPI                                             │ signed samples
-   Token-2022       PumpSwap AMM                Pyth SOL/USD          keeper service
+   └────┬───────────────┬─────────┬────────────────────────────────────────▲──────────┘
+        │ CPI           │ CPI     │ CPI lock (graduate only)               │ signed samples
+   Token-2022       PumpSwap AMM ◄┼─ withdraw ── fumpad_lp_locker          keeper service
+                                  └────────────► (IMMUTABLE, ~200 lines)   Pyth SOL/USD
 ```
 
-One program, four modules. A single program keeps trust boundaries simple (no cross-program auth) and gives auditors one surface. Modules share state definitions fixed in Phase 0 so agents can build them in parallel.
+One main program, four modules, plus a tiny immutable satellite. The main program keeps trust boundaries simple and gives auditors one surface; modules share state definitions fixed in Phase 0 so agents can build them in parallel. `fumpad_lp_locker` (D11) is separate on purpose: it holds every pool's LP, so it must be *unchangeable* — no admin, no upgrade authority — while the main program stays upgradeable. Its only trust link is one-way and hard-coded: it accepts `lock` only from FUMPAD's pool-authority PDA and pays skims only to FUMPAD-derived accounts.
 
 ## 3. Token & curve
 
@@ -52,7 +54,17 @@ One program, four modules. A single program keeps trust boundaries simple (no cr
 - **Allocation at launch:** 50M (5%) → coin's reward pool vault · ~753.4M → curve · ~196.6M → reserved for PumpSwap LP.
 - **Curve:** constant product on virtual reserves (pump.fun style). Initial virtual SOL 30, initial virtual tokens **~1,019.4M** (re-derived so the graduation price equals the LP price with 950M non-pool supply). Start→graduation price ratio ≈ 14.7x. All parameters live in `Global` so the simulation can tune them.
 - **Completion:** the curve completes when its **real tokens are exhausted**: the buy that would take more than what is left is partially filled (charged exactly the cost of the remaining tokens) and the coin becomes `Complete` (no trading). The parameters make that happen at ≈85 SOL raised (`graduation_lamports` is a sanity bound, not the trigger).
-- **Graduation:** anyone calls `graduate`, which creates the PumpSwap pool (index 0, creator = program PDA, coin_creator = default) with the **whole curve vault** (= `lp_supply`) + raised SOL minus the graduation fee, and **burns the LP tokens**. The caller pays PumpSwap's account rent (~0.01 SOL net; 0.05 SOL is lent to the PDA and the unused part returned in the same instruction).
+- **Graduation:** anyone calls `graduate`, which creates the PumpSwap pool (index 0, creator = program PDA, coin_creator = default) with the **whole curve vault** (= `lp_supply`) + raised SOL minus the graduation fee, and **locks every LP token** in the immutable `fumpad_lp_locker` (D11, CPI `lock`; replaces the burn): the LP lands in a vault owned by the locker's PDA and a `Lock` account ["lock", pool] records the principal. Afterwards LP mint supply == the locker's balance. The caller pays PumpSwap's account rent plus the Lock and LP-vault rent (~0.01 SOL net; 0.05 SOL is lent to the PDA and the unused part returned in the same instruction). ~300–310k CU; the transaction is 1011 bytes.
+
+### 3.1 LP locker (D11)
+
+`programs/fumpad_lp_locker` — two instructions, no admin, no config, nothing closable, upgrade authority removed at deploy (CONTRACTS.md).
+
+- **Principal in √k units.** The value of one LP token, as PumpSwap's `withdraw` pays it, is `r = √(base × quote) ÷ Pool.lp_supply` (base = base-vault balance; quote = min(vault + `virtual_quote_reserves`, vault − waiting protocol/creator fees), i.e. never more than real liquidity). `Pool.lp_supply` — not the LP mint supply — is the right denominator: `withdraw` divides by it, and it ignores direct burns, so a burned LP's share stays in the pool unclaimed; dividing by the (smaller) mint supply would overstate `r` and let a skim take principal. (The code uses max(`lp_supply`, mint supply) — identical today, and a guard if a PumpSwap layout change ever broke the `lp_supply` read.) At lock: `P = held₀ × ⌈√k₀⌉ ÷ L₀`, fixed forever.
+- **Why √k per LP only grows:** swaps add the 0.20% LP fee to k; proportional deposits and withdrawals by other LPs keep `r` (PumpSwap rounds both in the pool's favour); donations add to it; sweeping v2 waiting fees doesn't move effective reserves. It is price-independent (a swap without fee leaves √k unchanged), so moving the price can't fake growth, and a proportional withdraw can't be sandwiched.
+- **`skim` (permissionless):** `keep = ⌈P × L ÷ ⌊√k⌋⌉ + keep/2²⁰ + 1` (errs toward skimming less); withdraws `held − keep` LP if ≥ 0.001 LP (dust threshold) via PumpSwap `withdraw` (accounts passed through like the router; pool, user = locker PDA, mints, LP vault, both destinations and both pool vaults validated; results measured by balance deltas; LP burned must equal exactly the amount asked). Then it re-measures and **reverts unless the LP left is still worth ≥ P** (exact 256-bit comparison). Base tokens go to the coin's reward vault `["reward_vault", mint]`, WSOL to `ATA(["coin", mint], WSOL)` — both derived from the hard-coded FUMPAD program id and stored in `Lock` at lock time; the caller prepends an idempotent create of the WSOL ATA. ~75k CU.
+- **`settle_lp_fees` (FUMPAD, permissionless):** closes `ATA(coin, WSOL)` to the caller, who forwards exactly the unwrapped SOL to the Coin (keeping the ATA's rent reserve — the same caller paid it in the skim, so a keeper doing skim + settle in one transaction nets zero), credited **60% platform / 40% creator**. Coin lamport invariant preserved. Emits `LpFeesSettled`. ~16k CU.
+- **Nothing releases principal.** The vault's owner is the locker PDA; the only code that signs for it is the `withdraw` CPI in `skim`, for `held − keep` LP, followed by the principal check. If PumpSwap changes or disables `withdraw`, skims fail and the LP simply stays locked.
 - Math in u128, rounding always in the protocol's favor. Property tests: k never decreases, no free tokens, sum of balances conserved.
 
 ## 4. Fees (1% of SOL side, every FUMPAD trade, pre- and post-graduation)
@@ -66,6 +78,7 @@ One program, four modules. A single program keeps trust boundaries simple (no cr
 - **Pre-graduation buyback:** inline. The program buys from its own curve into the pool vault within the same instruction.
 - **Post-graduation buyback:** SOL accrues in the coin's buyback vault; a permissionless `execute_buyback` crank swaps it on PumpSwap only when spot is within ±3% of the 30-min median (blocks sandwich setups), in slices ≤ 0.5% of pool depth.
 - Fee bps and split are global params (admin, timelocked).
+- **LP fees (D11), on ALL post-graduation PumpSwap volume** — FUMPAD router, Jupiter, bots, anyone: the locked LP earns PumpSwap's 0.20% LP fee (≈100% of the pool's LP). `skim` withdraws the growth at the pool's ratio (≈ half the value in tokens, half in SOL): tokens → reward pool; SOL → `settle_lp_fees` → 60% platform / 40% creator. By value ≈ **50 / 30 / 20**, the same split as the trading fee. The 60/40 is a constant (`LP_FEE_PLATFORM_SHARE_BPS`), not a param.
 
 ## 5. Modules
 
@@ -132,12 +145,13 @@ Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no 
 
 ## 6. Admin & safety
 - `Global.admin` = Squads multisig. Program upgrade authority = the same multisig.
+- `fumpad_lp_locker`: **no** upgrade authority (removed right after deploy, `solana program set-upgrade-authority <id> --final`), no admin, no instruction besides `lock`/`skim`. Upgrading `fumpad` can't touch locked LP: the locker only ever pays FUMPAD-derived accounts and only fee growth.
 - 48h timelock on fee/param changes.
 - Pause flags: `pause_launch`, `pause_trade`, `pause_claims`. Pausing never blocks sells on graduated coins via PumpSwap directly.
 - Every state change emits an Anchor event (`emit_cpi!`) — the indexer's sole source of truth.
 
 ## 7. Off-chain
-- **Keeper (TS):** observation sampling, `process_queue`, `execute_buyback`, `graduate` cranks. Runs on Railway, health alarms to Telegram.
+- **Keeper (TS):** observation sampling, `process_queue`, `execute_buyback`, `graduate` cranks, and per graduated coin a periodic **create-ATA + `skim` + `settle_lp_fees`** in one transaction (936 bytes; skip when `NothingToSkim`). Runs on Railway, health alarms to Telegram.
 - **Indexer/API (TS, Postgres):** Helius stream → events → tables (coins, trades, tickets, claims, queue, samples, users). REST + WebSocket feed.
   - Off-chain flagging: rebuys made elsewhere, linked-wallet clusters (funding-graph heuristics). Flagged wallets are shown publicly and excluded from leaderboards; their claims are not blocked.
   - Game layer: levels, achievements, leaderboards (off-chain, derived from events).
@@ -150,7 +164,7 @@ Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no 
   - queue fairness with skip-ahead
   - rent and close paths
   - graduation price continuity
-- LiteSVM end-to-end on one real coin (`tests/src/e2e_tests.rs`): launch → curve trades → graduate → post-grad trades → sampling → claim / queue / buyback / crank → fees → expiry. D10/D12 exploit scenarios: `tests/src/d10_tests.rs`.
+- LiteSVM end-to-end on one real coin (`tests/src/e2e_tests.rs`): launch → curve trades → graduate (LP locked) → post-grad trades → sampling → claim / queue / buyback / crank → outside (non-FUMPAD) PumpSwap volume → skim → settle → fees → expiry. D10/D12 exploit scenarios: `tests/src/d10_tests.rs`. LP locker (third-party deposits/withdrawals/burns, big swaps both ways, donations, repeated skims, account substitution, lock gating, tx sizes): `tests/src/locker_tests.rs`; √k accounting property tests in the locker crate.
 - Devnet end-to-end: the same flow against live PumpSwap and Pyth.
 - An independent red-team agent reviews each module before it's marked done.
 - **Simulation (Python):** agent-based model of pool solvency across volume and price paths and attacker mixes. Outputs: % of claims paid, time in queue, pool depletion, sensitivity to the 10x / 10% / 5% / fee parameters. No revenue projections.
