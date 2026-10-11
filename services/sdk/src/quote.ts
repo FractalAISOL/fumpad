@@ -148,7 +148,8 @@ export function quoteSwapSell(pool: PoolReserves, p: Params, tokensIn: bigint, v
   const gross = v.quoteOut; // what lands in the user's WSOL (after PumpSwap's fee)
   const fee = computeFee(gross, p);
   const exec = tokensIn > 0n ? (priceQ64(gross, tokensIn) ?? 0n) : spot;
-  const after: PoolReserves = { base: pool.base + tokensIn, quote: pool.quote - v.grossQuote + (v.venueFee * 20n) / 25n };
+  // LP part of the fee stays in the pool; protocol part is excluded from effective reserves.
+  const after: PoolReserves = { base: pool.base + tokensIn, quote: pool.quote - v.grossQuote + (v.venueFee * 5n) / 6n };
   return {
     venue: "pumpswap",
     tokensIn,

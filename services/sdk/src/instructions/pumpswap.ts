@@ -64,6 +64,16 @@ export function parseGlobalConfigFees(globalConfigData: Uint8Array): { lpFeeBps:
   };
 }
 
+/**
+ * Pump Fees `FeeConfig.flat_fees` (non-pump pools — every FUMPAD pool): 8 disc | bump |
+ * admin | flat_fees {lp, protocol, creator: u64}. The AMM reads the fee schedule from
+ * here (v2 trades), not from GlobalConfig.
+ */
+export function parseFeeConfigFlatFees(feeConfigData: Uint8Array): { lpFeeBps: bigint; protocolFeeBps: bigint; creatorFeeBps: bigint } {
+  const dv = new DataView(feeConfigData.buffer, feeConfigData.byteOffset, feeConfigData.byteLength);
+  return { lpFeeBps: dv.getBigUint64(41, true), protocolFeeBps: dv.getBigUint64(49, true), creatorFeeBps: dv.getBigUint64(57, true) };
+}
+
 /** `buyback_fee_recipient` account = WSOL ATA of one of the buyback recipient wallets (must exist). */
 export function buybackFeeRecipientAta(recipientWallet: PublicKey): PublicKey {
   return ata(recipientWallet, WSOL_MINT, TOKEN_PROGRAM_ID);

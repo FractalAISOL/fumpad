@@ -90,8 +90,11 @@ export const PUMPSWAP_IX = {
   withdraw: Uint8Array.from([183, 18, 70, 156, 148, 109, 161, 34]),
 } as const;
 export const PUMPSWAP_POOL_DISCRIMINATOR = Uint8Array.from([241, 154, 109, 4, 17, 177, 109, 188]);
-/** Non-canonical pool fee: 0.20% LP + 0.05% protocol (SPEC §1). Live values: GlobalConfig. */
-export const PUMPSWAP_DEFAULT_FEE_BPS = 25n;
+/**
+ * Fallback PumpSwap fee for non-pump pools. Live value: Pump Fees `FeeConfig.flat_fees`
+ * (devnet dump: 0.25% LP + 0.05% protocol = 30 bps; SPEC §1 quotes 0.20 + 0.05).
+ */
+export const PUMPSWAP_DEFAULT_FEE_BPS = 30n;
 
 /**
  * Compute-unit limits. Measured on solana-test-validator against the real PumpSwap
@@ -105,9 +108,9 @@ export const CU = {
   sell: 200_000,
   createCoinAndBuy: 350_000,
   graduate: 400_000,
-  swapBuy: 400_000,
-  swapSell: 400_000,
-  executeBuyback: 400_000,
+  swapBuy: 250_000,
+  swapSell: 250_000,
+  executeBuyback: 250_000,
   recordSamplesPerCoin: 30_000,
   recordSamplesBase: 20_000,
   claim: 200_000,

@@ -10,6 +10,7 @@ import {
   type Keypair,
   type PublicKey,
   type Signer,
+  SYSVAR_CLOCK_PUBKEY,
   type TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
@@ -34,6 +35,8 @@ import {
 } from "./accounts.js";
 import {
   CU,
+  PUMPSWAP_DEFAULT_FEE_BPS,
+  PUMPSWAP_FEE_CONFIG,
   PUMPSWAP_GLOBAL_CONFIG,
   PYTH_SOL_USD_ACCOUNT,
   TOKEN_2022_PROGRAM_ID,
@@ -60,7 +63,7 @@ import {
   withdrawPlatformFeesIx,
 } from "./instructions/fumpad.js";
 import { skimIxs } from "./instructions/locker.js";
-import { buybackFeeRecipientAta, initUserVolumeAccumulatorIx, parseBuybackFeeRecipients, parseGlobalConfigFees } from "./instructions/pumpswap.js";
+import { buybackFeeRecipientAta, initUserVolumeAccumulatorIx, parseBuybackFeeRecipients, parseFeeConfigFlatFees, parseGlobalConfigFees } from "./instructions/pumpswap.js";
 import { computeBudgetIxs, createAtaIdempotentIx } from "./instructions/spl.js";
 import type { PoolReserves } from "./math/pumpswap.js";
 import {
@@ -94,6 +97,7 @@ export class FumpadClient {
   readonly solUsdAccount: PublicKey;
   priorityMicroLamports: number;
   private bfr?: PublicKey;
+  private venueFee?: bigint;
   private globalCache?: { at: number; g: GlobalAccount };
 
   constructor(readonly connection: Connection, opts: ClientOptions = {}) {
@@ -162,11 +166,18 @@ export class FumpadClient {
     this.bfr = buybackFeeRecipientAta(rs[0]);
     return this.bfr;
   }
+  /** Total PumpSwap fee on a FUMPAD (non-pump) pool: Pump Fees flat fees, else GlobalConfig. */
   async pumpswapFeeBps(): Promise<bigint> {
+    if (this.venueFee !== undefined) return this.venueFee;
+    const fc = await this.data(PUMPSWAP_FEE_CONFIG);
+    if (fc && fc.length >= 65) {
+      const f = parseFeeConfigFlatFees(fc);
+      return (this.venueFee = f.lpFeeBps + f.protocolFeeBps + f.creatorFeeBps);
+    }
     const d = await this.data(PUMPSWAP_GLOBAL_CONFIG);
-    if (!d) return 25n;
-    const f = parseGlobalConfigFees(d);
-    return f.lpFeeBps + f.protocolFeeBps;
+    if (!d) return PUMPSWAP_DEFAULT_FEE_BPS;
+    const g = parseGlobalConfigFees(d);
+    return (this.venueFee = g.lpFeeBps + g.protocolFeeBps);
   }
   async solUsd(): Promise<{ price: bigint; exponent: number } | null> {
     const d = await this.data(this.solUsdAccount);
@@ -174,6 +185,13 @@ export class FumpadClient {
     const p = decodePythPriceUpdate(d);
     return { price: p.price - p.conf, exponent: p.exponent };
   }
+  /** On-chain unix time (Clock sysvar) — what the program compares against, not wall time. */
+  async chainTime(): Promise<bigint> {
+    const a = await this.connection.getAccountInfo(SYSVAR_CLOCK_PUBKEY, this.commitment);
+    if (!a) throw new Error("clock sysvar unavailable");
+    return new DataView(a.data.buffer, a.data.byteOffset, a.data.byteLength).getBigInt64(32, true);
+  }
+
   /** Open/queued tickets listed in the wallet's position (what buys must pass). */
   async openTickets(mint: PublicKey, wallet: PublicKey): Promise<PublicKey[]> {
     return (await this.position(mint, wallet))?.openTickets ?? [];
@@ -362,14 +380,58 @@ export class FumpadClient {
     return { tx: new VersionedTransaction(msg), blockhash, lastValidBlockHeight };
   }
 
-  /** Sign with `payer` (+ b.signers) and send; waits for `commitment`. Node/scripts only. */
-  async send(payer: Signer, b: BuiltTx, opts: { lookupTables?: AddressLookupTableAccount[]; skipPreflight?: boolean } = {}): Promise<string> {
-    const { tx, blockhash, lastValidBlockHeight } = await this.toTransaction(payer.publicKey, b, opts.lookupTables);
+  /**
+   * Sign with `payer` (+ b.signers), send, and confirm by POLLING signature statuses
+   * (re-broadcasting every ~2 s) until `commitment` or blockhash expiry. Polling works on
+   * HTTP-only RPCs and doesn't depend on a websocket. Node/scripts/keeper use.
+   */
+  async send(payer: Signer, b: BuiltTx, opts: { lookupTables?: AddressLookupTableAccount[]; skipPreflight?: boolean; timeoutMs?: number } = {}): Promise<string> {
+    const { tx, lastValidBlockHeight } = await this.toTransaction(payer.publicKey, b, opts.lookupTables);
     tx.sign([payer, ...(b.signers ?? [])]);
-    const sig = await this.connection.sendTransaction(tx, { skipPreflight: opts.skipPreflight ?? false, maxRetries: 3 });
-    const res = await this.connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, this.commitment);
-    if (res.value.err) throw new Error(`tx ${sig} failed: ${JSON.stringify(res.value.err)}`);
+    const raw = tx.serialize();
+    const sig = await this.connection.sendRawTransaction(raw, { skipPreflight: opts.skipPreflight ?? false, maxRetries: 0, preflightCommitment: this.commitment });
+    await confirmSignature(this.connection, sig, lastValidBlockHeight, this.commitment, raw, opts.timeoutMs);
     return sig;
+  }
+}
+
+export class TxFailedError extends Error {
+  constructor(readonly signature: string, readonly err: unknown, readonly logs?: string[] | null) {
+    super(`tx ${signature} failed: ${JSON.stringify(err)}`);
+  }
+}
+
+const RANK: Record<string, number> = { processed: 0, confirmed: 1, finalized: 2 };
+
+/** Poll until the signature reaches `commitment`; throws on failure or blockhash expiry. */
+export async function confirmSignature(
+  connection: Connection,
+  signature: string,
+  lastValidBlockHeight: number,
+  commitment: Commitment = "confirmed",
+  rebroadcast?: Uint8Array,
+  timeoutMs = 90_000,
+): Promise<void> {
+  const want = RANK[commitment] ?? 1;
+  const t0 = Date.now();
+  let lastSend = Date.now();
+  for (;;) {
+    const st = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: false })).value[0];
+    if (st?.err) {
+      const tx = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }).catch(() => null);
+      throw new TxFailedError(signature, st.err, tx?.meta?.logMessages);
+    }
+    if (st && RANK[st.confirmationStatus ?? "processed"] >= want) return;
+    if (rebroadcast && Date.now() - lastSend > 2_000) {
+      lastSend = Date.now();
+      connection.sendRawTransaction(rebroadcast, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+    }
+    if (Date.now() - t0 > timeoutMs || (await connection.getBlockHeight("confirmed")) > lastValidBlockHeight) {
+      const again = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })).value[0];
+      if (again && !again.err && RANK[again.confirmationStatus ?? "processed"] >= want) return;
+      throw new Error(`tx ${signature} expired or timed out before ${commitment}`);
+    }
+    await new Promise((r) => setTimeout(r, 400));
   }
 }
 
