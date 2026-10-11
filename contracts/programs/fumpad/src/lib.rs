@@ -49,15 +49,15 @@ pub mod fumpad {
         instructions::handle_create_coin(ctx, name, symbol, uri)
     }
 
-    pub fn buy(ctx: Context<Buy>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
+    pub fn buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::handle_buy(ctx, sol_in, min_tokens_out)
     }
 
-    pub fn sell(ctx: Context<Sell>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
+    pub fn sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
         instructions::handle_sell(ctx, tokens_in, min_sol_out)
     }
 
-    pub fn graduate(ctx: Context<Graduate>) -> Result<()> {
+    pub fn graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()> {
         instructions::handle_graduate(ctx)
     }
 
