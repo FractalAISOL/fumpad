@@ -123,6 +123,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
             coin: &a.coin,
             position: &mut a.position,
             open_tickets: &ctx.remaining_accounts[..open],
+            event_authority: &a.event_authority,
         },
         q.tokens_out,
         now,

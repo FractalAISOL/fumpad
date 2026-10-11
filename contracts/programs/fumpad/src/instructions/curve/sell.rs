@@ -155,6 +155,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
             seller: &user_info,
             system_program: &system_info,
             program_id: ctx.program_id,
+            event_authority: &a.event_authority,
         },
         SellInfo { tokens_sold: tokens_in, gross_lamports_out: gross, balance_before, now },
     )?;

@@ -138,7 +138,13 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     let position_bump = ctx.bumps.position;
     a.position.init_if_new(user_info.key(), a.mint.key(), position_bump);
     hooks::on_buy(
-        BuyHookAccounts { global: &a.global, coin: &a.coin, position: &mut a.position, open_tickets },
+        BuyHookAccounts {
+            global: &a.global,
+            coin: &a.coin,
+            position: &mut a.position,
+            open_tickets,
+            event_authority: &a.event_authority,
+        },
         tokens_out,
         now,
     )?;

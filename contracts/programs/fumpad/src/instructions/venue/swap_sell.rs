@@ -144,6 +144,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
             seller: &user_info,
             system_program: &system_info,
             program_id,
+            event_authority: &a.event_authority,
         },
         SellInfo { tokens_sold, gross_lamports_out: gross, balance_before, now },
     )?;
