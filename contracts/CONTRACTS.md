@@ -9,6 +9,8 @@ anchor build                    # must pass, no new warnings
 cargo test -p fumpad --lib      # pure math/state unit tests
 cargo test -p tests             # LiteSVM integration tests (needs `anchor build` first)
 ```
+`tests/src/flow.rs` drives a real coin through the whole lifecycle (used by `d10_tests.rs`
+and `e2e_tests.rs`); `Env::set_sol_usd` writes a fresh Pyth SOL/USD account.
 `tests/src/lib.rs` is the shared harness (`Env::new()` = fumpad + real PumpSwap + pump fees
 program + PumpSwap GlobalConfig, global initialized, one keeper). Devnet account dumps live
 in `tests/fixtures/` (`solana account -u d <addr> --output json -o <file>`;

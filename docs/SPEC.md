@@ -1,6 +1,6 @@
 # FUMPAD — Technical Spec v0.1
 
-Status: draft for review · 2026-10-11 · Source concept: `concept-overview.pdf`
+Status: v0.2 — matches the merged contracts · 2026-10-11 · Source concept: `concept-overview.pdf`
 
 ## 0. Locked decisions
 
@@ -12,7 +12,7 @@ Status: draft for review · 2026-10-11 · Source concept: `concept-overview.pdf`
 | D4 | Queue is **skip-ahead**: processed in sell-time order, but an entry that doesn't fit is skipped so smaller ones behind it can pay. |
 | D5 | Queued claims **do not expire** (the 90-day clock stops at queue entry). |
 | D8 | Graduation fee = **0 SOL** during beta (covers nothing but rent; param stays tunable). |
-| D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). |
+| D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). Rule and analysis: §5.3. |
 | D9 | Creator exclusion is **wallet-based**; suspected creator alt wallets are flagged publicly and excluded from leaderboards, not blocked from claiming. |
 | D6 | 10x check = **own on-chain sampler** (Option A): keeper-signed price samples, median over 30 min. |
 | D7 | **Own bonding curve**; graduation creates a **PumpSwap** pool (permissionless, verified). |
@@ -49,7 +49,8 @@ One program, four modules. A single program keeps trust boundaries simple (no cr
 - **Mint:** Token-2022 with metadata-pointer + token-metadata extensions only (no transfer hooks, no transfer fees). 1,000,000,000 supply, 6 decimals. Mint authority revoked after mint; no freeze authority.
 - **Allocation at launch:** 50M (5%) → coin's reward pool vault · ~753.4M → curve · ~196.6M → reserved for PumpSwap LP.
 - **Curve:** constant product on virtual reserves (pump.fun style). Initial virtual SOL 30, initial virtual tokens **~1,019.4M** (re-derived so the graduation price equals the LP price with 950M non-pool supply). Start→graduation price ratio ≈ 14.7x. All parameters live in `Global` so the simulation can tune them.
-- **Graduation:** the buy that crosses the threshold (default 85 SOL real) is capped to finish the curve; `complete = true`. Anyone can then call `graduate`, which creates the PumpSwap pool (index 0, creator = program PDA, coin_creator = default) with the LP tokens + raised SOL minus a graduation fee, and **burns the LP tokens**.
+- **Completion:** the curve completes when its **real tokens are exhausted**: the buy that would take more than what is left is partially filled (charged exactly the cost of the remaining tokens) and the coin becomes `Complete` (no trading). The parameters make that happen at ≈85 SOL raised (`graduation_lamports` is a sanity bound, not the trigger).
+- **Graduation:** anyone calls `graduate`, which creates the PumpSwap pool (index 0, creator = program PDA, coin_creator = default) with the **whole curve vault** (= `lp_supply`) + raised SOL minus the graduation fee, and **burns the LP tokens**. The caller pays PumpSwap's account rent (~0.01 SOL net; 0.05 SOL is lent to the PDA and the unused part returned in the same instruction).
 - Math in u128, rounding always in the protocol's favor. Property tests: k never decreases, no free tokens, sum of balances conserved.
 
 ## 4. Fees (1% of SOL side, every FUMPAD trade, pre- and post-graduation)
@@ -80,16 +81,22 @@ One program, four modules. A single program keeps trust boundaries simple (no cr
 - Increased by FUMPAD buys, or by `register_holdings` (snapshots the wallet's current balance; lets people who bought elsewhere become eligible). Either way the 10-min hold clock restarts for the added amount.
 
 **Sell → ticket.** A sell creates a `Ticket` when all of these hold:
-1. USD value of the sell ≥ $50 (Pyth SOL/USD, staleness ≤ 60s, confidence check).
+1. USD value of the **ticket's tokens** (the matured part of the sell, at the execution price) ≥ $50 (Pyth SOL/USD, staleness ≤ 60s, confidence ≤ 2%, valued at price − conf).
 2. The seller is not the coin creator.
 3. The sold tokens have been eligible for ≥10 min. Ticket amount = min(sold, aged eligible balance).
 4. The wallet has fewer than 5 open tickets on this coin.
 
-If any check fails, the sell still goes through, just without a ticket.
+If any check fails, the sell still goes through, just without a ticket. **Pyth problems (missing, stale, wrong feed, uncertain) never block a sell** — they mean "no ticket".
 
-Ticket fields: tokens, sell price (SOL/token, Q64 fixed point, execution average before FUMPAD fee), sell timestamp, status (`Open → Queued → Claimed | Expired | Voided`). The seller pays ~0.002 SOL rent, refunded when the ticket is closed.
+Ticket fields: tokens, sell price (SOL/token, Q64 fixed point, see D10 below), sell timestamp, status (`Open → Queued → Claimed | Expired | Voided`). The seller pays ~0.002 SOL rent, refunded when the ticket is closed. `Coin.tickets_created` counts tickets.
 
-**Rebuy rule.** A FUMPAD buy (or `register_holdings` increase) within 7 days of an open/queued ticket's sell debits that ticket's tokens by the amount rebought, newest ticket first, down to 0 (→ `Voided`). The client must pass every open ticket (≤5, listed in Position); the program enforces completeness.
+**Ticket price (D10).** `sell_price = max(execution price before FUMPAD fee, coin.reference.avg)`. The reference (`math/reference.rs`, 40 bytes of `Coin`) is a time-weighted average of spot with a 10-minute window, updated at every FUMPAD touch point: curve buy/sell, router swap, keeper sample (initialised to the start price at `create_coin`, carried unchanged through graduation). At a touch point at time t: first **fold** the interval since the previous touch point into the average, `avg += (v − avg)·w/600`, then **record** the spot right after the touch point as `last`. A spot observed at t therefore has zero weight at t, so a crash staged and undone inside one bundle (A dumps → B sells → A rebuys; or dump on PumpSwap → `swap_sell` → rebuy) cannot lower the ticket price.
+- *Curve* (exact): only FUMPAD moves the curve, so `last` is exactly the price that stood: `v = last`, `w = min(dt, 600)`. Leaving a crashed curve price standing means anyone can buy the dumped tokens at the discount — it is then a real price.
+- *PumpSwap* (router, samples): trades elsewhere are invisible, so `last` may be a spot an attacker staged right before the coin goes quiet (with a plain `α = min(1, dt/600)` the next touch after 10 idle minutes would adopt it wholesale). Hence `v = max(last, pre-trade spot)` — a staged spot only gets weight if the touch that closes its interval is staged too; any honest trade or keeper sample zeroes it — and `w = min(dt, 150)`, so one interval moves the average at most ¼ of the way however long the coin sat idle. Dragging the reference to 1/10 with a 20x staged crash then takes ≥11 back-to-back staged intervals (~28 min) with no other FUMPAD touch on the coin, each a fresh dump of ~3.5x the pool's base reserve. The keeper heartbeat (§5.4) closes such windows.
+- Costs to honest users: in a flat market the ticket price is the pre-sale spot (above execution by the sell's own impact); in a decline it lags ~10 min (≈+17% in a −50%/hour slide); after a long idle period on PumpSwap it catches up over ~10–30 min of activity. All of these err toward a higher ticket price, never a lower one. Pumps can only raise it (griefing, bounded the same way).
+- The reference is deliberately upward-biased and is used **only** as this floor — never as a price for anything else.
+
+**Rebuy rule.** A FUMPAD buy (or `register_holdings` increase) within 7 days of an open/queued ticket's sell debits that ticket's tokens by the amount rebought, newest ticket first, down to 0 (→ `Voided`). The client must pass every open ticket (≤5, listed in Position); the program enforces completeness. **Queued tickets stay in `position.open_tickets`** (they are still debited by rebuys; `process_queue` re-syncs or drops their queue entry) until paid, voided or closed.
 
 **Claim.** `claim(ticket)` succeeds when:
 - the coin has graduated
@@ -98,18 +105,21 @@ Ticket fields: tokens, sell price (SOL/token, Q64 fixed point, execution average
 
 Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no older fitting entry is waiting → paid in the same transaction. Otherwise → `Queued`.
 
-**Queue (per coin, zero-copy, sorted by sell timestamp, capacity 512).** `process_queue` is a permissionless crank: it walks in order and pays every entry whose amount ≤ 10% of the current pool, skipping the rest (D4). Queued entries never expire (D5). If the queue is full, the claim reverts with "queue full" and the ticket stays `Open`.
+**Queue (per coin, zero-copy PDA `["claim_queue", mint]`, sorted by sell timestamp, capacity 256).** ~20 KB, more than one instruction may allocate, so the permissionless, repeatable `init_claim_queue` grows it by ≤10 KiB per call (3 calls, one transaction) and writes the header only at full size. `process_queue` is a permissionless crank: it walks in order and pays every entry whose amount ≤ 10% of the current pool, skipping the rest (D4); a crank can't reorder it (an unverified fitting entry halts payment). Queued entries never expire (D5). If the queue is full, the claim reverts with "queue full" and the ticket stays `Open`.
 
 ### 5.4 Oracle (10x check)
 
-- **Observations (per graduated coin, zero-copy ring, 256 slots):** `(ts, price_q64)` computed from PumpSwap reserves (effective quote = vault + `virtual_quote_reserves`).
-- `record_samples(coins[])` is signed by one of ≤3 registered keeper keys. Multiple coins per transaction: one signature covers ~8 coins.
+- **Observations (per graduated coin, zero-copy ring, 256 slots):** `(ts, price_q64)` computed from PumpSwap reserves (effective quote = vault + `virtual_quote_reserves`). Canonical PDA `["observations", mint]` created with `init` by the permissionless `init_observations` (payer funds ~0.058 SOL), so there is exactly one ring per coin.
+- `record_samples(groups[])` is signed by one of ≤3 registered keeper keys. Group = `[coin (mut, D10 touch point), observations (mut), pool, base vault, quote vault]`, ≤10 coins per call. A legacy transaction fits 5 coins; 6–10 need a v0 transaction with an address lookup table.
 - **Rules:**
   - ≥10s between samples.
   - The sampling transaction must contain no other non-compute-budget instructions (instruction-sysvar check).
   - Claim requires ≥70% coverage: at least 84 of 120 expected samples in the last 30 min.
   - The **median** of those samples must be ≥ trigger.
-- **Cost control:** the keeper only samples coins whose spot price is ≥50% of their lowest open trigger, so it doesn't pay to sample coins nowhere near 10x.
+- **Keeper policy (off-chain, required for liveness and safety):**
+  - full rate (every 15 s) for coins whose spot is ≥50% of their lowest open trigger (claims need 84 of 120 samples in 30 min);
+  - a **heartbeat sample every <10 min for every graduated coin with open tickets**, so the permissionless fallback stays closed and the D10 reference keeps getting honest touch points;
+  - full rate for every graduated coin whose `buyback_lamports` exceeds a small threshold (e.g. 0.05 SOL) — `execute_buyback` needs a median — and **crank `execute_buyback`** for those coins (in ≤0.5%-of-depth slices), otherwise the pool's 50% fee share sits unspent.
 - **Liveness fallback:** if a coin has no keeper sample for >10 min, `record_samples` becomes permissionless for that coin. The same rules apply, and fallback samples are flagged in the event log.
 
 ## 6. Admin & safety
@@ -132,7 +142,8 @@ Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no 
   - queue fairness with skip-ahead
   - rent and close paths
   - graduation price continuity
-- Devnet end-to-end: launch → curve trades → graduate → post-grad trades → sampling → claim / queue → expiry.
+- LiteSVM end-to-end on one real coin (`tests/src/e2e_tests.rs`): launch → curve trades → graduate → post-grad trades → sampling → claim / queue / buyback / crank → fees → expiry. D10 exploit scenarios: `tests/src/d10_tests.rs`.
+- Devnet end-to-end: the same flow against live PumpSwap and Pyth.
 - An independent red-team agent reviews each module before it's marked done.
 - **Simulation (Python):** agent-based model of pool solvency across volume and price paths and attacker mixes. Outputs: % of claims paid, time in queue, pool depletion, sensitivity to the 10x / 10% / 5% / fee parameters. No revenue projections.
 
