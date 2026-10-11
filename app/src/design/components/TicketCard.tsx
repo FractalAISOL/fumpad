@@ -87,7 +87,7 @@ export function TicketCard({ ticket: t, now, action, note, as: As = "article" }:
             <Tokens value={t.claimAmount} />
           </dd>
           <dd className={s.factSub}>
-            {t.state === "claimed" ? "paid" : closed ? "–" : t.multiple >= 10 ? `≈ ${f.sol(t.claimValueSol)} SOL now` : `≈ ${f.sol(t.claimAmount * t.sellPrice * 10)} SOL at 10×`}
+            {t.state === "claimed" ? "paid" : closed ? "–" : t.multiple >= 10 ? `≈ ${f.sol(t.claimValueSol)} SOL` : `≈ ${f.sol(t.claimAmount * t.sellPrice * 10)} SOL at 10×`}
           </dd>
         </div>
       </dl>

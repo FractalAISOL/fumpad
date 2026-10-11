@@ -154,6 +154,7 @@ export function Dialog({
         if (e.target === ref.current) onClose();
       }}
     >
+      {open && (
       <div className={s.sheet}>
         <span className={s.grip} aria-hidden="true" />
         <div className={s.dHead}>
@@ -172,6 +173,7 @@ export function Dialog({
         {children && <div className={s.dBody}>{children}</div>}
         {footer && <div className={s.dFoot}>{footer}</div>}
       </div>
+      )}
     </dialog>
   );
 }

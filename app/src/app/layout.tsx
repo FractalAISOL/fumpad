@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { Providers } from "@/components/shell/Providers";
 import { Header, TabBar, THEME_SCRIPT } from "@/components/shell/Shell";
 import { getFumpadData } from "@/data";
@@ -31,7 +32,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en" className={`${archivo.variable} ${martian.variable}`} suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <Script id="theme" strategy="beforeInteractive">
+          {THEME_SCRIPT}
+        </Script>
         <style dangerouslySetInnerHTML={{ __html: TOKENS_CSS }} />
       </head>
       <body>

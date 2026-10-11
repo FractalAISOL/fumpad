@@ -344,14 +344,14 @@ function makeEvent(kind: FeedKind, seed: string, ts: number, coin?: CoinSpec): F
       const c = pickGrad();
       const multiple = r() < 0.15 ? between(r, 18, 42) : between(r, 10, 13.5);
       const p = medianOf(c);
-      const claimTokens = Math.round(between(r, 0.4, 9) * 1e5) * 1e1 * 10;
+      const claimTokens = Math.min(c.poolTokens * 0.1, Math.round((between(r, 0.4, 9) * 1e5) / 1e3) * 1e3);
       return { ...base, ...coinBits(c), kind, multiple, claimTokens, claimSol: claimTokens * p };
     }
     case "claim": {
       const c = pickGrad();
       const multiple = r() < 0.15 ? between(r, 18, 42) : between(r, 10, 14);
       const p = medianOf(c);
-      const tokens = Math.min(c.poolTokens * 0.1, Math.round(between(r, 0.3, 8) * 1e5) * 1e1 * 10);
+      const tokens = Math.min(c.poolTokens * 0.1, Math.round((between(r, 0.3, 8) * 1e5) / 1e3) * 1e3);
       const fromQueue = r() < 0.25;
       return { ...base, ...coinBits(c), kind, multiple, tokens, sol: tokens * p, fromQueue, skippedAhead: fromQueue && r() < 0.5 };
     }
