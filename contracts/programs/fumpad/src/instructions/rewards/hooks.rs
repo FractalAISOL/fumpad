@@ -58,9 +58,13 @@ pub struct SellInfo {
     /// Seller's token balance immediately BEFORE the sell (caps eligibility).
     pub balance_before: u64,
     /// D10: the coin's reference average AFTER this sell's touch point
-    /// (`coin.reference.avg_q64`, see `math/reference.rs`). The ticket's price is
-    /// max(execution price, this). Callers must update the reference before the hook.
+    /// (`coin.reference.avg_q64`, see `math/reference.rs`). Callers must update the
+    /// reference before the hook.
     pub reference_price_q64: u128,
+    /// D12: spot right BEFORE this sell (Q64): curve spot (curve) / effective PumpSwap
+    /// spot (router). 0 = unknown → D10 floor. Ticket price =
+    /// max(execution, reference × execution ÷ pre_trade_spot).
+    pub pre_trade_spot_q64: u128,
     pub now: i64,
 }
 
@@ -157,8 +161,9 @@ pub struct TicketPlan {
 /// sell), not the whole sell — stricter than "sell ≥ $50", so a big sell of mostly
 /// unmatured tokens can't mint a dust ticket. It uses the execution value.
 ///
-/// Ticket price (D10) = max(execution price, `info.reference_price_q64`), so a crash
-/// staged inside one bundle can't lower the price the 10x is measured against.
+/// Ticket price (D12, refining D10) = max(execution price, reference × execution ÷
+/// pre-trade spot): an honest seller gets their real fill in a flat market, while a crash
+/// staged inside one bundle (ratio ≈ 1) can't lower the price the 10x is measured against.
 pub fn evaluate_sell(
     pos: &mut Position,
     p: &Params,
@@ -170,7 +175,7 @@ pub fn evaluate_sell(
     let execution_q64 = price_q64(info.gross_lamports_out, info.tokens_sold)
         .filter(|&x| x > 0)
         .ok_or(NoTicket::ZeroPrice)?;
-    let sell_price_q64 = ticket_price_q64(execution_q64, info.reference_price_q64);
+    let sell_price_q64 = ticket_price_q64(execution_q64, info.reference_price_q64, info.pre_trade_spot_q64);
     let usd = sol_usd().map_err(|_| NoTicket::OracleUnavailable)?;
     // Pro-rata share of the proceeds (exact floor; avoids double Q64 rounding).
     let ticket_lamports = (info.gross_lamports_out as u128) * (tokens as u128) / (info.tokens_sold as u128);
@@ -366,6 +371,7 @@ mod tests {
             gross_lamports_out: lamports,
             balance_before: tokens,
             reference_price_q64: 0,
+            pre_trade_spot_q64: 0,
             now: 10_000,
         }
     }
@@ -388,6 +394,20 @@ mod tests {
         assert_eq!(t.sell_price_q64, exec);
         // The $50 minimum still uses the execution value, not the floored price.
         assert_eq!(t.sell_usd_cents, 15_000);
+        // D12, same crash with the pre-trade spot known: the sell filled 1% under the
+        // crashed spot → ticket at 99% of the reference (rounded up), not the crash.
+        let mut i = crashed;
+        i.reference_price_q64 = exec;
+        i.pre_trade_spot_q64 = price_q64(50_505_051, 1_000_000).unwrap();
+        let t = evaluate_sell(&mut matured_position(1_000_000), &p, false, &i, || Ok(usd_hi)).unwrap();
+        assert!(t.sell_price_q64 * 1_000 >= exec * 989 && t.sell_price_q64 <= exec, "{}", t.sell_price_q64);
+        // D12, honest big sell in a flat market (reference = pre-trade spot, 10% impact):
+        // ticket = execution price exactly.
+        let mut i = sell(1_000_000, 900_000_000);
+        i.reference_price_q64 = exec;
+        i.pre_trade_spot_q64 = exec;
+        let t = evaluate_sell(&mut matured_position(1_000_000), &p, false, &i, || Ok(USD_150)).unwrap();
+        assert_eq!(t.sell_price_q64, price_q64(900_000_000, 1_000_000).unwrap());
         let mut i = crashed;
         i.reference_price_q64 = exec;
         assert_eq!(

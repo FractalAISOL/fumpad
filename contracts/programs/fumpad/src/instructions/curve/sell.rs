@@ -115,7 +115,8 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     let bb = inline_buyback(coin, &mut r, fee.pool)?;
     store_reserves(coin, &r);
     bump_stats(coin, gross);
-    // D10: exact curve touch point; the ticket (if any) is floored at the updated average.
+    // D10: exact curve touch point. The ticket (if any) is floored at the updated average
+    // scaled by this sell's own slippage from `pre_spot` (D12).
     let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
     coin.touch_reference(now, pre_spot, post_spot, true);
     let reference_price_q64 = coin.reference.avg_q64;
@@ -162,7 +163,14 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
             program_id: ctx.program_id,
             event_authority: &a.event_authority,
         },
-        SellInfo { tokens_sold: tokens_in, gross_lamports_out: gross, balance_before, reference_price_q64, now },
+        SellInfo {
+            tokens_sold: tokens_in,
+            gross_lamports_out: gross,
+            balance_before,
+            reference_price_q64,
+            pre_trade_spot_q64: pre_spot,
+            now,
+        },
     )?;
     if ticket.is_some() {
         a.coin.tickets_created = a.coin.tickets_created.saturating_add(1);

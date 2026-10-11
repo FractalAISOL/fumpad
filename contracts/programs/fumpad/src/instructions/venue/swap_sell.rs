@@ -134,9 +134,12 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     // (if any) is floored at the updated average.
     let after = pumpswap::venue_reserves(venue, &pool)?;
     // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
-    if let (Ok(pre), Ok(post)) = (before.spot_price_q64(), after.spot_price_q64()) {
+    let pre_spot = before.spot_price_q64().ok();
+    if let (Some(pre), Ok(post)) = (pre_spot, after.spot_price_q64()) {
         a.coin.touch_reference(now, pre, post, false);
     }
+    // D12: effective PumpSwap spot before the sell (0 = unknown → D10 floor).
+    let pre_trade_spot_q64 = pre_spot.unwrap_or(0);
     let reference_price_q64 = a.coin.reference.avg_q64;
 
     let position_bump = ctx.bumps.position;
@@ -155,7 +158,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
             program_id,
             event_authority: &a.event_authority,
         },
-        SellInfo { tokens_sold, gross_lamports_out: gross, balance_before, reference_price_q64, now },
+        SellInfo { tokens_sold, gross_lamports_out: gross, balance_before, reference_price_q64, pre_trade_spot_q64, now },
     )?;
     if ticket.is_some() {
         a.coin.tickets_created = a.coin.tickets_created.saturating_add(1);

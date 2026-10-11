@@ -1,16 +1,22 @@
-//! D10 — reference-price floor on ticket sell prices (SPEC §5.3, `math/reference.rs`).
+//! D10 — reference-price floor on ticket sell prices (SPEC §5.3, `math/reference.rs`),
+//! refined by D12: ticket = max(execution, reference × execution ÷ pre-trade spot).
 //!
 //! Exploits (must no longer yield an exploitable ticket):
 //!   * curve, two wallets: A dumps via FUMPAD → B sells (ticket) → A rebuys, one tx;
 //!   * PumpSwap, one wallet: direct dump → FUMPAD `swap_sell` (ticket) → direct rebuy,
 //!     one bundle (same timestamp);
 //!   * idle-coin variant: a staged crashed "last spot", then ≥10 idle minutes.
-//! Honest behaviour: normal sells, a genuine slow decline.
+//! D12 ratio-gaming attempts: a huge own sell after a crash, a pump before the sell, and
+//! the residual "inventory-backed self-impact round trip" (documented, bounded).
+//! Honest behaviour: normal sells (big ones too), a genuine slow decline.
 
 use fumpad::{
     error::FumpadError,
     events::{TicketCreated, Trade},
-    math::{price::meets_multiple, reference::REFERENCE_MAX_UNCONFIRMED_SECS},
+    math::{
+        price::meets_multiple,
+        reference::{ticket_price_q64, REFERENCE_MAX_UNCONFIRMED_SECS},
+    },
     state::*,
 };
 use solana_keypair::Keypair;
@@ -45,18 +51,21 @@ fn pool_reserves(f: &Flow) -> (u128, u128) {
 /// The PumpSwap bundle: `dumper` dumps `dump` tokens directly, `seller` sells
 /// `sell_tokens` through FUMPAD, `dumper` buys back directly until the pool's base
 /// reserve is back where it started. Three transactions, same timestamp (a Jito bundle).
-/// Returns the seller's FUMPAD sell metadata.
+/// Returns the seller's FUMPAD sell metadata and the spot right before that sell.
 fn pumpswap_bundle(
     f: &mut Flow,
     dumper: &Keypair,
     seller: &Keypair,
     dump: u64,
     sell_tokens: u64,
-) -> litesvm::types::TransactionMetadata {
+) -> (litesvm::types::TransactionMetadata, u128) {
     let (q0, b0) = pool_reserves(f);
     let d = kp_pk(dumper);
-    let i = f.direct_sell_ix(&d, dump);
-    ok(f.env.send_as(dumper, &[cu_limit(400_000), i], &[dumper]));
+    if dump > 0 {
+        let i = f.direct_sell_ix(&d, dump);
+        ok(f.env.send_as(dumper, &[cu_limit(400_000), i], &[dumper]));
+    }
+    let pre_sell = f.spot_q64();
     let i = f.swap_sell_ix(&kp_pk(seller), sell_tokens);
     let m = ok(f.env.send_as(seller, &[cu_limit(1_400_000), i], &[seller]));
     // Buy back D + S tokens: quote needed ≈ k/b0 − k/b1, grossed up for PumpSwap's fees.
@@ -65,7 +74,12 @@ fn pumpswap_bundle(
     let quote_in = (need * 1_004 / 1_000) as u64;
     let i = f.direct_buy_ix(&d, quote_in, true);
     ok(f.env.send_as(dumper, &[cu_limit(400_000), i], &[dumper]));
-    m
+    (m, pre_sell)
+}
+
+/// The D12 ticket price the program must have recorded for a sell (exact recomputation).
+fn d12_price(f: &Flow, exec: u128, pre_sell: u128) -> u128 {
+    ticket_price_q64(exec, f.coin_state().reference.avg_q64, pre_sell)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -73,8 +87,10 @@ fn pumpswap_bundle(
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// Curve, two wallets, one transaction: A dumps via FUMPAD, B sells (ticket), A rebuys.
-/// B's ticket is priced at the pre-attack reference, and the later claim — when the coin
-/// trades at ~14x B's *execution* price, which would have paid without D10 — is rejected.
+/// B sells into the crashed curve, so B's own slippage ratio (execution ÷ pre-trade spot)
+/// is ≈ 1 and B's ticket stays at ≈ the pre-attack reference (D12 scales the reference by
+/// only B's own impact); the later claim — when the coin trades at ~14x B's *execution*
+/// price, which would have paid without D10 — is rejected.
 #[test]
 fn exploit_curve_two_wallet_dump_sell_rebuy_is_neutralized() {
     let mut f = Flow::new();
@@ -101,12 +117,20 @@ fn exploit_curve_two_wallet_dump_sell_rebuy_is_neutralized() {
     let trades = events::<Trade>(&m);
     let b_exec = trades.iter().find(|t| t.user == bk).unwrap().price_q64;
     assert!(b_exec * 8 < pre_attack, "the dump crashed B's execution price ({b_exec} vs {pre_attack})");
+    // B's pre-trade spot = the curve right after A's dump (A's Trade event reserves).
+    let ta = trades.iter().find(|t| t.user == ak && !t.is_buy).unwrap();
+    let b_pre = ((ta.virtual_sol_reserves as u128) << 64) / ta.virtual_token_reserves as u128;
+    assert!(b_pre * 8 < pre_attack);
     let created = events::<TicketCreated>(&m);
     assert_eq!(created.len(), 2);
     let tb = f.ticket(&b_ticket);
     assert_eq!(tb.status, TicketStatus::Open);
-    // D10: B's ticket is priced at the pre-attack reference, not the crashed execution.
-    assert!(close(tb.sell_price_q64, pre_attack, 1_000), "ticket {} vs pre-attack {pre_attack}", tb.sell_price_q64);
+    // The reference ignored the crash (zero weight) …
+    assert!(close(f.coin_state().reference.avg_q64, pre_attack, 1_000));
+    // … and B's ticket = reference × B's own slippage ratio (exact), far above the crash.
+    assert_eq!(tb.sell_price_q64, d12_price(&f, b_exec, b_pre));
+    assert!(tb.sell_price_q64 * 100 >= pre_attack * 90, "ticket {} vs pre-attack {pre_attack}", tb.sell_price_q64);
+    assert!(tb.sell_price_q64 > b_exec * 7);
     // A's own ticket was voided by A's rebuy.
     assert_eq!(f.ticket(&a_ticket).status, TicketStatus::Voided);
     f.assert_invariant();
@@ -143,15 +167,17 @@ fn exploit_pumpswap_dump_swap_sell_rebuy_is_neutralized() {
     let dump = (base * 347 / 100) as u64;
     assert!(f.tokens(&wk) > dump + 30_000_000_000_000);
     let ticket = f.next_ticket(&wk);
-    let m = pumpswap_bundle(&mut f, &whale, &whale, dump, 30_000_000_000_000);
+    let (m, pre_sell) = pumpswap_bundle(&mut f, &whale, &whale, dump, 30_000_000_000_000);
 
     let exec = events::<Trade>(&m)[0].price_q64;
     assert!(exec * 15 < pre_attack, "crash too small: exec {exec} vs {pre_attack}");
     let t = f.ticket(&ticket);
     assert_eq!(t.owner, wk);
-    // The staged crash got zero weight: the ticket is at (or above) the pre-attack reference.
-    assert!(t.sell_price_q64 >= ref_before);
-    assert!(close(t.sell_price_q64, pre_attack, 5_000), "ticket {} vs pre-attack {pre_attack}", t.sell_price_q64);
+    // The staged crash got zero weight in the reference, and the sell's own slippage on
+    // the crashed pool is small: ticket = reference × ratio ≈ the pre-attack price.
+    assert!(f.coin_state().reference.avg_q64 >= ref_before);
+    assert_eq!(t.sell_price_q64, d12_price(&f, exec, pre_sell));
+    assert!(t.sell_price_q64 * 100 >= pre_attack * 95, "ticket {} vs pre-attack {pre_attack}", t.sell_price_q64);
     assert!(close(f.spot_q64(), pre_attack, 20_000), "bundle restored the price");
     f.assert_invariant();
 
@@ -182,7 +208,7 @@ fn exploit_idle_coin_staged_last_spot_is_bounded() {
         let dump = (base * 347 / 100) as u64;
 
         // Stage: crash, a dust FUMPAD sell records the crashed spot as `last`, restore.
-        pumpswap_bundle(&mut f, &whale, &whale, dump, 1_000_000_000_000);
+        let _ = pumpswap_bundle(&mut f, &whale, &whale, dump, 1_000_000_000_000);
         let c = f.coin_state();
         assert!(c.reference.last_spot_q64 * 15 < pre_attack, "staged crashed last spot");
         assert!(c.reference.avg_q64 >= ref_before, "the staging bundle itself got zero weight");
@@ -193,19 +219,22 @@ fn exploit_idle_coin_staged_last_spot_is_bounded() {
             f.env.warp(60);
         }
         let ticket = f.next_ticket(&wk);
-        let m = pumpswap_bundle(&mut f, &whale, &whale, dump, 30_000_000_000_000);
+        let (m, pre_sell) = pumpswap_bundle(&mut f, &whale, &whale, dump, 30_000_000_000_000);
         let exec = events::<Trade>(&m)[0].price_q64;
         let t = f.ticket(&ticket);
+        let reference = f.coin_state().reference.avg_q64;
+        assert_eq!(t.sell_price_q64, d12_price(&f, exec, pre_sell));
         if heartbeat {
-            assert!(t.sell_price_q64 >= ref_before, "heartbeat erased the staged spot");
-            assert!(close(t.sell_price_q64, pre_attack, 5_000));
+            assert!(reference >= ref_before, "heartbeat erased the staged spot");
+            assert!(t.sell_price_q64 * 100 >= pre_attack * 95);
         } else {
-            // One idle interval moves the reference at most 1/4 of the way to the crash.
+            // One idle interval moves the reference at most 1/4 of the way to the crash;
+            // the ticket is that reference × the sell's own (small) slippage ratio.
             assert_eq!(REFERENCE_MAX_UNCONFIRMED_SECS, 150);
             let staged = f.coin_state().reference.last_spot_q64.min(exec);
             let bound = ref_before - (ref_before - staged) / 4;
-            assert!(t.sell_price_q64 + 1 >= bound, "ticket {} vs bound {bound}", t.sell_price_q64);
-            assert!(t.sell_price_q64 * 100 >= pre_attack * 74 && t.sell_price_q64 < pre_attack);
+            assert!(reference + 1 >= bound, "reference {reference} vs bound {bound}");
+            assert!(t.sell_price_q64 * 100 >= pre_attack * 70 && t.sell_price_q64 < pre_attack);
         }
         // Either way the ticket is nowhere near 10x-able at the normal price.
         f.keeper_samples(125, 15);
@@ -216,12 +245,124 @@ fn exploit_idle_coin_staged_last_spot_is_bounded() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// D12: gaming the slippage ratio
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// One graduated coin after ~1 h of flat, keeper-sampled market; whale holds ~550M tokens.
+fn flat_graduated() -> (Flow, Keypair) {
+    let mut f = Flow::new();
+    let whale = graduated(&mut f);
+    f.keeper_samples(250, 15);
+    f.env.warp(5);
+    (f, whale)
+}
+
+/// The same sale S (¼ of the pool's base reserve) by the same matured whale, with the
+/// pre-trade spot (a) untouched, (b) crashed ~20x first, (c) pumped ~9x first — each
+/// manipulation undone in the same bundle. Moving the pre-trade spot never lowers the
+/// ticket below the honest one:
+///   (b) the crashed pool is deeper in base, so S's own slippage is SMALLER (ratio → 1);
+///   (c) S executes into the pumped price, so execution itself is higher.
+/// Returns (ticket price, pre-attack spot, execution) per mode.
+fn sale_after_manipulation(mode: u8) -> (u128, u128, u128) {
+    let (mut f, whale) = flat_graduated();
+    let wk = kp_pk(&whale);
+    let pre_attack = f.spot_q64();
+    let (q, base) = pool_reserves(&f);
+    let s = (base / 4) as u64;
+    let ticket = f.next_ticket(&wk);
+    let m = match mode {
+        0 => ok(f.swap_sell(&whale, s)),
+        1 => pumpswap_bundle(&mut f, &whale, &whale, (base * 347 / 100) as u64, s).0,
+        _ => {
+            // Pump: buy with 2× the pool's quote (price ×9), sell S via FUMPAD, dump back.
+            let before = f.tokens(&wk);
+            let i = f.direct_buy_ix(&wk, (2 * q) as u64, true);
+            ok(f.env.send_as(&whale, &[cu_limit(400_000), i], &[&whale]));
+            let bought = f.tokens(&wk) - before;
+            assert!(f.spot_q64() > pre_attack * 8);
+            let m = ok(f.swap_sell(&whale, s));
+            let i = f.direct_sell_ix(&wk, bought);
+            ok(f.env.send_as(&whale, &[cu_limit(400_000), i], &[&whale]));
+            m
+        }
+    };
+    let exec = events::<Trade>(&m)[0].price_q64;
+    let t = f.ticket(&ticket);
+    assert_eq!(t.tokens, s);
+    (t.sell_price_q64, pre_attack, exec)
+}
+
+#[test]
+fn d12_moving_pre_trade_spot_never_lowers_the_ticket() {
+    let (honest, pre, honest_exec) = sale_after_manipulation(0);
+    // Honest: ticket = execution ≈ pre × ¾ (own slippage x/(x+S) = 4/5, minus fees).
+    assert!(close(honest, honest_exec, 1_000));
+    assert!(honest * 100 >= pre * 78 && honest * 100 <= pre * 81, "{honest} vs {pre}");
+    let (crashed, pre_c, exec_c) = sale_after_manipulation(1);
+    assert_eq!(pre_c, pre, "identical worlds");
+    assert!(exec_c * 15 < pre, "the sale executed at the crashed price");
+    assert!(crashed >= honest, "crash first: {crashed} < honest {honest}");
+    assert!(crashed * 100 >= pre * 93, "deeper pool → ratio ≈ 1 → ticket ≈ reference: {crashed} vs {pre}");
+    let (pumped, pre_p, exec_p) = sale_after_manipulation(2);
+    assert_eq!(pre_p, pre);
+    assert!(pumped >= honest && pumped == exec_p, "pump first: ticket = (higher) execution");
+    println!("D12 same sale: honest {honest}, after crash {crashed}, after pump {pumped} (pre {pre})");
+}
+
+/// Residual vector (SPEC §5.3): an attacker holding inventory sells a LARGE amount through
+/// FUMPAD and buys it back directly on PumpSwap in the same bundle. The ticket is priced
+/// exactly like an honest exit of the same size — reference × own slippage, here ≈ ½ for
+/// a sale of the pool's whole base reserve — while the price is restored. The two are
+/// indistinguishable at sell time. Bounds: the discount is only the sale's own slippage
+/// x/(x+S) (deeper discounts need ever larger inventory), the inventory must be held
+/// (matured ≥ 10 min for the ticket's part), and the round trip costs FUMPAD's 1% (half
+/// of it funds the reward pool) + PumpSwap's 2 × 0.25% on the whole sale.
+#[test]
+fn d12_residual_self_impact_round_trip_is_priced_like_an_honest_exit() {
+    let (mut f, whale) = flat_graduated();
+    let wk = kp_pk(&whale);
+    let pre = f.spot_q64();
+    let (q0, b0) = pool_reserves(&f);
+    let s = b0 as u64;
+    let ticket = f.next_ticket(&wk);
+    let m = ok(f.swap_sell(&whale, s));
+    let trades = events::<Trade>(&m);
+    let tr = &trades[0];
+    let fee = tr.fee_pool + tr.fee_platform + tr.fee_creator;
+    let tp = f.ticket(&ticket).sell_price_q64;
+    assert_eq!(tp, d12_price(&f, tr.price_q64, pre));
+    assert!(close(tp, tr.price_q64, 1_000), "priced like an honest exit");
+    assert!(tp * 100 >= pre * 49 && tp * 100 <= pre * 50, "discount = own slippage ≈ ½: {tp} vs {pre}");
+
+    // Buy the same amount back directly on PumpSwap (outside FUMPAD: no rebuy debit).
+    let (_, b1) = pool_reserves(&f);
+    let quote_in = ((q0 - q0 * b0 / b1) * 1_004 / 1_000) as u64;
+    let before = f.tokens(&wk);
+    let i = f.direct_buy_ix(&wk, quote_in, true);
+    ok(f.env.send_as(&whale, &[cu_limit(400_000), i], &[&whale]));
+    let back = f.tokens(&wk) - before;
+    assert!(close(back as u128, s as u128, 2_000) && close(f.spot_q64(), pre, 5_000), "price restored");
+    // Cost of the round trip (extra tokens bought back valued at spot): ≥ 1.4% of the sale.
+    let net = tr.sol_amount - fee;
+    let extra_value = ((back as i128 - s as i128) * pre as i128) >> 64;
+    let cost = quote_in as i128 - net as i128 - extra_value;
+    assert!(cost * 1_000 >= tr.sol_amount as i128 * 14, "cost {cost} on a {} sale", tr.sol_amount);
+    println!(
+        "D12 residual: sale {} lamports, round-trip cost {cost} ({} bps), ticket at {}% of pre-sale spot",
+        tr.sol_amount,
+        cost * 10_000 / tr.sol_amount as i128,
+        tp * 100 / pre
+    );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Honest behaviour
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// Normal sells. Rising market (the reference lags below spot): ticket = execution price
-/// exactly. Flat market: the reference equals the pre-sale spot, so the ticket is the
-/// pre-sale spot — above execution only by the sell's own price impact.
+/// exactly. Flat market: the reference equals the pre-sale spot, so (D12) the ticket is
+/// the execution price too — including for a big sell with a large own price impact.
 #[test]
 fn honest_sells_ticket_at_execution_price() {
     let mut f = Flow::new();
@@ -239,16 +380,28 @@ fn honest_sells_ticket_at_execution_price() {
     assert_eq!(t.sell_price_q64, exec, "rising market: ticket = execution price");
     assert!(f.coin_state().reference.avg_q64 < exec);
 
-    // Flat market (nothing for 20 min): reference = spot; ticket within impact of exec.
+    // Flat market (nothing for 20 min): reference = spot exactly → ticket = execution.
     f.env.warp(1_200);
     let pre = f.spot_q64();
     let t2 = f.next_ticket(&sk);
     let m = ok(f.sell(&s, f.tokens(&sk) / 10));
     let exec = events::<Trade>(&m)[0].price_q64;
     let t = f.ticket(&t2);
-    assert_eq!(t.sell_price_q64, pre);
-    assert!(close(t.sell_price_q64, exec, 20_000), "≤2% (the sell's own impact)");
-    assert_eq!(f.coin_state().tickets_created, 2);
+    assert_eq!(f.coin_state().reference.avg_q64, pre);
+    assert_eq!(t.sell_price_q64, exec, "flat market: ticket = execution price");
+    // Big honest sell in a flat market: ~a quarter of the price gone to its own impact,
+    // still ticket = execution price (D10 alone would have priced it at the pre-sale spot).
+    let big = f.env.new_user(100);
+    let bk = kp_pk(&big);
+    ok(f.buy(&big, 30 * SOL));
+    f.env.warp(1_200);
+    let pre = f.spot_q64();
+    let t_big = f.next_ticket(&bk);
+    let m = ok(f.sell(&big, f.tokens(&bk)));
+    let exec = events::<Trade>(&m)[0].price_q64;
+    assert!(exec * 100 < pre * 80, "a big sell: exec {exec} vs pre {pre}");
+    assert_eq!(f.ticket(&t_big).sell_price_q64, exec);
+    assert_eq!(f.coin_state().tickets_created, 3);
 
     // Same on PumpSwap after graduation.
     let _whale = graduated(&mut f);
@@ -263,7 +416,18 @@ fn honest_sells_ticket_at_execution_price() {
     let exec = events::<Trade>(&m)[0].price_q64;
     let t = f.ticket(&t3);
     assert!(t.sell_price_q64 >= exec && t.sell_price_q64 <= pre);
-    assert!(close(t.sell_price_q64, exec, 30_000), "ticket {} exec {exec}", t.sell_price_q64);
+    // The keeper-sampled reference is within rounding of spot → ticket ≈ execution.
+    assert!(close(t.sell_price_q64, exec, 1_000), "ticket {} exec {exec}", t.sell_price_q64);
+    // Big honest router sell (half the pool's base reserve) in a flat market.
+    f.keeper_samples(50, 15);
+    let (_, base) = pool_reserves(&f);
+    let w = _whale.insecure_clone();
+    let t4 = f.next_ticket(&kp_pk(&w));
+    let pre = f.spot_q64();
+    let m = ok(f.swap_sell(&w, (base / 2) as u64));
+    let exec = events::<Trade>(&m)[0].price_q64;
+    assert!(exec * 100 < pre * 70);
+    assert!(close(f.ticket(&t4).sell_price_q64, exec, 1_000), "big router sell: ticket ≈ execution");
     f.assert_invariant();
 }
 

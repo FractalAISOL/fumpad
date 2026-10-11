@@ -3,10 +3,11 @@
 //! Threat. In one Jito bundle an attacker crashes the price outside FUMPAD's view
 //! (direct PumpSwap dump, or a second wallet dumping on the curve), sells a little
 //! through FUMPAD (the ticket records the crashed price), then restores the price.
-//! The ticket is then trivially "10x". So a ticket's price is
-//!     max(execution price, reference average)
+//! The ticket is then trivially "10x". So a ticket's price is (D12, refining D10)
+//!     max(execution price, reference average × execution ÷ pre-trade spot)
 //! where the reference is a time-weighted average of spot over ~10 minutes that a
-//! price which exists only for an instant cannot move.
+//! price which exists only for an instant cannot move, and the ratio is the sell's own
+//! slippage (≈ 1 after a staged crash; = 1 − impact for an honest sell in a flat market).
 //!
 //! State: `avg` (the reference), `last` (the last spot FUMPAD observed) and
 //! `updated_at`. FUMPAD observes spot only at its own touch points: curve buys/sells,
@@ -60,6 +61,8 @@
 //! exact, an increase is short by < 1 Q64 unit. No intermediate can overflow.
 
 use anchor_lang::prelude::*;
+
+use super::price::mul_div_ceil;
 
 /// Time constant / window of the reference average.
 pub const REFERENCE_WINDOW_SECS: u64 = 600;
@@ -122,9 +125,29 @@ fn blend(avg: u128, v: u128, w: u64, window: u64) -> u128 {
     }
 }
 
-/// D10 ticket price: never below the reference average.
-pub fn ticket_price_q64(execution_q64: u128, reference_q64: u128) -> u128 {
-    execution_q64.max(reference_q64)
+/// D12 ticket price (refines D10): max(execution, reference × execution ÷ pre_trade_spot),
+/// the second term rounded UP (protocol-favoring). See SPEC §5.3 / D12.
+///
+/// `execution ÷ pre_trade_spot` is the sell's own slippage (incl. venue fees) measured
+/// from the spot that stood right before it; the floor is the reference scaled by that
+/// ratio, i.e. the fill an honest seller of the same size would get at the reference.
+/// * Flat market (reference = pre-trade spot): ticket = execution price, exactly.
+/// * Crash staged before the sell (another wallet / a direct PumpSwap dump): the sell
+///   executes near the crashed pre-trade spot, so the ratio ≈ 1 and the floor stays at
+///   the reference — the D10 protection is intact.
+/// * Pumping pre-trade spot only raises the execution price (the floor then never binds).
+/// * A ratio > 1 (not reachable by a sell) can only raise the floor.
+///
+/// `pre_trade_spot_q64 == 0` (unknown) falls back to the D10 floor (the reference itself,
+/// the higher of the two since a sell never executes above spot). An overflowing
+/// quotient (impossible for real prices) saturates — again the higher price.
+pub fn ticket_price_q64(execution_q64: u128, reference_q64: u128, pre_trade_spot_q64: u128) -> u128 {
+    let floor = if pre_trade_spot_q64 == 0 {
+        reference_q64
+    } else {
+        mul_div_ceil(reference_q64, execution_q64, pre_trade_spot_q64).unwrap_or(u128::MAX)
+    };
+    execution_q64.max(floor)
 }
 
 #[cfg(test)]
@@ -255,8 +278,55 @@ mod tests {
     }
 
     #[test]
-    fn ticket_price_is_max() {
-        assert_eq!(ticket_price_q64(5, 7), 7);
-        assert_eq!(ticket_price_q64(9, 7), 9);
+    fn d12_ticket_price() {
+        // Unknown pre-trade spot → D10 rule.
+        assert_eq!(ticket_price_q64(5, 7, 0), 7);
+        assert_eq!(ticket_price_q64(9, 7, 0), 9);
+        // Flat market (reference == pre-trade spot): exactly the execution price, any size.
+        for exec in [P / 2, P * 9 / 10, P - 1, P] {
+            assert_eq!(ticket_price_q64(exec, P, P), exec);
+        }
+        // Rising market (reference below spot): execution price.
+        assert_eq!(ticket_price_q64(P * 99 / 100, P / 2, P), P * 99 / 100);
+        // Staged crash: pre-trade spot 20x below the reference, the sell fills 1% under it
+        // → the floor is 99% of the reference, ~19.8x the execution price.
+        let pre = CRASH;
+        let exec = pre * 99 / 100;
+        let t = ticket_price_q64(exec, P, pre);
+        assert!(t + P / 1_000_000 >= P * 99 / 100 && t <= P, "{t}");
+        assert!(t > exec * 19);
+        // Rounds up: 3 × 2 / 4 = 1.5 → 2.
+        assert_eq!(ticket_price_q64(2, 3, 4), 2);
+        assert_eq!(ticket_price_q64(1, 3, 2), 2);
+        // A ratio > 1 only raises the floor; extremes saturate instead of overflowing.
+        assert_eq!(ticket_price_q64(4, 10, 2), 20);
+        assert_eq!(ticket_price_q64(u128::MAX, u128::MAX, 1), u128::MAX);
+        // Wide intermediate (Q64 × Q64 overflows u128).
+        let big = u128::MAX / 3;
+        assert_eq!(ticket_price_q64(big / 2, big, big), big / 2);
+    }
+
+    /// Crash-staging can't beat the floor: whatever the pre-trade spot, the ticket is ≥
+    /// reference × (the sell's own slippage ratio); a smaller crashed pool only makes that
+    /// ratio closer to 1. Constant-product model, fee-less, sale of `s` into base `x`.
+    #[test]
+    fn d12_crash_raises_ratio() {
+        let reference = P;
+        let x = 1_000_000u128;
+        let s = 50_000u128;
+        // exec/pre = x / (x + s) for a fee-less constant-product sell.
+        let ratio = |base: u128| (base, base + s);
+        let mut last = 0u128;
+        for crash in [1u128, 4, 9, 16, 25] {
+            // A k-preserving crash by `crash`x multiplies base by √crash.
+            let base = x * (crash as f64).sqrt() as u128;
+            let (num, den) = ratio(base);
+            let pre = P / crash;
+            let exec = pre * num / den;
+            let t = ticket_price_q64(exec, reference, pre);
+            assert!(t * den * 1_000_001 >= reference * num * 1_000_000, "floor = reference × own slippage");
+            assert!(t >= last, "a deeper crash never lowers the ticket");
+            last = t;
+        }
     }
 }
