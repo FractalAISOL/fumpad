@@ -1,14 +1,23 @@
 [package]
 name = "tests"
 version = "0.1.0"
-description = "Created with Anchor"
 edition = "2021"
 rust-version = "1.89.0"
+publish = false
 
+# LiteSVM uses solana v4 crates; Anchor 1.2 uses v3. The harness converts at the
+# boundary (pubkeys/metas by bytes), so tests never mix the two type families.
 [dependencies]
-anchor-client = "1.2.1"
-fumpad = { version = "0.1.0", path = "../programs/fumpad" }
-solana-keypair = "3.0.0"
-solana-pubkey = "3.0.0"
-solana-sdk-ids = "3"
+anchor-lang = "1.2.1"
+fumpad = { path = "../programs/fumpad", features = ["no-entrypoint"] }
+litesvm = "0.18"
+solana-keypair = "3"
 solana-signer = "3"
+solana-transaction = "4"
+solana-message = "4"
+solana-account = "4"
+solana-instruction = "4"
+solana-address = "2"
+solana-clock = "=3.2.1"
+base64 = "0.22"
+serde_json = "1"

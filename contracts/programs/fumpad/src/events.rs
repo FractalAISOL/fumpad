@@ -1,0 +1,133 @@
+use anchor_lang::prelude::*;
+
+// Every state change emits an event via `emit_cpi!` (instructions using it need
+// `#[event_cpi]` on their Accounts struct). The indexer treats these as the source of truth.
+
+#[event]
+pub struct CoinCreated {
+    pub mint: Pubkey,
+    pub creator: Pubkey,
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+    pub ts: i64,
+}
+
+#[event]
+pub struct Trade {
+    pub mint: Pubkey,
+    pub user: Pubkey,
+    pub is_buy: bool,
+    /// false = bonding curve, true = PumpSwap via router.
+    pub on_amm: bool,
+    pub token_amount: u64,
+    /// SOL side before FUMPAD's fee.
+    pub sol_amount: u64,
+    pub fee_pool: u64,
+    pub fee_platform: u64,
+    pub fee_creator: u64,
+    /// Tokens bought into the reward pool by this trade (curve: inline buyback).
+    pub pool_tokens_bought: u64,
+    pub price_q64: u128,
+    pub virtual_sol_reserves: u64,
+    pub virtual_token_reserves: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct CurveCompleted {
+    pub mint: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct Graduated {
+    pub mint: Pubkey,
+    pub pool: Pubkey,
+    pub sol_deposited: u64,
+    pub tokens_deposited: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct TicketCreated {
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub ticket: Pubkey,
+    pub tokens: u64,
+    pub sell_price_q64: u128,
+    pub sell_usd_cents: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct TicketDebited {
+    pub ticket: Pubkey,
+    pub debited: u64,
+    pub remaining: u64,
+    pub voided: bool,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ClaimQueued {
+    pub mint: Pubkey,
+    pub ticket: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub queue_len: u16,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ClaimPaid {
+    pub mint: Pubkey,
+    pub ticket: Pubkey,
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub from_queue: bool,
+    pub median_price_q64: u128,
+    pub ts: i64,
+}
+
+#[event]
+pub struct TicketClosed {
+    pub ticket: Pubkey,
+    pub owner: Pubkey,
+    pub final_status: u8,
+    pub ts: i64,
+}
+
+#[event]
+pub struct SampleRecorded {
+    pub mint: Pubkey,
+    pub price_q64: u128,
+    pub fallback: bool,
+    pub ts: i64,
+}
+
+#[event]
+pub struct BuybackExecuted {
+    pub mint: Pubkey,
+    pub lamports_in: u64,
+    pub tokens_out: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct FeesWithdrawn {
+    pub mint: Pubkey,
+    pub recipient: Pubkey,
+    pub lamports: u64,
+    /// true = creator fees, false = platform fees.
+    pub creator: bool,
+    pub ts: i64,
+}
+
+#[event]
+pub struct HoldingsRegistered {
+    pub mint: Pubkey,
+    pub wallet: Pubkey,
+    pub added: u64,
+    pub ts: i64,
+}
