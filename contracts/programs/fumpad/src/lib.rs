@@ -91,15 +91,15 @@ pub mod fumpad {
     }
 
     // ── venue: router, oracle, buyback ──────────────────────────────────────
-    pub fn swap_buy(ctx: Context<SwapBuy>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
+    pub fn swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::handle_swap_buy(ctx, sol_in, min_tokens_out)
     }
 
-    pub fn swap_sell(ctx: Context<SwapSell>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
+    pub fn swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
         instructions::handle_swap_sell(ctx, tokens_in, min_sol_out)
     }
 
-    pub fn execute_buyback(ctx: Context<ExecuteBuyback>, max_lamports: u64) -> Result<()> {
+    pub fn execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>, max_lamports: u64) -> Result<()> {
         instructions::handle_execute_buyback(ctx, max_lamports)
     }
 
@@ -107,7 +107,7 @@ pub mod fumpad {
         instructions::handle_init_observations(ctx)
     }
 
-    pub fn record_samples(ctx: Context<RecordSamples>) -> Result<()> {
+    pub fn record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -> Result<()> {
         instructions::handle_record_samples(ctx)
     }
 }

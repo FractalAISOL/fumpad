@@ -21,7 +21,7 @@ custom-panic = []
 
 
 [dependencies]
-anchor-lang = { version = "1.2.1", features = ["init-if-needed"] }
+anchor-lang = { version = "1.2.1", features = ["init-if-needed", "event-cpi"] }
 anchor-spl = { version = "1.2.1", default-features = false, features = ["token", "token_2022", "token_2022_extensions", "associated_token", "solana-v3"] }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 
