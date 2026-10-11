@@ -338,3 +338,4 @@ mod smoke {
 #[cfg(test)] mod review_rewards;
 #[cfg(test)] mod redteam_custody;
 #[cfg(test)] mod review_venue;
+#[cfg(test)] mod cu_report;

@@ -1258,10 +1258,11 @@ fn compute_units_and_batch_size() {
     let mut groups = fx.group();
     let lp = fx.lp.insecure_clone();
     let lpk = kp_pk(&lp);
-    for _ in 0..4 {
+    for _ in 0..9 {
         let m = Pubkey::new_unique();
         put_mint(&mut fx.env, m, POOL_BASE_IN, 6, T22);
         put_token_account(&mut fx.env, ata(&lpk, &m, &T22), m, lpk, POOL_BASE_IN, T22);
+        put_token_account(&mut fx.env, ata(&lpk, &WSOL_MINT, &TOKEN), WSOL_MINT, lpk, 10 * SOL, TOKEN);
         let p = create_pool(&mut fx.env, &lp, m, 0, POOL_BASE_IN, 10 * SOL);
         let c = put_coin(&mut fx.env, m, p, CoinStatus::Graduated, 0);
         let o = pda(&[fumpad::OBSERVATIONS_SEED, m.as_ref()], &fumpad::ID);
@@ -1280,15 +1281,20 @@ fn compute_units_and_batch_size() {
     let one = fx.sample_ix(kp_pk(&k), &fx.group());
     let single = cu(&fx.env.send_as(&k, &[one], &[&k]));
     fx.env.warp(10);
-    let batch = fx.sample_ix(kp_pk(&k), &groups);
+    let batch = fx.sample_ix(kp_pk(&k), &groups[..5 * 5]);
     let five = cu(&fx.env.send_as(&k, &[batch], &[&k]));
+    // 10 coins (v0 transaction + lookup table in production): needs an explicit CU limit.
+    fx.env.warp(10);
+    let batch = fx.sample_ix(kp_pk(&k), &groups);
+    let ten = cu(&fx.env.send_as(&k, &[cu_limit(1_400_000), batch], &[&k]));
 
     fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
     let bb = cu(&fx.buyback(u64::MAX));
     println!(
-        "CU: swap_buy {buy}, swap_sell {sell}, record_samples 1 coin {single}, 5 coins {five}, execute_buyback {bb}"
+        "CU: swap_buy {buy}, swap_sell {sell}, record_samples 1 coin {single}, 5 coins {five}, 10 coins {ten}, execute_buyback {bb}"
     );
+    assert!(ten < 1_400_000);
     assert!(buy < 200_000 && sell < 200_000 && bb < 200_000);
     assert!(five < 200_000, "5-coin batch must fit the default 200k budget");
 }
