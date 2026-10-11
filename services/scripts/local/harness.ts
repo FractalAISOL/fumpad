@@ -145,7 +145,7 @@ export interface Postgres {
  */
 export async function startPostgres(port = 54329): Promise<Postgres> {
   if (process.env.DATABASE_URL) return { url: process.env.DATABASE_URL, stop: async () => {} };
-  const dir = join(LOCAL, "pg");
+  const dir = join(LOCAL, `pg-${port}`);
   rmSync(dir, { recursive: true, force: true });
   const env = { ...process.env, PATH };
   execFileSync("initdb", ["-D", dir, "-U", "fumpad", "--auth=trust", "-E", "UTF8"], { env, stdio: "ignore" });

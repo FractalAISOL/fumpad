@@ -273,15 +273,24 @@ export class Keeper {
     const p = this.params!;
     const now = this.chainNow;
     const due: { c: CoinState; overdue: bigint }[] = [];
+    const fill: { c: CoinState; overdue: bigint }[] = [];
     for (const c of this.coins.values()) {
       if (c.coin.status !== "graduated" || !c.obs || !c.pool) continue;
       const lastKeeper = c.obs.keeperSampled ? c.obs.lastKeeperSampleTs : 0n;
       const since = now - lastKeeper;
       const want = BigInt(this.sampleInterval(c));
-      if (since >= want && since >= p.oracleMinSpacingSecs) due.push({ c, overdue: since - want });
+      if (since < p.oracleMinSpacingSecs) continue;
+      if (since >= want) due.push({ c, overdue: since - want });
+      // Past half their interval: ride along in a batch that is going out anyway (fewer txs,
+      // and heartbeats of many coins converge into shared batches).
+      else if (since * 2n >= want) fill.push({ c, overdue: since - want });
     }
     if (!due.length) return 0;
     due.sort((a, b) => (a.overdue > b.overdue ? -1 : 1));
+    fill.sort((a, b) => (a.overdue > b.overdue ? -1 : 1));
+    const cap = this.cfg.useLookupTable && !this.cfg.dryRun ? MAX_SAMPLE_COINS : MAX_SAMPLE_COINS_LEGACY;
+    const room = (cap - (due.length % cap)) % cap;
+    due.push(...fill.slice(0, room));
     let sent = 0;
     const alt = this.cfg.useLookupTable && due.length > MAX_SAMPLE_COINS_LEGACY ? await this.ensureAlt(due.map((d) => d.c.mint)) : undefined;
     const size = alt ? MAX_SAMPLE_COINS : MAX_SAMPLE_COINS_LEGACY;

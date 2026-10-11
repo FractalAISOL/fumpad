@@ -2,6 +2,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Integration tests share one validator port + Postgres dir: run files one at a time.
+    fileParallelism: false,
     projects: [
       {
         test: {
@@ -17,7 +19,6 @@ export default defineConfig({
           environment: "node",
           testTimeout: 600_000,
           hookTimeout: 600_000,
-          fileParallelism: false,
         },
       },
     ],

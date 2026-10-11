@@ -258,8 +258,19 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     const coin = await get<Record<string, number | string | undefined>>(`/v1/coins/${M}`);
     const chainCoin = (await c.coin(mint))!;
     const vault = await c.tokenBalance(coinAddresses(mint).rewardVault);
-    check("GET /v1/coins/:mint pool tokens == reward vault on chain", Math.abs((coin.poolTokens as number) - Number(vault) / 1e6) < 1e-6, `${coin.poolTokens}`);
-    check("GET /v1/coins/:mint reference == Coin.reference (chain sync)", Math.abs((coin.referencePrice as number) / (Number(chainCoin.reference.avgQ64) / 2 ** 64 / 1e3) - 1) < 1e-6);
+    const poolOk = await waitFor("pool in sync", async () => {
+      const apiPool = (await get<{ poolTokens: number }>(`/v1/coins/${M}`)).poolTokens;
+      return Math.abs(apiPool - Number(await c.tokenBalance(coinAddresses(mint).rewardVault)) / 1e6) < 1e-6;
+    }, 30_000, 300).then(() => true, () => false);
+    check("GET /v1/coins/:mint pool tokens == reward vault on chain", poolOk, `${coin.poolTokens} vs ${Number(vault) / 1e6}`);
+    // The keeper keeps sampling (each sample moves the D10 reference): wait for a quiet
+    // moment where the API's chain-synced value and a fresh chain read agree.
+    const refOk = await waitFor("reference in sync", async () => {
+      const apiRef = (await get<{ referencePrice: number }>(`/v1/coins/${M}`)).referencePrice;
+      const chainRef = Number((await c.coin(mint))!.reference.avgQ64) / 2 ** 64 / 1e3;
+      return Math.abs(apiRef / chainRef - 1) < 1e-9;
+    }, 30_000, 300).then(() => true, () => false);
+    check("GET /v1/coins/:mint reference == Coin.reference (chain sync)", refOk);
     check("GET /v1/coins/:mint ammPool + paid out", coin.ammPool === chainCoin.ammPool.toBase58() && (coin.poolPaidOut as number) > 0);
     const list = await get<{ mint: string }[]>(`/v1/coins?sort=trending`);
     check("GET /v1/coins lists the coin", list.some((x) => x.mint === M));
