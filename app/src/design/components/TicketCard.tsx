@@ -50,11 +50,11 @@ export function TicketCard({ ticket: t, now, action, note, as: As = "article" }:
             ? `${days} ${days === 1 ? "day" : "days"} left`
             : undefined;
   return (
-    <As className={cx(s.tk, s[t.state], t.state === "claimable" && s.ready)} aria-labelledby={`tk-${t.id}`}>
+    <As className={cx(s.tk, s[t.state], t.state === "claimable" && s.ready)} aria-label={`$${t.symbol} ticket, ${TICKET_LABEL[t.state].toLowerCase()}`}>
       <div className={s.id}>
         <CoinTile symbol={t.symbol} variant={t.tile} />
         <div className={s.idText}>
-          <h3 id={`tk-${t.id}`} className={cx("ticker", s.sym)}>
+          <h3 className={cx("ticker", s.sym)}>
             ${t.symbol}
           </h3>
           <div className={s.idSub}>

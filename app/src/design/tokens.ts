@@ -250,6 +250,9 @@ export function tokensToCss(): string {
     `@media (min-width:${breakpoint.md}px){:root{--gut:${layout.gutterWide};}}`,
     `@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){${dark}color-scheme:dark;}}`,
     `:root[data-theme="dark"]{${dark}color-scheme:dark;}`,
+    // Scoped themes, for rendering both side by side (the /design route).
+    `.theme-light{${light}color-scheme:light;background:var(--canvas);color:var(--ink);}`,
+    `.theme-dark{${dark}color-scheme:dark;background:var(--canvas);color:var(--ink);}`,
     `@media (prefers-reduced-motion:reduce){:root{--dur-gauge:1ms;--dur-curve:1ms;--dur-slow:1ms;--dur-base:1ms;--dur-fast:1ms;}}`,
   ].join("\n");
 }
