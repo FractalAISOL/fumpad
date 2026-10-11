@@ -70,7 +70,6 @@ pub struct Buy<'info> {
 
 pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
     let a = &mut *ctx.accounts;
-    let p = a.global.params;
     require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
     require!(sol_in > 0, FumpadError::ZeroAmount);
@@ -82,7 +81,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     let q = quote_buy(&r, sol_in).ok_or(FumpadError::MathOverflow)?;
     require!(q.tokens_out > 0, FumpadError::ZeroAmount);
     require!(q.tokens_out >= min_tokens_out, FumpadError::SlippageExceeded);
-    let fee = compute_fee(q.sol_used, &p).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(q.sol_used, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     r.apply_buy(&q).ok_or(FumpadError::MathOverflow)?;
 
     // ── Move value: SOL (curve + fee) user → coin; tokens curve vault → user ──

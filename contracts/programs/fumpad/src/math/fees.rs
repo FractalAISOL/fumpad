@@ -1,4 +1,4 @@
-use crate::{constants::BPS_DENOM, state::Params};
+use crate::{constants::BPS_DENOM, state::CoinFees};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FeeSplit {
@@ -9,8 +9,9 @@ pub struct FeeSplit {
     pub creator: u64,
 }
 
-/// Fee on a SOL amount, rounded up (in the protocol's favor), split per params.
-pub fn compute_fee(sol_amount: u64, p: &Params) -> Option<FeeSplit> {
+/// Fee on a SOL amount, rounded up (in the protocol's favor), split per the coin's
+/// snapshotted fee params (D14: `Coin.fees`, taken from `Global.params` at create_coin).
+pub fn compute_fee(sol_amount: u64, p: &CoinFees) -> Option<FeeSplit> {
     let total = ceil_div((sol_amount as u128).checked_mul(p.fee_bps as u128)?, BPS_DENOM as u128)?;
     let total = u64::try_from(total).ok()?;
     let pool = ((total as u128) * p.fee_pool_share_bps as u128 / BPS_DENOM as u128) as u64;
@@ -29,10 +30,11 @@ pub fn ceil_div(a: u128, b: u128) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::Params;
 
     #[test]
     fn split_sums_and_matches_doc_example() {
-        let p = Params::default();
+        let p = Params::default().coin_fees();
         // $10,000 trade → $100 fee → 50 / 30 / 20 (concept doc §03), in lamports.
         let f = compute_fee(10_000_000_000, &p).unwrap();
         assert_eq!(f.total, 100_000_000);

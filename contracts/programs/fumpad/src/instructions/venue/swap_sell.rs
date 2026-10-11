@@ -119,7 +119,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     let gross = token_amount(&wsol_info)?.checked_sub(wsol_before).ok_or(FumpadError::MathOverflow)?;
     require!(tokens_sold > 0 && tokens_sold <= tokens_in, FumpadError::InvalidAccount);
 
-    let fee = compute_fee(gross, &a.global.params).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(gross, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     let net = gross.checked_sub(fee.total).ok_or(FumpadError::MathOverflow)?;
     require!(net >= min_sol_out, FumpadError::SlippageExceeded);
 

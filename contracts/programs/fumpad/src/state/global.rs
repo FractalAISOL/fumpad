@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::constants::*;
+use crate::state::CoinFees;
 
 /// Singleton config. PDA ["global"].
 #[account]
@@ -17,6 +18,11 @@ pub struct Global {
     pub paused: u8,
     pub params: Params,
     pub reserved: [u8; 128],
+    /// D15: params queued by `queue_params`, applied by `execute_params` once
+    /// `pending_eta` has passed. `pending_eta == 0` = nothing queued.
+    /// (Appended in v0.3: Global grew by `Params::INIT_SPACE + 8` bytes.)
+    pub pending_params: Params,
+    pub pending_eta: i64,
 }
 
 pub const PAUSE_LAUNCH: u8 = 1 << 0;
@@ -101,9 +107,22 @@ impl Default for Params {
 }
 
 impl Params {
-    /// Structural sanity checks run on initialize/update.
+    /// D14: the fee parameters a new coin snapshots at `create_coin`.
+    pub fn coin_fees(&self) -> CoinFees {
+        CoinFees {
+            graduation_fee_lamports: self.graduation_fee_lamports,
+            fee_bps: self.fee_bps,
+            fee_pool_share_bps: self.fee_pool_share_bps,
+            fee_platform_share_bps: self.fee_platform_share_bps,
+            fee_creator_share_bps: self.fee_creator_share_bps,
+        }
+    }
+
+    /// Structural sanity checks run on initialize / queue / execute.
     pub fn is_valid(&self) -> bool {
-        self.fee_pool_share_bps as u32 + self.fee_platform_share_bps as u32 + self.fee_creator_share_bps as u32
+        self.graduation_fee_lamports <= MAX_GRADUATION_FEE_LAMPORTS
+            && self.fee_bps <= MAX_FEE_BPS
+            && self.fee_pool_share_bps as u32 + self.fee_platform_share_bps as u32 + self.fee_creator_share_bps as u32
             == BPS_DENOM as u32
             && (self.fee_bps as u64) < BPS_DENOM
             && self.reward_pool_supply.checked_add(self.curve_supply).and_then(|s| s.checked_add(self.lp_supply))

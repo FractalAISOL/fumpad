@@ -184,7 +184,8 @@ impl World {
             tickets_created: 0,
             tokens_paid_out: 0,
             reference: Default::default(),
-            reserved: [0; 88],
+            fees: fumpad::state::Params::default().coin_fees(),
+            reserved: [0; 72],
         };
         w.write_coin(&c);
         w

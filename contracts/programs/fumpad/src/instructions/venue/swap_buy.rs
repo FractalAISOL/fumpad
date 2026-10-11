@@ -126,7 +126,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     require!(spent > 0 && spent <= sol_in, FumpadError::InvalidAccount);
 
     // FUMPAD fee on top of the SOL actually spent, paid in native SOL into the Coin account.
-    let fee = compute_fee(spent, &a.global.params).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(spent, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     transfer_sol(&system_info, &user_info, &a.coin.to_account_info(), fee.total)?;
     accrue_fee(&mut a.coin, &fee)?;
     record_volume(&mut a.coin, spent);

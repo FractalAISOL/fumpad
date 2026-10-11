@@ -60,16 +60,20 @@ pub struct Graduate<'info> {
     #[account(address = WSOL_MINT, mint::token_program = quote_token_program)]
     pub wsol_mint: Box<InterfaceAccount<'info, Mint>>,
 
-    /// Pool authority's WSOL account: the raised SOL is wrapped here, deposited, and
-    /// the account is closed again (rent back to `payer`).
+    /// Graduation's own WSOL account (C-L1: NOT the pool authority's ATA, which is
+    /// `execute_buyback`'s persistent `buyback_wsol`): PDA ["graduation_wsol", mint],
+    /// created here, the raised SOL wrapped into it and deposited, then closed again in this
+    /// instruction (rent back to `payer`).
     #[account(
-        init_if_needed,
+        init,
         payer = payer,
-        associated_token::mint = wsol_mint,
-        associated_token::authority = pool_authority,
-        associated_token::token_program = quote_token_program,
+        seeds = [GRADUATION_WSOL_SEED, mint.key().as_ref()],
+        bump,
+        token::mint = wsol_mint,
+        token::authority = pool_authority,
+        token::token_program = quote_token_program,
     )]
-    pub pool_authority_wsol: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub graduation_wsol: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// CHECK: PumpSwap pool PDA, verified in the handler; created by PumpSwap.
     #[account(mut)]
@@ -125,7 +129,8 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     require!(a.coin.status == CoinStatus::Complete, FumpadError::WrongCoinStatus);
     let now = Clock::get()?.unix_timestamp;
 
-    let grad_fee = a.global.params.graduation_fee_lamports;
+    // D14: the fee snapshotted at create_coin, never the current global value.
+    let grad_fee = a.coin.fees.graduation_fee_lamports;
     let quote_amount = a.coin.real_sol_reserves.checked_sub(grad_fee).ok_or(FumpadError::InsufficientReserves)?;
     require!(quote_amount > 0, FumpadError::InsufficientReserves);
     let base_amount = a.curve_vault.amount;
@@ -163,14 +168,14 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     // ── 2. Lend the pool authority rent for PumpSwap's accounts ──
     transfer(a.payer.to_account_info(), a.pool_authority.to_account_info(), GRADUATION_RENT_BUDGET, false)?;
 
-    // ── 3. Wrap the raised SOL in the pool authority's WSOL account ──
-    transfer(a.pool_authority.to_account_info(), a.pool_authority_wsol.to_account_info(), quote_amount, true)?;
+    // ── 3. Wrap the raised SOL in graduation's own WSOL account ──
+    transfer(a.pool_authority.to_account_info(), a.graduation_wsol.to_account_info(), quote_amount, true)?;
     token_interface::sync_native(CpiContext::new(
         a.quote_token_program.key(),
-        SyncNative { account: a.pool_authority_wsol.to_account_info() },
+        SyncNative { account: a.graduation_wsol.to_account_info() },
     ))?;
-    a.pool_authority_wsol.reload()?;
-    let wsol_before = a.pool_authority_wsol.amount;
+    a.graduation_wsol.reload()?;
+    let wsol_before = a.graduation_wsol.amount;
     require!(wsol_before >= quote_amount, FumpadError::GraduationMismatch);
 
     // ── 4. Create the pool ──
@@ -187,7 +192,7 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
             quote_mint: &a.wsol_mint.to_account_info(),
             lp_mint: &a.lp_mint.to_account_info(),
             user_base_token_account: &a.curve_vault.to_account_info(),
-            user_quote_token_account: &a.pool_authority_wsol.to_account_info(),
+            user_quote_token_account: &a.graduation_wsol.to_account_info(),
             user_pool_token_account: &a.pool_authority_lp.to_account_info(),
             pool_base_token_account: &a.pool_base_vault.to_account_info(),
             pool_quote_token_account: &a.pool_quote_vault.to_account_info(),
@@ -216,10 +221,10 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
 
     // ── 5. Verify by balance deltas ──
     a.curve_vault.reload()?;
-    a.pool_authority_wsol.reload()?;
+    a.graduation_wsol.reload()?;
     require!(a.curve_vault.amount == 0, FumpadError::GraduationMismatch);
     require!(
-        wsol_before.checked_sub(a.pool_authority_wsol.amount) == Some(quote_amount),
+        wsol_before.checked_sub(a.graduation_wsol.amount) == Some(quote_amount),
         FumpadError::GraduationMismatch
     );
     require_keys_eq!(*a.amm_pool.owner, PUMPSWAP_PROGRAM_ID, FumpadError::WrongVenue);
@@ -270,7 +275,7 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     token_interface::close_account(CpiContext::new_with_signer(
         a.quote_token_program.key(),
         CloseAccount {
-            account: a.pool_authority_wsol.to_account_info(),
+            account: a.graduation_wsol.to_account_info(),
             destination: a.payer.to_account_info(),
             authority: a.pool_authority.to_account_info(),
         },

@@ -145,3 +145,54 @@ pub struct HoldingsRegistered {
     pub added: u64,
     pub ts: i64,
 }
+
+// ── v0.3 ────────────────────────────────────────────────────────────────────
+
+/// D15: a params change was queued; `execute_params` may apply it from `eta`.
+#[event]
+pub struct ParamsQueued {
+    pub params: crate::state::Params,
+    pub eta: i64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ParamsUpdated {
+    pub params: crate::state::Params,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ParamsCancelled {
+    pub ts: i64,
+}
+
+/// D13: a coin stuck in `Complete` for 7 days reopened its curve (escape hatch).
+#[event]
+pub struct CurveReopened {
+    pub mint: Pubkey,
+    pub completed_at: i64,
+    pub ts: i64,
+}
+
+/// D16: a queued payout whose owner's ATA refuses transfers was paid into the ticket's
+/// escrow token account (`["escrow", ticket]`); the owner withdraws it with `withdraw_escrow`.
+#[event]
+pub struct ClaimEscrowed {
+    pub mint: Pubkey,
+    pub ticket: Pubkey,
+    pub owner: Pubkey,
+    pub escrow: Pubkey,
+    pub amount: u64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct EscrowWithdrawn {
+    pub mint: Pubkey,
+    pub ticket: Pubkey,
+    pub owner: Pubkey,
+    pub destination: Pubkey,
+    pub amount: u64,
+    pub ts: i64,
+}

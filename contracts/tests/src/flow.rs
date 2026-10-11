@@ -354,7 +354,7 @@ impl Flow {
                 pool_authority: pa,
                 curve_vault: self.curve_vault,
                 wsol_mint: WSOL_MINT,
-                pool_authority_wsol: ata(&pa, &WSOL_MINT, &TOKEN),
+                graduation_wsol: fpda(&[fumpad::GRADUATION_WSOL_SEED, self.mint.as_ref()]),
                 amm_pool: self.pool,
                 amm_global_config: PUMPSWAP_GLOBAL_CONFIG,
                 lp_mint,

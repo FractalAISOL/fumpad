@@ -160,3 +160,23 @@ fn covers_is_exact() {
     assert!(lock.covers(500, 200, 1_000));
     assert!(!lock.covers(499, 200, 1_000));
 }
+
+/// C-Info4: the locker fails closed on any Pool size other than the known layout.
+#[test]
+fn parse_pool_requires_exact_known_length() {
+    let mut d = vec![0u8; POOL_LEN];
+    d[..8].copy_from_slice(&POOL_DISCRIMINATOR);
+    d[203..211].copy_from_slice(&7u64.to_le_bytes());
+    assert_eq!(parse_pool(&d).unwrap().lp_supply, 7);
+    for len in [0usize, 7, 211, 261, 286, 288, 300, 1_024] {
+        let mut x = d.clone();
+        x.resize(len, 0);
+        if len >= 8 {
+            x[..8].copy_from_slice(&POOL_DISCRIMINATOR);
+        }
+        assert!(parse_pool(&x).is_err(), "len {len} accepted");
+    }
+    let mut bad = d.clone();
+    bad[0] ^= 1;
+    assert!(parse_pool(&bad).is_err());
+}

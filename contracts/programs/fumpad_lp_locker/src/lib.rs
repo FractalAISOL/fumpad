@@ -291,6 +291,8 @@ pub enum LockerError {
     BadReserves,
     #[msg("Math overflow")]
     MathOverflow,
+    #[msg("Unknown PumpSwap pool layout")]
+    UnknownPoolLayout,
 }
 
 // ── PumpSwap pool / token reads ─────────────────────────────────────────────
@@ -315,10 +317,17 @@ fn u64_at(d: &[u8], o: usize) -> u64 {
     if d.len() >= o + 8 { u64::from_le_bytes(d[o..o + 8].try_into().unwrap()) } else { 0 }
 }
 
-/// Pool layout per PumpSwap IDL; appended fields missing on short accounts read as 0.
+/// Exact size of a PumpSwap `Pool` in the layout parsed below (IDL; every FUMPAD pool is
+/// created with it). Fail closed: any other size — e.g. PumpSwap reallocating pools for a
+/// new layout — is refused, so `lock` (→ `graduate`) and `skim` stop and the principal stays
+/// locked, rather than reading fields at shifted offsets.
+pub const POOL_LEN: usize = 287;
+
+/// Pool layout per PumpSwap IDL (exactly `POOL_LEN` bytes).
 pub fn parse_pool(d: &[u8]) -> Result<PoolView> {
-    require!(d.len() >= 211 && d[..8] == POOL_DISCRIMINATOR, LockerError::WrongAccount);
-    let virtual_quote = if d.len() >= 261 { i128::from_le_bytes(d[245..261].try_into().unwrap()) } else { 0 };
+    require!(d.len() >= 8 && d[..8] == POOL_DISCRIMINATOR, LockerError::WrongAccount);
+    require!(d.len() == POOL_LEN, LockerError::UnknownPoolLayout);
+    let virtual_quote = i128::from_le_bytes(d[245..261].try_into().unwrap());
     Ok(PoolView {
         creator: key_at(d, 11),
         base_mint: key_at(d, 43),
