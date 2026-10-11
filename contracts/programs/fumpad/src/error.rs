@@ -55,6 +55,8 @@ pub enum FumpadError {
     OpenTicketsMismatch,
     #[msg("Ticket cannot be closed yet")]
     TicketNotClosable,
+    #[msg("Coin lamport accounting invariant violated")]
+    LamportInvariant,
 
     // ── venue / router / oracle / buyback ───────────────────────────────────
     #[msg("Wrong venue program or pool")]
