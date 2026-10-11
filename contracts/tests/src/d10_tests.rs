@@ -259,6 +259,7 @@ fn honest_sells_ticket_at_execution_price() {
     let t3 = f.next_ticket(&pk_);
     let pre = f.spot_q64();
     let m = ok(f.swap_sell(&p, f.tokens(&pk_) / 2));
+    println!("CU: swap_sell creating a ticket = {}", m.compute_units_consumed);
     let exec = events::<Trade>(&m)[0].price_q64;
     let t = f.ticket(&t3);
     assert!(t.sell_price_q64 >= exec && t.sell_price_q64 <= pre);
