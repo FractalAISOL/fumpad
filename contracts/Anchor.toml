@@ -6,6 +6,7 @@ skip-lint = false
 
 [programs.localnet]
 fumpad = "ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv"
+fumpad_lp_locker = "8TkV5aWsBJ9bHr96HV5iQXrCJ51XvHTTtxnufMQmEaY9"
 
 [provider]
 cluster = "localnet"
