@@ -12,6 +12,7 @@ Status: draft for review · 2026-10-11 · Source concept: `concept-overview.pdf`
 | D4 | Queue is **skip-ahead**: processed in sell-time order, but an entry that doesn't fit is skipped so smaller ones behind it can pay. |
 | D5 | Queued claims **do not expire** (the 90-day clock stops at queue entry). |
 | D8 | Graduation fee = **0 SOL** during beta (covers nothing but rent; param stays tunable). |
+| D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). |
 | D9 | Creator exclusion is **wallet-based**; suspected creator alt wallets are flagged publicly and excluded from leaderboards, not blocked from claiming. |
 | D6 | 10x check = **own on-chain sampler** (Option A): keeper-signed price samples, median over 30 min. |
 | D7 | **Own bonding curve**; graduation creates a **PumpSwap** pool (permissionless, verified). |
