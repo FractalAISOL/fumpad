@@ -17,6 +17,9 @@ use solana_transaction::Transaction;
 
 pub use fumpad;
 
+#[cfg(test)]
+mod rewards_tests;
+
 pub const SOL: u64 = 1_000_000_000;
 
 pub fn fixtures_dir() -> std::path::PathBuf {

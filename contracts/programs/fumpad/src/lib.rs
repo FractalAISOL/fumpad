@@ -70,7 +70,7 @@ pub mod fumpad {
         instructions::handle_claim(ctx)
     }
 
-    pub fn process_queue(ctx: Context<ProcessQueue>, max_entries: u8) -> Result<()> {
+    pub fn process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max_entries: u8) -> Result<()> {
         instructions::handle_process_queue(ctx, max_entries)
     }
 

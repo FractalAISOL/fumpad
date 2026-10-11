@@ -1,0 +1,333 @@
+//! Pure reward-eligibility logic (no account access), so every abuse rule can be
+//! unit-tested in isolation. OWNER: rewards module.
+//!
+//! Position model (see `state/position.rs`): `matured` + `pending` = tokens FUMPAD knows
+//! the wallet acquired through FUMPAD buys or `register_holdings`. The program cannot see
+//! transfers or trades on other venues, so whenever the wallet's real balance is known
+//! (sells, `register_holdings`) the tracked amount is capped to it. Tokens that left the
+//! wallet outside FUMPAD are assumed to have been the *matured* ones (the strict reading).
+
+use crate::{
+    constants::BPS_DENOM,
+    state::{Params, Position, TicketStatus},
+};
+use anchor_lang::prelude::Pubkey;
+
+/// Cap `matured + pending` to the wallet's real `balance`, removing from `matured` first.
+pub fn cap_tracked(pos: &mut Position, balance: u64) {
+    let tracked = pos.matured.saturating_add(pos.pending);
+    if tracked <= balance {
+        return;
+    }
+    let mut excess = tracked - balance;
+    let from_matured = excess.min(pos.matured);
+    pos.matured -= from_matured;
+    excess -= from_matured;
+    pos.pending = pos.pending.saturating_sub(excess);
+}
+
+/// Debit `sold` tokens from the tracked buckets, matured first (the seller sells their
+/// eligible tokens first, which is what makes the ticket). Untracked tokens absorb the rest.
+pub fn debit_sold(pos: &mut Position, sold: u64) {
+    let m = sold.min(pos.matured);
+    pos.matured -= m;
+    let rest = sold - m;
+    pos.pending = pos.pending.saturating_sub(rest);
+}
+
+/// Why a sell did not get a ticket (informational; never an error).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoTicket {
+    Creator,
+    /// None of the sold tokens had been held for `min_hold_secs`.
+    NotMatured,
+    TooManyOpenTickets,
+    BelowMinimumUsd,
+    OracleUnavailable,
+    ZeroPrice,
+}
+
+/// Settle, cap and debit the position for a sell, and return the ticket candidate size.
+/// Always mutates the position (every sold token is debited) — even when no ticket results.
+/// The USD check is done by the caller (needs the oracle) on the returned amount.
+pub fn plan_sell(
+    pos: &mut Position,
+    p: &Params,
+    is_creator: bool,
+    tokens_sold: u64,
+    balance_before: u64,
+    now: i64,
+) -> Result<u64, NoTicket> {
+    pos.settle(now, p.min_hold_secs);
+    cap_tracked(pos, balance_before);
+    let ticket_tokens = tokens_sold.min(pos.matured);
+    debit_sold(pos, tokens_sold);
+    if is_creator {
+        return Err(NoTicket::Creator);
+    }
+    if ticket_tokens == 0 {
+        return Err(NoTicket::NotMatured);
+    }
+    if pos.open_count >= p.max_open_tickets {
+        return Err(NoTicket::TooManyOpenTickets);
+    }
+    Ok(ticket_tokens)
+}
+
+// ── open-ticket list ─────────────────────────────────────────────────────────
+
+pub fn push_open(pos: &mut Position, key: Pubkey) -> bool {
+    if pos.open_tickets.contains(&key) {
+        return false;
+    }
+    match pos.open_tickets.iter_mut().find(|k| **k == Pubkey::default()) {
+        Some(slot) => {
+            *slot = key;
+            pos.open_count += 1;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Idempotent: returns whether the key was present.
+pub fn remove_open(pos: &mut Position, key: &Pubkey) -> bool {
+    if *key == Pubkey::default() {
+        return false;
+    }
+    match pos.open_tickets.iter_mut().find(|k| *k == key) {
+        Some(slot) => {
+            *slot = Pubkey::default();
+            pos.open_count = pos.open_count.saturating_sub(1);
+            true
+        }
+        None => false,
+    }
+}
+
+/// True iff `keys` is exactly the set of the position's open tickets (no duplicates,
+/// no extras, none missing).
+pub fn open_set_matches(pos: &Position, keys: &[Pubkey]) -> bool {
+    if keys.len() != pos.open_count as usize {
+        return false;
+    }
+    let listed = pos.open_tickets.iter().filter(|k| **k != Pubkey::default()).count();
+    if listed != keys.len() {
+        return false;
+    }
+    for (i, k) in keys.iter().enumerate() {
+        if *k == Pubkey::default() || !pos.open_tickets.contains(k) || keys[..i].contains(k) {
+            return false;
+        }
+    }
+    true
+}
+
+// ── rebuy rule ───────────────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RebuyView {
+    pub sell_ts: i64,
+    pub seq: u64,
+    pub tokens: u64,
+    pub status: TicketStatus,
+}
+
+/// Distribute `amount` rebought tokens over the tickets, newest sell first (ties: higher
+/// seq first), only for Open/Queued tickets whose sell was within `window_secs` of `now`.
+/// Returns the debit for each ticket (same order as the input).
+pub fn plan_rebuy(tickets: &[RebuyView], amount: u64, now: i64, window_secs: i64) -> Vec<u64> {
+    let mut debits = vec![0u64; tickets.len()];
+    let mut order: Vec<usize> = (0..tickets.len())
+        .filter(|&i| {
+            let t = &tickets[i];
+            matches!(t.status, TicketStatus::Open | TicketStatus::Queued)
+                && t.tokens > 0
+                && now >= t.sell_ts
+                && now - t.sell_ts <= window_secs
+        })
+        .collect();
+    order.sort_by(|&a, &b| (tickets[b].sell_ts, tickets[b].seq).cmp(&(tickets[a].sell_ts, tickets[a].seq)));
+    let mut left = amount;
+    for i in order {
+        if left == 0 {
+            break;
+        }
+        let d = left.min(tickets[i].tokens);
+        debits[i] = d;
+        left -= d;
+    }
+    debits
+}
+
+// ── claims ───────────────────────────────────────────────────────────────────
+
+/// Tokens owed for a ticket: `tokens × claim_bps / 10_000`, rounded down.
+pub fn claim_amount(tokens: u64, claim_bps: u16) -> u64 {
+    ((tokens as u128) * claim_bps as u128 / BPS_DENOM as u128) as u64
+}
+
+/// Per-claim cap: `pool × max_claim_pool_bps / 10_000`, rounded down.
+pub fn claim_cap(pool: u64, max_claim_pool_bps: u16) -> u64 {
+    ((pool as u128) * max_claim_pool_bps as u128 / BPS_DENOM as u128) as u64
+}
+
+/// An amount is payable from `pool` iff it is non-zero, within the per-claim cap and
+/// within the pool.
+pub fn fits(amount: u64, pool: u64, max_claim_pool_bps: u16) -> bool {
+    amount > 0 && amount <= claim_cap(pool, max_claim_pool_bps) && amount <= pool
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pos() -> Position {
+        Position {
+            bump: 0,
+            wallet: Pubkey::new_unique(),
+            mint: Pubkey::new_unique(),
+            matured: 0,
+            pending: 0,
+            pending_since: 0,
+            next_ticket_seq: 0,
+            open_tickets: [Pubkey::default(); crate::constants::MAX_OPEN_TICKETS],
+            open_count: 0,
+            reserved: [0; 64],
+        }
+    }
+
+    #[test]
+    fn min_hold_ten_minutes() {
+        let p = Params::default();
+        let mut s = pos();
+        s.add(1_000, 0, p.min_hold_secs);
+        // 9:59 later: nothing matured → no ticket, and the sold tokens are still debited.
+        assert_eq!(plan_sell(&mut s.clone(), &p, false, 1_000, 1_000, 599), Err(NoTicket::NotMatured));
+        let mut s2 = s.clone();
+        let _ = plan_sell(&mut s2, &p, false, 400, 1_000, 599);
+        assert_eq!((s2.matured, s2.pending), (0, 600));
+        // 10:00 later: matured.
+        assert_eq!(plan_sell(&mut s.clone(), &p, false, 1_000, 1_000, 600), Ok(1_000));
+    }
+
+    #[test]
+    fn new_buy_does_not_reset_matured_clock_but_restarts_pending() {
+        let p = Params::default();
+        let mut s = pos();
+        s.add(1_000, 0, p.min_hold_secs);
+        s.add(500, 700, p.min_hold_secs); // first 1_000 matured at 600 → settled here
+        assert_eq!((s.matured, s.pending, s.pending_since), (1_000, 500, 700));
+        // Selling 1_500 at t=800: only 1_000 qualify.
+        assert_eq!(plan_sell(&mut s.clone(), &p, false, 1_500, 1_500, 800), Ok(1_000));
+        // Adding to unmatured pending restarts its clock for all of it.
+        s.add(100, 1_000, p.min_hold_secs);
+        assert_eq!((s.pending, s.pending_since), (600, 1_000));
+        s.settle(1_599, p.min_hold_secs);
+        assert_eq!(s.pending, 600);
+        s.settle(1_600, p.min_hold_secs);
+        assert_eq!((s.matured, s.pending), (1_600, 0));
+    }
+
+    #[test]
+    fn ticket_capped_by_sold_and_balance() {
+        let p = Params::default();
+        let mut s = pos();
+        s.add(1_000, 0, p.min_hold_secs);
+        // Sold less than matured.
+        let mut a = s.clone();
+        assert_eq!(plan_sell(&mut a, &p, false, 300, 1_000, 700), Ok(300));
+        assert_eq!(a.matured, 700);
+        // Wallet moved 800 out elsewhere: only 200 left → ticket ≤ 200 even if 500 sold
+        // (the extra 300 sold came from untracked tokens).
+        let mut b = s.clone();
+        assert_eq!(plan_sell(&mut b, &p, false, 500, 200, 700), Ok(200));
+        assert_eq!((b.matured, b.pending), (0, 0));
+    }
+
+    #[test]
+    fn cap_removes_matured_first() {
+        let mut s = pos();
+        s.matured = 100;
+        s.pending = 50;
+        cap_tracked(&mut s, 120);
+        assert_eq!((s.matured, s.pending), (70, 50));
+        cap_tracked(&mut s, 10);
+        assert_eq!((s.matured, s.pending), (0, 10));
+        cap_tracked(&mut s, 1_000);
+        assert_eq!((s.matured, s.pending), (0, 10));
+    }
+
+    #[test]
+    fn creator_and_open_ticket_limit() {
+        let p = Params::default();
+        let mut s = pos();
+        s.add(1_000, 0, p.min_hold_secs);
+        let mut c = s.clone();
+        assert_eq!(plan_sell(&mut c, &p, true, 500, 1_000, 700), Err(NoTicket::Creator));
+        assert_eq!(c.matured, 500); // still debited
+        for _ in 0..5 {
+            assert!(push_open(&mut s, Pubkey::new_unique()));
+        }
+        assert_eq!(plan_sell(&mut s.clone(), &p, false, 500, 1_000, 700), Err(NoTicket::TooManyOpenTickets));
+        assert!(!push_open(&mut s, Pubkey::new_unique()));
+    }
+
+    #[test]
+    fn open_list_ops() {
+        let mut s = pos();
+        let (a, b, c) = (Pubkey::new_unique(), Pubkey::new_unique(), Pubkey::new_unique());
+        assert!(open_set_matches(&s, &[]));
+        assert!(push_open(&mut s, a));
+        assert!(!push_open(&mut s, a));
+        assert!(push_open(&mut s, b));
+        assert!(open_set_matches(&s, &[b, a]));
+        assert!(!open_set_matches(&s, &[a]));
+        assert!(!open_set_matches(&s, &[a, a]));
+        assert!(!open_set_matches(&s, &[a, c]));
+        assert!(!open_set_matches(&s, &[a, b, c]));
+        assert!(remove_open(&mut s, &a));
+        assert!(!remove_open(&mut s, &a));
+        assert!(!remove_open(&mut s, &Pubkey::default()));
+        assert!(open_set_matches(&s, &[b]));
+        assert_eq!(s.open_count, 1);
+        assert!(push_open(&mut s, c)); // reuses the freed slot
+        assert_eq!(s.open_tickets[0], c);
+    }
+
+    #[test]
+    fn rebuy_newest_first_within_window() {
+        let w = 7 * 86_400;
+        let t = |sell_ts, seq, tokens, status| RebuyView { sell_ts, seq, tokens, status };
+        let tickets = [
+            t(100, 0, 1_000, TicketStatus::Open),
+            t(300, 2, 400, TicketStatus::Queued),
+            t(200, 1, 500, TicketStatus::Open),
+            t(300, 3, 50, TicketStatus::Claimed), // not active
+            t(-w, 4, 9_999, TicketStatus::Open),  // outside the window at now=1
+        ];
+        // 600 rebought: newest (seq 2, 400) fully, then seq 1 gets 200.
+        assert_eq!(plan_rebuy(&tickets, 600, 1_000, w), vec![0, 400, 200, 0, 0]);
+        // Huge rebuy: everything in-window voided, excess ignored.
+        assert_eq!(plan_rebuy(&tickets, 10_000, 1_000, w), vec![1_000, 400, 500, 0, 0]);
+        // Window edge: exactly 7 days later still counts; one second later doesn't.
+        assert_eq!(plan_rebuy(&[t(0, 0, 10, TicketStatus::Open)], 5, w, w), vec![5]);
+        assert_eq!(plan_rebuy(&[t(0, 0, 10, TicketStatus::Open)], 5, w + 1, w), vec![0]);
+        // Same sell_ts → higher seq is newer.
+        let same = [t(5, 0, 10, TicketStatus::Open), t(5, 1, 10, TicketStatus::Open)];
+        assert_eq!(plan_rebuy(&same, 15, 10, w), vec![5, 10]);
+    }
+
+    #[test]
+    fn claim_math() {
+        assert_eq!(claim_amount(1_000_000, 1_000), 100_000);
+        assert_eq!(claim_amount(9, 1_000), 0);
+        assert_eq!(claim_amount(u64::MAX, 10_000), u64::MAX);
+        assert_eq!(claim_cap(1_000, 1_000), 100);
+        assert!(fits(100, 1_000, 1_000));
+        assert!(!fits(101, 1_000, 1_000));
+        assert!(!fits(0, 1_000, 1_000));
+        assert!(!fits(1, 9, 1_000)); // cap 0
+        assert!(fits(1_000, 1_000, 10_000));
+    }
+}

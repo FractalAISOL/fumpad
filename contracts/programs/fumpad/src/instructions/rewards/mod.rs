@@ -1,6 +1,8 @@
 //! OWNER: rewards module.
 
 pub mod hooks;
+pub mod logic;
+pub mod queue;
 pub mod register_holdings;
 pub mod claim;
 pub mod process_queue;
