@@ -61,7 +61,13 @@ export interface EventMap {
   Skimmed: SkimmedEvent;
 }
 export type EventName = keyof EventMap;
-export type FumpadEvent = { [K in EventName]: { name: K; data: EventMap[K]; program: "fumpad" | "locker"; index: number; topIx: number } }[EventName];
+/**
+ * One decoded event. `raw` = base64 of discriminator ‖ borsh body (what `decodeEventRaw`
+ * takes), so an indexer can store it and re-decode on replay.
+ */
+export type FumpadEvent = {
+  [K in EventName]: { name: K; data: EventMap[K]; program: "fumpad" | "locker"; index: number; topIx: number; raw: string };
+}[EventName];
 
 /** `TicketClosed.final_status` / TicketStatus enum order. */
 export const TICKET_STATUS_NAMES = ["open", "queued", "claimed", "expired", "voided"] as const;
@@ -86,7 +92,36 @@ export interface TxLike {
     logMessages?: string[] | null;
     innerInstructions?: { index: number; instructions: CompiledIx[] }[] | null;
     loadedAddresses?: { writable: (string | PublicKey)[]; readonly: (string | PublicKey)[] } | null;
+    preTokenBalances?: TokenBalance[] | null;
+    postTokenBalances?: TokenBalance[] | null;
+    preBalances?: number[];
+    postBalances?: number[];
   } | null;
+}
+
+export interface TokenBalance {
+  accountIndex: number;
+  mint: string;
+  owner?: string;
+  uiTokenAmount: { amount: string };
+}
+
+/**
+ * Per-owner token balance change of `mint` in a transaction (post − pre), from the
+ * RPC's pre/postTokenBalances. Used to see PumpSwap trades that bypass FUMPAD.
+ */
+export function tokenDeltas(tx: TxLike, mint: string): Map<string, bigint> {
+  const out = new Map<string, bigint>();
+  const add = (list: TokenBalance[] | null | undefined, sign: bigint) => {
+    for (const b of list ?? []) {
+      if (b.mint !== mint || !b.owner) continue;
+      out.set(b.owner, (out.get(b.owner) ?? 0n) + sign * BigInt(b.uiTokenAmount.amount));
+    }
+  };
+  add(tx.meta?.postTokenBalances, 1n);
+  add(tx.meta?.preTokenBalances, -1n);
+  for (const [k, v] of out) if (v === 0n) out.delete(k);
+  return out;
 }
 
 const toB58 = (k: string | PublicKey | { toBase58(): string }) => (typeof k === "string" ? k : k.toBase58());
@@ -126,6 +161,12 @@ export function decodeCpiEvent(payload: Uint8Array): { name: string; data: unkno
   return ev ? { name: ev.name, data: normalize(ev.data) } : null;
 }
 
+/** Re-decode a stored `FumpadEvent.raw`. */
+export function decodeEventRaw(program: "fumpad" | "locker", raw: string): { name: EventName; data: EventMap[EventName] } | null {
+  const ev = (program === "fumpad" ? fumpadCoder() : lockerCoder()).events.decode(raw);
+  return ev ? { name: ev.name as EventName, data: normalize(ev.data) as EventMap[EventName] } : null;
+}
+
 /**
  * All FUMPAD + locker events of a successful transaction, in execution order per
  * top-level instruction. Failed transactions emit nothing (their state changes reverted).
@@ -146,10 +187,11 @@ export function decodeTransactionEvents(tx: TxLike): FumpadEvent[] {
       if (!startsWith(data, EVENT_IX_TAG)) continue;
       const accts = ix.accounts ?? ix.accountKeyIndexes ?? [];
       if (accts.length < 1 || keys[accts[0]] !== evAuth) continue;
-      const ev = decodeCpiEvent(data.subarray(8));
+      const payload = data.subarray(8);
+      const ev = decodeCpiEvent(payload);
       if (!ev) continue;
       const list = byTop.get(group.index) ?? [];
-      list.push({ name: ev.name, data: ev.data, program: "fumpad", index: 0, topIx: group.index } as FumpadEvent);
+      list.push({ name: ev.name, data: ev.data, program: "fumpad", index: 0, topIx: group.index, raw: b64(payload) } as FumpadEvent);
       byTop.set(group.index, list);
     }
   }
@@ -170,10 +212,11 @@ export function decodeTransactionEvents(tx: TxLike): FumpadEvent[] {
       continue;
     }
     if (line.startsWith("Program data: ") && stack[stack.length - 1] === locker) {
-      const ev = lockerCoder().events.decode(line.slice("Program data: ".length));
+      const raw = line.slice("Program data: ".length);
+      const ev = lockerCoder().events.decode(raw);
       if (!ev) continue;
       const list = byTop.get(top) ?? [];
-      list.push({ name: ev.name, data: normalize(ev.data), program: "locker", index: 0, topIx: top } as FumpadEvent);
+      list.push({ name: ev.name, data: normalize(ev.data), program: "locker", index: 0, topIx: top, raw } as FumpadEvent);
       byTop.set(top, list);
     }
   }
