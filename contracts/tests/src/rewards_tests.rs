@@ -335,7 +335,8 @@ impl World {
                 open_tickets: [Pubkey::default(); fumpad::MAX_OPEN_TICKETS],
                 open_count: 0,
                 last_balance: 0,
-                reserved: [0; 56],
+                auto_claim_opt_out: 0,
+                reserved: [0; 55],
             },
         }
     }
@@ -380,6 +381,10 @@ impl World {
 
     pub fn ticket(&self, key: &Pubkey) -> Ticket {
         self.env.fetch(key)
+    }
+
+    pub fn write_ticket(&mut self, key: &Pubkey, t: &Ticket) {
+        self.raw_set(key, anchor_bytes(t), fumpad::ID);
     }
 
     // ── instruction builders ────────────────────────────────────────────────
@@ -542,6 +547,66 @@ impl World {
     pub fn close(&mut self, caller: &Keypair, ticket: Pubkey, with_queue: bool) -> TransactionResult {
         let i = self.close_ix(&kp_pk(caller), ticket, with_queue);
         self.env.send(&[i], &[caller])
+    }
+
+    // ── D17 auto-claim ──────────────────────────────────────────────────────
+
+    /// `claim_for` signed by `keeper`, paying to `owner_ata` / `escrow` as passed.
+    pub fn claim_for_ix_raw(&self, keeper: &Pubkey, ticket: Pubkey, owner_ata: Pubkey, escrow: Pubkey) -> Instruction {
+        let owner = self.ticket(&ticket).owner;
+        ix(
+            fumpad::accounts::ClaimFor {
+                keeper: *keeper,
+                global: self.env.global_pda(),
+                coin: self.coin,
+                mint: self.mint,
+                ticket,
+                position: self.position_key(&owner),
+                claim_queue: self.queue,
+                observations: self.obs,
+                pool_authority: self.pool_auth,
+                reward_vault: self.vault,
+                owner_ata,
+                escrow,
+                token_program: TOKEN_2022,
+                system_program: anchor_lang::system_program::ID,
+                event_authority: fumpad::EVENT_AUTHORITY_AND_BUMP.0,
+                program: fumpad::ID,
+            },
+            fumpad::instruction::ClaimFor {},
+        )
+    }
+
+    /// The canonical `claim_for` (owner's ATA + the ticket's escrow PDA).
+    pub fn claim_for_ix(&self, keeper: &Pubkey, ticket: Pubkey) -> Instruction {
+        let owner = self.ticket(&ticket).owner;
+        self.claim_for_ix_raw(keeper, ticket, ata(&owner, &self.mint), self.escrow_key(&ticket))
+    }
+
+    /// `claim_for` by the registered keeper (fee payer = env payer, so the keeper's
+    /// lamports move only for rent it pays).
+    pub fn claim_for(&mut self, ticket: Pubkey) -> TransactionResult {
+        let k = self.env.keeper.insecure_clone();
+        let i = self.claim_for_ix(&kp_pk(&k), ticket);
+        self.env.send(&[i], &[&k])
+    }
+
+    pub fn set_auto_claim_ix(&self, wallet: &Pubkey, position: Pubkey, enabled: bool) -> Instruction {
+        ix(
+            fumpad::accounts::SetAutoClaim {
+                wallet: *wallet,
+                position,
+                event_authority: fumpad::EVENT_AUTHORITY_AND_BUMP.0,
+                program: fumpad::ID,
+            },
+            fumpad::instruction::SetAutoClaim { enabled },
+        )
+    }
+
+    pub fn set_auto_claim(&mut self, u: &User, enabled: bool) -> TransactionResult {
+        let i = self.set_auto_claim_ix(&u.key, self.position_key(&u.key), enabled);
+        let kp = u.kp.insecure_clone();
+        self.env.send(&[i], &[&kp])
     }
 }
 
@@ -1379,4 +1444,211 @@ fn compute_units_claim_and_crank_batch() {
     assert_eq!(w.queue_state().len, 241); // 240 big + the last claim (queued behind older fitting ones)
     assert!(claim_cu < 200_000);
     assert!(crank_cu < 1_400_000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// D17 auto-claim (`claim_for`, `set_auto_claim`)
+// ═══════════════════════════════════════════════════════════════════════════
+
+use crate::flow::events;
+use fumpad::events::{AutoClaimSet, ClaimEscrowed, ClaimPaid, ClaimQueued};
+
+/// Idempotent ATA create (Token-2022) paid by `payer`.
+fn create_ata_ix(payer: &Pubkey, owner: &Pubkey, mint: &Pubkey) -> Instruction {
+    Instruction {
+        program_id: ATA_PROGRAM,
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(ata(owner, mint), false),
+            AccountMeta::new_readonly(*owner, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+            AccountMeta::new_readonly(TOKEN_2022, false),
+        ],
+        data: vec![1],
+    }
+}
+
+#[test]
+fn auto_claim_keeper_pays_the_owner() {
+    let mut w = World::new();
+    let (u, t) = user_with_ticket(&mut w, 1_000_000 * M, DAY);
+    let kk = kp_pk(&w.env.keeper);
+    let (k_sol, u_sol) = (w.env.lamports(&kk), w.env.lamports(&u.key));
+    let m = ok(w.claim_for(t));
+    assert_eq!(token_amount(&w.env, &u.ata), 100_000 * M, "paid to the owner's ATA");
+    assert_eq!(w.pool(), POOL - 100_000 * M);
+    let tk = w.ticket(&t);
+    assert_eq!((tk.status, tk.claim_amount, tk.claimed_at), (TicketStatus::Claimed, 100_000 * M, w.now()));
+    assert_eq!(w.position(&u.key).open_count, 0);
+    assert_eq!(w.coin_state().tokens_paid_out, 100_000 * M);
+    let e = &events::<ClaimPaid>(&m)[0];
+    assert_eq!((e.owner, e.triggered_by, e.from_queue, e.amount), (u.key, kk, false, 100_000 * M));
+    assert_eq!(w.env.lamports(&kk), k_sol, "nothing charged to the keeper (fee payer is separate)");
+    assert_eq!(w.env.lamports(&u.key), u_sol, "nothing charged to the owner");
+    // Owner-signed claims keep working and report the owner as the trigger.
+    let t2 = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - DAY);
+    let m = ok(w.claim(&u, t2));
+    let e = &events::<ClaimPaid>(&m)[0];
+    assert_eq!((e.owner, e.triggered_by), (u.key, u.key));
+}
+
+/// A missing owner ATA: the keeper creates it in its own transaction (paying the rent)
+/// and the payout lands there; without that, the payout is escrowed with the keeper's
+/// lamports, and the owner withdraws it (rent back to the keeper). Memo-required ATAs are
+/// escrowed too. The owner never pays.
+#[test]
+fn auto_claim_missing_or_refusing_ata_caller_pays() {
+    let mut w = World::new();
+    let kk = kp_pk(&w.env.keeper);
+    let mint = w.mint;
+    // (1) keeper creates the missing ATA first.
+    let (u, t) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    w.env.svm.set_account(addr(&u.ata), Account::default()).unwrap();
+    let u_sol = w.env.lamports(&u.key);
+    let k_sol = w.env.lamports(&kk);
+    let k = w.env.keeper.insecure_clone();
+    let i = w.claim_for_ix(&kk, t);
+    ok(w.env.send_as(&k, &[create_ata_ix(&kk, &u.key, &mint), i], &[&k]));
+    assert_eq!(token_amount(&w.env, &u.ata), 100 * M);
+    assert_eq!(w.ticket(&t).status, TicketStatus::Claimed);
+    let ata_rent = w.env.lamports(&u.ata);
+    assert!(k_sol - w.env.lamports(&kk) >= ata_rent, "keeper paid the ATA rent");
+    assert_eq!(w.env.lamports(&u.key), u_sol);
+
+    // (2) missing ATA, no create → escrow, rent from the keeper.
+    let (a, ta) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    w.env.svm.set_account(addr(&a.ata), Account::default()).unwrap();
+    // (3) memo-required ATA → escrow.
+    let (b, tb) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    w.set_balance(&b, 0, true);
+    let k_sol = w.env.lamports(&kk);
+    for (usr, tkt) in [(&a, ta), (&b, tb)] {
+        let m = ok(w.claim_for(tkt));
+        let e = &events::<ClaimEscrowed>(&m)[0];
+        assert_eq!((e.owner, e.triggered_by, e.escrow, e.amount), (usr.key, kk, w.escrow_key(&tkt), 100 * M));
+        let tk = w.ticket(&tkt);
+        assert_eq!((tk.status, tk.escrow_payer), (TicketStatus::Escrowed, kk));
+        assert_eq!(token_amount(&w.env, &w.escrow_key(&tkt)), 100 * M);
+        assert_eq!(w.position(&usr.key).open_count, 0);
+    }
+    let rent = w.env.lamports(&w.escrow_key(&ta));
+    assert_eq!(k_sol - w.env.lamports(&kk), 2 * rent, "keeper paid both escrows' rent");
+    w.set_balance(&a, 0, false);
+    ok(w.withdraw_escrow(&a, ta, a.ata));
+    assert_eq!(token_amount(&w.env, &a.ata), 100 * M);
+    assert_eq!(w.env.lamports(&kk), k_sol - rent, "escrow rent refunded to the keeper");
+    assert_eq!(w.coin_state().tokens_paid_out, 300 * M);
+}
+
+#[test]
+fn auto_claim_opt_out_and_back_in() {
+    let mut w = World::new();
+    let (u, t) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let m = ok(w.set_auto_claim(&u, false));
+    let e = &events::<AutoClaimSet>(&m)[0];
+    assert_eq!((e.wallet, e.mint, e.enabled), (u.key, w.mint, false));
+    assert_eq!(w.position(&u.key).auto_claim_opt_out, 1);
+    assert_fumpad_err(w.claim_for(t), FumpadError::AutoClaimDisabled);
+    assert_eq!(w.ticket(&t).status, TicketStatus::Open);
+    // Someone else can't flip it (position PDA is the signer's own).
+    let (v, _) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let i = w.set_auto_claim_ix(&v.key, w.position_key(&u.key), true);
+    let kv = v.kp.insecure_clone();
+    assert_err_code(w.env.send(&[i], &[&kv]), anchor_lang::error::ErrorCode::ConstraintSeeds as u32);
+    // Back in → the keeper can claim.
+    ok(w.set_auto_claim(&u, true));
+    assert_eq!(w.position(&u.key).auto_claim_opt_out, 0);
+    ok(w.claim_for(t));
+    assert_eq!(token_amount(&w.env, &u.ata), 100 * M);
+    // Opted out: the owner-signed claim still works.
+    let t2 = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - DAY);
+    ok(w.set_auto_claim(&u, false));
+    assert_fumpad_err(w.claim_for(t2), FumpadError::AutoClaimDisabled);
+    ok(w.claim(&u, t2));
+    assert_eq!(token_amount(&w.env, &u.ata), 200 * M);
+}
+
+/// The keeper (or anyone) can't redirect a payout: the destination must be the owner's
+/// canonical ATA and the escrow must be the ticket's own PDA; only registered keepers
+/// may call.
+#[test]
+fn auto_claim_cannot_redirect_funds() {
+    let mut w = World::new();
+    let (u, t) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let kk = kp_pk(&w.env.keeper);
+    let k = w.env.keeper.insecure_clone();
+    let thief = w.user(0);
+    let side = w.side_account(&u); // the owner's own, but not the canonical ATA
+    for dest in [thief.ata, ata(&kk, &w.mint), side] {
+        let i = w.claim_for_ix_raw(&kk, t, dest, w.escrow_key(&t));
+        assert_fumpad_err(w.env.send(&[i], &[&k]), FumpadError::InvalidAccount);
+    }
+    let (_, other_ticket) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let i = w.claim_for_ix_raw(&kk, t, u.ata, w.escrow_key(&other_ticket));
+    assert_err_code(w.env.send(&[i], &[&k]), anchor_lang::error::ErrorCode::ConstraintSeeds as u32);
+    // Not a keeper.
+    let tk = thief.kp.insecure_clone();
+    let i = w.claim_for_ix(&thief.key, t);
+    assert_fumpad_err(w.env.send(&[i], &[&tk]), FumpadError::Unauthorized);
+    assert_eq!(w.ticket(&t).status, TicketStatus::Open);
+    assert_eq!(w.pool(), POOL);
+    ok(w.claim_for(t));
+    assert_eq!(token_amount(&w.env, &u.ata), 100 * M);
+    assert_eq!(token_amount(&w.env, &thief.ata), 0);
+}
+
+#[test]
+fn auto_claim_rejects_queued_expired_voided_and_unchanged_rules() {
+    let mut w = World::new();
+    // Queued (over the cap) → can't be claimed again.
+    w.set_pool(1);
+    let (q, tq) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let m = ok(w.claim_for(tq));
+    let e = &events::<ClaimQueued>(&m)[0];
+    assert_eq!((e.owner, e.triggered_by, e.queue_len), (q.key, kp_pk(&w.env.keeper), 1));
+    assert_eq!(w.ticket(&tq).status, TicketStatus::Queued);
+    assert_fumpad_err(w.claim_for(tq), FumpadError::TicketNotOpen);
+    w.set_pool(POOL);
+    // Expired.
+    let (_, te) = user_with_ticket(&mut w, 1_000 * M, 90 * DAY + 1);
+    assert_fumpad_err(w.claim_for(te), FumpadError::TicketExpired);
+    // Voided (rebuy debited it to zero).
+    let (v, tv) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let mut tk = w.ticket(&tv);
+    tk.tokens = 0;
+    tk.status = TicketStatus::Voided;
+    w.raw_set(&tv, anchor_bytes(&tk), fumpad::ID);
+    assert_fumpad_err(w.claim_for(tv), FumpadError::TicketNotOpen);
+    assert_eq!(token_amount(&w.env, &v.ata), 0);
+    // Trigger, coverage and pause apply unchanged.
+    let (_, tt) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let mut tk = w.ticket(&tt);
+    tk.sell_price_q64 = sell_price(2_000, M); // median is only 5x of this
+    w.raw_set(&tt, anchor_bytes(&tk), fumpad::ID);
+    assert_fumpad_err(w.claim_for(tt), FumpadError::TriggerNotMet);
+    let (_, tp) = user_with_ticket(&mut w, 1_000 * M, DAY);
+    let admin = w.env.admin.insecure_clone();
+    let i = ix(
+        fumpad::accounts::AdminOnly { admin: kp_pk(&admin), global: w.env.global_pda() },
+        fumpad::instruction::SetPause { paused: PAUSE_CLAIMS },
+    );
+    ok(w.env.send(&[i], &[&admin]));
+    assert_fumpad_err(w.claim_for(tp), FumpadError::Paused);
+}
+
+/// D16 applies to auto-claims: a third over-cap ticket of a wallet with 2 queue entries
+/// is refused and stays Open.
+#[test]
+fn auto_claim_respects_wallet_queue_limit() {
+    let mut w = World::new();
+    w.set_pool(1);
+    let u = w.user(0);
+    let now = w.now();
+    let ts: Vec<_> = (0..3).map(|i| w.add_ticket(&u.key, 1_000 * M, base_price(), now - DAY + i)).collect();
+    ok(w.claim_for(ts[0]));
+    ok(w.claim(&u, ts[1])); // mixed: owner-queued entries count too
+    assert_fumpad_err(w.claim_for(ts[2]), FumpadError::WalletQueueLimit);
+    assert_eq!(w.ticket(&ts[2]).status, TicketStatus::Open);
+    assert_eq!(w.queue_state().len, 2);
 }

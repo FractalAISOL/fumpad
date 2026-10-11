@@ -91,6 +91,8 @@ pub struct ClaimQueued {
     pub amount: u64,
     pub queue_len: u16,
     pub ts: i64,
+    /// D17: who sent the claim — the owner (`claim`) or a keeper (`claim_for`).
+    pub triggered_by: Pubkey,
 }
 
 #[event]
@@ -102,6 +104,9 @@ pub struct ClaimPaid {
     pub from_queue: bool,
     pub median_price_q64: u128,
     pub ts: i64,
+    /// D17: who triggered the payout — the owner (`claim`), a keeper (`claim_for`, auto-claim)
+    /// or the `process_queue` cranker (`from_queue`).
+    pub triggered_by: Pubkey,
 }
 
 #[event]
@@ -185,6 +190,8 @@ pub struct ClaimEscrowed {
     pub escrow: Pubkey,
     pub amount: u64,
     pub ts: i64,
+    /// D17: the `process_queue` cranker or the `claim_for` keeper (it also paid the escrow rent).
+    pub triggered_by: Pubkey,
 }
 
 #[event]
@@ -194,5 +201,14 @@ pub struct EscrowWithdrawn {
     pub owner: Pubkey,
     pub destination: Pubkey,
     pub amount: u64,
+    pub ts: i64,
+}
+
+/// D17: a wallet opted out of (or back into) keeper auto-claim for one coin.
+#[event]
+pub struct AutoClaimSet {
+    pub mint: Pubkey,
+    pub wallet: Pubkey,
+    pub enabled: bool,
     pub ts: i64,
 }

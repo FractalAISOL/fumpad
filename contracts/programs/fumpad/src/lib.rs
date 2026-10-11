@@ -104,6 +104,17 @@ pub mod fumpad {
         instructions::handle_withdraw_escrow(ctx)
     }
 
+    /// D17 auto-claim: a keeper claims a ticket for its owner (payout to the owner's
+    /// canonical ATA, or its escrow). Same rules as `claim`; owner may opt out.
+    pub fn claim_for(ctx: Context<ClaimFor>) -> Result<()> {
+        instructions::handle_claim_for(ctx)
+    }
+
+    /// D17: the position's wallet opts out of / back into keeper auto-claim for this coin.
+    pub fn set_auto_claim(ctx: Context<SetAutoClaim>, enabled: bool) -> Result<()> {
+        instructions::handle_set_auto_claim(ctx, enabled)
+    }
+
     // ── venue: router, oracle, buyback ──────────────────────────────────────
     pub fn swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::handle_swap_buy(ctx, sol_in, min_tokens_out)

@@ -79,7 +79,7 @@ pub struct ProcessQueue<'info> {
 }
 
 #[derive(Clone, Copy)]
-enum Dest {
+pub(crate) enum Dest {
     Payable,
     /// Owner's ATA can't receive a plain transfer (memo required / frozen / missing) → escrow.
     Refuses,
@@ -143,7 +143,16 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                             ai
                         }
                         Dest::Refuses => {
-                            open_escrow(&ctx, ei, &e.ticket)?;
+                            let a = &ctx.accounts;
+                            open_escrow(
+                                &a.cranker.to_account_info(),
+                                ei,
+                                &a.system_program.to_account_info(),
+                                &a.token_program.key(),
+                                &a.mint.to_account_info(),
+                                &a.pool_authority.to_account_info(),
+                                &e.ticket,
+                            )?;
                             t.status = TicketStatus::Escrowed;
                             t.escrow_payer = cranker;
                             ei
@@ -172,6 +181,7 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                             from_queue: true,
                             median_price_q64: 0,
                             ts: now,
+                            triggered_by: cranker,
                         }),
                         Dest::Refuses => emit_cpi!(ClaimEscrowed {
                             mint,
@@ -180,6 +190,7 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                             escrow: ei.key(),
                             amount: e.amount,
                             ts: now,
+                            triggered_by: cranker,
                         }),
                     }
                     continue; // paid → drop entry
@@ -202,37 +213,37 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
 }
 
 /// D16: create the ticket's escrow token account ["escrow", ticket] (Token-2022, mint =
-/// the coin, authority = pool authority), rent paid by the cranker.
-fn open_escrow<'info>(
-    ctx: &Context<'info, ProcessQueue<'info>>,
+/// the coin, authority = pool authority), rent paid by `payer` (the cranker / `claim_for`
+/// keeper, recorded in `Ticket.escrow_payer` and refunded by `withdraw_escrow`).
+pub(crate) fn open_escrow<'info>(
+    payer: &AccountInfo<'info>,
     escrow: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    token_program: &Pubkey,
+    mint: &AccountInfo<'info>,
+    pool_authority: &AccountInfo<'info>,
     ticket: &Pubkey,
 ) -> Result<()> {
     let (key, bump) = Pubkey::find_program_address(&[ESCROW_SEED, ticket.as_ref()], &crate::ID);
     require_keys_eq!(escrow.key(), key, FumpadError::InvalidAccount);
-    let a = &ctx.accounts;
     create_pda_account_owned(
-        &a.cranker.to_account_info(),
+        payer,
         escrow,
-        &a.system_program.to_account_info(),
+        system_program,
         ESCROW_ACCOUNT_SPACE,
         &[ESCROW_SEED, ticket.as_ref(), &[bump]],
-        &a.token_program.key(),
+        token_program,
     )?;
     token_interface::initialize_account3(CpiContext::new(
-        a.token_program.key(),
-        InitializeAccount3 {
-            account: escrow.clone(),
-            mint: a.mint.to_account_info(),
-            authority: a.pool_authority.to_account_info(),
-        },
+        *token_program,
+        InitializeAccount3 { account: escrow.clone(), mint: mint.clone(), authority: pool_authority.clone() },
     ))
 }
 
 /// The destination must be the owner's canonical Token-2022 ATA for this mint. It can
 /// receive iff it exists, is initialized and doesn't require incoming-transfer memos;
 /// otherwise (memo required, frozen, missing/closed) the payout is escrowed (D16).
-fn check_destination(ata: &AccountInfo, owner: &Pubkey, mint: &Pubkey) -> Result<Dest> {
+pub(crate) fn check_destination(ata: &AccountInfo, owner: &Pubkey, mint: &Pubkey) -> Result<Dest> {
     let expected = get_associated_token_address_with_program_id(owner, mint, &anchor_spl::token_2022::ID);
     require_keys_eq!(ata.key(), expected, FumpadError::InvalidAccount);
     if *ata.owner != anchor_spl::token_2022::ID || ata.data_is_empty() {

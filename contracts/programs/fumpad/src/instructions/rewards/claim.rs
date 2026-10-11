@@ -66,21 +66,42 @@ pub struct Claim<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
-    let now = Clock::get()?.unix_timestamp;
-    let p = ctx.accounts.global.params;
-    require!(!ctx.accounts.global.is_paused(PAUSE_CLAIMS), FumpadError::Paused);
-    require!(ctx.accounts.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
+/// Outcome of the checks shared by `claim` and `claim_for` (D17).
+pub(crate) enum Decision {
+    /// Pay `amount` now. The ticket is already `Claimed` and off the open list; the caller
+    /// transfers, bumps `coin.tokens_paid_out` and emits.
+    PayNow { amount: u64, median: u128 },
+    /// The ticket entered the queue (`Queued`) at position `queue_len`.
+    Queued { amount: u64, queue_len: u16 },
+}
 
-    let ticket_key = ctx.accounts.ticket.key();
-    let t = &ctx.accounts.ticket;
+/// Every claim rule, identical for owner-signed and keeper auto-claims: pause, graduated
+/// coin, ticket `Open`, 90-day window, 30-min keeper median ≥ trigger with coverage,
+/// non-zero amount; then pay now iff it fits the per-claim cap and no older fitting entry
+/// waits, else queue (D16 per-wallet limit, capacity).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn decide_claim(
+    global: &Global,
+    coin: &Coin,
+    mint: &Pubkey,
+    ticket_key: &Pubkey,
+    t: &mut Ticket,
+    position: &mut Position,
+    claim_queue: &AccountLoader<ClaimQueue>,
+    observations: &AccountLoader<Observations>,
+    pool: u64,
+    now: i64,
+) -> Result<Decision> {
+    let p = global.params;
+    require!(!global.is_paused(PAUSE_CLAIMS), FumpadError::Paused);
+    require!(coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
     require!(t.status == TicketStatus::Open, FumpadError::TicketNotOpen);
     let deadline = t.sell_ts.checked_add(p.claim_window_secs).ok_or(FumpadError::MathOverflow)?;
     require!(now <= deadline, FumpadError::TicketExpired);
 
     let median = {
-        let obs = ctx.accounts.observations.load()?;
-        require_keys_eq!(obs.mint, ctx.accounts.mint.key(), FumpadError::InvalidAccount);
+        let obs = observations.load()?;
+        require_keys_eq!(obs.mint, *mint, FumpadError::InvalidAccount);
         obs.median_price_q64(now, p.oracle_window_secs, p.oracle_min_samples)
             .ok_or(FumpadError::InsufficientSamples)?
     };
@@ -88,49 +109,74 @@ pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
 
     let amount = logic::claim_amount(t.tokens, p.claim_bps);
     require!(amount > 0, FumpadError::ZeroAmount);
-    let (sell_ts, owner) = (t.sell_ts, t.owner);
 
-    let pool = ctx.accounts.reward_vault.amount;
-    let mut q = ctx.accounts.claim_queue.load_mut()?;
-    require_keys_eq!(q.mint, ctx.accounts.mint.key(), FumpadError::InvalidAccount);
+    let mut q = claim_queue.load_mut()?;
+    require_keys_eq!(q.mint, *mint, FumpadError::InvalidAccount);
     let pay_now = logic::fits(amount, pool, p.max_claim_pool_bps)
-        && !queue::has_older_fitting(&q, sell_ts, &ticket_key, pool, p.max_claim_pool_bps);
+        && !queue::has_older_fitting(&q, t.sell_ts, ticket_key, pool, p.max_claim_pool_bps);
 
-    let t = &mut ctx.accounts.ticket;
     t.claim_amount = amount;
     if pay_now {
-        drop(q);
         t.status = TicketStatus::Claimed;
         t.claimed_at = now;
-        logic::remove_open(&mut ctx.accounts.position, &ticket_key);
-        let coin = &mut ctx.accounts.coin;
-        coin.tokens_paid_out = coin.tokens_paid_out.saturating_add(amount);
-        pay_from_vault(
-            &ctx.accounts.token_program,
-            &ctx.accounts.reward_vault,
-            &ctx.accounts.mint,
-            &ctx.accounts.owner_token_account.to_account_info(),
-            &ctx.accounts.pool_authority,
-            ctx.bumps.pool_authority,
-            amount,
-        )?;
-        emit_cpi!(ClaimPaid {
-            mint: ctx.accounts.mint.key(),
-            ticket: ticket_key,
-            owner,
-            amount,
-            from_queue: false,
-            median_price_q64: median,
-            ts: now,
-        });
+        logic::remove_open(position, ticket_key);
+        Ok(Decision::PayNow { amount, median })
     } else {
         // D16: at most MAX_QUEUED_PER_WALLET entries per wallet per coin (the ticket stays Open).
-        require!(queue::count_owner(&q, &owner) < MAX_QUEUED_PER_WALLET, FumpadError::WalletQueueLimit);
-        let queue_len = queue::insert(&mut q, QueueEntry { ticket: ticket_key, owner, amount, sell_ts })?;
-        drop(q);
+        require!(queue::count_owner(&q, &t.owner) < MAX_QUEUED_PER_WALLET, FumpadError::WalletQueueLimit);
+        let queue_len =
+            queue::insert(&mut q, QueueEntry { ticket: *ticket_key, owner: t.owner, amount, sell_ts: t.sell_ts })?;
         t.status = TicketStatus::Queued;
         t.queued_at = now;
-        emit_cpi!(ClaimQueued { mint: ctx.accounts.mint.key(), ticket: ticket_key, owner, amount, queue_len, ts: now });
+        Ok(Decision::Queued { amount, queue_len })
+    }
+}
+
+pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let ticket_key = ctx.accounts.ticket.key();
+    let mint = ctx.accounts.mint.key();
+    let owner = ctx.accounts.owner.key();
+    let a = &mut *ctx.accounts;
+    let decision = decide_claim(
+        &a.global,
+        &a.coin,
+        &mint,
+        &ticket_key,
+        &mut a.ticket,
+        &mut a.position,
+        &a.claim_queue,
+        &a.observations,
+        a.reward_vault.amount,
+        now,
+    )?;
+    match decision {
+        Decision::PayNow { amount, median } => {
+            let coin = &mut ctx.accounts.coin;
+            coin.tokens_paid_out = coin.tokens_paid_out.saturating_add(amount);
+            pay_from_vault(
+                &ctx.accounts.token_program,
+                &ctx.accounts.reward_vault,
+                &ctx.accounts.mint,
+                &ctx.accounts.owner_token_account.to_account_info(),
+                &ctx.accounts.pool_authority,
+                ctx.bumps.pool_authority,
+                amount,
+            )?;
+            emit_cpi!(ClaimPaid {
+                mint,
+                ticket: ticket_key,
+                owner,
+                amount,
+                from_queue: false,
+                median_price_q64: median,
+                ts: now,
+                triggered_by: owner,
+            });
+        }
+        Decision::Queued { amount, queue_len } => {
+            emit_cpi!(ClaimQueued { mint, ticket: ticket_key, owner, amount, queue_len, ts: now, triggered_by: owner });
+        }
     }
     Ok(())
 }

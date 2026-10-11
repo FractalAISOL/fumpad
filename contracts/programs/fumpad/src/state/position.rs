@@ -32,7 +32,12 @@ pub struct Position {
     /// draws on it FIRST, so fresh tokens can't ride on matured credit. Carved from
     /// `reserved` (size unchanged).
     pub last_balance: u64,
-    pub reserved: [u8; 56],
+    /// D17: 1 = the wallet opted out of keeper auto-claim (`claim_for`) for this coin;
+    /// 0 (default) = keepers may claim its tickets on its behalf (payout always to the
+    /// wallet's canonical ATA, or its escrow). Set with `set_auto_claim`. Carved from
+    /// `reserved` (size unchanged).
+    pub auto_claim_opt_out: u8,
+    pub reserved: [u8; 55],
 }
 
 impl Position {
@@ -53,6 +58,10 @@ impl Position {
         }
     }
 
+    pub fn auto_claim_enabled(&self) -> bool {
+        self.auto_claim_opt_out == 0
+    }
+
     /// Last observed balance; never below what is tracked (positions created before v0.3
     /// have `last_balance` = 0).
     pub fn observed_balance(&self) -> u64 {
@@ -64,5 +73,16 @@ impl Position {
         self.settle(now, min_hold_secs);
         self.pending = self.pending.saturating_add(amount);
         self.pending_since = now;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D17's `auto_claim_opt_out` is carved from `reserved`: the account size is unchanged.
+    #[test]
+    fn position_size_unchanged() {
+        assert_eq!(Position::INIT_SPACE, 322);
     }
 }

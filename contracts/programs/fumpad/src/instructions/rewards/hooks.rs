@@ -452,7 +452,8 @@ mod tests {
             open_tickets: [Pubkey::default(); crate::constants::MAX_OPEN_TICKETS],
             open_count: 0,
             last_balance: 0,
-            reserved: [0; 56],
+            auto_claim_opt_out: 0,
+            reserved: [0; 55],
         };
         s.add(amount, 0, 600);
         s

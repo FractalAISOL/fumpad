@@ -83,4 +83,8 @@ pub enum FumpadError {
     NoEscrow,
     #[msg("Claim queue account required: an open ticket is queued")]
     QueueAccountRequired,
+
+    // ── v0.4 (appended) ─────────────────────────────────────────────────────
+    #[msg("The ticket owner opted out of auto-claim for this coin")]
+    AutoClaimDisabled,
 }
