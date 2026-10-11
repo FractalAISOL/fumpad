@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.pytest_cache/
+out/coins.json
+out/full_run.log
+out/coin_*.png
+out/raw.pkl
