@@ -35,6 +35,7 @@ import {
 } from "./accounts.js";
 import {
   CU,
+  MAX_QUEUE_ENTRIES_PER_TX,
   PUMPSWAP_DEFAULT_FEE_BPS,
   PUMPSWAP_FEE_CONFIG,
   PUMPSWAP_GLOBAL_CONFIG,
@@ -49,6 +50,7 @@ import {
   closeTicketIx,
   createCoinIx,
   executeBuybackIx,
+  executeParamsIx,
   graduateIx,
   initClaimQueueIx,
   initObservationsIx,
@@ -60,6 +62,7 @@ import {
   swapBuyIx,
   swapSellIx,
   withdrawCreatorFeesIx,
+  withdrawEscrowIx,
   withdrawPlatformFeesIx,
 } from "./instructions/fumpad.js";
 import { skimIxs } from "./instructions/locker.js";
@@ -192,9 +195,16 @@ export class FumpadClient {
     return new DataView(a.data.buffer, a.data.byteOffset, a.data.byteLength).getBigInt64(32, true);
   }
 
-  /** Open/queued tickets listed in the wallet's position (what buys must pass). */
-  async openTickets(mint: PublicKey, wallet: PublicKey): Promise<PublicKey[]> {
-    return (await this.position(mint, wallet))?.openTickets ?? [];
+  /**
+   * Open/queued tickets listed in the wallet's position (what buys / register_holdings
+   * must pass) and whether any is Queued (then the ClaimQueue must follow them).
+   */
+  async openTickets(mint: PublicKey, wallet: PublicKey): Promise<{ keys: PublicKey[]; anyQueued: boolean }> {
+    const keys = (await this.position(mint, wallet))?.openTickets ?? [];
+    if (!keys.length) return { keys, anyQueued: false };
+    const infos = await this.connection.getMultipleAccountsInfo(keys, this.commitment);
+    const anyQueued = infos.some((i) => i && i.data.length > 8 && decodeTicket(new Uint8Array(i.data)).status === "queued");
+    return { keys, anyQueued };
   }
 
   // ── builders ───────────────────────────────────────────────────────────────
@@ -210,6 +220,7 @@ export class FumpadClient {
     if (a.initialBuyLamports && a.initialBuyLamports > 0n) {
       const g = await this.global();
       const p = g.params;
+      // New coin: its fee snapshot will be the current Global.params (D14).
       quote = quoteCurveBuy({ virtualSol: p.initialVirtualSol, virtualToken: p.initialVirtualToken, realSol: 0n, realToken: p.curveSupply }, p, a.initialBuyLamports)!;
       ixs.push(buyIx({ user: a.creator, mint: a.mint.publicKey, solIn: quote.solIn, minTokensOut: withSlippage(quote.tokensOut, a.slippageBps ?? 100), openTickets: [] }));
     }
@@ -218,37 +229,37 @@ export class FumpadClient {
 
   /** Buy for a total SOL budget (fee included); routes curve vs PumpSwap by coin status. */
   async buildBuy(a: { user: PublicKey; mint: PublicKey; budgetLamports: bigint; slippageBps?: number }): Promise<BuiltTx & { quote: BuyQuoteRaw }> {
-    const [coin, g, open] = await Promise.all([this.coin(a.mint), this.global(), this.openTickets(a.mint, a.user)]);
+    const [coin, open] = await Promise.all([this.coin(a.mint), this.openTickets(a.mint, a.user)]);
     if (!coin) throw new Error("coin not found");
     const slip = a.slippageBps ?? 100;
     if (coin.status === "curve") {
-      const q = quoteCurveBuy(reservesOf(coin), g.params, a.budgetLamports);
+      const q = quoteCurveBuy(reservesOf(coin), coin.fees, a.budgetLamports);
       if (!q || q.tokensOut === 0n) throw new Error("amount too small");
       return {
         quote: q,
-        instructions: [...this.cb(CU.buy), buyIx({ user: a.user, mint: a.mint, solIn: q.solIn, minTokensOut: withSlippage(q.tokensOut, slip), openTickets: open })],
+        instructions: [...this.cb(CU.buy), buyIx({ user: a.user, mint: a.mint, solIn: q.solIn, minTokensOut: withSlippage(q.tokensOut, slip), openTickets: open.keys, anyQueued: open.anyQueued })],
       };
     }
     if (coin.status !== "graduated") throw new Error("coin is complete — waiting for graduation");
     const [pool, fee, bfr] = await Promise.all([this.poolReserves(a.mint), this.pumpswapFeeBps(), this.buybackFeeRecipient()]);
-    const q = quoteSwapBuy(pool, g.params, a.budgetLamports, fee);
+    const q = quoteSwapBuy(pool, coin.fees, a.budgetLamports, fee);
     return {
       quote: q,
       instructions: [
         ...this.cb(CU.swapBuy),
-        swapBuyIx({ user: a.user, mint: a.mint, solIn: q.solIn, minTokensOut: withSlippage(q.tokensOut, slip), openTickets: open, buybackFeeRecipient: bfr }),
+        swapBuyIx({ user: a.user, mint: a.mint, solIn: q.solIn, minTokensOut: withSlippage(q.tokensOut, slip), openTickets: open.keys, anyQueued: open.anyQueued, buybackFeeRecipient: bfr }),
       ],
     };
   }
 
   async buildSell(a: { user: PublicKey; mint: PublicKey; tokensIn: bigint; slippageBps?: number }): Promise<BuiltTx & { quote: SellQuoteRaw; ticket: PublicKey }> {
-    const [coin, g, pos] = await Promise.all([this.coin(a.mint), this.global(), this.position(a.mint, a.user)]);
+    const [coin, pos] = await Promise.all([this.coin(a.mint), this.position(a.mint, a.user)]);
     if (!coin) throw new Error("coin not found");
     const seq = pos?.nextTicketSeq ?? 0n;
     const ticket = ticketPda(a.mint, a.user, seq);
     const slip = a.slippageBps ?? 100;
     if (coin.status === "curve") {
-      const q = quoteCurveSell(reservesOf(coin), g.params, a.tokensIn);
+      const q = quoteCurveSell(reservesOf(coin), coin.fees, a.tokensIn);
       if (!q) throw new Error("curve cannot pay this sell");
       return {
         quote: q,
@@ -258,7 +269,7 @@ export class FumpadClient {
     }
     if (coin.status !== "graduated") throw new Error("coin is complete — waiting for graduation");
     const [pool, fee, bfr] = await Promise.all([this.poolReserves(a.mint), this.pumpswapFeeBps(), this.buybackFeeRecipient()]);
-    const q = quoteSwapSell(pool, g.params, a.tokensIn, fee);
+    const q = quoteSwapSell(pool, coin.fees, a.tokensIn, fee);
     return {
       quote: q,
       ticket,
@@ -281,13 +292,31 @@ export class FumpadClient {
   }
 
   async buildRegisterHoldings(a: { user: PublicKey; mint: PublicKey }): Promise<BuiltTx> {
-    return { instructions: [...this.cb(CU.default), registerHoldingsIx({ ...a, openTickets: await this.openTickets(a.mint, a.user) })] };
+    const open = await this.openTickets(a.mint, a.user);
+    return { instructions: [...this.cb(CU.default), registerHoldingsIx({ ...a, openTickets: open.keys, anyQueued: open.anyQueued })] };
   }
 
   async buildCloseTicket(a: { caller: PublicKey; ticket: PublicKey }): Promise<BuiltTx> {
     const t = await this.ticket(a.ticket);
     if (!t) throw new Error("ticket not found");
     return { instructions: [closeTicketIx({ caller: a.caller, ticket: a.ticket, owner: t.owner, mint: t.mint, queued: t.queuedAt !== 0n })] };
+  }
+
+  /** D16: withdraw an escrowed payout to the owner's canonical ATA (created if missing). */
+  async buildWithdrawEscrow(a: { owner: PublicKey; ticket: PublicKey }): Promise<BuiltTx> {
+    const t = await this.ticket(a.ticket);
+    if (!t) throw new Error("ticket not found");
+    return {
+      instructions: [
+        createAtaIdempotentIx(a.owner, a.owner, t.mint, TOKEN_2022_PROGRAM_ID),
+        withdrawEscrowIx({ owner: a.owner, mint: t.mint, ticket: a.ticket, escrowPayer: t.escrowPayer }),
+      ],
+    };
+  }
+
+  /** D15: apply a queued params change once its 48h timelock has passed (permissionless). */
+  buildExecuteParams(caller: PublicKey): BuiltTx {
+    return { instructions: [executeParamsIx(caller)] };
   }
 
   buildWithdrawCreatorFees(a: { creator: PublicKey; mint: PublicKey }): BuiltTx {
@@ -346,13 +375,14 @@ export class FumpadClient {
   }
 
   /**
-   * process_queue over the first `maxTriples` queue entries (in queue order). Owners'
-   * ATAs are (re)created idempotently first — a closed ATA would fail the crank.
+   * process_queue over the first `maxTriples` (≤ 13) queue entries, in queue order.
+   * Owners' ATAs are (re)created idempotently first so payouts land directly instead of
+   * in escrow (D16: a missing ATA now escrows rather than failing the crank).
    */
   async buildProcessQueue(a: { cranker: PublicKey; mint: PublicKey; maxEntries?: number; maxTriples?: number }): Promise<BuiltTx | null> {
     const q = await this.claimQueue(a.mint);
     if (!q || q.len === 0) return null;
-    const entries = q.entries.slice(0, a.maxTriples ?? 6);
+    const entries = q.entries.slice(0, Math.min(a.maxTriples ?? MAX_QUEUE_ENTRIES_PER_TX, MAX_QUEUE_ENTRIES_PER_TX));
     const owners = [...new Map(entries.map((e) => [e.owner.toBase58(), e.owner])).values()];
     return {
       instructions: [

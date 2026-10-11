@@ -9,7 +9,16 @@ import type { Params } from "./params.js";
 import type { ReferencePrice } from "./math/reference.js";
 
 export type CoinStatus = "curve" | "complete" | "graduated";
-export type TicketStatus = "open" | "queued" | "claimed" | "expired" | "voided";
+export type TicketStatus = "open" | "queued" | "claimed" | "expired" | "voided" | "escrowed";
+
+/** D14 per-coin fee snapshot (`Coin.fees`). */
+export interface CoinFees {
+  graduationFeeLamports: bigint;
+  feeBps: number;
+  feePoolShareBps: number;
+  feePlatformShareBps: number;
+  feeCreatorShareBps: number;
+}
 
 export interface CoinAccount {
   bump: number;
@@ -32,6 +41,8 @@ export interface CoinAccount {
   ticketsCreated: bigint;
   tokensPaidOut: bigint;
   reference: ReferencePrice;
+  /** D14: fee params snapshotted at create_coin — use these, not Global.params. */
+  fees: CoinFees;
 }
 
 export interface GlobalAccount {
@@ -41,6 +52,9 @@ export interface GlobalAccount {
   keepers: PublicKey[];
   paused: number;
   params: Params;
+  /** D15: queued params change (valid when pendingEta ≠ 0). */
+  pendingParams: Params;
+  pendingEta: bigint;
 }
 
 export interface PositionAccount {
@@ -53,6 +67,8 @@ export interface PositionAccount {
   nextTicketSeq: bigint;
   openTickets: PublicKey[];
   openCount: number;
+  /** v0.3 R-L2: canonical-ATA balance at FUMPAD's last observation. */
+  lastBalance: bigint;
 }
 
 export interface TicketAccount {
@@ -69,6 +85,8 @@ export interface TicketAccount {
   queuedAt: bigint;
   claimAmount: bigint;
   claimedAt: bigint;
+  /** D16: rent payer of this ticket's escrow (refunded by withdraw_escrow). */
+  escrowPayer: PublicKey;
 }
 
 export interface LockAccount {
@@ -99,7 +117,11 @@ export function decodeCoin(data: Uint8Array): CoinAccount {
 }
 export function decodeGlobal(data: Uint8Array): GlobalAccount {
   const g = strip<Record<string, unknown>>(fumpadCoder().accounts.decode("Global", Buffer.from(data)));
-  return { ...(g as unknown as GlobalAccount), params: paramsFromIdl(g.params as Record<string, unknown>) };
+  return {
+    ...(g as unknown as GlobalAccount),
+    params: paramsFromIdl(g.params as Record<string, unknown>),
+    pendingParams: paramsFromIdl(g.pendingParams as Record<string, unknown>),
+  };
 }
 export function decodePosition(data: Uint8Array): PositionAccount {
   const p = strip<PositionAccount>(fumpadCoder().accounts.decode("Position", Buffer.from(data)));
@@ -135,12 +157,14 @@ export interface ObservationsAccount {
   pool: PublicKey;
   head: number;
   len: number;
+  /** 1 once a keeper sample exists (else lastKeeperSampleTs = init time / fallback grace start). */
+  keeperSampled: boolean;
   lastKeeperSampleTs: bigint;
   /** Valid samples in ring order (oldest first). */
   samples: Observation[];
 }
 
-/** Zero-copy `Observations` (repr C): 8 disc | mint | pool | head u16 | len u16 | bump | pad3 | last_keeper i64 | 256 × 32B. */
+/** Zero-copy `Observations` (repr C): 8 disc | mint | pool | head u16 | len u16 | bump | keeper_sampled | pad2 | last_keeper i64 | 256 × 32B. */
 export function decodeObservations(data: Uint8Array): ObservationsAccount {
   const v = dv(data);
   const head = v.getUint16(8 + 64, true);
@@ -153,7 +177,7 @@ export function decodeObservations(data: Uint8Array): ObservationsAccount {
     const off = base + i * 32;
     samples.push({ ts: v.getBigInt64(off, true), fallback: v.getBigUint64(off + 8, true) !== 0n, priceQ64: u128(v, off + 16) });
   }
-  return { mint: pk(data, 8), pool: pk(data, 40), head, len, lastKeeperSampleTs: v.getBigInt64(8 + 72, true), samples };
+  return { mint: pk(data, 8), pool: pk(data, 40), head, len, keeperSampled: data[8 + 69] !== 0, lastKeeperSampleTs: v.getBigInt64(8 + 72, true), samples };
 }
 
 export interface QueueEntry {

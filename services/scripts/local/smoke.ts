@@ -73,10 +73,10 @@ async function main() {
     const sample = async () => {
       const obs = await c.observations(mint);
       const last = obs?.samples.at(-1)?.ts ?? 0n;
-      while ((await c.chainTime()) < last + 2n) await sleep(400);
+      while ((await c.chainTime()) < last + 2n) await sleep(300);
       await show("record_samples", await c.send(keeper, c.buildRecordSamples({ sampler: keeper.publicKey, mints: [mint] })));
     };
-    for (let i = 0; i < 4; i++) await sample();
+    for (let i = 0; i < 26; i++) await sample(); // ≥ 60 s: 5-of-6 bucket coverage
     const ticket = ticketPda(mint, alice.publicKey, 0n);
     await show("claim", await c.send(alice, c.buildClaim({ owner: alice.publicKey, mint, ticket })));
 
@@ -88,7 +88,7 @@ async function main() {
     await show("router swap_sell", await c.send(alice, ss));
     await show("direct PumpSwap buy (outside FUMPAD)", await directPumpBuy(c, whale, mint, 2n * BigInt(LAMPORTS_PER_SOL)));
     await show("skim + settle", await c.send(keeper, c.buildSkimSettle({ payer: keeper.publicKey, mint })));
-    for (let i = 0; i < 8; i++) await sample();
+    for (let i = 0; i < 26; i++) await sample();
     const coin = await c.coin(mint);
     console.log(`  buyback_lamports=${coin?.buybackLamports}`);
     await show("execute_buyback", await c.send(keeper, await c.buildExecuteBuyback({ cranker: keeper.publicKey, mint, maxLamports: coin!.buybackLamports })));

@@ -10,6 +10,7 @@ import {
   type CurveReserves,
   curveSpotQ64,
   evaluateSell,
+  type FeeParams,
   type FeeSplit,
   inlineBuyback,
   type NoTicket,
@@ -71,8 +72,11 @@ function impactBps(exec: bigint, spot: bigint): number {
   return Number(((exec - spot) * BPS_DENOM * 100n) / spot) / 100;
 }
 
-/** Curve buy for a total budget (fee on top), exactly as `buy` computes it. */
-export function quoteCurveBuy(r: CurveReserves, p: Params, budgetLamports: bigint): BuyQuoteRaw | null {
+/**
+ * Curve buy for a total budget (fee on top), exactly as `buy` computes it. Fees: pass the
+ * coin's snapshot (`coin.fees`, D14) — `Global.params` only for a coin not yet created.
+ */
+export function quoteCurveBuy(r: CurveReserves, p: FeeParams, budgetLamports: bigint): BuyQuoteRaw | null {
   const solIn = solInForBudget(budgetLamports, p);
   const spot = curveSpotQ64(r) ?? 0n;
   const q = quoteBuy(r, solIn);
@@ -98,7 +102,7 @@ export function quoteCurveBuy(r: CurveReserves, p: Params, budgetLamports: bigin
 }
 
 /** Curve sell, as `sell` computes it (incl. the inline buyback's effect on spot). */
-export function quoteCurveSell(r: CurveReserves, p: Params, tokensIn: bigint): SellQuoteRaw | null {
+export function quoteCurveSell(r: CurveReserves, p: FeeParams, tokensIn: bigint): SellQuoteRaw | null {
   const spot = curveSpotQ64(r) ?? 0n;
   const gross = quoteSell(r, tokensIn);
   if (gross === null) return null;
@@ -120,7 +124,7 @@ export function quoteCurveSell(r: CurveReserves, p: Params, tokensIn: bigint): S
 }
 
 /** Router buy: the router wraps exactly `solIn`, PumpSwap spends ≤ it incl. its fees, FUMPAD's fee on top. */
-export function quoteSwapBuy(pool: PoolReserves, p: Params, budgetLamports: bigint, venueFeeBps = PUMPSWAP_DEFAULT_FEE_BPS): BuyQuoteRaw {
+export function quoteSwapBuy(pool: PoolReserves, p: FeeParams, budgetLamports: bigint, venueFeeBps = PUMPSWAP_DEFAULT_FEE_BPS): BuyQuoteRaw {
   const solIn = solInForBudget(budgetLamports, p);
   const spot = poolSpotQ64(pool) ?? 0n;
   const v = pumpBuyExactQuoteIn(pool, solIn, venueFeeBps);
@@ -142,7 +146,7 @@ export function quoteSwapBuy(pool: PoolReserves, p: Params, budgetLamports: bigi
   };
 }
 
-export function quoteSwapSell(pool: PoolReserves, p: Params, tokensIn: bigint, venueFeeBps = PUMPSWAP_DEFAULT_FEE_BPS): SellQuoteRaw {
+export function quoteSwapSell(pool: PoolReserves, p: FeeParams, tokensIn: bigint, venueFeeBps = PUMPSWAP_DEFAULT_FEE_BPS): SellQuoteRaw {
   const spot = poolSpotQ64(pool) ?? 0n;
   const v = pumpSell(pool, tokensIn, venueFeeBps);
   const gross = v.quoteOut; // what lands in the user's WSOL (after PumpSwap's fee)
@@ -191,9 +195,9 @@ export function previewTicket(args: {
 }): TicketPreviewRaw {
   const { coin, params: p, quote: q } = args;
   const ref = updateReference(coin.reference, args.now, q.spotBeforeQ64, q.spotAfterQ64, q.venue === "curve");
-  const pos = args.position ?? { matured: 0n, pending: 0n, pendingSince: 0n, openCount: 0 };
+  const pos = args.position ?? { matured: 0n, pending: 0n, pendingSince: 0n, openCount: 0, lastBalance: 0n };
   const ev = evaluateSell({
-    position: { matured: pos.matured, pending: pos.pending, pendingSince: pos.pendingSince, openCount: pos.openCount },
+    position: { matured: pos.matured, pending: pos.pending, pendingSince: pos.pendingSince, openCount: pos.openCount, lastBalance: pos.lastBalance },
     params: p,
     isCreator: coin.creator.toBase58() === args.wallet,
     tokensSold: q.tokensIn,

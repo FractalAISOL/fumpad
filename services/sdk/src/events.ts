@@ -38,6 +38,13 @@ export interface SampleRecordedEvent { mint: PublicKey; priceQ64: bigint; fallba
 export interface BuybackExecutedEvent { mint: PublicKey; lamportsIn: bigint; tokensOut: bigint; ts: bigint }
 export interface FeesWithdrawnEvent { mint: PublicKey; recipient: PublicKey; lamports: bigint; creator: boolean; ts: bigint }
 export interface HoldingsRegisteredEvent { mint: PublicKey; wallet: PublicKey; added: bigint; ts: bigint }
+// v0.3
+export interface ParamsQueuedEvent { params: Record<string, unknown>; eta: bigint; ts: bigint }
+export interface ParamsUpdatedEvent { params: Record<string, unknown>; ts: bigint }
+export interface ParamsCancelledEvent { ts: bigint }
+export interface CurveReopenedEvent { mint: PublicKey; completedAt: bigint; ts: bigint }
+export interface ClaimEscrowedEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; escrow: PublicKey; amount: bigint; ts: bigint }
+export interface EscrowWithdrawnEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; destination: PublicKey; amount: bigint; ts: bigint }
 // locker
 export interface LockedEvent { pool: PublicKey; mint: PublicKey; lpLocked: bigint; lpSupply: bigint; sqrtK: bigint }
 export interface SkimmedEvent { pool: PublicKey; mint: PublicKey; lpWithdrawn: bigint; baseOut: bigint; quoteOut: bigint; lpHeld: bigint }
@@ -57,6 +64,12 @@ export interface EventMap {
   BuybackExecuted: BuybackExecutedEvent;
   FeesWithdrawn: FeesWithdrawnEvent;
   HoldingsRegistered: HoldingsRegisteredEvent;
+  ParamsQueued: ParamsQueuedEvent;
+  ParamsUpdated: ParamsUpdatedEvent;
+  ParamsCancelled: ParamsCancelledEvent;
+  CurveReopened: CurveReopenedEvent;
+  ClaimEscrowed: ClaimEscrowedEvent;
+  EscrowWithdrawn: EscrowWithdrawnEvent;
   Locked: LockedEvent;
   Skimmed: SkimmedEvent;
 }
@@ -70,7 +83,7 @@ export type FumpadEvent = {
 }[EventName];
 
 /** `TicketClosed.final_status` / TicketStatus enum order. */
-export const TICKET_STATUS_NAMES = ["open", "queued", "claimed", "expired", "voided"] as const;
+export const TICKET_STATUS_NAMES = ["open", "queued", "claimed", "expired", "voided", "escrowed"] as const;
 
 // ── Transaction shape (RPC `getTransaction` JSON, web3.js object, or Helius raw webhook) ──
 

@@ -65,9 +65,11 @@ export const DEFAULT_PARAMS: Params = {
   maxPriceAgeSecs: 60n,
 };
 
-/** Mirror of `Params::is_valid` (structural checks run on initialize/update). */
+/** Mirror of `Params::is_valid` (initialize / queue / execute), incl. the D14 caps. */
 export function paramsValid(p: Params): boolean {
   return (
+    p.graduationFeeLamports <= 1_000_000_000n &&
+    p.feeBps <= 200 &&
     p.feePoolShareBps + p.feePlatformShareBps + p.feeCreatorShareBps === 10_000 &&
     p.feeBps < 10_000 &&
     p.rewardPoolSupply + p.curveSupply + p.lpSupply === p.totalSupply &&

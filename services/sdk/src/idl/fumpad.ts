@@ -276,6 +276,54 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "cancelParams",
+      "discriminator": [
+        100,
+        172,
+        113,
+        60,
+        25,
+        68,
+        80,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "global"
+          ]
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim",
       "discriminator": [
         62,
@@ -1120,6 +1168,54 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "executeParams",
+      "discriminator": [
+        211,
+        161,
+        167,
+        192,
+        235,
+        188,
+        25,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anyone (the change was approved when it was queued)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "graduate",
       "discriminator": [
         45,
@@ -1242,64 +1338,41 @@ export type Fumpad = {
           "address": "So11111111111111111111111111111111111111112"
         },
         {
-          "name": "poolAuthorityWsol",
+          "name": "graduationWsol",
           "docs": [
-            "Pool authority's WSOL account: the raised SOL is wrapped here, deposited, and",
-            "the account is closed again (rent back to `payer`)."
+            "Graduation's own WSOL account (C-L1: NOT the pool authority's ATA, which is",
+            "`execute_buyback`'s persistent `buyback_wsol`): PDA [\"graduation_wsol\", mint],",
+            "created here, the raised SOL wrapped into it and deposited, then closed again in this",
+            "instruction (rent back to `payer`)."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
-                "kind": "account",
-                "path": "poolAuthority"
+                "kind": "const",
+                "value": [
+                  103,
+                  114,
+                  97,
+                  100,
+                  117,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  119,
+                  115,
+                  111,
+                  108
+                ]
               },
               {
                 "kind": "account",
-                "path": "quoteTokenProgram"
-              },
-              {
-                "kind": "account",
-                "path": "wsolMint"
+                "path": "mint"
               }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
+            ]
           }
         },
         {
@@ -1616,6 +1689,10 @@ export type Fumpad = {
       "accounts": [
         {
           "name": "cranker",
+          "docs": [
+            "Pays the rent of any escrow account created (refunded on `withdraw_escrow`)."
+          ],
+          "writable": true,
           "signer": true
         },
         {
@@ -1751,6 +1828,10 @@ export type Fumpad = {
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
           "name": "eventAuthority"
         },
         {
@@ -1761,6 +1842,66 @@ export type Fumpad = {
         {
           "name": "maxEntries",
           "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "queueParams",
+      "docs": [
+        "D15: queue a params change; `execute_params` applies it after 48h."
+      ],
+      "discriminator": [
+        180,
+        46,
+        181,
+        164,
+        140,
+        178,
+        204,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "global"
+          ]
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "params"
+            }
+          }
         }
       ]
     },
@@ -2901,7 +3042,64 @@ export type Fumpad = {
         },
         {
           "name": "userTokenAccount",
-          "writable": true
+          "docs": [
+            "R-L3: the user's canonical Token-2022 ATA (as on the curve): eligibility is capped by",
+            "the balance FUMPAD observes, so a sell from a secondary account must not stand in for it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token2022Program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
           "name": "userWsol",
@@ -3003,57 +3201,6 @@ export type Fumpad = {
       ]
     },
     {
-      "name": "updateParams",
-      "discriminator": [
-        108,
-        178,
-        190,
-        95,
-        94,
-        203,
-        116,
-        20
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "global"
-          ]
-        },
-        {
-          "name": "global",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  108,
-                  111,
-                  98,
-                  97,
-                  108
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "params",
-          "type": {
-            "defined": {
-              "name": "params"
-            }
-          }
-        }
-      ]
-    },
-    {
       "name": "withdrawCreatorFees",
       "discriminator": [
         8,
@@ -3095,6 +3242,158 @@ export type Fumpad = {
               }
             ]
           }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdrawEscrow",
+      "docs": [
+        "D16: move an escrowed queue payout to the owner's token account of choice."
+      ],
+      "discriminator": [
+        81,
+        84,
+        226,
+        128,
+        245,
+        47,
+        96,
+        104
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "ticket"
+          ]
+        },
+        {
+          "name": "global",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": [
+            "ticket"
+          ]
+        },
+        {
+          "name": "ticket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  99,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "ticket.seq",
+                "account": "ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "poolAuthority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "destination",
+          "docs": [
+            "Any token account of the owner for this mint."
+          ],
+          "writable": true
+        },
+        {
+          "name": "escrowPayer",
+          "writable": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "eventAuthority"
@@ -3271,6 +3570,19 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "claimEscrowed",
+      "discriminator": [
+        190,
+        201,
+        238,
+        171,
+        10,
+        247,
+        124,
+        141
+      ]
+    },
+    {
       "name": "claimPaid",
       "discriminator": [
         212,
@@ -3323,6 +3635,32 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "curveReopened",
+      "discriminator": [
+        134,
+        18,
+        70,
+        177,
+        37,
+        255,
+        73,
+        7
+      ]
+    },
+    {
+      "name": "escrowWithdrawn",
+      "discriminator": [
+        43,
+        206,
+        174,
+        47,
+        105,
+        219,
+        216,
+        239
+      ]
+    },
+    {
       "name": "feesWithdrawn",
       "discriminator": [
         234,
@@ -3372,6 +3710,45 @@ export type Fumpad = {
         49,
         155,
         130
+      ]
+    },
+    {
+      "name": "paramsCancelled",
+      "discriminator": [
+        160,
+        167,
+        193,
+        145,
+        11,
+        138,
+        30,
+        120
+      ]
+    },
+    {
+      "name": "paramsQueued",
+      "discriminator": [
+        154,
+        201,
+        187,
+        11,
+        75,
+        245,
+        205,
+        20
+      ]
+    },
+    {
+      "name": "paramsUpdated",
+      "discriminator": [
+        2,
+        163,
+        138,
+        99,
+        135,
+        11,
+        136,
+        169
       ]
     },
     {
@@ -3539,7 +3916,7 @@ export type Fumpad = {
     {
       "code": 6019,
       "name": "insufficientSamples",
-      "msg": "Not enough price samples in the window"
+      "msg": "Not enough keeper price samples spread over the 30-min window (claims and buybacks pause during a keeper outage)"
     },
     {
       "code": 6020,
@@ -3590,6 +3967,31 @@ export type Fumpad = {
       "code": 6029,
       "name": "nothingToSettle",
       "msg": "No skimmed LP fees to settle"
+    },
+    {
+      "code": 6030,
+      "name": "noPendingParams",
+      "msg": "No parameter change is queued"
+    },
+    {
+      "code": 6031,
+      "name": "timelockNotElapsed",
+      "msg": "Parameter timelock (48h) has not elapsed"
+    },
+    {
+      "code": 6032,
+      "name": "walletQueueLimit",
+      "msg": "Wallet already has the maximum number of queued claims on this coin"
+    },
+    {
+      "code": 6033,
+      "name": "noEscrow",
+      "msg": "Ticket has no escrowed payout"
+    },
+    {
+      "code": 6034,
+      "name": "queueAccountRequired",
+      "msg": "Claim queue account required: an open ticket is queued"
     }
   ],
   "types": [
@@ -3608,6 +4010,42 @@ export type Fumpad = {
           },
           {
             "name": "tokensOut",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "claimEscrowed",
+      "docs": [
+        "D16: a queued payout whose owner's ATA refuses transfers was paid into the ticket's",
+        "escrow token account (`[\"escrow\", ticket]`); the owner withdraws it with `withdraw_escrow`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "ticket",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "escrow",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
             "type": "u64"
           },
           {
@@ -3856,11 +4294,23 @@ export type Fumpad = {
             }
           },
           {
+            "name": "fees",
+            "docs": [
+              "D14: graduation fee + trading-fee params snapshotted at `create_coin` (no",
+              "retroactive changes). Occupies 16 bytes of the former 88-byte `reserved`."
+            ],
+            "type": {
+              "defined": {
+                "name": "coinFees"
+              }
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                88
+                72
               ]
             }
           }
@@ -3900,6 +4350,44 @@ export type Fumpad = {
       }
     },
     {
+      "name": "coinFees",
+      "docs": [
+        "D14: per-coin snapshot of the fee parameters, taken from `Global.params` at",
+        "`create_coin`. Later param changes (timelocked, D15) apply only to coins created after."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "graduationFeeLamports",
+            "docs": [
+              "Taken from raised SOL at graduation (≤ `MAX_GRADUATION_FEE_LAMPORTS`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "feeBps",
+            "docs": [
+              "FUMPAD fee, bps of the SOL side of every trade (≤ `MAX_FEE_BPS`)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "feePoolShareBps",
+            "type": "u16"
+          },
+          {
+            "name": "feePlatformShareBps",
+            "type": "u16"
+          },
+          {
+            "name": "feeCreatorShareBps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
       "name": "coinStatus",
       "type": {
         "kind": "enum",
@@ -3924,6 +4412,61 @@ export type Fumpad = {
           {
             "name": "mint",
             "type": "pubkey"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "curveReopened",
+      "docs": [
+        "D13: a coin stuck in `Complete` for 7 days reopened its curve (escape hatch)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "completedAt",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "escrowWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "ticket",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
           },
           {
             "name": "ts",
@@ -4024,6 +4567,23 @@ export type Fumpad = {
                 128
               ]
             }
+          },
+          {
+            "name": "pendingParams",
+            "docs": [
+              "D15: params queued by `queue_params`, applied by `execute_params` once",
+              "`pending_eta` has passed. `pending_eta == 0` = nothing queued.",
+              "(Appended in v0.3: Global grew by `Params::INIT_SPACE + 8` bytes.)"
+            ],
+            "type": {
+              "defined": {
+                "name": "params"
+              }
+            }
+          },
+          {
+            "name": "pendingEta",
+            "type": "i64"
           }
         ]
       }
@@ -4188,11 +4748,19 @@ export type Fumpad = {
             "type": "u8"
           },
           {
+            "name": "keeperSampled",
+            "docs": [
+              "1 once a keeper sample has been recorded (`last_keeper_sample_ts` is then that",
+              "sample's time; before, it is the `init_observations` time = fallback grace start)."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "pad",
             "type": {
               "array": [
                 "u8",
-                3
+                2
               ]
             }
           },
@@ -4345,6 +4913,65 @@ export type Fumpad = {
       }
     },
     {
+      "name": "paramsCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "paramsQueued",
+      "docs": [
+        "D15: a params change was queued; `execute_params` may apply it from `eta`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "params",
+            "type": {
+              "defined": {
+                "name": "params"
+              }
+            }
+          },
+          {
+            "name": "eta",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "paramsUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "params",
+            "type": {
+              "defined": {
+                "name": "params"
+              }
+            }
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "position",
       "docs": [
         "A wallet's reward-eligibility state for one coin. PDA [\"position\", mint, wallet].",
@@ -4409,11 +5036,22 @@ export type Fumpad = {
             "type": "u8"
           },
           {
+            "name": "lastBalance",
+            "docs": [
+              "R-L2: the wallet's canonical-ATA balance as of FUMPAD's last observation of it",
+              "(after a FUMPAD buy/sell, or at `register_holdings`). At the next observation, any",
+              "balance above it arrived unseen (transfer / other venue): it is untracked, and a sell",
+              "draws on it FIRST, so fresh tokens can't ride on matured credit. Carved from",
+              "`reserved` (size unchanged)."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                64
+                56
               ]
             }
           }
@@ -4585,13 +5223,12 @@ export type Fumpad = {
             "type": "i64"
           },
           {
-            "name": "reserved",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
+            "name": "escrowPayer",
+            "docs": [
+              "D16: who paid the rent of this ticket's escrow token account (`process_queue`",
+              "cranker); refunded to it by `withdraw_escrow`. Carved from `reserved` (size unchanged)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -4703,6 +5340,9 @@ export type Fumpad = {
           },
           {
             "name": "voided"
+          },
+          {
+            "name": "escrowed"
           }
         ]
       }
@@ -4798,9 +5438,19 @@ export type Fumpad = {
       "value": "[99, 117, 114, 118, 101, 95, 118, 97, 117, 108, 116]"
     },
     {
+      "name": "escrowSeed",
+      "type": "bytes",
+      "value": "[101, 115, 99, 114, 111, 119]"
+    },
+    {
       "name": "globalSeed",
       "type": "bytes",
       "value": "[103, 108, 111, 98, 97, 108]"
+    },
+    {
+      "name": "graduationWsolSeed",
+      "type": "bytes",
+      "value": "[103, 114, 97, 100, 117, 97, 116, 105, 111, 110, 95, 119, 115, 111, 108]"
     },
     {
       "name": "mintAuthoritySeed",

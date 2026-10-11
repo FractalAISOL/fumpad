@@ -52,6 +52,10 @@ export const claimQueuePda = (mint: PublicKey) => f([SEEDS.claimQueue, mint.toBy
 export const positionPda = (mint: PublicKey, wallet: PublicKey) => f([SEEDS.position, mint.toBytes(), wallet.toBytes()]);
 export const ticketPda = (mint: PublicKey, wallet: PublicKey, seq: bigint | number) =>
   f([SEEDS.ticket, mint.toBytes(), wallet.toBytes(), u64Le(seq)]);
+/** D16 per-ticket escrow token account ["escrow", ticket]. */
+export const escrowPda = (ticket: PublicKey) => f([SEEDS.escrow, ticket.toBytes()]);
+/** graduate's own WSOL account ["graduation_wsol", mint] (created + closed in-instruction). */
+export const graduationWsolPda = (mint: PublicKey) => f([SEEDS.graduationWsol, mint.toBytes()]);
 /** ProgramData of the (upgradeable) fumpad program — `initialize_global` checks its authority. */
 export const programDataPda = (program: PublicKey = FUMPAD_PROGRAM_ID) =>
   find([program.toBytes()], BPF_LOADER_UPGRADEABLE_ID);

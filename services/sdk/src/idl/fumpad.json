@@ -270,6 +270,54 @@
       ]
     },
     {
+      "name": "cancel_params",
+      "discriminator": [
+        100,
+        172,
+        113,
+        60,
+        25,
+        68,
+        80,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "global"
+          ]
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "claim",
       "discriminator": [
         62,
@@ -1114,6 +1162,54 @@
       ]
     },
     {
+      "name": "execute_params",
+      "discriminator": [
+        211,
+        161,
+        167,
+        192,
+        235,
+        188,
+        25,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Anyone (the change was approved when it was queued)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "graduate",
       "discriminator": [
         45,
@@ -1236,64 +1332,41 @@
           "address": "So11111111111111111111111111111111111111112"
         },
         {
-          "name": "pool_authority_wsol",
+          "name": "graduation_wsol",
           "docs": [
-            "Pool authority's WSOL account: the raised SOL is wrapped here, deposited, and",
-            "the account is closed again (rent back to `payer`)."
+            "Graduation's own WSOL account (C-L1: NOT the pool authority's ATA, which is",
+            "`execute_buyback`'s persistent `buyback_wsol`): PDA [\"graduation_wsol\", mint],",
+            "created here, the raised SOL wrapped into it and deposited, then closed again in this",
+            "instruction (rent back to `payer`)."
           ],
           "writable": true,
           "pda": {
             "seeds": [
               {
-                "kind": "account",
-                "path": "pool_authority"
+                "kind": "const",
+                "value": [
+                  103,
+                  114,
+                  97,
+                  100,
+                  117,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  95,
+                  119,
+                  115,
+                  111,
+                  108
+                ]
               },
               {
                 "kind": "account",
-                "path": "quote_token_program"
-              },
-              {
-                "kind": "account",
-                "path": "wsol_mint"
+                "path": "mint"
               }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
+            ]
           }
         },
         {
@@ -1610,6 +1683,10 @@
       "accounts": [
         {
           "name": "cranker",
+          "docs": [
+            "Pays the rent of any escrow account created (refunded on `withdraw_escrow`)."
+          ],
+          "writable": true,
           "signer": true
         },
         {
@@ -1745,6 +1822,10 @@
           "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
           "name": "event_authority"
         },
         {
@@ -1755,6 +1836,66 @@
         {
           "name": "max_entries",
           "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "queue_params",
+      "docs": [
+        "D15: queue a params change; `execute_params` applies it after 48h."
+      ],
+      "discriminator": [
+        180,
+        46,
+        181,
+        164,
+        140,
+        178,
+        204,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "global"
+          ]
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "params",
+          "type": {
+            "defined": {
+              "name": "Params"
+            }
+          }
         }
       ]
     },
@@ -2895,7 +3036,64 @@
         },
         {
           "name": "user_token_account",
-          "writable": true
+          "docs": [
+            "R-L3: the user's canonical Token-2022 ATA (as on the curve): eligibility is capped by",
+            "the balance FUMPAD observes, so a sell from a secondary account must not stand in for it."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
         },
         {
           "name": "user_wsol",
@@ -2997,57 +3195,6 @@
       ]
     },
     {
-      "name": "update_params",
-      "discriminator": [
-        108,
-        178,
-        190,
-        95,
-        94,
-        203,
-        116,
-        20
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "global"
-          ]
-        },
-        {
-          "name": "global",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  108,
-                  111,
-                  98,
-                  97,
-                  108
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "params",
-          "type": {
-            "defined": {
-              "name": "Params"
-            }
-          }
-        }
-      ]
-    },
-    {
       "name": "withdraw_creator_fees",
       "discriminator": [
         8,
@@ -3089,6 +3236,158 @@
               }
             ]
           }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_escrow",
+      "docs": [
+        "D16: move an escrowed queue payout to the owner's token account of choice."
+      ],
+      "discriminator": [
+        81,
+        84,
+        226,
+        128,
+        245,
+        47,
+        96,
+        104
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "ticket"
+          ]
+        },
+        {
+          "name": "global",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": [
+            "ticket"
+          ]
+        },
+        {
+          "name": "ticket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  99,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "ticket.seq",
+                "account": "Ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "destination",
+          "docs": [
+            "Any token account of the owner for this mint."
+          ],
+          "writable": true
+        },
+        {
+          "name": "escrow_payer",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "event_authority"
@@ -3265,6 +3564,19 @@
       ]
     },
     {
+      "name": "ClaimEscrowed",
+      "discriminator": [
+        190,
+        201,
+        238,
+        171,
+        10,
+        247,
+        124,
+        141
+      ]
+    },
+    {
       "name": "ClaimPaid",
       "discriminator": [
         212,
@@ -3317,6 +3629,32 @@
       ]
     },
     {
+      "name": "CurveReopened",
+      "discriminator": [
+        134,
+        18,
+        70,
+        177,
+        37,
+        255,
+        73,
+        7
+      ]
+    },
+    {
+      "name": "EscrowWithdrawn",
+      "discriminator": [
+        43,
+        206,
+        174,
+        47,
+        105,
+        219,
+        216,
+        239
+      ]
+    },
+    {
       "name": "FeesWithdrawn",
       "discriminator": [
         234,
@@ -3366,6 +3704,45 @@
         49,
         155,
         130
+      ]
+    },
+    {
+      "name": "ParamsCancelled",
+      "discriminator": [
+        160,
+        167,
+        193,
+        145,
+        11,
+        138,
+        30,
+        120
+      ]
+    },
+    {
+      "name": "ParamsQueued",
+      "discriminator": [
+        154,
+        201,
+        187,
+        11,
+        75,
+        245,
+        205,
+        20
+      ]
+    },
+    {
+      "name": "ParamsUpdated",
+      "discriminator": [
+        2,
+        163,
+        138,
+        99,
+        135,
+        11,
+        136,
+        169
       ]
     },
     {
@@ -3533,7 +3910,7 @@
     {
       "code": 6019,
       "name": "InsufficientSamples",
-      "msg": "Not enough price samples in the window"
+      "msg": "Not enough keeper price samples spread over the 30-min window (claims and buybacks pause during a keeper outage)"
     },
     {
       "code": 6020,
@@ -3584,6 +3961,31 @@
       "code": 6029,
       "name": "NothingToSettle",
       "msg": "No skimmed LP fees to settle"
+    },
+    {
+      "code": 6030,
+      "name": "NoPendingParams",
+      "msg": "No parameter change is queued"
+    },
+    {
+      "code": 6031,
+      "name": "TimelockNotElapsed",
+      "msg": "Parameter timelock (48h) has not elapsed"
+    },
+    {
+      "code": 6032,
+      "name": "WalletQueueLimit",
+      "msg": "Wallet already has the maximum number of queued claims on this coin"
+    },
+    {
+      "code": 6033,
+      "name": "NoEscrow",
+      "msg": "Ticket has no escrowed payout"
+    },
+    {
+      "code": 6034,
+      "name": "QueueAccountRequired",
+      "msg": "Claim queue account required: an open ticket is queued"
     }
   ],
   "types": [
@@ -3602,6 +4004,42 @@
           },
           {
             "name": "tokens_out",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClaimEscrowed",
+      "docs": [
+        "D16: a queued payout whose owner's ATA refuses transfers was paid into the ticket's",
+        "escrow token account (`[\"escrow\", ticket]`); the owner withdraws it with `withdraw_escrow`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "ticket",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "escrow",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
             "type": "u64"
           },
           {
@@ -3850,11 +4288,23 @@
             }
           },
           {
+            "name": "fees",
+            "docs": [
+              "D14: graduation fee + trading-fee params snapshotted at `create_coin` (no",
+              "retroactive changes). Occupies 16 bytes of the former 88-byte `reserved`."
+            ],
+            "type": {
+              "defined": {
+                "name": "CoinFees"
+              }
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                88
+                72
               ]
             }
           }
@@ -3894,6 +4344,44 @@
       }
     },
     {
+      "name": "CoinFees",
+      "docs": [
+        "D14: per-coin snapshot of the fee parameters, taken from `Global.params` at",
+        "`create_coin`. Later param changes (timelocked, D15) apply only to coins created after."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "graduation_fee_lamports",
+            "docs": [
+              "Taken from raised SOL at graduation (≤ `MAX_GRADUATION_FEE_LAMPORTS`)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "fee_bps",
+            "docs": [
+              "FUMPAD fee, bps of the SOL side of every trade (≤ `MAX_FEE_BPS`)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "fee_pool_share_bps",
+            "type": "u16"
+          },
+          {
+            "name": "fee_platform_share_bps",
+            "type": "u16"
+          },
+          {
+            "name": "fee_creator_share_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
       "name": "CoinStatus",
       "type": {
         "kind": "enum",
@@ -3918,6 +4406,61 @@
           {
             "name": "mint",
             "type": "pubkey"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "CurveReopened",
+      "docs": [
+        "D13: a coin stuck in `Complete` for 7 days reopened its curve (escape hatch)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "completed_at",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EscrowWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "ticket",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
           },
           {
             "name": "ts",
@@ -4018,6 +4561,23 @@
                 128
               ]
             }
+          },
+          {
+            "name": "pending_params",
+            "docs": [
+              "D15: params queued by `queue_params`, applied by `execute_params` once",
+              "`pending_eta` has passed. `pending_eta == 0` = nothing queued.",
+              "(Appended in v0.3: Global grew by `Params::INIT_SPACE + 8` bytes.)"
+            ],
+            "type": {
+              "defined": {
+                "name": "Params"
+              }
+            }
+          },
+          {
+            "name": "pending_eta",
+            "type": "i64"
           }
         ]
       }
@@ -4182,11 +4742,19 @@
             "type": "u8"
           },
           {
+            "name": "keeper_sampled",
+            "docs": [
+              "1 once a keeper sample has been recorded (`last_keeper_sample_ts` is then that",
+              "sample's time; before, it is the `init_observations` time = fallback grace start)."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "_pad",
             "type": {
               "array": [
                 "u8",
-                3
+                2
               ]
             }
           },
@@ -4339,6 +4907,65 @@
       }
     },
     {
+      "name": "ParamsCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ParamsQueued",
+      "docs": [
+        "D15: a params change was queued; `execute_params` may apply it from `eta`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "params",
+            "type": {
+              "defined": {
+                "name": "Params"
+              }
+            }
+          },
+          {
+            "name": "eta",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ParamsUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "params",
+            "type": {
+              "defined": {
+                "name": "Params"
+              }
+            }
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Position",
       "docs": [
         "A wallet's reward-eligibility state for one coin. PDA [\"position\", mint, wallet].",
@@ -4403,11 +5030,22 @@
             "type": "u8"
           },
           {
+            "name": "last_balance",
+            "docs": [
+              "R-L2: the wallet's canonical-ATA balance as of FUMPAD's last observation of it",
+              "(after a FUMPAD buy/sell, or at `register_holdings`). At the next observation, any",
+              "balance above it arrived unseen (transfer / other venue): it is untracked, and a sell",
+              "draws on it FIRST, so fresh tokens can't ride on matured credit. Carved from",
+              "`reserved` (size unchanged)."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                64
+                56
               ]
             }
           }
@@ -4579,13 +5217,12 @@
             "type": "i64"
           },
           {
-            "name": "reserved",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
+            "name": "escrow_payer",
+            "docs": [
+              "D16: who paid the rent of this ticket's escrow token account (`process_queue`",
+              "cranker); refunded to it by `withdraw_escrow`. Carved from `reserved` (size unchanged)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -4697,6 +5334,9 @@
           },
           {
             "name": "Voided"
+          },
+          {
+            "name": "Escrowed"
           }
         ]
       }
@@ -4792,9 +5432,19 @@
       "value": "[99, 117, 114, 118, 101, 95, 118, 97, 117, 108, 116]"
     },
     {
+      "name": "ESCROW_SEED",
+      "type": "bytes",
+      "value": "[101, 115, 99, 114, 111, 119]"
+    },
+    {
       "name": "GLOBAL_SEED",
       "type": "bytes",
       "value": "[103, 108, 111, 98, 97, 108]"
+    },
+    {
+      "name": "GRADUATION_WSOL_SEED",
+      "type": "bytes",
+      "value": "[103, 114, 97, 100, 117, 97, 116, 105, 111, 110, 95, 119, 115, 111, 108]"
     },
     {
       "name": "MINT_AUTHORITY_SEED",

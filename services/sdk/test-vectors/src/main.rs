@@ -9,9 +9,9 @@ use fumpad::{
         curve::{initial_reserves, quote_buy, quote_sell, sol_for_tokens, CurveReserves},
         fees::compute_fee,
         price::{lamports_for, meets_multiple, mul_div_ceil, price_q64},
-        reference::{ticket_price_q64, ReferencePrice},
+        reference::{ticket_price_q64, ReferencePrice, Touch},
     },
-    state::{Params, Position, TicketStatus},
+    state::{Observations, Params, Position, TicketStatus},
 };
 use serde_json::{json, Value};
 
@@ -84,7 +84,7 @@ fn curve(rng: &mut Rng) -> Value {
 }
 
 fn fees(rng: &mut Rng) -> Value {
-    let p = Params::default();
+    let p = Params::default().coin_fees();
     let mut v = vec![];
     for amt in [0u64, 1, 99, 100, 101, 12_345_678, 10_000_000_000, u64::MAX / 10_000] {
         let f = compute_fee(amt, &p).unwrap();
@@ -134,9 +134,14 @@ fn reference(rng: &mut Rng) -> Value {
             now += (rng.next() % 900) as i64 - if rng.next() % 10 == 0 { 30 } else { 0 };
             let pre = base / 1000 + (rng.wide() % (base * 40));
             let post = base / 1000 + (rng.wide() % (base * 40));
-            let exact = rng.next() % 2 == 0;
-            st.update(now, pre, post, exact);
-            steps.push(json!({ "now": s(now), "pre": s(pre), "post": s(post), "exact": exact, "avg": s(st.avg_q64), "last": s(st.last_spot_q64), "updatedAt": s(st.updated_at) }));
+            let (kind, name) = match rng.next() % 4 {
+                0 => (Touch::Curve, "curve"),
+                1 => (Touch::Venue, "venue"),
+                2 => (Touch::KeeperSample, "keeper-sample"),
+                _ => (Touch::FallbackSample, "fallback-sample"),
+            };
+            st.touch(now, pre, post, kind);
+            steps.push(json!({ "now": s(now), "pre": s(pre), "post": s(post), "kind": name, "avg": s(st.avg_q64), "last": s(st.last_spot_q64), "updatedAt": s(st.updated_at) }));
         }
         seqs.push(json!({ "init": { "avg": s(init.avg_q64), "last": s(init.last_spot_q64), "updatedAt": s(init.updated_at) }, "steps": steps }));
     }
@@ -154,7 +159,7 @@ fn reference(rng: &mut Rng) -> Value {
     json!({ "sequences": seqs, "ticketPrice": tp })
 }
 
-fn position(matured: u64, pending: u64, pending_since: i64, open_count: u8) -> Position {
+fn position(matured: u64, pending: u64, pending_since: i64, open_count: u8, last_balance: u64) -> Position {
     Position {
         bump: 0,
         wallet: Pubkey::default(),
@@ -165,7 +170,8 @@ fn position(matured: u64, pending: u64, pending_since: i64, open_count: u8) -> P
         next_ticket_seq: 0,
         open_tickets: [Pubkey::default(); 5],
         open_count,
-        reserved: [0; 64],
+        last_balance,
+        reserved: [0; 56],
     }
 }
 
@@ -181,13 +187,15 @@ fn rewards(rng: &mut Rng) -> Value {
         let sold = rng.amount(2_000_000_000_000);
         let bal = sold + if rng.next() % 2 == 0 { 0 } else { rng.amount(1_000_000_000_000) };
         let now = since + (rng.next() % 1_300) as i64;
-        let mut pos = position(matured, pending, since, open);
+        // last_balance: legacy 0, exactly tracked, or below/above the current balance.
+        let last = match rng.next() % 4 { 0 => 0, 1 => matured + pending, 2 => bal / 2, _ => bal + rng.amount(1_000_000) };
+        let mut pos = position(matured, pending, since, open, last);
         let r = logic::plan_sell(&mut pos, &p, creator, sold, bal, now);
         let (tokens, reason) = match r {
             Ok(t) => (Value::String(t.to_string()), Value::Null),
             Err(e) => (Value::Null, Value::String(format!("{e:?}"))),
         };
-        ps.push(json!({ "matured": s(matured), "pending": s(pending), "pendingSince": s(since), "openCount": open, "isCreator": creator, "sold": s(sold), "balance": s(bal), "now": s(now), "tokens": tokens, "reason": reason }));
+        ps.push(json!({ "matured": s(matured), "pending": s(pending), "pendingSince": s(since), "openCount": open, "lastBalance": s(last), "isCreator": creator, "sold": s(sold), "balance": s(bal), "now": s(now), "tokens": tokens, "reason": reason }));
     }
     let mut rb = vec![];
     let statuses = [TicketStatus::Open, TicketStatus::Queued, TicketStatus::Claimed, TicketStatus::Voided];
@@ -227,6 +235,31 @@ fn rewards(rng: &mut Rng) -> Value {
     json!({ "planSell": ps, "planRebuy": rb, "claims": claims, "usdCents": usd })
 }
 
+fn median(rng: &mut Rng) -> Value {
+    let mut cases = vec![];
+    for _ in 0..24 {
+        let mut o: Box<Observations> = Box::new(bytemuck::Zeroable::zeroed());
+        let window = [120i64, 600, 1_800][(rng.next() % 3) as usize];
+        let spacing = 1 + (rng.next() % (window as u64 / 20)) as i64;
+        let n = 10 + rng.next() % 300;
+        let mut t = 1_000_000i64;
+        let mut samples = vec![];
+        for _ in 0..n {
+            t += spacing + if rng.next() % 9 == 0 { (rng.next() % (window as u64 / 3)) as i64 } else { 0 };
+            let price = 1 + (rng.wide() >> 40);
+            let fallback = rng.next() % 5 == 0;
+            o.push(t, price, fallback);
+            samples.push(json!({ "ts": s(t), "price": s(price), "fallback": fallback }));
+        }
+        let min = [3u16, 20, 84][(rng.next() % 3) as usize];
+        let now = t + (rng.next() % 30) as i64;
+        // Only the ring's surviving samples (last 256) matter.
+        let keep = samples.len().saturating_sub(256);
+        cases.push(json!({ "samples": samples[keep..].to_vec(), "now": s(now), "window": s(window), "min": min, "median": opt(o.median_price_q64(now, window, min)) }));
+    }
+    Value::Array(cases)
+}
+
 fn main() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let out = json!({
@@ -237,6 +270,7 @@ fn main() {
         "price": price(&mut rng),
         "reference": reference(&mut rng),
         "rewards": rewards(&mut rng),
+        "median": median(&mut rng),
     });
     println!("{}", serde_json::to_string(&out).unwrap());
 }

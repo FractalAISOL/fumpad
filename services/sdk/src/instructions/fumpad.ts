@@ -25,7 +25,9 @@ import {
   coinAddresses,
   coinAta,
   coinPda,
+  escrowPda,
   globalPda,
+  graduationWsolPda,
   mintAuthorityPda,
   poolAuthorityPda,
   positionPda,
@@ -43,7 +45,12 @@ function ix(name: string, accounts: AccountsInput, args: Record<string, unknown>
   return makeIx(FUMPAD_PROGRAM_ID, keys, data);
 }
 
-const openTicketMetas = (tickets: PublicKey[]) => tickets.map(w);
+/**
+ * Rebuy-rule accounts: the position's open tickets, then — iff any of them is Queued —
+ * the coin's ClaimQueue (v0.3: the rebuy updates the queue entry in place).
+ */
+const openTicketMetas = (tickets: PublicKey[], mint?: PublicKey, anyQueued?: boolean) =>
+  anyQueued && mint ? [...tickets.map(w), w(coinAddresses(mint).claimQueue)] : tickets.map(w);
 
 // ── admin ───────────────────────────────────────────────────────────────────
 
@@ -78,9 +85,20 @@ export function initializeGlobalIx(a: {
   return makeIx(FUMPAD_PROGRAM_ID, keys, data);
 }
 
-export function updateParamsIx(admin: PublicKey, params: Params): TransactionInstruction {
-  const keys = idlMetas(FUMPAD_IDL, FUMPAD_PROGRAM_ID, "update_params", { admin, global: globalPda() });
-  return makeIx(FUMPAD_PROGRAM_ID, keys, fumpadCoder().instruction.encode("update_params", { params: paramsToIdl(params) }));
+/** D15: queue a params change (admin); `executeParamsIx` applies it after 48h. */
+export function queueParamsIx(admin: PublicKey, params: Params): TransactionInstruction {
+  const keys = idlMetas(FUMPAD_IDL, FUMPAD_PROGRAM_ID, "queue_params", { admin, global: globalPda() });
+  return makeIx(FUMPAD_PROGRAM_ID, keys, fumpadCoder().instruction.encode("queue_params", { params: paramsToIdl(params) }));
+}
+
+/** D15: apply the queued params once `Global.pending_eta` has passed (permissionless). */
+export function executeParamsIx(caller: PublicKey): TransactionInstruction {
+  return ix("execute_params", { caller, global: globalPda() });
+}
+
+/** D15: drop the queued params change (admin). */
+export function cancelParamsIx(admin: PublicKey): TransactionInstruction {
+  return ix("cancel_params", { admin, global: globalPda() });
 }
 
 export function setPauseIx(admin: PublicKey, paused: number): TransactionInstruction {
@@ -126,13 +144,17 @@ export function createCoinIx(a: {
   );
 }
 
-/** Curve `buy`. `openTickets` = EVERY open/queued ticket in the user's Position (rebuy rule). */
+/**
+ * Curve `buy`. `openTickets` = EVERY open/queued ticket in the user's Position (rebuy
+ * rule); `anyQueued` = one of them is Queued (then the ClaimQueue is passed too).
+ */
 export function buyIx(a: {
   user: PublicKey;
   mint: PublicKey;
   solIn: bigint;
   minTokensOut: bigint;
   openTickets: PublicKey[];
+  anyQueued?: boolean;
 }): TransactionInstruction {
   const c = coinAddresses(a.mint);
   return ix(
@@ -150,7 +172,7 @@ export function buyIx(a: {
       tokenProgram: TOKEN_2022_PROGRAM_ID,
     },
     { solIn: a.solIn, minTokensOut: a.minTokensOut },
-    openTicketMetas(a.openTickets),
+    openTicketMetas(a.openTickets, a.mint, a.anyQueued),
   );
 }
 
@@ -188,7 +210,7 @@ export function sellIx(a: {
   );
 }
 
-/** `graduate` (permissionless). Needs ~300–310k CU; send with `CU.graduate`. */
+/** `graduate` (permissionless). ~270k CU; send with `CU.graduate` (400k). */
 export function graduateIx(a: { payer: PublicKey; mint: PublicKey; extra?: AccountMeta[] }): TransactionInstruction {
   const c = coinAddresses(a.mint);
   const pa = poolAuthorityPda();
@@ -201,7 +223,7 @@ export function graduateIx(a: { payer: PublicKey; mint: PublicKey; extra?: Accou
       mint: a.mint,
       poolAuthority: pa,
       curveVault: c.curveVault,
-      poolAuthorityWsol: wsolAta(pa),
+      graduationWsol: graduationWsolPda(a.mint),
       ammPool: c.pool,
       ammGlobalConfig: PUMPSWAP_GLOBAL_CONFIG,
       lpMint: c.lpMint,
@@ -222,7 +244,7 @@ export function graduateIx(a: { payer: PublicKey; mint: PublicKey; extra?: Accou
 
 // ── rewards ─────────────────────────────────────────────────────────────────
 
-export function registerHoldingsIx(a: { user: PublicKey; mint: PublicKey; openTickets: PublicKey[] }): TransactionInstruction {
+export function registerHoldingsIx(a: { user: PublicKey; mint: PublicKey; openTickets: PublicKey[]; anyQueued?: boolean }): TransactionInstruction {
   return ix(
     "register_holdings",
     {
@@ -235,7 +257,7 @@ export function registerHoldingsIx(a: { user: PublicKey; mint: PublicKey; openTi
       tokenProgram: TOKEN_2022_PROGRAM_ID,
     },
     {},
-    openTicketMetas(a.openTickets),
+    openTicketMetas(a.openTickets, a.mint, a.anyQueued),
   );
 }
 
@@ -257,7 +279,11 @@ export function claimIx(a: { owner: PublicKey; mint: PublicKey; ticket: PublicKe
   });
 }
 
-/** `process_queue`. `entries` = (ticket, owner) for a subsequence of the queue, IN QUEUE ORDER. */
+/**
+ * `process_queue`. `entries` = (ticket, owner) for a subsequence of the queue, IN QUEUE
+ * ORDER, ≤ 13 per tx. Remaining = quadruples [ticket, position, owner ATA, escrow PDA]; a
+ * missing/refusing ATA escrows the payout (D16), so create owner ATAs first.
+ */
 export function processQueueIx(a: {
   cranker: PublicKey;
   mint: PublicKey;
@@ -265,7 +291,7 @@ export function processQueueIx(a: {
   entries: { ticket: PublicKey; owner: PublicKey }[];
 }): TransactionInstruction {
   const c = coinAddresses(a.mint);
-  const rem = a.entries.flatMap((e) => [w(e.ticket), w(positionPda(a.mint, e.owner)), w(coinAta(e.owner, a.mint))]);
+  const rem = a.entries.flatMap((e) => [w(e.ticket), w(positionPda(a.mint, e.owner)), w(coinAta(e.owner, a.mint)), w(escrowPda(e.ticket))]);
   return ix(
     "process_queue",
     {
@@ -283,7 +309,7 @@ export function processQueueIx(a: {
   );
 }
 
-/** `close_ticket`. Pass `queued: true` when the ticket was ever queued (ticket.queued_at ≠ 0). */
+/** `close_ticket`. Pass `queued: true` when the ticket was ever queued (queue account optional otherwise). */
 export function closeTicketIx(a: {
   caller: PublicKey;
   ticket: PublicKey;
@@ -319,6 +345,30 @@ export function withdrawPlatformFeesIx(a: {
   });
 }
 
+/**
+ * D16: move an escrowed payout to `destination` (default: the owner's canonical ATA) and
+ * refund the escrow rent to `escrowPayer` (= ticket.escrow_payer).
+ */
+export function withdrawEscrowIx(a: {
+  owner: PublicKey;
+  mint: PublicKey;
+  ticket: PublicKey;
+  escrowPayer: PublicKey;
+  destination?: PublicKey;
+}): TransactionInstruction {
+  return ix("withdraw_escrow", {
+    owner: a.owner,
+    global: globalPda(),
+    mint: a.mint,
+    ticket: a.ticket,
+    escrow: escrowPda(a.ticket),
+    poolAuthority: poolAuthorityPda(),
+    destination: a.destination ?? coinAta(a.owner, a.mint),
+    escrowPayer: a.escrowPayer,
+    tokenProgram: TOKEN_2022_PROGRAM_ID,
+  });
+}
+
 /** Grows the queue by ≤10 KiB per call; send 3 in one tx after graduation. */
 export function initClaimQueueIx(a: { payer: PublicKey; mint: PublicKey }): TransactionInstruction {
   const c = coinAddresses(a.mint);
@@ -335,7 +385,7 @@ function venuePool(mint: PublicKey): VenuePool {
 /**
  * Router buy on PumpSwap. The program wraps exactly `solIn`, swaps, charges FUMPAD's fee
  * on top in native SOL, and closes the user's WSOL ATA (no client-side wrap needed).
- * remaining = [open tickets…, 17 PumpSwap accounts].
+ * remaining = [open tickets…, (ClaimQueue iff any Queued), 17 PumpSwap accounts].
  */
 export function swapBuyIx(a: {
   user: PublicKey;
@@ -343,6 +393,7 @@ export function swapBuyIx(a: {
   solIn: bigint;
   minTokensOut: bigint;
   openTickets: PublicKey[];
+  anyQueued?: boolean;
   buybackFeeRecipient: PublicKey;
 }): TransactionInstruction {
   return ix(
@@ -360,7 +411,7 @@ export function swapBuyIx(a: {
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     },
     { solIn: a.solIn, minTokensOut: a.minTokensOut },
-    [...openTicketMetas(a.openTickets), ...userVenueAccounts(venuePool(a.mint), a.user, a.buybackFeeRecipient)],
+    [...openTicketMetas(a.openTickets, a.mint, a.anyQueued), ...userVenueAccounts(venuePool(a.mint), a.user, a.buybackFeeRecipient)],
   );
 }
 

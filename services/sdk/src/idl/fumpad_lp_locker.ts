@@ -374,6 +374,11 @@ export type FumpadLpLocker = {
       "code": 6006,
       "name": "mathOverflow",
       "msg": "Math overflow"
+    },
+    {
+      "code": 6007,
+      "name": "unknownPoolLayout",
+      "msg": "Unknown PumpSwap pool layout"
     }
   ],
   "types": [

@@ -26,7 +26,9 @@ import {
   solForTokens,
   solInForBudget,
   ticketPriceQ64,
-  updateReference,
+  touchReference,
+  medianPriceQ64,
+  type Touch,
   curveSpotQ64,
   type CurveReserves,
   type ReferencePrice,
@@ -100,7 +102,7 @@ describe("reference (math/reference.rs, D10/D12)", () => {
     for (const seq of V.reference.sequences) {
       let st: ReferencePrice = { avgQ64: BigInt(seq.init.avg), lastSpotQ64: BigInt(seq.init.last), updatedAt: BigInt(seq.init.updatedAt) };
       for (const s of seq.steps) {
-        st = updateReference(st, BigInt(s.now), BigInt(s.pre), BigInt(s.post), s.exact);
+        st = touchReference(st, BigInt(s.now), BigInt(s.pre), BigInt(s.post), s.kind as Touch);
         expect(st).toEqual({ avgQ64: BigInt(s.avg), lastSpotQ64: BigInt(s.last), updatedAt: BigInt(s.updatedAt) });
       }
     }
@@ -110,12 +112,25 @@ describe("reference (math/reference.rs, D10/D12)", () => {
   });
 });
 
+describe("oracle median (state/observations.rs, v0.3 keeper-only + 5/6 buckets)", () => {
+  it("matches Observations::median_price_q64", () => {
+    let some = 0;
+    for (const c of V.median) {
+      const samples = c.samples.map((x: { ts: string; price: string; fallback: boolean }) => ({ ts: BigInt(x.ts), priceQ64: BigInt(x.price), fallback: x.fallback }));
+      const got = medianPriceQ64(samples, BigInt(c.now), BigInt(c.window), c.min);
+      expect(got).toBe(B(c.median));
+      if (got !== null) some++;
+    }
+    expect(some).toBeGreaterThan(0);
+  });
+});
+
 describe("rewards (instructions/rewards/logic.rs)", () => {
   const reasonMap: Record<string, string> = { Creator: "creator", NotMatured: "not-matured", TooManyOpenTickets: "max-open" };
   it("plan_sell", () => {
     for (const c of V.rewards.planSell) {
       const got = planSell(
-        { matured: BigInt(c.matured), pending: BigInt(c.pending), pendingSince: BigInt(c.pendingSince), openCount: c.openCount },
+        { matured: BigInt(c.matured), pending: BigInt(c.pending), pendingSince: BigInt(c.pendingSince), openCount: c.openCount, lastBalance: BigInt(c.lastBalance) },
         DEFAULT_PARAMS,
         c.isCreator,
         BigInt(c.sold),

@@ -111,7 +111,11 @@ describe("event decoding", () => {
   it("every IDL event has a decoder entry", () => {
     const names = (FUMPAD_IDL.events as { name: string }[]).map((e) => e.name).sort();
     expect(names).toEqual(
-      ["BuybackExecuted", "ClaimPaid", "ClaimQueued", "CoinCreated", "CurveCompleted", "FeesWithdrawn", "Graduated", "HoldingsRegistered", "LpFeesSettled", "SampleRecorded", "TicketClosed", "TicketCreated", "TicketDebited", "Trade"].sort(),
+      [
+        "BuybackExecuted", "ClaimEscrowed", "ClaimPaid", "ClaimQueued", "CoinCreated", "CurveCompleted", "CurveReopened", "EscrowWithdrawn",
+        "FeesWithdrawn", "Graduated", "HoldingsRegistered", "LpFeesSettled", "ParamsCancelled", "ParamsQueued", "ParamsUpdated",
+        "SampleRecorded", "TicketClosed", "TicketCreated", "TicketDebited", "Trade",
+      ].sort(),
     );
     expect((LP_LOCKER_IDL.events as { name: string }[]).map((e) => e.name).sort()).toEqual(["Locked", "Skimmed"]);
     expect(PublicKey.isOnCurve(eventAuthorityPda().toBytes())).toBe(false);

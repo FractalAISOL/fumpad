@@ -372,6 +372,11 @@ export const LP_LOCKER_IDL: Idl = {
       "code": 6006,
       "name": "MathOverflow",
       "msg": "Math overflow"
+    },
+    {
+      "code": 6007,
+      "name": "UnknownPoolLayout",
+      "msg": "Unknown PumpSwap pool layout"
     }
   ],
   "types": [

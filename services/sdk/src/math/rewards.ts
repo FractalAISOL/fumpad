@@ -8,7 +8,13 @@ export interface PositionLite {
   pending: bigint;
   pendingSince: bigint;
   openCount: number;
+  /** v0.3 R-L2: canonical-ATA balance at FUMPAD's last observation (0 on legacy positions). */
+  lastBalance: bigint;
 }
+
+/** Position::observed_balance — never below what is tracked. */
+export const observedBalance = (p: PositionLite) => max(p.lastBalance, p.matured + p.pending);
+const max = (a: bigint, b: bigint) => (a > b ? a : b);
 
 export type NoTicket = "creator" | "not-matured" | "max-open" | "under-min" | "no-oracle" | "zero-price";
 
@@ -19,10 +25,13 @@ export function settle(pos: PositionLite, now: bigint, minHoldSecs: bigint): Pos
   return { ...pos };
 }
 
-/** Matured (ticket-eligible) tokens right now, capped by the wallet's balance. */
+/**
+ * Ticket-eligible tokens if the wallet sold its whole `balance` now: unseen arrivals are
+ * sold first (R-L2), the rest draws on matured credit.
+ */
 export function maturedNow(pos: PositionLite, balance: bigint, now: bigint, minHoldSecs: bigint): bigint {
-  const s = capTracked(settle(pos, now, minHoldSecs), balance);
-  return s.matured;
+  const r = planSell(pos, { minHoldSecs, maxOpenTickets: 255 }, false, balance, balance, now);
+  return "tokens" in r ? r.tokens : 0n;
 }
 
 export function capTracked(pos: PositionLite, balance: bigint): PositionLite {
@@ -44,8 +53,12 @@ export function planSell(
   balanceBefore: bigint,
   now: bigint,
 ): { tokens: bigint } | { reason: NoTicket } {
-  const s = capTracked(settle(pos, now, p.minHoldSecs), balanceBefore);
-  const ticketTokens = tokensSold < s.matured ? tokensSold : s.matured;
+  const settled = settle(pos, now, p.minHoldSecs);
+  const ob = observedBalance(settled);
+  const unseen = balanceBefore > ob ? balanceBefore - ob : 0n;
+  const s = capTracked(settled, balanceBefore);
+  const trackedSold = tokensSold - (tokensSold < unseen ? tokensSold : unseen);
+  const ticketTokens = trackedSold < s.matured ? trackedSold : s.matured;
   if (isCreator) return { reason: "creator" };
   if (ticketTokens === 0n) return { reason: "not-matured" };
   if (pos.openCount >= p.maxOpenTickets) return { reason: "max-open" };

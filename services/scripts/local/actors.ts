@@ -21,11 +21,11 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from "@fumpad/sdk";
 
-/** Fast local params: 2s maturity, 3-sample/60s oracle window, else defaults. */
+/** Fast local params: 2s maturity; 60 s oracle window (6 × 10 s coverage buckets), ≥3 keeper samples, 2 s spacing. */
 export const LOCAL_PARAMS: Params = {
   ...DEFAULT_PARAMS,
   minHoldSecs: 2n,
-  oracleWindowSecs: 120n,
+  oracleWindowSecs: 60n,
   oracleMinSpacingSecs: 2n,
   oracleMinSamples: 3,
 };

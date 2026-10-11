@@ -40,6 +40,8 @@ export const SEEDS = {
   observations: enc("observations"),
   claimQueue: enc("claim_queue"),
   poolAuthority: enc("pool_authority"),
+  escrow: enc("escrow"),
+  graduationWsol: enc("graduation_wsol"),
   eventAuthority: enc("__event_authority"),
   // locker
   lock: enc("lock"),
@@ -61,6 +63,20 @@ export const U128_MAX = (1n << 128n) - 1n;
 
 // ── Program constants that are NOT params ───────────────────────────────────
 export const MAX_OPEN_TICKETS = 5;
+/** D16: max claim-queue entries per wallet per coin. */
+export const MAX_QUEUED_PER_WALLET = 2;
+/** D14 hard caps (Params::is_valid). */
+export const MAX_GRADUATION_FEE_LAMPORTS = 1_000_000_000n;
+export const MAX_FEE_BPS = 200;
+/** D15: queue_params → execute_params delay. */
+export const PARAMS_TIMELOCK_SECS = 48n * 3_600n;
+/** D13: a coin Complete this long reopens curve sells. */
+export const ESCAPE_HATCH_SECS = 7n * 86_400n;
+/** V-L2 oracle coverage: keeper samples in ≥ 5 of the window's 6 equal buckets. */
+export const COVERAGE_BUCKETS = 6n;
+export const MIN_COVERED_BUCKETS = 5;
+/** Most process_queue entries one legacy tx can carry (11 + 13×4 ≤ 64 account locks). */
+export const MAX_QUEUE_ENTRIES_PER_TX = 13;
 export const MAX_KEEPERS = 3;
 export const OBSERVATION_CAPACITY = 256;
 export const CLAIM_QUEUE_CAPACITY = 256;
@@ -107,14 +123,14 @@ export const CU = {
   buy: 200_000,
   sell: 200_000,
   createCoinAndBuy: 350_000,
-  graduate: 400_000,
+  graduate: 400_000, // ~270k measured (v0.3)
   swapBuy: 250_000,
   swapSell: 250_000,
   executeBuyback: 250_000,
   recordSamplesPerCoin: 30_000,
   recordSamplesBase: 20_000,
   claim: 200_000,
-  processQueue: 600_000,
+  processQueue: 450_000, // 13 entries: ~245k paying, ~323k escrowing
   skimSettle: 200_000,
   initClaimQueue: 100_000,
   initObservations: 60_000,

@@ -10,7 +10,7 @@ import { FUMPAD_IDL, LP_LOCKER_IDL, fumpadCoder, idlInstruction } from "../src/c
 import { FUMPAD_PROGRAM_ID, PUMPSWAP_PROGRAM_ID } from "../src/constants.js";
 import * as I from "../src/instructions/index.js";
 import { DEFAULT_PARAMS } from "../src/params.js";
-import { coinAddresses, eventAuthorityPda, positionPda, ticketPda } from "../src/pda.js";
+import { coinAddresses, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, ticketPda } from "../src/pda.js";
 
 const k = () => Keypair.generate().publicKey;
 const user = k();
@@ -21,17 +21,20 @@ const t2 = k();
 
 const built: Record<string, [TransactionInstruction, number]> = {
   initialize_global: [I.initializeGlobalIx({ payer: user, admin: user, platformTreasury: user, params: DEFAULT_PARAMS }), 0],
-  update_params: [I.updateParamsIx(user, DEFAULT_PARAMS), 0],
+  queue_params: [I.queueParamsIx(user, DEFAULT_PARAMS), 0],
+  execute_params: [I.executeParamsIx(user), 0],
+  cancel_params: [I.cancelParamsIx(user), 0],
+  withdraw_escrow: [I.withdrawEscrowIx({ owner: user, mint, ticket: t1, escrowPayer: k() }), 0],
   set_pause: [I.setPauseIx(user, 3), 0],
   set_keepers: [I.setKeepersIx(user, [user]), 0],
   set_admin: [I.setAdminIx(user, user, user), 0],
   create_coin: [I.createCoinIx({ creator: user, mint, name: "Fumble", symbol: "FUMB", uri: "https://x" }), 0],
-  buy: [I.buyIx({ user, mint, solIn: 5n, minTokensOut: 1n, openTickets: [t1, t2] }), 2],
+  buy: [I.buyIx({ user, mint, solIn: 5n, minTokensOut: 1n, openTickets: [t1, t2], anyQueued: true }), 3],
   sell: [I.sellIx({ user, mint, tokensIn: 5n, minSolOut: 0n, nextTicketSeq: 3n }), 0],
   graduate: [I.graduateIx({ payer: user, mint }), 0],
   register_holdings: [I.registerHoldingsIx({ user, mint, openTickets: [t1] }), 1],
   claim: [I.claimIx({ owner: user, mint, ticket: t1 }), 0],
-  process_queue: [I.processQueueIx({ cranker: user, mint, maxEntries: 2, entries: [{ ticket: t1, owner: user }, { ticket: t2, owner: k() }] }), 6],
+  process_queue: [I.processQueueIx({ cranker: user, mint, maxEntries: 2, entries: [{ ticket: t1, owner: user }, { ticket: t2, owner: k() }] }), 8],
   close_ticket: [I.closeTicketIx({ caller: user, ticket: t1, owner: user, mint, queued: true }), 0],
   withdraw_creator_fees: [I.withdrawCreatorFeesIx({ creator: user, mint }), 0],
   withdraw_platform_fees: [I.withdrawPlatformFeesIx({ caller: user, mint, platformTreasury: user }), 0],
@@ -65,6 +68,33 @@ describe("instruction builders vs IDL", () => {
       expect(dec?.name).toBe(name);
     });
   }
+
+  it("rebuy accounts: ClaimQueue follows the open tickets only when one is Queued", () => {
+    const n = idlInstruction(FUMPAD_IDL, "buy").accounts.length;
+    const q = built.buy[0];
+    expect(q.keys[n + 2].pubkey.equals(coinAddresses(mint).claimQueue)).toBe(true);
+    const nq = I.buyIx({ user, mint, solIn: 5n, minTokensOut: 1n, openTickets: [t1, t2] });
+    expect(nq.keys.length).toBe(n + 2);
+    const sb = I.swapBuyIx({ user, mint, solIn: 5n, minTokensOut: 1n, openTickets: [t1], anyQueued: true, buybackFeeRecipient: bfr });
+    const sn = idlInstruction(FUMPAD_IDL, "swap_buy").accounts.length;
+    expect(sb.keys[sn + 1].pubkey.equals(coinAddresses(mint).claimQueue)).toBe(true);
+    expect(sb.keys[sn + 2].pubkey.equals(coinAddresses(mint).pool)).toBe(true);
+  });
+
+  it("process_queue passes quadruples [ticket, position, owner ATA, escrow PDA]", () => {
+    const ix = built.process_queue[0];
+    const n = idlInstruction(FUMPAD_IDL, "process_queue").accounts.length;
+    expect(ix.keys[n].pubkey.equals(t1)).toBe(true);
+    expect(ix.keys[n + 1].pubkey.equals(positionPda(mint, user)).valueOf()).toBe(true);
+    expect(ix.keys[n + 3].pubkey.equals(escrowPda(t1))).toBe(true);
+    expect(ix.keys[n + 4].pubkey.equals(t2)).toBe(true);
+  });
+
+  it("graduate uses its own WSOL PDA", () => {
+    const ix = built.graduate[0];
+    const idx = idlInstruction(FUMPAD_IDL, "graduate").accounts.findIndex((a) => a.name === "graduation_wsol");
+    expect(ix.keys[idx].pubkey.equals(graduationWsolPda(mint))).toBe(true);
+  });
 
   it("event_cpi accounts are filled", () => {
     const ix = built.buy[0];
