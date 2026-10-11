@@ -33,6 +33,10 @@ pub enum FumpadError {
     CurveNotComplete,
     #[msg("Insufficient reserves")]
     InsufficientReserves,
+    #[msg("Name and symbol must not be empty")]
+    EmptyMetadata,
+    #[msg("PumpSwap pool creation did not move the expected amounts")]
+    GraduationMismatch,
 
     // ── rewards / claims / queue ────────────────────────────────────────────
     #[msg("Oracle price is stale or invalid")]

@@ -253,3 +253,5 @@ mod smoke {
         assert!(env.send(&[bad], &[&rando]).is_err());
     }
 }
+
+#[cfg(test)] mod curve_tests;
