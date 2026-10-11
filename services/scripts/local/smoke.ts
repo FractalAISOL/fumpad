@@ -3,6 +3,8 @@
  * init → create coin → buys → matured sell (ticket) → fill curve → graduate → post-grad
  * setup → samples → claim → router swaps → skim+settle → buyback → fees.
  * Prints each step's signature and the decoded events. `tsx scripts/local/smoke.ts`
+ * With `--indexer`: afterwards starts Postgres + the indexer, which BACKFILLS the whole
+ * history from RPC, and prints table counts (backfill path check).
  */
 import { Connection, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
@@ -16,7 +18,9 @@ import {
 } from "@fumpad/sdk";
 
 import { airdrop, initGlobal, directPumpBuy, tokenBalance } from "./actors.js";
-import { keypair, sleep, startValidator } from "./harness.js";
+import { Indexer, loadIndexerConfig } from "@fumpad/indexer";
+
+import { keypair, sleep, startPostgres, startValidator, waitFor } from "./harness.js";
 
 async function main() {
   const auth = keypair("upgrade-authority");
@@ -95,6 +99,26 @@ async function main() {
     await show("withdraw_platform_fees", await c.send(keeper, await c.buildWithdrawPlatformFees({ caller: keeper.publicKey, mint })));
     await show("withdraw_creator_fees", await c.send(creator, c.buildWithdrawCreatorFees({ creator: creator.publicKey, mint })));
     console.log("reward vault:", await c.tokenBalance(coinAddresses(mint).rewardVault));
+    if (process.argv.includes("--indexer")) {
+      const pg = await startPostgres();
+      const idx = new Indexer(loadIndexerConfig({ DATABASE_URL: pg.url, RPC_URL: v.rpcUrl, FETCH_METADATA: "false", LOG_LEVEL: "warn", DERIVE_INTERVAL_MS: "2000" }));
+      try {
+        await idx.start();
+        await waitFor("backfill", async () => (await idx.db.query("SELECT 1 FROM claims")).rowCount, 120_000);
+        await sleep(4000);
+        for (const t of ["transactions", "events", "coins", "trades", "tickets", "claims", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) {
+          const r = await idx.db.query(`SELECT count(*) AS n FROM ${t}`);
+          console.log(`  ${t.padEnd(16)} ${r.rows[0].n}`);
+        }
+        const coin = await idx.db.query("SELECT status, pool_tokens, tickets_created, tickets_open, median_q64 IS NOT NULL AS has_median FROM coins");
+        console.log("  coin:", coin.rows[0]);
+        console.log("  flags:", (await idx.db.query("SELECT wallet, reason FROM wallet_flags")).rows);
+        console.log("  health:", JSON.stringify(await idx.health()).slice(0, 300));
+      } finally {
+        await idx.stop();
+        await pg.stop();
+      }
+    }
     console.log("SMOKE OK");
   } finally {
     await v.stop();

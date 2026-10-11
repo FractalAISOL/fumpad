@@ -149,7 +149,7 @@ export async function startPostgres(port = 54329): Promise<Postgres> {
   rmSync(dir, { recursive: true, force: true });
   const env = { ...process.env, PATH };
   execFileSync("initdb", ["-D", dir, "-U", "fumpad", "--auth=trust", "-E", "UTF8"], { env, stdio: "ignore" });
-  execFileSync("pg_ctl", ["-D", dir, "-o", `-p ${port} -k ${dir} -c listen_addresses=127.0.0.1`, "-l", join(dir, "log.txt"), "-w", "start"], { env, stdio: "ignore" });
+  execFileSync("pg_ctl", ["-D", dir, "-o", `-p ${port} -c unix_socket_directories= -c listen_addresses=127.0.0.1`, "-l", join(dir, "log.txt"), "-w", "start"], { env, stdio: "ignore" });
   execFileSync("createdb", ["-h", "127.0.0.1", "-p", String(port), "-U", "fumpad", "fumpad"], { env, stdio: "ignore" });
   return {
     url: `postgres://fumpad@127.0.0.1:${port}/fumpad`,
