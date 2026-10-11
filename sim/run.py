@@ -69,6 +69,10 @@ for k in ("route20", "route70"):
 for k in ("turn2", "turn8"):
     VARIANTS[k] = ("market: day-0 turnover", f"{k[4:]}x FDV/day", k, BASE_P, BASE_OPT)
 VARIANTS["abuse"] = ("abuse mix", "40 sybils + 3 round-trippers", "abuse", BASE_P, BASE_OPT)
+VARIANTS["d1floor"] = ("D1 curve tickets (not spec)", "priced ≥ graduation price", "base", BASE_P,
+                       replace(BASE_OPT, curve_ticket_floor=1.0))
+VARIANTS["abuse_d1floor"] = ("abuse mix + D1 floor (not spec)", "40 sybils + 3 round-trippers", "abuse", BASE_P,
+                             replace(BASE_OPT, curve_ticket_floor=1.0))
 # combined recommendation candidates (chosen after a first sweep; see REPORT.md)
 VARIANTS["rec_claim750"] = ("recommendation", "claim 7.5%", "base", replace(BASE_P, claim_bps=750), BASE_OPT)
 VARIANTS["rec_claim750_q1024"] = ("recommendation", "claim 7.5% + queue 1024", "base",

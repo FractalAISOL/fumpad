@@ -128,7 +128,7 @@ def chart_sensitivity(table, path, scenarios=("run_fade", "moon_hold", "multi_pu
     from .run import VARIANTS
     groups = {}
     for v, (g, lbl, *_r) in VARIANTS.items():
-        if g in ("base", "abuse mix", "claim attentiveness", "recommendation", "D16 per-wallet queue limit"):
+        if g in ("base", "abuse mix", "D1 curve tickets (not spec)", "abuse mix + D1 floor (not spec)", "claim attentiveness", "recommendation", "D16 per-wallet queue limit"):
             continue
         groups.setdefault(g, []).append((v, lbl))
     base_lbl = {"trigger multiple": "10x", "claim bps": "10%", "per-claim cap": "10% of pool",
@@ -197,6 +197,8 @@ def tables_md(table, seeds):
     L.append(hdr)
     L.append("|---|---|" + "---|" * len(focus))
     for v, (g, lbl, *_r) in VARIANTS.items():
+        if not any((v, sc) in table for sc in focus):
+            continue
         cells = []
         for sc in focus:
             a = table.get((v, sc))

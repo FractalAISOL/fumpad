@@ -40,6 +40,9 @@ class MechOptions:
     claim_attempt_p: float = 0.5  # per 5-min step while qualifying (≈ claims within 10 min)
     skim_every_steps: int = 12  # hourly LP skim + settle (keeper)
     record_every: int = 12  # time-series resolution (hourly)
+    # NOT the spec: floor curve tickets' price at this multiple of the graduation price
+    # (0 = off, spec D1). Used to measure what D1 costs the pool.
+    curve_ticket_floor: float = 0.0
 
 
 @dataclass
@@ -68,6 +71,8 @@ def run_mechanism(tape: Tape, p: fm.Params, opt: MechOptions | None = None, rng_
     sell_ts = tape.tk_ts
     wallet = tape.tk_wallet
     price = tape.tk_price
+    if opt.curve_ticket_floor > 0:
+        price = np.where(tape.tk_phase == 0, np.maximum(price, opt.curve_ticket_floor * tape.info["p0"]), price)
     tokens = tape.tk_tokens.astype(float).copy()
     status = np.full(N, -1, dtype=np.int8)  # -1 = not created yet
     q_amount = np.zeros(N)  # claim amount fixed at queue entry (re-synced by rebuys)
