@@ -299,3 +299,4 @@ mod smoke {
 #[cfg(test)] mod d10_tests;
 #[cfg(test)] mod e2e_tests;
 #[cfg(test)] mod locker_tests;
+#[cfg(test)] mod review_rewards;
