@@ -300,3 +300,4 @@ mod smoke {
 #[cfg(test)] mod e2e_tests;
 #[cfg(test)] mod locker_tests;
 #[cfg(test)] mod review_rewards;
+#[cfg(test)] mod redteam_custody;
