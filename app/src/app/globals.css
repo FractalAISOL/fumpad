@@ -1,0 +1,128 @@
+/* Base layer. Tokens live in src/design/tokens.ts and are inlined by the root layout. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--header-h) + 12px);
+}
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--f-sans);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  font-weight: var(--w-regular);
+  font-variation-settings: "wdth" var(--wdth-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  min-height: 100dvh;
+}
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+h1,
+h2,
+h3,
+h4 {
+  font-weight: var(--w-semibold);
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+table {
+  border-collapse: collapse;
+}
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+::selection {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+/* Every number in the product is Martian Mono with tabular figures. */
+.num {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" var(--wdth-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tr-num);
+  font-weight: 400;
+}
+.num sub {
+  font-size: 0.68em;
+  vertical-align: -0.25em;
+  line-height: 0;
+}
+.ticker {
+  font-weight: 650;
+  font-variation-settings: "wdth" var(--wdth-ticker);
+  letter-spacing: var(--tr-tight);
+}
+.muted {
+  color: var(--ink-3);
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.wrap {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 0 var(--gut);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}

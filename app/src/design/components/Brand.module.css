@@ -1,0 +1,14 @@
+.mark { flex: none; }
+.wordmark {
+  font-weight: 850;
+  font-variation-settings: "wdth" var(--wdth-display);
+  letter-spacing: var(--tr-title);
+  line-height: 1;
+}
+.md { font-size: 19px; }
+.xl {
+  font-weight: var(--w-black);
+  letter-spacing: -0.055em;
+  font-size: clamp(56px, 15vw, 200px);
+  line-height: 0.82;
+}

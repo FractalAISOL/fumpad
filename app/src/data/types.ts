@@ -1,0 +1,362 @@
+/**
+ * Domain types for the app. They mirror the on-chain accounts and events in
+ * `contracts/programs/fumpad/src/{state,events}.rs`, normalised for display:
+ *
+ *   chain                         app
+ *   ───────────────────────────── ──────────────────────────────────────────
+ *   u64 base units (6 decimals)   `number` of whole tokens        (see chain.ts)
+ *   u64 lamports                  `number` of SOL
+ *   u128 Q64.64 lamports/base     `number` SOL per whole token
+ *   i64 unix seconds              `number` unix milliseconds
+ *   Pubkey                        base58 `string`
+ *
+ * Floats are fine for display. Transaction building must go back to raw units via
+ * `chain.ts` and never round-trip through these numbers.
+ */
+
+export type Address = string;
+export type Millis = number;
+
+/* ── Coins ─────────────────────────────────────────────────────────────────── */
+
+/** Mirrors `CoinStatus`. */
+export type CoinStatus = "curve" | "complete" | "graduated";
+
+export interface CoinSummary {
+  mint: Address;
+  symbol: string; // without "$"
+  name: string;
+  creator: Address;
+  /** Monogram style for the generated tile (until real images land). */
+  tile: 0 | 1 | 2;
+  imageUrl?: string;
+  status: CoinStatus;
+  createdAt: Millis;
+  graduatedAt?: Millis;
+  /** Spot, SOL per token. */
+  price: number;
+  /** 30-minute median of keeper samples, SOL per token. Graduated coins only. */
+  median?: number;
+  change24h: number; // percent
+  volume24hSol: number;
+  marketCapSol: number;
+  holders: number;
+  /** Real SOL raised on the curve (pre-graduation). */
+  curveSol: number;
+  /** Reward pool balance, tokens. */
+  poolTokens: number;
+  ticketsOpen: number;
+  /** Last 24 points of price, oldest first, for sparklines. */
+  spark: number[];
+}
+
+export interface CoinDetail extends CoinSummary {
+  description: string;
+  links: { label: string; href: string }[];
+  /** Tokens seeded to the pool at launch (5% of supply). */
+  poolSeeded: number;
+  poolBought24h: number;
+  poolPaidOut: number;
+  /** Tokens owed to the claim queue. */
+  queueOwed: number;
+  ticketsCreated: number;
+  /** Open tickets already at ≥ 10× (pre-graduation: waiting on graduation). */
+  ticketsPast10x: number;
+  /** D10 reference average (10-min TWAP), SOL per token. Used only as the ticket floor. */
+  referencePrice: number;
+  /** PumpSwap pool address after graduation. */
+  ammPool?: Address;
+  /** Virtual reserves, for curve quotes. */
+  virtualSol: number;
+  virtualTokens: number;
+  /** Real tokens left on the curve. */
+  curveTokensLeft: number;
+  /** Graduated-coin pool reserves (quote side incl. virtual), for quotes. */
+  ammSol?: number;
+  ammTokens?: number;
+  curveSol1h: number;
+}
+
+export type ChartRange = "1h" | "1d" | "7d" | "all";
+export interface PricePoint {
+  t: Millis;
+  p: number; // SOL per token
+}
+
+export interface Holder {
+  address: Address;
+  label?: string;
+  kind: "pool" | "creator" | "you" | "holder" | "amm";
+  share: number; // percent of supply
+}
+
+/* ── Tickets ───────────────────────────────────────────────────────────────── */
+
+/** Mirrors `TicketStatus`. */
+export type TicketChainStatus = "open" | "queued" | "claimed" | "expired" | "voided";
+
+/**
+ * What the UI shows. Derived from chain status + coin status + oracle median:
+ *  - claimable:   open, graduated, median ≥ 10× with coverage, inside 90 days
+ *  - queued:      waiting in the claim queue (clock stopped, never expires)
+ *  - tracking:    open, graduated, below 10×
+ *  - awaiting-graduation: open, coin still on the curve (may already be ≥ 10×)
+ *  - claimed / expired / voided: closed
+ * `rebuyReduced` is orthogonal: tokens < originalTokens after a rebuy inside 7 days.
+ */
+export type TicketState =
+  | "claimable"
+  | "queued"
+  | "tracking"
+  | "awaiting-graduation"
+  | "claimed"
+  | "expired"
+  | "voided";
+
+export interface Ticket {
+  id: Address; // ticket PDA
+  seq: number;
+  owner: Address;
+  mint: Address;
+  symbol: string;
+  coinName: string;
+  tile: 0 | 1 | 2;
+  coinStatus: CoinStatus;
+  /** Tokens credited after rebuy debits. */
+  tokens: number;
+  originalTokens: number;
+  /** Ticket price, SOL per token: max(execution, D12 floor). */
+  sellPrice: number;
+  /** What the sell actually filled at. Differs from sellPrice when the floor applied. */
+  execPrice: number;
+  sellUsd: number;
+  sellSol: number;
+  sellTs: Millis;
+  /** sellTs + 90 days, or undefined once queued (clock stopped). */
+  expiresAt?: Millis;
+  chainStatus: TicketChainStatus;
+  state: TicketState;
+  /** Current 30-min median ÷ ticket price. */
+  multiple: number;
+  /** Highest multiple the median has reached. */
+  peakMultiple: number;
+  /** 10% of tokens, fixed at queue entry or payout. */
+  claimAmount: number;
+  /** Claim value in SOL at the current median. */
+  claimValueSol: number;
+  queuedAt?: Millis;
+  queuePosition?: number;
+  /** Pool balance at which this claim fits (claim ≤ 10% of pool). */
+  queueNeedsPool?: number;
+  queueEta?: number; // ms
+  claimedAt?: Millis;
+  claimTx?: string;
+  /** Debits applied by rebuys within 7 days. */
+  rebuyDebited: number;
+}
+
+/* ── Queue ─────────────────────────────────────────────────────────────────── */
+
+export interface QueueEntry {
+  position: number;
+  ticket: Address;
+  owner: Address;
+  ownerName?: string;
+  amount: number;
+  sellTs: Millis;
+  /** True when amount ≤ 10% of the pool right now. */
+  fits: boolean;
+  needsPool: number;
+  eta?: number;
+  isYou?: boolean;
+}
+
+/* ── Trades & quotes ───────────────────────────────────────────────────────── */
+
+export type Side = "buy" | "sell";
+
+export interface FumbleRow {
+  ticket: Address;
+  owner: Address;
+  ownerName?: string;
+  tokens: number;
+  sol: number;
+  ts: Millis;
+  multiple: number;
+  isYou?: boolean;
+}
+
+export interface TradeQuote {
+  side: Side;
+  /** Input amount (SOL for buys, tokens for sells). */
+  amountIn: number;
+  /** Output before slippage (tokens for buys, SOL for sells), after the fee. */
+  amountOut: number;
+  feeSol: number;
+  feePoolSol: number;
+  feePlatformSol: number;
+  feeCreatorSol: number;
+  /** PumpSwap's own 0.25% (0.20% LP + 0.05% protocol) on graduated coins; 0 on the curve. */
+  venueFeeSol: number;
+  /** Spot before the trade. */
+  spotBefore: number;
+  /** Average execution price, SOL per token, before the fee. */
+  execPrice: number;
+  priceImpact: number; // percent
+  venue: "curve" | "pumpswap";
+  ticket?: TicketPreview;
+  rebuyWarning?: RebuyWarning;
+  /** Curve buys that would fill the curve are partially filled. */
+  partialFill?: boolean;
+}
+
+export interface TicketPreview {
+  /** Whether this sell files a ticket, and why not when it doesn't. */
+  files: boolean;
+  reason?: "under-min" | "creator" | "max-open" | "not-matured" | "no-oracle";
+  usdValue: number;
+  /** Tokens credited (sold, capped by tokens held ≥ 10 min). */
+  tokens: number;
+  execPrice: number;
+  /** D12 floor: reference × exec ÷ spotBefore. */
+  floorPrice: number;
+  /** max(exec, floor). */
+  ticketPrice: number;
+  floorApplied: boolean;
+  triggerPrice: number;
+  claimTokens: number;
+  openTickets: number;
+  maxOpenTickets: number;
+}
+
+export interface RebuyWarning {
+  /** Tickets that a buy of this size would debit (newest first). */
+  tickets: { id: Address; symbol: string; tokens: number; debit: number; soldAgo: number }[];
+  totalDebit: number;
+}
+
+/* ── Feed ──────────────────────────────────────────────────────────────────── */
+
+export type FeedKind = "launch" | "fumble" | "cross" | "graduation" | "claim";
+
+interface FeedBase {
+  id: string;
+  kind: FeedKind;
+  ts: Millis;
+  actor: Address;
+  actorName?: string;
+  mint: Address;
+  symbol: string;
+  coinName: string;
+  tile: 0 | 1 | 2;
+  /** Social counters, off-chain. */
+  replies: number;
+  reposts: number;
+}
+export interface FeedLaunch extends FeedBase {
+  kind: "launch";
+  poolTokens: number;
+}
+export interface FeedFumble extends FeedBase {
+  kind: "fumble";
+  tokens: number;
+  sol: number;
+  ticketPrice: number;
+}
+export interface FeedCross extends FeedBase {
+  kind: "cross";
+  multiple: number;
+  claimTokens: number;
+  claimSol: number;
+}
+export interface FeedGraduation extends FeedBase {
+  kind: "graduation";
+  raisedSol: number;
+  ticketsUnlocked: number;
+}
+export interface FeedClaim extends FeedBase {
+  kind: "claim";
+  multiple: number;
+  tokens: number;
+  sol: number;
+  fromQueue: boolean;
+  skippedAhead: boolean;
+}
+export type FeedEvent = FeedLaunch | FeedFumble | FeedCross | FeedGraduation | FeedClaim;
+
+export interface PlatformStats {
+  paidBack24hSol: number;
+  crossings24h: number;
+  graduated24h: number;
+  openTickets: number;
+  solUsd: number;
+}
+
+export interface CloseCall {
+  ticket: Address;
+  symbol: string;
+  mint: Address;
+  owner: Address;
+  ownerName?: string;
+  multiple: number;
+  isYou?: boolean;
+}
+
+/* ── People ────────────────────────────────────────────────────────────────── */
+
+export type Board = "fumbles" | "claimers" | "diamond";
+
+export interface LeaderRow {
+  rank: number;
+  address: Address;
+  name?: string;
+  isYou?: boolean;
+  symbol?: string;
+  /** Board-specific numeric columns. */
+  soldForSol?: number;
+  worthNowSol?: number;
+  multiple?: number;
+  claims?: number;
+  claimedSol?: number;
+  unlockedAt?: number;
+  claimedAtMultiple?: number;
+  waitedDays?: number;
+}
+
+export interface Achievement {
+  id: string;
+  title: string;
+  detail: string;
+  earned: boolean;
+  glyph: "ring" | "ring-dot" | "bar" | "queue" | "check" | "down";
+}
+
+export interface Profile {
+  address: Address;
+  name?: string;
+  level: number;
+  levelTitle: string;
+  xp: number;
+  xpNext: number;
+  fumbleRank?: number;
+  ticketsFiled: number;
+  crossed10x: number;
+  claimedSol: number;
+  worst?: { symbol: string; multiple: number };
+  flagged: boolean;
+  achievements: Achievement[];
+}
+
+/* ── Launch ────────────────────────────────────────────────────────────────── */
+
+export interface LaunchDraft {
+  name: string;
+  symbol: string;
+  description: string;
+  imageFile?: File | null;
+  website?: string;
+  x?: string;
+  telegram?: string;
+  /** Optional first buy in SOL, made in the same transaction. */
+  initialBuySol: number;
+}

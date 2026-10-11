@@ -1,0 +1,34 @@
+.num {
+  white-space: nowrap;
+}
+.unit {
+  font-family: var(--f-sans);
+  font-variation-settings: "wdth" var(--wdth-body);
+  letter-spacing: 0;
+  font-size: 0.82em;
+  color: var(--ink-3);
+  font-weight: var(--w-medium);
+}
+.xs { font-size: var(--fs-xs); }
+.sm { font-size: var(--fs-sm); }
+.md { font-size: var(--fs-md); }
+.lg { font-size: var(--fs-lg); letter-spacing: -0.03em; }
+.xl { font-size: 26px; letter-spacing: -0.04em; }
+.readout {
+  font-variation-settings: "wdth" var(--wdth-readout);
+  font-weight: 600;
+  letter-spacing: var(--tr-readout);
+  font-size: clamp(56px, 12vw, 120px);
+  line-height: 0.85;
+}
+
+.money { color: var(--flare-text); }
+.muted { color: var(--ink-3); }
+.multiple { font-weight: 500; letter-spacing: -0.03em; }
+
+/* Direction: glyph + sign + tone. No red, no green, no orange. */
+.change { display: inline-flex; align-items: baseline; gap: 0.3em; }
+.glyph { font-size: 0.66em; transform: translateY(-0.1em); }
+.up { color: var(--ink); font-weight: 500; }
+.down { color: var(--ink-3); }
+.flat { color: var(--ink-3); }

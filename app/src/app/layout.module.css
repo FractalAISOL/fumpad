@@ -1,0 +1,6 @@
+.main {
+  padding-bottom: calc(var(--tabbar-h) + 40px + env(safe-area-inset-bottom));
+}
+@media (min-width: 900px) {
+  .main { padding-bottom: 64px; }
+}
