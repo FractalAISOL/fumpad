@@ -293,3 +293,5 @@ mod smoke {
 
 #[cfg(test)] mod curve_tests;
 #[cfg(test)] mod venue_tests;
+#[cfg(test)] mod flow;
+#[cfg(test)] mod d10_tests;
