@@ -1,0 +1,166 @@
+.pageHead {
+  padding: var(--s-7) 0 var(--s-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-4) var(--s-6);
+}
+.h1 {
+  font-weight: var(--w-heavy);
+  font-variation-settings: "wdth" var(--wdth-title);
+  letter-spacing: var(--tr-title);
+  font-size: 30px;
+  line-height: 1.02;
+}
+@media (min-width: 760px) {
+  .h1 {
+    font-size: 40px;
+  }
+}
+.lede {
+  color: var(--ink-2);
+  max-width: 58ch;
+  margin-top: var(--s-2);
+}
+
+.grid {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+@media (min-width: 1000px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: var(--s-5);
+  }
+}
+.tabsWrap {
+  padding: 0 var(--s-4);
+}
+.rank {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+.rankTop {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Profile */
+.prof {
+  padding: var(--s-5) var(--s-4);
+}
+.hd {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.hdText {
+  min-width: 0;
+}
+.name {
+  font-weight: var(--w-heavy);
+  font-variation-settings: "wdth" 115;
+  letter-spacing: -0.03em;
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+.addrRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12.5px;
+}
+.badges {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lvl {
+  margin-top: 18px;
+}
+.lvlRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font-size: var(--fs-sm);
+  margin-bottom: 6px;
+}
+.kv {
+  margin-top: var(--s-4);
+}
+.achH {
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  margin-top: var(--s-5);
+}
+.ach {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-2);
+}
+.badge {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  padding: 10px;
+  min-width: 0;
+}
+.badge b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 640;
+  line-height: 1.2;
+}
+.badge span {
+  display: block;
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+.locked {
+  opacity: 0.5;
+  border-style: dashed;
+}
+.glyph {
+  width: 28px;
+  height: 28px;
+  display: block;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+.flag {
+  margin-top: var(--s-4);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.flagNote {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
+.profileGrid {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+  padding-top: var(--s-6);
+  align-items: start;
+}
+@media (min-width: 1000px) {
+  .profileGrid {
+    grid-template-columns: 380px minmax(0, 1fr);
+    gap: var(--s-5);
+  }
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

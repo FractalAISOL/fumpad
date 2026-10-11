@@ -1,0 +1,208 @@
+/* Tooltip */
+.tip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  transform: translate(-50%, -100%);
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border-radius: var(--r-2);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  pointer-events: none;
+  animation: tipIn var(--dur-fast) var(--ease-out);
+}
+.below {
+  transform: translate(-50%, 0);
+}
+@keyframes tipIn {
+  from {
+    opacity: 0;
+  }
+}
+
+.info {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  vertical-align: -4px;
+  border-radius: 50%;
+  color: var(--ink-3);
+}
+.info:hover {
+  color: var(--ink);
+}
+.info svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Dialog */
+.dialog {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  max-width: calc(100vw - 32px);
+  width: 100%;
+  overflow: visible;
+}
+.sm {
+  max-width: min(400px, calc(100vw - 32px));
+}
+.md {
+  max-width: min(520px, calc(100vw - 32px));
+}
+.dialog::backdrop {
+  background: var(--scrim);
+  animation: fade var(--dur-base) var(--ease-out);
+}
+.dialog[open] .sheet {
+  animation: rise var(--dur-slow) var(--ease-out);
+}
+.sheet {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-float);
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+}
+.grip {
+  display: none;
+}
+.dHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-4) 0 var(--s-5);
+}
+.dTitle {
+  font-size: var(--fs-lg);
+  font-weight: var(--w-bold);
+  font-variation-settings: "wdth" 110;
+  letter-spacing: -0.02em;
+}
+.dClose {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-2);
+  color: var(--ink-3);
+}
+.dClose:hover {
+  color: var(--ink);
+  background: var(--sunken);
+}
+.dClose svg {
+  width: 18px;
+  height: 18px;
+}
+.dDesc {
+  padding: 6px var(--s-5) 0;
+  color: var(--ink-2);
+  font-size: var(--fs-md);
+}
+.dBody {
+  padding: var(--s-4) var(--s-5);
+}
+.dFoot {
+  display: flex;
+  gap: var(--s-2);
+  justify-content: flex-end;
+  padding: var(--s-3) var(--s-5) var(--s-5);
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+/* Bottom sheet below 600px */
+@media (max-width: 599.98px) {
+  .dialog,
+  .sm,
+  .md {
+    max-width: 100vw;
+    margin: auto 0 0;
+    width: 100vw;
+  }
+  .sheet {
+    border-radius: var(--r-3) var(--r-3) 0 0;
+    border-bottom: 0;
+    max-height: 88dvh;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .dialog[open] .sheet {
+    animation: sheetUp var(--dur-slow) var(--ease-out);
+  }
+  .grip {
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--rule-2);
+    margin: 8px auto 0;
+  }
+  .dFoot {
+    flex-direction: column-reverse;
+  }
+  .dFoot > * {
+    width: 100%;
+  }
+}
+@keyframes sheetUp {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  z-index: var(--z-toast);
+  left: 50%;
+  bottom: calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom));
+  transform: translate(-50%, 20px);
+  max-width: calc(100% - 32px);
+  padding: 10px 14px;
+  border-radius: var(--r-2);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: 13.5px;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
+}
+.toastOn {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.toastMoney {
+  background: var(--flare);
+  color: var(--on-flare);
+  font-weight: var(--w-semibold);
+}
+@media (min-width: 900px) {
+  .toast {
+    bottom: 28px;
+  }
+}
+
+.anchor {
+  display: inline-flex;
+  vertical-align: middle;
+}

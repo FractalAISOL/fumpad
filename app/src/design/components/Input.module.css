@@ -1,0 +1,137 @@
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--ink);
+}
+.optional {
+  color: var(--ink-3);
+  font-weight: var(--w-regular);
+  font-size: var(--fs-xs);
+}
+.hint {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.error {
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  font-weight: var(--w-semibold);
+}
+.error::before {
+  content: "✕ ";
+  font-size: 0.85em;
+}
+
+.box {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 42px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-2);
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--rule-2);
+  transition:
+    box-shadow var(--dur-base) var(--ease-out),
+    background-color var(--dur-base);
+}
+.box:hover {
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.box:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: var(--surface);
+}
+.invalid .box {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: repeating-linear-gradient(-45deg, var(--sunken) 0 6px, var(--surface) 6px 7px);
+}
+.input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  padding: 10px 0;
+  font-size: var(--fs-base);
+}
+.input::placeholder {
+  color: var(--ink-3);
+  opacity: 0.8;
+}
+.affix {
+  color: var(--ink-3);
+  font-size: var(--fs-md);
+  flex: none;
+}
+.areaBox {
+  align-items: stretch;
+}
+.area {
+  resize: vertical;
+  min-height: 88px;
+  line-height: 1.5;
+}
+
+/* Amount */
+.amount {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+}
+.amountTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-3);
+}
+.balance {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.amountBox {
+  min-height: 56px;
+}
+.amountInput {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" var(--wdth-num);
+  font-size: 22px;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.unit {
+  font-weight: var(--w-semibold);
+  color: var(--ink-2);
+  flex: none;
+}
+.quick {
+  display: flex;
+  gap: 6px;
+}
+.quick button {
+  flex: 1;
+  height: 28px;
+  font-size: var(--fs-xs);
+  border-radius: var(--r-1);
+  box-shadow: inset 0 0 0 1px var(--rule);
+  color: var(--ink-2);
+  transition:
+    box-shadow var(--dur-fast),
+    color var(--dur-fast);
+}
+.quick button:hover {
+  box-shadow: inset 0 0 0 1px var(--ink);
+  color: var(--ink);
+}
+.quick button:active {
+  transform: translateY(1px);
+}

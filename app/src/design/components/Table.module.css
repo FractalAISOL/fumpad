@@ -1,0 +1,98 @@
+.scroll {
+  overflow-x: auto;
+}
+.tbl {
+  width: 100%;
+  font-size: var(--fs-sm);
+}
+.tbl th {
+  text-align: left;
+  font-weight: var(--w-medium);
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  padding: 10px var(--s-4);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.tbl td {
+  padding: 11px var(--s-4);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.tbl tbody tr:last-child td {
+  border-bottom: 0;
+}
+.end {
+  text-align: right !important;
+}
+.end .sortBtn {
+  flex-direction: row-reverse;
+}
+
+.sortBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-weight: inherit;
+  border-radius: 2px;
+}
+.sortBtn:hover {
+  color: var(--ink);
+}
+th[aria-sort="ascending"] .sortBtn,
+th[aria-sort="descending"] .sortBtn {
+  color: var(--ink);
+}
+
+.linked {
+  position: relative;
+  cursor: pointer;
+}
+.linked:hover td {
+  background: var(--sunken);
+}
+.rowLink {
+  display: contents;
+}
+.rowLink::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.rowLink:focus-visible {
+  outline: none;
+}
+.linked:has(.rowLink:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.me td {
+  background: var(--flare-soft);
+}
+.linked.me:hover td {
+  background: color-mix(in srgb, var(--flare-soft) 80%, var(--flare));
+}
+
+@media (max-width: 599.98px) {
+  .tbl th,
+  .tbl td {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .hide-sm {
+    display: none;
+  }
+}
+@media (max-width: 759.98px) {
+  .hide-md {
+    display: none;
+  }
+}
+@media (max-width: 899.98px) {
+  .hide-lg {
+    display: none;
+  }
+}
