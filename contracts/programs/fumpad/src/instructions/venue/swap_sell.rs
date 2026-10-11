@@ -21,6 +21,7 @@ use anchor_spl::{
 };
 
 use super::common::*;
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -136,7 +137,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
     let pre_spot = before.spot_price_q64().ok();
     if let (Some(pre), Ok(post)) = (pre_spot, after.spot_price_q64()) {
-        a.coin.touch_reference(now, pre, post, false);
+        a.coin.touch_reference(now, pre, post, Touch::Venue);
     }
     // D12: effective PumpSwap spot before the sell (0 = unknown → D10 floor).
     let pre_trade_spot_q64 = pre_spot.unwrap_or(0);

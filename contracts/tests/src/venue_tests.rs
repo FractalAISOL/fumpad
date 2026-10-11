@@ -989,9 +989,9 @@ fn buyback_needs_samples_and_balance() {
     fx.init_obs();
     fund_buyback(&mut fx, SOL / 10);
     // Fewer than oracle_min_samples (84) in the window.
-    fx.keeper_samples(83, 10);
+    fx.keeper_samples(83, 20);
     expect_err(fx.buyback(u64::MAX), FumpadError::InsufficientSamples);
-    fx.keeper_samples(1, 10);
+    fx.keeper_samples(1, 20);
     // Zero balance → nothing to do.
     fund_buyback(&mut fx, 0);
     expect_err(fx.buyback(u64::MAX), FumpadError::NothingToBuyBack);
@@ -1011,7 +1011,7 @@ fn buyback_happy_path_from_router_fees() {
     expect_ok(fx.buy(&user, 20 * SOL, 1));
     let accrued = fetch_coin(&fx.env, &fx.coin).buyback_lamports;
     assert_eq!(accrued, 20 * SOL / 100 / 2);
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
 
     let vault0 = token_balance(&fx.env, &fx.reward_vault);
     let lamports0 = fx.env.lamports(&fx.coin);
@@ -1031,7 +1031,7 @@ fn buyback_happy_path_from_router_fees() {
 fn buyback_slice_is_capped_by_pool_depth_and_max() {
     let mut fx = setup();
     fx.init_obs();
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, 10 * SOL);
     assert_eq!(fx.virtual_quote_reserves(), 0); // fresh pool
     let cap = fx.effective_quote() * 50 / 10_000;
@@ -1054,7 +1054,7 @@ fn buyback_slice_is_capped_by_pool_depth_and_max() {
 fn buyback_rejects_wrong_destination_and_pause() {
     let mut fx = setup();
     fx.init_obs();
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
 
     // Tokens to an attacker account instead of the reward vault.
@@ -1081,7 +1081,7 @@ fn buyback_rejects_wrong_destination_and_pause() {
 fn buyback_deviation_guard_blocks_pumped_spot() {
     let mut fx = setup();
     fx.init_obs();
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
     let median_spot = fx.spot_q64();
 
@@ -1149,8 +1149,8 @@ fn manipulation_pump_and_sample_in_same_tx_or_bundle() {
         FumpadError::SampleTxNotIsolated,
     );
 
-    // (3) Bundle-style: pumped pool, isolated sample tx → lands, but flagged as fallback;
-    // a handful of such samples can't move the median of the honest window.
+    // (3) Bundle-style: pumped pool, isolated sample tx → lands, but flagged as fallback,
+    // and fallback samples are excluded from the median and its coverage (V-M1).
     for _ in 0..5 {
         expect_ok(fx.sample_as(&attacker));
         fx.env.warp(10);
@@ -1168,11 +1168,13 @@ fn manipulation_pump_and_sample_in_same_tx_or_bundle() {
     // to own most of a 30-min window of ≥84 samples to move it.
     let honest_end = fx.env.now() - 50 - 700 - 15;
     assert_eq!(o.median_price_q64(honest_end, p.oracle_window_secs, p.oracle_min_samples), Some(fair));
-    // Right now the window holds ~69 honest + 5 pumped samples < 84 → no median at all:
-    // a keeper outage pauses claims rather than letting a few fallback samples decide.
+    // Right now the window holds ~69 honest keeper samples (+ 5 ignored fallback ones) < 84
+    // → no median at all: a keeper outage pauses claims rather than letting fallback
+    // samples decide.
     assert_eq!(o.median_price_q64(fx.env.now(), p.oracle_window_secs, p.oracle_min_samples), None);
-    // Even with coverage relaxed, the median of the current window is still the fair price.
-    assert_eq!(o.median_price_q64(fx.env.now(), p.oracle_window_secs, 1), Some(fair));
+    // V-M1: fallback samples never count, not even with the count requirement relaxed: the
+    // keeper samples left in the window are bunched in its oldest half (time spread fails).
+    assert_eq!(o.median_price_q64(fx.env.now(), p.oracle_window_secs, 1), None);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1281,7 +1283,7 @@ fn compute_units_and_batch_size() {
     let batch = fx.sample_ix(kp_pk(&k), &groups);
     let five = cu(&fx.env.send_as(&k, &[batch], &[&k]));
 
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
     let bb = cu(&fx.buyback(u64::MAX));
     println!(

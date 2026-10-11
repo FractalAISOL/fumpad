@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::math::reference::ReferencePrice;
+use crate::math::reference::{ReferencePrice, Touch};
 
 /// One per launched coin. PDA ["coin", mint].
 ///
@@ -68,9 +68,9 @@ pub struct CoinFees {
 }
 
 impl Coin {
-    /// Apply a touch point to the reference price (`exact` = curve trade).
-    pub fn touch_reference(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, exact: bool) {
-        self.reference.update(now, pre_spot_q64, post_spot_q64, exact);
+    /// Apply a D10 touch point to the reference price.
+    pub fn touch_reference(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, kind: Touch) {
+        self.reference.touch(now, pre_spot_q64, post_spot_q64, kind);
     }
 }
 

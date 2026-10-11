@@ -6,6 +6,7 @@ use anchor_spl::{
 };
 
 use super::{accrue_fees, bump_stats, inline_buyback, reserves_of, store_reserves};
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -106,7 +107,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     bump_stats(coin, q.sol_used);
     // D10: exact curve touch point (post-trade spot includes the inline buyback).
     let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
-    coin.touch_reference(now, pre_spot, post_spot, true);
+    coin.touch_reference(now, pre_spot, post_spot, Touch::Curve);
     let completed = r.real_token == 0;
     if completed {
         coin.status = CoinStatus::Complete;

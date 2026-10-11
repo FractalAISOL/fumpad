@@ -5,6 +5,7 @@ use anchor_spl::{
 };
 
 use super::{accrue_fees, bump_stats, inline_buyback, reserves_of, store_reserves};
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -133,7 +134,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     // D10: exact curve touch point. The ticket (if any) is floored at the updated average
     // scaled by this sell's own slippage from `pre_spot` (D12).
     let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
-    coin.touch_reference(now, pre_spot, post_spot, true);
+    coin.touch_reference(now, pre_spot, post_spot, Touch::Curve);
     let reference_price_q64 = coin.reference.avg_q64;
     // A sell's buyback can only finish the curve in pathological dust states; handle it anyway.
     let completed = r.real_token == 0;

@@ -23,6 +23,7 @@ use anchor_spl::{
 };
 
 use super::common::*;
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -153,7 +154,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     let after = pumpswap::venue_reserves(venue, &pool)?;
     // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
     if let (Ok(pre), Ok(post)) = (before.spot_price_q64(), after.spot_price_q64()) {
-        a.coin.touch_reference(now, pre, post, false);
+        a.coin.touch_reference(now, pre, post, Touch::Venue);
     }
 
     let ev = Trade {
