@@ -6,6 +6,7 @@ use anchor_spl::{
 };
 
 use super::{accrue_fees, bump_stats, inline_buyback, reserves_of, store_reserves};
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -19,7 +20,8 @@ use crate::{
 /// is charged on top of the lamports actually used (see `curve/mod.rs`).
 ///
 /// remaining_accounts: the position's open tickets (exactly `position.open_count`,
-/// any order) — consumed by `hooks::on_buy` for the rebuy rule.
+/// any order), then the coin's ClaimQueue only if one of them is `Queued` — consumed by
+/// `hooks::on_buy` for the rebuy rule (`hooks::split_rebuy_accounts`).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct Buy<'info> {
@@ -70,11 +72,13 @@ pub struct Buy<'info> {
 
 pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
     let a = &mut *ctx.accounts;
-    let p = a.global.params;
     require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
     require!(sol_in > 0, FumpadError::ZeroAmount);
     let now = Clock::get()?.unix_timestamp;
+
+    // Canonical ATA balance before the buy (R-L2 observation).
+    let balance_before = a.user_token_account.amount;
 
     // ── Quote ──
     let mut r = reserves_of(&a.coin);
@@ -82,7 +86,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     let q = quote_buy(&r, sol_in).ok_or(FumpadError::MathOverflow)?;
     require!(q.tokens_out > 0, FumpadError::ZeroAmount);
     require!(q.tokens_out >= min_tokens_out, FumpadError::SlippageExceeded);
-    let fee = compute_fee(q.sol_used, &p).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(q.sol_used, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     r.apply_buy(&q).ok_or(FumpadError::MathOverflow)?;
 
     // ── Move value: SOL (curve + fee) user → coin; tokens curve vault → user ──
@@ -107,7 +111,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     bump_stats(coin, q.sol_used);
     // D10: exact curve touch point (post-trade spot includes the inline buyback).
     let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
-    coin.touch_reference(now, pre_spot, post_spot, true);
+    coin.touch_reference(now, pre_spot, post_spot, Touch::Curve);
     let completed = r.real_token == 0;
     if completed {
         coin.status = CoinStatus::Complete;
@@ -118,18 +122,19 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     }
 
     // ── Rewards hook ──
-    let open = a.position.open_count as usize;
-    require!(ctx.remaining_accounts.len() >= open, FumpadError::OpenTicketsMismatch);
+    let (rebuy, rest) = hooks::split_rebuy_accounts(&a.position, ctx.remaining_accounts)?;
+    require!(rest.is_empty(), FumpadError::OpenTicketsMismatch);
     a.position.init_if_new(a.user.key(), a.mint.key(), ctx.bumps.position);
     hooks::on_buy(
         BuyHookAccounts {
             global: &a.global,
             coin: &a.coin,
             position: &mut a.position,
-            open_tickets: &ctx.remaining_accounts[..open],
+            rebuy,
             event_authority: &a.event_authority,
         },
         q.tokens_out,
+        balance_before,
         now,
     )?;
 

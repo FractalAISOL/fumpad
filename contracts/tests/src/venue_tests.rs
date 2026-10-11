@@ -240,7 +240,8 @@ fn put_coin(env: &mut Env, mint: Pubkey, pool: Pubkey, status: CoinStatus, buyba
         tokens_paid_out: 0,
         // D10 reference initialized at the pool's opening spot (as graduation carries it).
         reference: ReferencePrice::new(pool_spot_q64(env, &pool), START_TS - 30),
-        reserved: [0; 88],
+        fees: env.fetch::<fumpad::state::Global>(&env.global_pda()).params.coin_fees(),
+        reserved: [0; 72],
     };
     let mut data = Vec::new();
     coin.try_serialize(&mut data).unwrap();
@@ -988,9 +989,9 @@ fn buyback_needs_samples_and_balance() {
     fx.init_obs();
     fund_buyback(&mut fx, SOL / 10);
     // Fewer than oracle_min_samples (84) in the window.
-    fx.keeper_samples(83, 10);
+    fx.keeper_samples(83, 20);
     expect_err(fx.buyback(u64::MAX), FumpadError::InsufficientSamples);
-    fx.keeper_samples(1, 10);
+    fx.keeper_samples(1, 20);
     // Zero balance → nothing to do.
     fund_buyback(&mut fx, 0);
     expect_err(fx.buyback(u64::MAX), FumpadError::NothingToBuyBack);
@@ -1010,7 +1011,7 @@ fn buyback_happy_path_from_router_fees() {
     expect_ok(fx.buy(&user, 20 * SOL, 1));
     let accrued = fetch_coin(&fx.env, &fx.coin).buyback_lamports;
     assert_eq!(accrued, 20 * SOL / 100 / 2);
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
 
     let vault0 = token_balance(&fx.env, &fx.reward_vault);
     let lamports0 = fx.env.lamports(&fx.coin);
@@ -1030,7 +1031,7 @@ fn buyback_happy_path_from_router_fees() {
 fn buyback_slice_is_capped_by_pool_depth_and_max() {
     let mut fx = setup();
     fx.init_obs();
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, 10 * SOL);
     assert_eq!(fx.virtual_quote_reserves(), 0); // fresh pool
     let cap = fx.effective_quote() * 50 / 10_000;
@@ -1053,7 +1054,7 @@ fn buyback_slice_is_capped_by_pool_depth_and_max() {
 fn buyback_rejects_wrong_destination_and_pause() {
     let mut fx = setup();
     fx.init_obs();
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
 
     // Tokens to an attacker account instead of the reward vault.
@@ -1080,7 +1081,7 @@ fn buyback_rejects_wrong_destination_and_pause() {
 fn buyback_deviation_guard_blocks_pumped_spot() {
     let mut fx = setup();
     fx.init_obs();
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
     let median_spot = fx.spot_q64();
 
@@ -1148,8 +1149,8 @@ fn manipulation_pump_and_sample_in_same_tx_or_bundle() {
         FumpadError::SampleTxNotIsolated,
     );
 
-    // (3) Bundle-style: pumped pool, isolated sample tx → lands, but flagged as fallback;
-    // a handful of such samples can't move the median of the honest window.
+    // (3) Bundle-style: pumped pool, isolated sample tx → lands, but flagged as fallback,
+    // and fallback samples are excluded from the median and its coverage (V-M1).
     for _ in 0..5 {
         expect_ok(fx.sample_as(&attacker));
         fx.env.warp(10);
@@ -1167,11 +1168,13 @@ fn manipulation_pump_and_sample_in_same_tx_or_bundle() {
     // to own most of a 30-min window of ≥84 samples to move it.
     let honest_end = fx.env.now() - 50 - 700 - 15;
     assert_eq!(o.median_price_q64(honest_end, p.oracle_window_secs, p.oracle_min_samples), Some(fair));
-    // Right now the window holds ~69 honest + 5 pumped samples < 84 → no median at all:
-    // a keeper outage pauses claims rather than letting a few fallback samples decide.
+    // Right now the window holds ~69 honest keeper samples (+ 5 ignored fallback ones) < 84
+    // → no median at all: a keeper outage pauses claims rather than letting fallback
+    // samples decide.
     assert_eq!(o.median_price_q64(fx.env.now(), p.oracle_window_secs, p.oracle_min_samples), None);
-    // Even with coverage relaxed, the median of the current window is still the fair price.
-    assert_eq!(o.median_price_q64(fx.env.now(), p.oracle_window_secs, 1), Some(fair));
+    // V-M1: fallback samples never count, not even with the count requirement relaxed: the
+    // keeper samples left in the window are bunched in its oldest half (time spread fails).
+    assert_eq!(o.median_price_q64(fx.env.now(), p.oracle_window_secs, 1), None);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1194,8 +1197,8 @@ fn swap_buy_open_tickets_precede_venue_slice() {
     assert_eq!((pos.open_count, pos.open_tickets[0]), (1, ticket));
     assert_eq!(fetch_coin(&fx.env, &fx.coin).tickets_created, 1);
 
-    // Without the ticket the venue slice is shifted by one → rejected.
-    expect_err(fx.buy(&user, SOL, 1), FumpadError::WrongVenue);
+    // Without the ticket the open set doesn't match (the venue would be shifted) → rejected.
+    expect_err(fx.buy(&user, SOL, 1), FumpadError::OpenTicketsMismatch);
     // With it, the buy goes through (and the rebuy rule debits the ticket).
     let before: Ticket = fx.env.fetch(&ticket);
     let mut remaining = vec![w(ticket)];
@@ -1255,10 +1258,11 @@ fn compute_units_and_batch_size() {
     let mut groups = fx.group();
     let lp = fx.lp.insecure_clone();
     let lpk = kp_pk(&lp);
-    for _ in 0..4 {
+    for _ in 0..9 {
         let m = Pubkey::new_unique();
         put_mint(&mut fx.env, m, POOL_BASE_IN, 6, T22);
         put_token_account(&mut fx.env, ata(&lpk, &m, &T22), m, lpk, POOL_BASE_IN, T22);
+        put_token_account(&mut fx.env, ata(&lpk, &WSOL_MINT, &TOKEN), WSOL_MINT, lpk, 10 * SOL, TOKEN);
         let p = create_pool(&mut fx.env, &lp, m, 0, POOL_BASE_IN, 10 * SOL);
         let c = put_coin(&mut fx.env, m, p, CoinStatus::Graduated, 0);
         let o = pda(&[fumpad::OBSERVATIONS_SEED, m.as_ref()], &fumpad::ID);
@@ -1277,15 +1281,20 @@ fn compute_units_and_batch_size() {
     let one = fx.sample_ix(kp_pk(&k), &fx.group());
     let single = cu(&fx.env.send_as(&k, &[one], &[&k]));
     fx.env.warp(10);
-    let batch = fx.sample_ix(kp_pk(&k), &groups);
+    let batch = fx.sample_ix(kp_pk(&k), &groups[..5 * 5]);
     let five = cu(&fx.env.send_as(&k, &[batch], &[&k]));
+    // 10 coins (v0 transaction + lookup table in production): needs an explicit CU limit.
+    fx.env.warp(10);
+    let batch = fx.sample_ix(kp_pk(&k), &groups);
+    let ten = cu(&fx.env.send_as(&k, &[cu_limit(1_400_000), batch], &[&k]));
 
-    fx.keeper_samples(90, 10);
+    fx.keeper_samples(90, 20);
     fund_buyback(&mut fx, SOL);
     let bb = cu(&fx.buyback(u64::MAX));
     println!(
-        "CU: swap_buy {buy}, swap_sell {sell}, record_samples 1 coin {single}, 5 coins {five}, execute_buyback {bb}"
+        "CU: swap_buy {buy}, swap_sell {sell}, record_samples 1 coin {single}, 5 coins {five}, 10 coins {ten}, execute_buyback {bb}"
     );
+    assert!(ten < 1_400_000);
     assert!(buy < 200_000 && sell < 200_000 && bb < 200_000);
     assert!(five < 200_000, "5-coin batch must fit the default 200k budget");
 }

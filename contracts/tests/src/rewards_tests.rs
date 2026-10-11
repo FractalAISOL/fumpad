@@ -184,7 +184,8 @@ impl World {
             tickets_created: 0,
             tokens_paid_out: 0,
             reference: Default::default(),
-            reserved: [0; 88],
+            fees: fumpad::state::Params::default().coin_fees(),
+            reserved: [0; 72],
         };
         w.write_coin(&c);
         w
@@ -333,7 +334,8 @@ impl World {
                 next_ticket_seq: 0,
                 open_tickets: [Pubkey::default(); fumpad::MAX_OPEN_TICKETS],
                 open_count: 0,
-                reserved: [0; 64],
+                last_balance: 0,
+                reserved: [0; 56],
             },
         }
     }
@@ -364,7 +366,7 @@ impl World {
             queued_at: 0,
             claim_amount: 0,
             claimed_at: 0,
-            reserved: [0; 32],
+            escrow_payer: Pubkey::default(),
         };
         assert_eq!(anchor_bytes(&t).len(), 8 + Ticket::INIT_SPACE);
         self.raw_set(&key, anchor_bytes(&t), fumpad::ID);
@@ -418,6 +420,7 @@ impl World {
                     AccountMeta::new(*t, false),
                     AccountMeta::new(self.position_key(o), false),
                     AccountMeta::new(ata(o, &self.mint), false),
+                    AccountMeta::new(self.escrow_key(t), false),
                 ]
             })
             .collect();
@@ -435,6 +438,7 @@ impl World {
                 pool_authority: self.pool_auth,
                 reward_vault: self.vault,
                 token_program: TOKEN_2022,
+                system_program: anchor_lang::system_program::ID,
                 event_authority: fumpad::EVENT_AUTHORITY_AND_BUMP.0,
                 program: fumpad::ID,
             },
@@ -448,8 +452,52 @@ impl World {
         self.env.send(&[i], &[])
     }
 
+    /// D16 escrow token account of a ticket.
+    pub fn escrow_key(&self, ticket: &Pubkey) -> Pubkey {
+        Pubkey::find_program_address(&[fumpad::ESCROW_SEED, ticket.as_ref()], &fumpad::ID).0
+    }
+
+    /// D16 `withdraw_escrow` by `u` into `dest` (any token account of u for this mint).
+    pub fn withdraw_escrow_ix(&self, owner: &Pubkey, ticket: Pubkey, dest: Pubkey) -> Instruction {
+        let t = self.ticket(&ticket);
+        ix(
+            fumpad::accounts::WithdrawEscrow {
+                owner: *owner,
+                global: self.env.global_pda(),
+                mint: self.mint,
+                ticket,
+                escrow: self.escrow_key(&ticket),
+                pool_authority: self.pool_auth,
+                destination: dest,
+                escrow_payer: t.escrow_payer,
+                token_program: TOKEN_2022,
+                event_authority: fumpad::EVENT_AUTHORITY_AND_BUMP.0,
+                program: fumpad::ID,
+            },
+            fumpad::instruction::WithdrawEscrow {},
+        )
+    }
+
+    pub fn withdraw_escrow(&mut self, u: &User, ticket: Pubkey, dest: Pubkey) -> TransactionResult {
+        let i = self.withdraw_escrow_ix(&u.key, ticket, dest);
+        let kp = u.kp.insecure_clone();
+        self.env.send_as(&kp, &[i], &[&kp])
+    }
+
+    /// A second (non-ATA) Token-2022 account of `u`, without extensions.
+    pub fn side_account(&mut self, u: &User) -> Pubkey {
+        let k = Pubkey::new_unique();
+        let mint = self.mint;
+        self.raw_set(&k, token_account_bytes(&mint, &u.key, 0, false, false), TOKEN_2022);
+        k
+    }
+
+    /// `open` tickets (writable), then the claim queue iff one of them is Queued (R-L1).
     pub fn register_ix(&self, u: &User, open: &[Pubkey]) -> Instruction {
-        let rem: Vec<AccountMeta> = open.iter().map(|k| AccountMeta::new(*k, false)).collect();
+        let mut rem: Vec<AccountMeta> = open.iter().map(|k| AccountMeta::new(*k, false)).collect();
+        if open.iter().any(|k| self.env.account(k).is_some_and(|a| a.lamports > 0) && self.ticket(k).status == TicketStatus::Queued) {
+            rem.push(AccountMeta::new(self.queue, false));
+        }
         ix_with_remaining(
             fumpad::accounts::RegisterHoldings {
                 user: u.key,
@@ -898,26 +946,60 @@ fn process_queue_rejects_spoofing() {
     assert_fumpad_err(w.process(10, &[e(0)]), FumpadError::InvalidAccount);
 }
 
+/// D16: a queue payout whose owner's ATA can't receive — closed/missing, or requiring
+/// memos — goes into the ticket's escrow (cranker pays the rent); the entry leaves the
+/// queue either way. The owner withdraws to any token account they own; the rent goes back
+/// to the cranker.
 #[test]
-fn process_queue_closed_ata_fails_until_recreated_and_memo_ata_is_skipped() {
+fn process_queue_escrows_payouts_to_refusing_or_missing_atas() {
     let mut w = World::new();
     let v = three_queued(&mut w);
     let e = |i: usize| (v[i].1, v[i].0.key);
-    // a's ATA closed: the crank must fail (not silently skip a — that would let a cranker
-    // reorder the queue).
+    let cranker = kp_pk(&w.env.payer);
+    // a's ATA closed, b requires memos, c is fine.
     w.env.svm.set_account(addr(&v[0].0.ata), Account::default()).unwrap();
-    assert_fumpad_err(w.process(10, &[e(0), e(1), e(2)]), FumpadError::InvalidAccount);
-    w.set_balance(&v[0].0, 0, false);
-    // b turns on required memos (owner-only setting) → b is skipped, a and c are paid.
     w.set_balance(&v[1].0, 0, true);
+    let sol0 = w.env.lamports(&cranker);
     ok(w.process(10, &[e(0), e(1), e(2)]));
     let q = w.queue_state();
-    assert_eq!((q.len, q.entries[0].ticket), (1, v[1].1));
-    assert_eq!(w.ticket(&v[1].1).status, TicketStatus::Queued);
-    // b turns memos off → paid.
-    w.set_balance(&v[1].0, 0, false);
-    ok(w.process(10, &[e(1)]));
-    assert_eq!(token_amount(&w.env, &v[1].0.ata), 10 * M);
+    assert_eq!((q.len, q.total_owed), (0, 0), "every entry left the queue");
+    for i in [0, 1] {
+        let t = w.ticket(&v[i].1);
+        assert_eq!((t.status, t.escrow_payer, t.claim_amount), (TicketStatus::Escrowed, cranker, 10 * M));
+        assert_eq!(token_amount(&w.env, &w.escrow_key(&v[i].1)), 10 * M);
+        assert_eq!(w.position(&v[i].0.key).open_count, 0);
+    }
+    assert_eq!(w.ticket(&v[2].1).status, TicketStatus::Claimed);
+    assert_eq!(token_amount(&w.env, &v[2].0.ata), 10 * M);
+    let rent = w.env.lamports(&w.escrow_key(&v[0].1));
+    assert!(rent > 0);
+    assert!(sol0 - w.env.lamports(&cranker) >= 2 * rent, "cranker paid both escrows' rent");
+
+    // Escrowed tickets can't be closed; only the owner withdraws, to an account they own.
+    let (a, ta) = (&v[0].0, v[0].1);
+    let ka = a.kp.insecure_clone();
+    assert_fumpad_err(w.close(&ka, ta, false), FumpadError::TicketNotClosable);
+    let side_b = w.side_account(&v[1].0);
+    let stranger_dest = w.side_account(&v[1].0);
+    let i = w.withdraw_escrow_ix(&a.key, ta, stranger_dest); // dest not a's
+    assert!(w.env.send_as(&ka, &[i], &[&ka]).is_err());
+    let i = w.withdraw_escrow_ix(&v[1].0.key, ta, side_b); // signer not the ticket owner
+    let kb = v[1].0.kp.insecure_clone();
+    assert!(w.env.send_as(&kb, &[i], &[&kb]).is_err());
+    // a recreates its ATA and withdraws there; b withdraws to a memo-free side account.
+    w.set_balance(a, 0, false);
+    let c0 = w.env.lamports(&cranker);
+    ok(w.withdraw_escrow(a, ta, a.ata));
+    assert_eq!(token_amount(&w.env, &a.ata), 10 * M);
+    assert_eq!(w.env.lamports(&cranker) - c0, rent, "escrow rent refunded to the cranker");
+    assert!(w.env.account(&w.escrow_key(&ta)).map_or(true, |x| x.lamports == 0));
+    assert_eq!(w.ticket(&ta).status, TicketStatus::Claimed);
+    assert!(w.withdraw_escrow(a, ta, a.ata).is_err(), "nothing left to withdraw");
+    ok(w.close(&ka, ta, false));
+    let b = &v[1].0;
+    ok(w.withdraw_escrow(b, v[1].1, side_b));
+    assert_eq!(token_amount(&w.env, &side_b), 10 * M);
+    assert_eq!(w.coin_state().tokens_paid_out, 30 * M);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1056,37 +1138,29 @@ fn rebuy_debits_queued_ticket_and_crank_resyncs() {
 }
 
 #[test]
-fn rebuy_voids_queued_ticket_entry_dropped_or_removed_on_close() {
-    // (1) dropped by the crank
+fn rebuy_voids_queued_ticket_and_removes_its_entry() {
+    // R-L1: the voiding rebuy removes the queue entry itself.
     let mut w = World::new();
     w.set_pool(1);
     let u = w.user(0);
     let now = w.now();
     let t = w.add_ticket(&u.key, 1_000 * M, base_price(), now - DAY);
     ok(w.claim(&u, t));
+    assert_eq!(w.queue_state().len, 1);
     w.set_balance(&u, 5_000 * M, false);
+    // Without the queue account the rebuy is refused (the ticket is Queued).
+    let mut i = w.register_ix(&u, &[t]);
+    i.accounts.pop();
+    let kp = u.kp.insecure_clone();
+    assert_fumpad_err(w.env.send_as(&kp, &[i], &[&kp]), FumpadError::QueueAccountRequired);
     ok(w.register(&u, &[t]));
     assert_eq!(w.ticket(&t).status, TicketStatus::Voided);
     assert_eq!(w.position(&u.key).open_count, 0);
+    assert_eq!((w.queue_state().len, w.queue_state().total_owed), (0, 0));
     w.set_pool(1_000_000 * M);
-    ok(w.process(10, &[(t, u.key)]));
-    assert_eq!((w.queue_state().len, w.queue_state().total_owed), (0, 0));
     assert_eq!(token_amount(&w.env, &u.ata), 5_000 * M, "voided entry not paid");
-
-    // (2) removed when the owner closes the voided ticket (queue required)
-    let mut w = World::new();
-    w.set_pool(1);
-    let u = w.user(0);
-    let now = w.now();
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), now - DAY);
-    ok(w.claim(&u, t));
-    w.set_balance(&u, 5_000 * M, false);
-    ok(w.register(&u, &[t]));
-    let kp = u.kp.insecure_clone();
-    assert_fumpad_err(w.close(&kp, t, false), FumpadError::InvalidAccount);
-    ok(w.close(&kp, t, true));
-    assert_eq!((w.queue_state().len, w.queue_state().total_owed), (0, 0));
-    // The closed ticket's stale key can't be used to pay anything.
+    // The voided ticket closes without the queue; its stale key can't be used to pay.
+    ok(w.close(&kp, t, false));
     assert_fumpad_err(w.process(10, &[(t, u.key)]), FumpadError::InvalidAccount);
 }
 

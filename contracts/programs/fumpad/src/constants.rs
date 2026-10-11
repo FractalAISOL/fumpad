@@ -21,6 +21,10 @@ pub const OBSERVATIONS_SEED: &[u8] = b"observations"; // ["observations", mint]
 pub const CLAIM_QUEUE_SEED: &[u8] = b"claim_queue"; // ["claim_queue", mint]
 #[constant]
 pub const POOL_AUTHORITY_SEED: &[u8] = b"pool_authority"; // ["pool_authority"] — creator of PumpSwap pools + signer for program-owned token moves
+#[constant]
+pub const ESCROW_SEED: &[u8] = b"escrow"; // ["escrow", ticket] — D16 per-ticket escrow token account
+#[constant]
+pub const GRADUATION_WSOL_SEED: &[u8] = b"graduation_wsol"; // ["graduation_wsol", mint] — graduate's own WSOL account (created + closed in-instruction)
 
 // ── Fixed-point ──────────────────────────────────────────────────────────────
 /// Prices are lamports per base unit of the token, in Q64.64 (u128).
@@ -55,6 +59,8 @@ pub const DEFAULT_MIN_HOLD_SECS: i64 = 600; // 10 min
 pub const DEFAULT_REBUY_WINDOW_SECS: i64 = 7 * 86_400;
 pub const DEFAULT_CLAIM_WINDOW_SECS: i64 = 90 * 86_400;
 pub const MAX_OPEN_TICKETS: usize = 5;
+/// D16: a wallet may hold at most this many claim-queue entries per coin.
+pub const MAX_QUEUED_PER_WALLET: usize = 2;
 
 pub const DEFAULT_ORACLE_WINDOW_SECS: i64 = 1_800; // 30 min
 pub const DEFAULT_ORACLE_MIN_SPACING_SECS: i64 = 10;
@@ -62,6 +68,14 @@ pub const DEFAULT_ORACLE_MIN_SAMPLES: u16 = 84; // 70% of 120 expected @15s
 pub const DEFAULT_KEEPER_STALE_SECS: i64 = 600; // permissionless fallback after 10 min w/o keeper sample
 pub const DEFAULT_BUYBACK_MAX_DEVIATION_BPS: u16 = 300; // spot within ±3% of median
 pub const DEFAULT_BUYBACK_MAX_POOL_BPS: u16 = 50; // slice ≤ 0.5% of pool quote depth
+
+/// D14: hard caps enforced by `Params::is_valid` (a timelocked change can't exceed them).
+pub const MAX_GRADUATION_FEE_LAMPORTS: u64 = 1_000_000_000; // 1 SOL
+pub const MAX_FEE_BPS: u16 = 200; // 2% of the SOL side
+/// D15: delay between `queue_params` and the earliest `execute_params`.
+pub const PARAMS_TIMELOCK_SECS: i64 = 48 * 3_600;
+/// D13: a coin `Complete` for this long reopens curve sells (escape hatch).
+pub const ESCAPE_HATCH_SECS: i64 = 7 * 86_400;
 
 /// D12 cap: a seller's own slippage can lower the ticket floor by at most 10% of the reference.
 pub const MAX_SELF_IMPACT_DISCOUNT_BPS: u64 = 1_000;

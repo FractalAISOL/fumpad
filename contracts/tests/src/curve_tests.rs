@@ -247,7 +247,7 @@ fn graduate_accounts(env: &Env, payer: &Pubkey, mint: &Pubkey) -> fumpad::accoun
         pool_authority: pa,
         curve_vault: curve_vault(mint),
         wsol_mint: WSOL_MINT,
-        pool_authority_wsol: ata(&pa, &WSOL_MINT, &SPL_TOKEN),
+        graduation_wsol: Pubkey::find_program_address(&[fumpad::GRADUATION_WSOL_SEED, mint.as_ref()], &fumpad::ID).0,
         amm_pool: pool,
         amm_global_config: fumpad::PUMPSWAP_GLOBAL_CONFIG,
         lp_mint,
@@ -422,7 +422,7 @@ fn buy_charges_fee_on_top_and_buys_back_inline() {
     let before: Coin = env.fetch(&coin_pda(&mint));
     let sol_in = 5 * SOL;
     let q = quote_buy(&reserves(&before), sol_in).unwrap();
-    let fee = compute_fee(q.sol_used, &p).unwrap();
+    let fee = compute_fee(q.sol_used, &p.coin_fees()).unwrap();
     let mut after_user = reserves(&before);
     after_user.apply_buy(&q).unwrap();
     let bb = quote_buy(&after_user, fee.pool).unwrap();
@@ -473,7 +473,7 @@ fn sell_deducts_fee_and_buys_back_inline() {
     let before: Coin = env.fetch(&coin_pda(&mint));
     let tokens_in = held / 3;
     let gross = quote_sell(&reserves(&before), tokens_in).unwrap();
-    let fee = compute_fee(gross, &p).unwrap();
+    let fee = compute_fee(gross, &p.coin_fees()).unwrap();
     let net = gross - fee.total;
     let mut after_user = reserves(&before);
     after_user.apply_sell(tokens_in, gross).unwrap();
@@ -532,7 +532,7 @@ fn random_trading_keeps_invariants() {
             }
             let had_accounts = exists(&env, &u_ata);
             ok(buy(&mut env, u, &mint, sol_in, q.tokens_out));
-            let fee = compute_fee(q.sol_used, &p).unwrap();
+            let fee = compute_fee(q.sol_used, &p.coin_fees()).unwrap();
             if had_accounts {
                 assert_eq!(lam - env.lamports(&kp_pk(u)), q.sol_used + fee.total);
             }
@@ -547,7 +547,7 @@ fn random_trading_keeps_invariants() {
                 continue;
             }
             ok(sell(&mut env, u, &mint, t, 0));
-            let fee = compute_fee(gross, &p).unwrap();
+            let fee = compute_fee(gross, &p.coin_fees()).unwrap();
             assert_eq!(env.lamports(&kp_pk(u)) - lam, gross - fee.total);
             got[i] += gross - fee.total;
         }
@@ -589,7 +589,7 @@ fn final_buy_is_partially_filled_and_completes_curve() {
 
     let before: Coin = env.fetch(&coin_pda(&mint));
     let need = sol_for_tokens(&reserves(&before), before.real_token_reserves).unwrap();
-    let fee = compute_fee(need, &p).unwrap();
+    let fee = compute_fee(need, &p.coin_fees()).unwrap();
     let lam = env.lamports(&kp_pk(&whale));
     let tokens = token_amount(&env, &ata(&kp_pk(&whale), &mint, &TOKEN_2022));
     // Offer far more than needed, with min_out = everything left.
@@ -643,7 +643,7 @@ fn trade_rejections() {
     let held = token_amount(&env, &ata(&kp_pk(&u), &mint, &TOKEN_2022));
     let c: Coin = env.fetch(&coin_pda(&mint));
     let gross = quote_sell(&reserves(&c), held).unwrap();
-    let net = gross - compute_fee(gross, &Params::default()).unwrap().total;
+    let net = gross - compute_fee(gross, &Params::default().coin_fees()).unwrap().total;
     assert_fumpad_err(sell(&mut env, &u, &mint, held, net + 1), FumpadError::SlippageExceeded);
     assert_fumpad_err(sell(&mut env, &u, &mint, 0, 0), FumpadError::ZeroAmount);
     // Dust sell that pays zero lamports.
@@ -1008,26 +1008,29 @@ fn dust_buy_rounding_to_zero_is_rejected() {
     assert_lamport_invariant(&env, &mint);
 }
 
-/// If the admin raises the graduation fee to/above what the curve raised, graduation
-/// refuses instead of underflowing (and the coin stays Complete).
+/// D14: a coin graduates with the fee snapshotted at `create_coin`; a (timelocked) change
+/// of the global fee afterwards applies only to coins created later, and is capped at 1 SOL.
 #[test]
-fn graduate_rejects_fee_above_reserves() {
+fn graduate_uses_fee_snapshotted_at_create() {
     let mut env = env();
     let creator = env.new_user(10);
     let mint = create_coin(&mut env, &creator);
+    assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).fees, Params::default().coin_fees());
     let whale = env.new_user(1_000);
     complete_curve(&mut env, &mint, &whale);
     let raised = env.fetch::<Coin>(&coin_pda(&mint)).real_sol_reserves;
-    for fee in [raised, raised + 1] {
-        let params = Params { graduation_fee_lamports: fee, graduation_lamports: 200 * SOL, ..Params::default() };
-        let i = ix(
-            fumpad::accounts::AdminOnly { admin: kp_pk(&env.admin), global: env.global_pda() },
-            fumpad::instruction::UpdateParams { params },
-        );
-        let admin = env.admin.insecure_clone();
-        ok(env.send(&[i], &[&admin]));
-        assert_fumpad_err(graduate(&mut env, &mint), FumpadError::InsufficientReserves);
-    }
-    assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).status, CoinStatus::Complete);
+    // Above the 1 SOL hard cap: refused at queue time.
+    let too_big = Params { graduation_fee_lamports: raised, graduation_lamports: 200 * SOL, ..Params::default() };
+    assert_fumpad_err(env.queue_params(too_big), FumpadError::InvalidParams);
+    // At the cap: accepted after 48h, but not for this (already created) coin.
+    env.set_params_timelocked(Params { graduation_fee_lamports: SOL, ..Params::default() });
+    let platform_before = env.fetch::<Coin>(&coin_pda(&mint)).platform_fees_unclaimed;
+    ok(graduate(&mut env, &mint));
+    let c = env.fetch::<Coin>(&coin_pda(&mint));
+    assert_eq!(c.status, CoinStatus::Graduated);
+    assert_eq!(c.platform_fees_unclaimed, platform_before, "snapshotted fee (0) charged, not the new 1 SOL");
     assert_lamport_invariant(&env, &mint);
+    // A coin created after the change snapshots the new fee.
+    let mint2 = create_coin(&mut env, &creator);
+    assert_eq!(env.fetch::<Coin>(&coin_pda(&mint2)).fees.graduation_fee_lamports, SOL);
 }

@@ -49,6 +49,10 @@
 //!     ~3.5x the pool's base reserve. The keeper heartbeat (SPEC §5.4) bounds such
 //!     windows for every coin it samples.
 //!
+//!   v0.3 refinements: a keeper sample's OWN upward observation is folded with the full
+//!   elapsed weight (heartbeats refresh a genuine rise at once; downward stays capped), and
+//!   permissionless fallback samples are raise-only (they can never lower `avg` or `last`).
+//!
 //!   Honest cost: after a long idle period on PumpSwap the reference lags a genuine move
 //!   that happened while idle; it catches up over ~10–30 min of activity or keeper
 //!   samples. Tickets in that period are priced conservatively (higher), never lower.
@@ -91,9 +95,15 @@ impl ReferencePrice {
         self.updated_at != 0
     }
 
-    /// Apply one touch point at `now`: `pre_spot` = spot just before it (equals
-    /// `post_spot` for a sample), `post_spot` = spot just after it. `exact` = curve.
+    /// Apply one touch point at `now` (`exact` = curve trade, else a router swap). Kept
+    /// for callers/tests that only distinguish curve vs PumpSwap; see `touch`.
     pub fn update(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, exact: bool) {
+        self.touch(now, pre_spot_q64, post_spot_q64, if exact { Touch::Curve } else { Touch::Venue });
+    }
+
+    /// Apply one touch point at `now`: `pre_spot` = spot just before it (equals
+    /// `post_spot` for a sample), `post_spot` = spot just after it.
+    pub fn touch(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, kind: Touch) {
         if !self.is_initialized() {
             // Unreachable for real coins (initialized in create_coin and carried through
             // graduation). Defensive: start from the higher observation (floor-safe).
@@ -103,15 +113,46 @@ impl ReferencePrice {
         }
         // Solana's clock is monotonic in practice; never trust a negative dt anyway.
         let dt = now.saturating_sub(self.updated_at).max(0) as u64;
-        let (v, w) = if exact {
-            (self.last_spot_q64, dt.min(REFERENCE_WINDOW_SECS))
-        } else {
-            (self.last_spot_q64.max(pre_spot_q64), dt.min(REFERENCE_MAX_UNCONFIRMED_SECS))
+        let capped = dt.min(REFERENCE_MAX_UNCONFIRMED_SECS);
+        let (v, w) = match kind {
+            Touch::Curve => (self.last_spot_q64, dt.min(REFERENCE_WINDOW_SECS)),
+            Touch::Venue | Touch::FallbackSample => (self.last_spot_q64.max(pre_spot_q64), capped),
+            // V-opt: an UPWARD move to the keeper's OWN observation is folded with the full
+            // elapsed weight (≤ WINDOW): it only raises the floor, so after an idle period a
+            // heartbeat refreshes the reference to a genuine rise at once. The 150 s cap stays
+            // for downward moves and for any value carried in `last` (a router swap's
+            // post-spot could be a staged pump: uncapping it would make griefing cheap).
+            Touch::KeeperSample => {
+                let v = self.last_spot_q64.max(pre_spot_q64);
+                let own_upward = pre_spot_q64 >= self.last_spot_q64 && v >= self.avg_q64;
+                (v, if own_upward { dt.min(REFERENCE_WINDOW_SECS) } else { capped })
+            }
         };
-        self.avg_q64 = blend(self.avg_q64, v, w, REFERENCE_WINDOW_SECS);
-        self.last_spot_q64 = post_spot_q64;
+        let blended = blend(self.avg_q64, v, w, REFERENCE_WINDOW_SECS);
+        if kind == Touch::FallbackSample {
+            // V-M2: permissionless samples may only raise the reference (or be ignored):
+            // neither the average nor the carried `last` can go down through them.
+            self.avg_q64 = self.avg_q64.max(blended);
+            self.last_spot_q64 = self.last_spot_q64.max(post_spot_q64);
+        } else {
+            self.avg_q64 = blended;
+            self.last_spot_q64 = post_spot_q64;
+        }
         self.updated_at = self.updated_at.max(now);
     }
+}
+
+/// Kind of D10 touch point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Touch {
+    /// Curve buy/sell: exact (only FUMPAD moves the curve).
+    Curve,
+    /// Router swap on PumpSwap.
+    Venue,
+    /// `record_samples` signed by a registered keeper.
+    KeeperSample,
+    /// Permissionless (fallback) `record_samples`: raise-only (V-M2).
+    FallbackSample,
 }
 
 /// avg + (v − avg) · w / window, moving toward `v` by a floored amount. `w ≤ window`.
@@ -258,6 +299,53 @@ mod tests {
             r.update(t, CRASH, CRASH, false);
         }
         assert!(t - 1_000 >= 1_500, "dragged in {}s", t - 1_000);
+    }
+
+    /// V-M2: fallback samples can never lower the reference (nor the carried `last`), but
+    /// may raise it.
+    #[test]
+    fn fallback_samples_are_raise_only() {
+        let mut r = at(P, 1_000);
+        let mut t = 1_000;
+        for _ in 0..50 {
+            t += 150;
+            r.touch(t, CRASH, CRASH, Touch::FallbackSample);
+            assert_eq!((r.avg_q64, r.last_spot_q64), (P, P));
+        }
+        assert_eq!(r.updated_at, t);
+        // A staged crash via a router swap afterwards: `last` is still genuine → v = P.
+        r.touch(t + 150, CRASH, CRASH, Touch::Venue);
+        assert_eq!(r.avg_q64, P);
+        // Raising works (same caps as a router touch: ≤ 1/4 per interval).
+        let mut r = at(P, 1_000);
+        r.touch(1_000 + 600, 2 * P, 2 * P, Touch::FallbackSample);
+        assert!(r.avg_q64.abs_diff(P + P / 4) <= 1, "{}", r.avg_q64);
+    }
+
+    /// V-opt: a keeper sample's own upward observation is folded with the full elapsed
+    /// weight; downward and `last`-carried values stay capped at 150 s.
+    #[test]
+    fn keeper_upward_uncapped_downward_capped() {
+        // Genuine 2x rise during 10 idle minutes: one heartbeat adopts it.
+        let mut r = at(P, 1_000);
+        r.touch(1_600, 2 * P, 2 * P, Touch::KeeperSample);
+        assert_eq!(r.avg_q64, 2 * P);
+        // Router touch: still capped at 1/4.
+        let mut r = at(P, 1_000);
+        r.touch(1_600, 2 * P, 2 * P, Touch::Venue);
+        assert!(r.avg_q64.abs_diff(P + P / 4) <= 1);
+        // Downward keeper observation: capped.
+        let mut r = at(P, 1_000);
+        r.touch(1_000, CRASH, CRASH, Touch::Venue); // zero weight; last = CRASH
+        r.touch(1_600, CRASH, CRASH, Touch::KeeperSample);
+        assert!(r.avg_q64.abs_diff(P - (P - CRASH) / 4) <= 1);
+        // A staged PUMPED `last` (router swap inside a pump bundle) is not adopted wholesale
+        // by the next heartbeat: it is a carried value, capped at 1/4.
+        let mut r = at(P, 1_000);
+        r.touch(1_000, 3 * P, 3 * P, Touch::Venue); // same second: zero weight, last = 3P
+        assert_eq!(r.avg_q64, P);
+        r.touch(1_600, P, P, Touch::KeeperSample);
+        assert!(r.avg_q64.abs_diff(P + (2 * P) / 4) <= 1, "{}", r.avg_q64);
     }
 
     #[test]

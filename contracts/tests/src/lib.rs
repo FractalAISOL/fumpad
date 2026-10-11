@@ -126,6 +126,42 @@ impl Env {
         env
     }
 
+    /// D15: `queue_params` signed by the admin.
+    pub fn queue_params(&mut self, params: fumpad::state::Params) -> TransactionResult {
+        let i = ix(
+            fumpad::accounts::QueueParams {
+                admin: kp_pk(&self.admin),
+                global: self.global_pda(),
+                event_authority: fumpad::EVENT_AUTHORITY_AND_BUMP.0,
+                program: fumpad::ID,
+            },
+            fumpad::instruction::QueueParams { params },
+        );
+        let admin = self.admin.insecure_clone();
+        self.send(&[i], &[&admin])
+    }
+
+    /// D15: permissionless `execute_params` (fee payer = `payer`).
+    pub fn execute_params(&mut self) -> TransactionResult {
+        let i = ix(
+            fumpad::accounts::ExecuteParams {
+                caller: kp_pk(&self.payer),
+                global: self.global_pda(),
+                event_authority: fumpad::EVENT_AUTHORITY_AND_BUMP.0,
+                program: fumpad::ID,
+            },
+            fumpad::instruction::ExecuteParams {},
+        );
+        self.send(&[i], &[])
+    }
+
+    /// D15: queue → warp 48h → execute.
+    pub fn set_params_timelocked(&mut self, params: fumpad::state::Params) {
+        self.queue_params(params).expect("queue_params");
+        self.warp(fumpad::PARAMS_TIMELOCK_SECS);
+        self.execute_params().expect("execute_params");
+    }
+
     pub fn global_pda(&self) -> Pubkey {
         Pubkey::find_program_address(&[fumpad::GLOBAL_SEED], &fumpad::ID).0
     }
@@ -301,3 +337,5 @@ mod smoke {
 #[cfg(test)] mod locker_tests;
 #[cfg(test)] mod review_rewards;
 #[cfg(test)] mod redteam_custody;
+#[cfg(test)] mod review_venue;
+#[cfg(test)] mod cu_report;

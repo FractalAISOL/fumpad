@@ -10,6 +10,7 @@
 //! the user already held there comes back as native SOL too (value-neutral).
 //!
 //! remaining_accounts = [ the position's open tickets (exactly `position.open_count`) ,
+//!                        the coin's ClaimQueue — only if one of those tickets is Queued ,
 //!                        PumpSwap `buy_exact_quote_in_v2` accounts, in PumpSwap order ]
 //! The venue slice's `user` is this instruction's `user`, its `user_base_token_account`
 //! is `user_token_account`, its `user_quote_token_account` is `user_wsol`.
@@ -23,6 +24,7 @@ use anchor_spl::{
 };
 
 use super::common::*;
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -93,9 +95,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
 
-    let open = a.position.open_count as usize;
-    require!(remaining.len() >= open, FumpadError::OpenTicketsMismatch);
-    let (open_tickets, venue) = remaining.split_at(open);
+    let (rebuy, venue) = hooks::split_rebuy_accounts(&a.position, remaining)?;
 
     let user_info = a.user.to_account_info();
     let token_acc_info = a.user_token_account.to_account_info();
@@ -126,7 +126,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     require!(spent > 0 && spent <= sol_in, FumpadError::InvalidAccount);
 
     // FUMPAD fee on top of the SOL actually spent, paid in native SOL into the Coin account.
-    let fee = compute_fee(spent, &a.global.params).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(spent, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     transfer_sol(&system_info, &user_info, &a.coin.to_account_info(), fee.total)?;
     accrue_fee(&mut a.coin, &fee)?;
     record_volume(&mut a.coin, spent);
@@ -142,10 +142,11 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
             global: &a.global,
             coin: &a.coin,
             position: &mut a.position,
-            open_tickets,
+            rebuy,
             event_authority: &a.event_authority,
         },
         tokens_out,
+        tokens_before,
         now,
     )?;
 
@@ -153,7 +154,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     let after = pumpswap::venue_reserves(venue, &pool)?;
     // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
     if let (Ok(pre), Ok(post)) = (before.spot_price_q64(), after.spot_price_q64()) {
-        a.coin.touch_reference(now, pre, post, false);
+        a.coin.touch_reference(now, pre, post, Touch::Venue);
     }
 
     let ev = Trade {

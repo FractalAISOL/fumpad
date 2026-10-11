@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::math::reference::ReferencePrice;
+use crate::math::reference::{ReferencePrice, Touch};
 
 /// One per launched coin. PDA ["coin", mint].
 ///
@@ -47,13 +47,30 @@ pub struct Coin {
     /// Occupies 40 bytes of the former 128-byte `reserved` (account size unchanged).
     pub reference: ReferencePrice,
 
-    pub reserved: [u8; 88],
+    /// D14: graduation fee + trading-fee params snapshotted at `create_coin` (no
+    /// retroactive changes). Occupies 16 bytes of the former 88-byte `reserved`.
+    pub fees: CoinFees,
+
+    pub reserved: [u8; 72],
+}
+
+/// D14: per-coin snapshot of the fee parameters, taken from `Global.params` at
+/// `create_coin`. Later param changes (timelocked, D15) apply only to coins created after.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct CoinFees {
+    /// Taken from raised SOL at graduation (≤ `MAX_GRADUATION_FEE_LAMPORTS`).
+    pub graduation_fee_lamports: u64,
+    /// FUMPAD fee, bps of the SOL side of every trade (≤ `MAX_FEE_BPS`).
+    pub fee_bps: u16,
+    pub fee_pool_share_bps: u16,
+    pub fee_platform_share_bps: u16,
+    pub fee_creator_share_bps: u16,
 }
 
 impl Coin {
-    /// Apply a touch point to the reference price (`exact` = curve trade).
-    pub fn touch_reference(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, exact: bool) {
-        self.reference.update(now, pre_spot_q64, post_spot_q64, exact);
+    /// Apply a D10 touch point to the reference price.
+    pub fn touch_reference(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, kind: Touch) {
+        self.reference.touch(now, pre_spot_q64, post_spot_q64, kind);
     }
 }
 
@@ -71,10 +88,10 @@ pub enum CoinStatus {
 mod tests {
     use super::*;
 
-    /// D10 carved `reference` out of `reserved`: the account size must not change.
+    /// D10 (`reference`) and D14 (`fees`) were carved out of `reserved`: the account size must not change.
     #[test]
     fn account_size_unchanged() {
         assert_eq!(Coin::INIT_SPACE, 338);
-        assert_eq!(ReferencePrice::INIT_SPACE + 88, 128);
+        assert_eq!(ReferencePrice::INIT_SPACE + CoinFees::INIT_SPACE + 72, 128);
     }
 }

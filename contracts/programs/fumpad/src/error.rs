@@ -47,7 +47,7 @@ pub enum FumpadError {
     TicketExpired,
     #[msg("Price has not held 10x the sell price")]
     TriggerNotMet,
-    #[msg("Not enough price samples in the window")]
+    #[msg("Not enough keeper price samples spread over the 30-min window (claims and buybacks pause during a keeper outage)")]
     InsufficientSamples,
     #[msg("Claim queue is full")]
     QueueFull,
@@ -71,4 +71,16 @@ pub enum FumpadError {
     NothingToBuyBack,
     #[msg("No skimmed LP fees to settle")]
     NothingToSettle,
+
+    // ── v0.3 (appended so earlier codes stay stable) ────────────────────────
+    #[msg("No parameter change is queued")]
+    NoPendingParams,
+    #[msg("Parameter timelock (48h) has not elapsed")]
+    TimelockNotElapsed,
+    #[msg("Wallet already has the maximum number of queued claims on this coin")]
+    WalletQueueLimit,
+    #[msg("Ticket has no escrowed payout")]
+    NoEscrow,
+    #[msg("Claim queue account required: an open ticket is queued")]
+    QueueAccountRequired,
 }

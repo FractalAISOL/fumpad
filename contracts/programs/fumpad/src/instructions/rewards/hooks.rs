@@ -11,7 +11,9 @@
 //!                                          a ticket would otherwise be created)
 //!
 //! and, for buys, the wallet's open tickets as the FIRST `position.open_count`
-//! entries of `remaining_accounts` (router: venue accounts follow them), all writable.
+//! entries of `remaining_accounts`, all writable, followed — only if one of them is
+//! `Queued` — by the coin's ClaimQueue (writable); router venue accounts follow
+//! (`split_rebuy_accounts`).
 //!
 //! The hooks make CPIs (system create_account for the ticket, event self-CPI). Call them
 //! BEFORE any direct `sub_lamports`/`add_lamports` move in the caller.
@@ -22,19 +24,22 @@
 use anchor_lang::{
     prelude::*,
     solana_program::{instruction::Instruction, program::invoke_signed},
-    system_program,
+    system_program, Discriminator,
 };
 
 use crate::{
-    constants::TICKET_SEED,
+    constants::{CLAIM_QUEUE_SEED, TICKET_SEED},
     error::FumpadError,
     events::{TicketCreated, TicketDebited},
     external::pyth,
     math::{price::price_q64, reference::ticket_price_q64},
-    state::{Coin, Global, Params, Position, Ticket, TicketStatus},
+    state::{ClaimQueue, Coin, Global, Params, Position, Ticket, TicketStatus},
 };
 
-use super::logic::{self, NoTicket, RebuyView};
+use super::{
+    logic::{self, NoTicket, RebuyView},
+    queue,
+};
 
 pub struct SellHookAccounts<'a, 'info> {
     pub global: &'a Global,
@@ -122,7 +127,7 @@ pub fn on_sell(a: SellHookAccounts, info: SellInfo) -> Result<Option<Pubkey>> {
         queued_at: 0,
         claim_amount: 0,
         claimed_at: 0,
-        reserved: [0; 32],
+        escrow_payer: Pubkey::default(),
     };
     write_ticket(a.ticket, &t)?;
 
@@ -193,32 +198,70 @@ pub struct BuyHookAccounts<'a, 'info> {
     pub global: &'a Global,
     pub coin: &'a Account<'info, Coin>,
     pub position: &'a mut Account<'info, Position>,
-    /// Exactly the position's open tickets, in any order, writable.
-    pub open_tickets: &'a [AccountInfo<'info>],
+    /// The position's open tickets (+ the claim queue when one of them is queued), as
+    /// split off `remaining_accounts` by `split_rebuy_accounts`.
+    pub rebuy: RebuyAccounts<'a, 'info>,
     /// The caller's `#[event_cpi]` event authority.
     pub event_authority: &'a AccountInfo<'info>,
 }
 
 /// Called AFTER a buy executes. Applies the rebuy rule to open tickets whose sell was
-/// within the rebuy window, then adds `tokens_bought` to the position's pending bucket.
-pub fn on_buy(a: BuyHookAccounts, tokens_bought: u64, now: i64) -> Result<()> {
+/// within the rebuy window, then records the buy: the balance seen before it caps what is
+/// tracked (R-L2), `tokens_bought` go to the pending bucket, and the balance after it
+/// becomes the position's last observed balance.
+pub fn on_buy(a: BuyHookAccounts, tokens_bought: u64, balance_before: u64, now: i64) -> Result<()> {
     require_keys_eq!(a.position.mint, a.coin.mint, FumpadError::InvalidAccount);
-    apply_rebuy(&a.global.params, a.position, a.open_tickets, tokens_bought, now, a.event_authority)?;
-    a.position.add(tokens_bought, now, a.global.params.min_hold_secs);
+    let p = &a.global.params;
+    apply_rebuy(p, a.position, &a.rebuy, tokens_bought, now, a.event_authority)?;
+    logic::observe_buy(a.position, p, tokens_bought, balance_before, now);
     Ok(())
 }
 
-/// Rebuy rule shared by `on_buy` and `register_holdings`. `open_tickets` must be exactly
-/// the position's open set. Debits newest-first, voids at zero (and removes voided
-/// tickets from the open list), emits TicketDebited per touched ticket.
+/// The rebuy-rule accounts at the front of an instruction's `remaining_accounts`.
+pub struct RebuyAccounts<'a, 'info> {
+    /// Exactly the position's open tickets, any order, writable.
+    pub open: &'a [AccountInfo<'info>],
+    /// R-L1: the coin's ClaimQueue, present iff one of `open` is `Queued`.
+    pub queue: Option<&'a AccountInfo<'info>>,
+}
+
+/// Split `remaining = [open tickets (position.open_count)] [claim_queue — only if one of
+/// those tickets is Queued] [rest…]`. Returns the rebuy accounts and the rest (router: the
+/// venue accounts). The open set itself is validated by `apply_rebuy`.
+pub fn split_rebuy_accounts<'a, 'info>(
+    position: &Position,
+    remaining: &'a [AccountInfo<'info>],
+) -> Result<(RebuyAccounts<'a, 'info>, &'a [AccountInfo<'info>])> {
+    let n = position.open_count as usize;
+    require!(remaining.len() >= n, FumpadError::OpenTicketsMismatch);
+    let (open, rest) = remaining.split_at(n);
+    let keys: Vec<Pubkey> = open.iter().map(|t| t.key()).collect();
+    require!(logic::open_set_matches(position, &keys), FumpadError::OpenTicketsMismatch);
+    let mut any_queued = false;
+    for info in open {
+        any_queued |= read_ticket(info)?.status == TicketStatus::Queued;
+    }
+    if !any_queued {
+        return Ok((RebuyAccounts { open, queue: None }, rest));
+    }
+    require!(!rest.is_empty(), FumpadError::QueueAccountRequired);
+    Ok((RebuyAccounts { open, queue: Some(&rest[0]) }, &rest[1..]))
+}
+
+/// Rebuy rule shared by `on_buy` and `register_holdings`. `rebuy.open` must be exactly the
+/// position's open set. Debits newest-first, voids at zero (and removes voided tickets from
+/// the open list), emits TicketDebited per touched ticket. R-L1: a debited Queued ticket's
+/// queue entry is updated in the same instruction (amount lowered, or removed when voided),
+/// so queue order and amounts are always exact.
 pub fn apply_rebuy(
     p: &Params,
     position: &mut Position,
-    open_tickets: &[AccountInfo<'_>],
+    rebuy: &RebuyAccounts<'_, '_>,
     amount: u64,
     now: i64,
     event_authority: &AccountInfo<'_>,
 ) -> Result<()> {
+    let open_tickets = rebuy.open;
     let keys: Vec<Pubkey> = open_tickets.iter().map(|t| t.key()).collect();
     require!(logic::open_set_matches(position, &keys), FumpadError::OpenTicketsMismatch);
     if open_tickets.is_empty() {
@@ -231,6 +274,13 @@ pub fn apply_rebuy(
         require_keys_eq!(t.mint, position.mint, FumpadError::InvalidAccount);
         tickets.push(t);
     }
+    let queue = if tickets.iter().any(|t| t.status == TicketStatus::Queued) {
+        let info = rebuy.queue.ok_or(FumpadError::QueueAccountRequired)?;
+        check_claim_queue(info, &position.mint)?;
+        Some(info)
+    } else {
+        None
+    };
     if amount == 0 {
         return Ok(());
     }
@@ -246,11 +296,18 @@ pub fn apply_rebuy(
         require!(info.is_writable, FumpadError::InvalidAccount);
         t.tokens -= d;
         let owed = logic::claim_amount(t.tokens, p.claim_bps);
-        if t.status == TicketStatus::Queued {
-            // The queue entry is re-synced (or dropped) by process_queue / close_ticket.
-            t.claim_amount = owed;
-        }
         let voided = t.tokens == 0 || owed == 0;
+        if t.status == TicketStatus::Queued {
+            t.claim_amount = owed;
+            let qi = queue.ok_or(FumpadError::QueueAccountRequired)?;
+            let mut data = qi.try_borrow_mut_data()?;
+            let q = claim_queue_mut(&mut data)?;
+            if voided {
+                queue::remove(q, &info.key());
+            } else {
+                queue::set_amount(q, &info.key(), owed);
+            }
+        }
         if voided {
             t.status = TicketStatus::Voided;
             logic::remove_open(position, &info.key());
@@ -262,6 +319,28 @@ pub fn apply_rebuy(
         )?;
     }
     Ok(())
+}
+
+/// The coin's canonical, initialized ClaimQueue: owner, writable, size, discriminator,
+/// mint, and PDA (via its stored bump).
+pub fn check_claim_queue(info: &AccountInfo, mint: &Pubkey) -> Result<()> {
+    require_keys_eq!(*info.owner, crate::ID, FumpadError::InvalidAccount);
+    require!(info.is_writable, FumpadError::InvalidAccount);
+    let mut data = info.try_borrow_mut_data()?;
+    let q = claim_queue_mut(&mut data)?;
+    require_keys_eq!(q.mint, *mint, FumpadError::InvalidAccount);
+    let pda = Pubkey::create_program_address(&[CLAIM_QUEUE_SEED, mint.as_ref(), &[q.bump]], &crate::ID)
+        .map_err(|_| error!(FumpadError::InvalidAccount))?;
+    require_keys_eq!(info.key(), pda, FumpadError::InvalidAccount);
+    Ok(())
+}
+
+/// View raw ClaimQueue account data (discriminator + Pod body) as the zero-copy struct.
+pub fn claim_queue_mut(data: &mut [u8]) -> Result<&mut ClaimQueue> {
+    let size = core::mem::size_of::<ClaimQueue>();
+    require!(data.len() >= 8 + size, FumpadError::InvalidAccount);
+    require!(data[..8] == *ClaimQueue::DISCRIMINATOR, FumpadError::InvalidAccount);
+    bytemuck::try_from_bytes_mut(&mut data[8..8 + size]).map_err(|_| error!(FumpadError::InvalidAccount))
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -289,6 +368,19 @@ pub fn create_pda_account<'info>(
     space: usize,
     seeds: &[&[u8]],
 ) -> Result<()> {
+    create_pda_account_owned(payer, target, system, space, seeds, &crate::ID)
+}
+
+/// `create_pda_account` for an arbitrary owner program (e.g. a Token-2022 account at a
+/// FUMPAD PDA, D16 escrow).
+pub fn create_pda_account_owned<'info>(
+    payer: &AccountInfo<'info>,
+    target: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    space: usize,
+    seeds: &[&[u8]],
+    owner: &Pubkey,
+) -> Result<()> {
     require_keys_eq!(system.key(), system_program::ID, FumpadError::InvalidAccount);
     require!(target.owner == &system_program::ID && target.data_is_empty(), FumpadError::InvalidAccount);
     let rent = Rent::get()?.minimum_balance(space);
@@ -303,7 +395,7 @@ pub fn create_pda_account<'info>(
             ),
             rent,
             space as u64,
-            &crate::ID,
+            owner,
         )
     } else {
         if rent > current {
@@ -326,7 +418,7 @@ pub fn create_pda_account<'info>(
                 system_program::Assign { account_to_assign: target.clone() },
                 signer,
             ),
-            &crate::ID,
+            owner,
         )
     }
 }
@@ -359,7 +451,8 @@ mod tests {
             next_ticket_seq: 0,
             open_tickets: [Pubkey::default(); crate::constants::MAX_OPEN_TICKETS],
             open_count: 0,
-            reserved: [0; 64],
+            last_balance: 0,
+            reserved: [0; 56],
         };
         s.add(amount, 0, 600);
         s

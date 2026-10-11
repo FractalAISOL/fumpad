@@ -1,9 +1,9 @@
-//! Red-team PoCs (custody scope). Each `poc_*` test PASSES when the issue reproduces
-//! against the current code. `nofinding_*` tests document attacks that were tried and
-//! FAIL against the current code (kept as regression guards).
+//! Red-team findings (custody scope), fixed in v0.3. Each `regression_*` test replays the
+//! original PoC scenario and asserts the attack now FAILS. `nofinding_*` tests document
+//! attacks that were tried and FAIL against the code (kept as regression guards).
 
 use anchor_lang::prelude::{AccountMeta as Meta, Pubkey};
-use fumpad::{external::pumpswap::WSOL_MINT, state::{CoinStatus, Params}};
+use fumpad::{error::FumpadError, events::CurveReopened, external::pumpswap::WSOL_MINT, state::{CoinStatus, Params}};
 use solana_keypair::Keypair;
 
 use crate::flow::*;
@@ -24,15 +24,6 @@ fn graduated() -> (Flow, Keypair) {
     (f, whale)
 }
 
-fn update_params(f: &mut Flow, params: Params) {
-    let i = ix(
-        fumpad::accounts::AdminOnly { admin: kp_pk(&f.env.admin), global: f.env.global_pda() },
-        fumpad::instruction::UpdateParams { params },
-    );
-    let admin = f.env.admin.insecure_clone();
-    ok(f.env.send(&[i], &[&admin]));
-}
-
 fn send_lamports_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> solana_instruction::Instruction {
     let mut data = vec![2, 0, 0, 0];
     data.extend_from_slice(&lamports.to_le_bytes());
@@ -43,54 +34,115 @@ fn send_lamports_ix(from: &Pubkey, to: &Pubkey, lamports: u64) -> solana_instruc
 // Findings
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// [M] `graduation_fee_lamports` is read from Global at graduation time, not snapshotted at
-/// create_coin, and `is_valid` only bounds it by `graduation_lamports` (itself unused by the
-/// curve). With one `update_params` (no timelock) the admin can retroactively take almost
-/// all SOL raised by every Complete coin into `platform_fees_unclaimed`, seed the PumpSwap
-/// pool with 1 lamport of SOL, and sweep the rest to the treasury.
+/// [M] (fixed, D14 + D15) The PoC: the admin raised `graduation_fee_lamports` to almost all
+/// raised SOL with one untimelocked `update_params`, then graduated the Complete coin with a
+/// 1-lamport pool and swept the SOL to the treasury. Now: there is no `update_params`; a
+/// change must be queued and waits 48h; the fee is capped at 1 SOL (and fee_bps at 200);
+/// and a coin graduates with the fee snapshotted at its `create_coin`, so even a valid,
+/// executed change never applies retroactively.
 #[test]
-fn poc_admin_retroactive_graduation_fee_takes_raised_sol() {
+fn regression_admin_cannot_retroactively_take_raised_sol() {
     let (mut f, _whale) = completed();
     let raised = f.coin_state().real_sol_reserves;
     assert!(raised > 84 * SOL);
-    update_params(&mut f, Params { graduation_fee_lamports: raised - 1, graduation_lamports: u64::MAX, ..Params::default() });
+    let platform_before = f.coin_state().platform_fees_unclaimed;
+    // The PoC's params are refused outright (1 SOL cap), as is a fee_bps above 2%.
+    let poc = Params { graduation_fee_lamports: raised - 1, graduation_lamports: u64::MAX, ..Params::default() };
+    expect_err(f.env.queue_params(poc), FumpadError::InvalidParams);
+    expect_err(f.env.queue_params(Params { fee_bps: 201, ..Params::default() }), FumpadError::InvalidParams);
+    // Only the admin can queue.
+    let rando = f.env.new_user(1);
+    let i = ix(
+        fumpad::accounts::QueueParams {
+            admin: kp_pk(&rando),
+            global: f.env.global_pda(),
+            event_authority: event_authority(),
+            program: fumpad::ID,
+        },
+        fumpad::instruction::QueueParams { params: Params::default() },
+    );
+    expect_err(f.env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
+    // The maximum allowed fee, queued: not executable before 48h; cancellable.
+    let max = Params { graduation_fee_lamports: SOL, fee_bps: 200, ..Params::default() };
+    ok(f.env.queue_params(max));
+    f.env.warp(fumpad::PARAMS_TIMELOCK_SECS - 1);
+    expect_err(f.env.execute_params(), FumpadError::TimelockNotElapsed);
+    let cancel = ix(
+        fumpad::accounts::CancelParams {
+            admin: kp_pk(&f.env.admin),
+            global: f.env.global_pda(),
+            event_authority: event_authority(),
+            program: fumpad::ID,
+        },
+        fumpad::instruction::CancelParams {},
+    );
+    let admin = f.env.admin.insecure_clone();
+    ok(f.env.send(&[cancel], &[&admin]));
+    f.env.warp(1);
+    expect_err(f.env.execute_params(), FumpadError::NoPendingParams);
+    // Queue again and let it execute after 48h: Global changes…
+    f.env.set_params_timelocked(max);
+    let g: fumpad::state::Global = f.env.fetch(&f.env.global_pda());
+    assert_eq!((g.params, g.pending_eta), (max, 0));
+    // …but this coin keeps its snapshot (fee 0, 1%): the whole raise goes into the pool.
+    assert_eq!(f.coin_state().fees, Params::default().coin_fees());
     ok(f.graduate());
-    assert_eq!(token_balance(&f.env, &f.pool_quote), 1, "pool seeded with 1 lamport");
-    let treasury = kp_pk(&f.env.treasury);
-    let t0 = f.env.lamports(&treasury);
-    ok(f.withdraw_platform_fees());
-    let taken = f.env.lamports(&treasury) - t0;
-    assert!(taken >= raised - 1, "treasury took {taken} of {raised}");
-    // Holders are left with a pool priced ~85e9x lower than the curve's final price.
+    assert_eq!(token_balance(&f.env, &f.pool_quote), raised, "pool seeded with every raised lamport");
+    assert_eq!(f.coin_state().platform_fees_unclaimed, platform_before, "no graduation fee taken");
     f.assert_invariant();
 }
 
-/// [M] A Complete coin has no exit: buy/sell require `Curve`, and the only transition is
-/// `graduate`, which depends on PumpSwap `create_pool`. Any PumpSwap-side block
-/// (GlobalConfig.disable_flags bit 0 = disable_create_pool, set by the PumpSwap admin; or an
-/// incompatible create_pool upgrade) freezes the raised SOL and every holder's position with
-/// no refund / timeout path. Simulated here by flipping the PumpSwap admin flag.
+/// [M] (fixed, D13) The PoC: PumpSwap's admin sets `disable_create_pool`; `graduate`
+/// fails forever and buy/sell require `Curve`, so the raised SOL and every holder are stuck.
+/// Now: after 7 days in `Complete`, a curve sell reopens the coin as a plain curve
+/// (`CurveReopened`), holders exit at curve prices, and if the curve is later bought out
+/// again it re-completes and graduates normally once PumpSwap allows it.
 #[test]
-fn poc_complete_coin_has_no_exit_when_pumpswap_blocks_create_pool() {
+fn regression_complete_coin_reopens_curve_after_7_days() {
     let (mut f, whale) = completed();
+    let completed_at = f.coin_state().completed_at;
     let mut gc = f.env.account(&fumpad::PUMPSWAP_GLOBAL_CONFIG).unwrap();
     gc.data[56] |= 1; // disable_create_pool
-    f.env.svm.set_account(addr(&fumpad::PUMPSWAP_GLOBAL_CONFIG), gc).unwrap();
+    f.env.svm.set_account(addr(&fumpad::PUMPSWAP_GLOBAL_CONFIG), gc.clone()).unwrap();
     assert!(f.graduate().is_err());
-    // Nobody can get out.
     let held = f.tokens(&kp_pk(&whale));
     assert!(held > 0);
-    expect_err(f.sell(&whale, held / 10), fumpad::error::FumpadError::WrongCoinStatus);
-    expect_err(f.buy(&whale, SOL), fumpad::error::FumpadError::WrongCoinStatus);
-    assert!(f.coin_state().real_sol_reserves > 84 * SOL, "raised SOL stuck in the Coin PDA");
+    // Before the 7 days: still no trading.
+    f.env.warp(fumpad::ESCAPE_HATCH_SECS - 1);
+    expect_err(f.sell(&whale, held / 10), FumpadError::WrongCoinStatus);
+    expect_err(f.buy(&whale, SOL), FumpadError::WrongCoinStatus);
+    // At 7 days: the sell reopens the curve and pays out.
+    f.env.warp(1);
+    let sol0 = f.env.lamports(&kp_pk(&whale));
+    let m = ok(f.sell(&whale, held / 2));
+    let ev = events::<CurveReopened>(&m);
+    assert_eq!((ev.len(), ev[0].completed_at), (1, completed_at));
+    assert!(f.env.lamports(&kp_pk(&whale)) > sol0 + 40 * SOL, "holder exited with SOL");
+    let c = f.coin_state();
+    assert_eq!((c.status, c.completed_at), (CoinStatus::Curve, 0));
+    assert!(c.real_token_reserves > 0 && c.real_sol_reserves < 50 * SOL);
+    f.assert_invariant();
+    // Other holders can keep exiting; graduation is not possible on a reopened curve.
+    ok(f.sell(&whale, held / 4));
+    expect_err(f.graduate(), FumpadError::WrongCoinStatus);
+    // PumpSwap unblocks; the curve is bought out again → re-completes → graduates.
+    gc.data[56] &= !1;
+    f.env.svm.set_account(addr(&fumpad::PUMPSWAP_GLOBAL_CONFIG), gc).unwrap();
+    ok(f.buy(&whale, 200 * SOL));
+    let c = f.coin_state();
+    assert_eq!((c.status, c.completed_at), (CoinStatus::Complete, f.now()));
+    ok(f.graduate());
+    assert_eq!(f.coin_state().status, CoinStatus::Graduated);
+    f.assert_invariant();
 }
 
-/// [L] `graduate` (any coin) closes ATA(pool_authority, WSOL) to its caller. That same
-/// account is `execute_buyback`'s persistent `buyback_wsol` (init_if_needed, rent paid by the
-/// buyback cranker, and documented to keep "unspent remainder" dust). Every graduation hands
-/// that rent + any wrapped balance to whoever calls `graduate`.
+/// [L] (fixed) The PoC: `graduate` closed ATA(pool_authority, WSOL) — `execute_buyback`'s
+/// persistent `buyback_wsol` — to its caller, handing every graduation caller the buyback
+/// cranker's rent + any wrapped dust. Now graduation wraps into its own PDA
+/// ["graduation_wsol", mint], created and closed inside `graduate`; the buyback ATA is never
+/// passed to it.
 #[test]
-fn poc_graduate_sweeps_shared_buyback_wsol_to_caller() {
+fn regression_graduate_leaves_buyback_wsol_alone() {
     // Coin A graduates; its buyback crank runs once → ATA(pool_authority, WSOL) now persists
     // (rent paid by the buyback cranker).
     let (mut a, _) = graduated();
@@ -120,9 +172,13 @@ fn poc_graduate_sweeps_shared_buyback_wsol_to_caller() {
         ok(f.env.send_as(&caller, &ixs, &[&caller]));
         net.push(f.env.lamports(&c) as i128 - before as i128);
     }
-    // Same accounts created both times; B's caller is richer by exactly the shared ATA.
-    assert_eq!(net[0] - net[1], shared_lamports as i128, "B's graduate caller pocketed the buyback ATA");
-    assert!(f.env.account(&shared).map_or(true, |x| x.lamports == 0));
+    // Same accounts created both times → both callers net exactly the same; the buyback
+    // WSOL ATA is untouched.
+    assert_eq!(net[0], net[1], "no graduate caller pockets the buyback ATA");
+    assert_eq!(f.env.lamports(&shared), shared_lamports, "buyback WSOL ATA intact");
+    for mint in [&f.mint] {
+        assert!(f.env.account(&fpda(&[fumpad::GRADUATION_WSOL_SEED, mint.as_ref()])).map_or(true, |x| x.lamports == 0));
+    }
 }
 
 // ── helpers for multi-coin envs ─────────────────────────────────────────────────
@@ -199,7 +255,7 @@ fn graduate_ixs(f: &Flow, payer: &Pubkey) -> Vec<solana_instruction::Instruction
                 pool_authority: pa,
                 curve_vault: f.curve_vault,
                 wsol_mint: WSOL_MINT,
-                pool_authority_wsol: ata(&pa, &WSOL_MINT, &TOKEN),
+                graduation_wsol: fpda(&[fumpad::GRADUATION_WSOL_SEED, f.mint.as_ref()]),
                 amm_pool: f.pool,
                 amm_global_config: fumpad::PUMPSWAP_GLOBAL_CONFIG,
                 lp_mint,

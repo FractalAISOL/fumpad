@@ -13,9 +13,9 @@ use super::{logic, queue};
 /// - Claimed / Voided: owner only.
 /// - Open past `sell_ts + claim_window` (→ Expired) or Expired: anyone (rent still goes to
 ///   the owner), so stale tickets can be cleaned up and free their open-ticket slot.
-/// - Queued: never (D5 — queued claims don't expire).
-/// A ticket voided while queued may still have a queue entry: pass `claim_queue` so it
-/// is removed (required in that case).
+/// - Queued: never (D5 — queued claims don't expire). Escrowed: not until
+///   `withdraw_escrow` (then Claimed).
+/// `claim_queue` is optional (rebuys remove a voided ticket's entry themselves, R-L1).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct CloseTicket<'info> {
@@ -56,18 +56,23 @@ pub fn handle_close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
             TicketStatus::Expired
         }
         TicketStatus::Expired => TicketStatus::Expired,
-        TicketStatus::Queued => return err!(FumpadError::TicketNotClosable),
+        // Queued: D5, never expires. Escrowed: tokens still waiting in its escrow
+        // (`withdraw_escrow` first).
+        TicketStatus::Queued | TicketStatus::Escrowed => return err!(FumpadError::TicketNotClosable),
         s @ (TicketStatus::Claimed | TicketStatus::Voided) => {
             require!(is_owner, FumpadError::Unauthorized);
             s
         }
     };
 
-    if final_status == TicketStatus::Voided && t.queued_at != 0 {
-        let q = ctx.accounts.claim_queue.as_ref().ok_or(FumpadError::InvalidAccount)?;
+    // A ticket voided while queued already left the queue in the voiding rebuy (R-L1);
+    // if the queue is passed anyway, removing is a harmless no-op (kept for old clients).
+    if let Some(q) = ctx.accounts.claim_queue.as_ref() {
         let mut q = q.load_mut()?;
         require_keys_eq!(q.mint, t.mint, FumpadError::InvalidAccount);
-        queue::remove(&mut q, &ticket_key);
+        if final_status == TicketStatus::Voided {
+            queue::remove(&mut q, &ticket_key);
+        }
     }
 
     logic::remove_open(&mut ctx.accounts.position, &ticket_key);

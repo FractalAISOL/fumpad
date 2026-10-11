@@ -21,6 +21,7 @@ use anchor_spl::{
 };
 
 use super::common::*;
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
@@ -61,11 +62,13 @@ pub struct SwapSell<'info> {
     pub ticket: UncheckedAccount<'info>,
     /// CHECK: Pyth PriceUpdateV2; owner/feed/staleness checked by `hooks::on_sell`.
     pub sol_usd_price: UncheckedAccount<'info>,
+    /// R-L3: the user's canonical Token-2022 ATA (as on the curve): eligibility is capped by
+    /// the balance FUMPAD observes, so a sell from a secondary account must not stand in for it.
     #[account(
         mut,
-        token::mint = mint,
-        token::authority = user,
-        token::token_program = token_2022_program,
+        associated_token::mint = mint,
+        associated_token::authority = user,
+        associated_token::token_program = token_2022_program,
     )]
     pub user_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
@@ -119,7 +122,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     let gross = token_amount(&wsol_info)?.checked_sub(wsol_before).ok_or(FumpadError::MathOverflow)?;
     require!(tokens_sold > 0 && tokens_sold <= tokens_in, FumpadError::InvalidAccount);
 
-    let fee = compute_fee(gross, &a.global.params).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(gross, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     let net = gross.checked_sub(fee.total).ok_or(FumpadError::MathOverflow)?;
     require!(net >= min_sol_out, FumpadError::SlippageExceeded);
 
@@ -136,7 +139,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
     let pre_spot = before.spot_price_q64().ok();
     if let (Some(pre), Ok(post)) = (pre_spot, after.spot_price_q64()) {
-        a.coin.touch_reference(now, pre, post, false);
+        a.coin.touch_reference(now, pre, post, Touch::Venue);
     }
     // D12: effective PumpSwap spot before the sell (0 = unknown → D10 floor).
     let pre_trade_spot_q64 = pre_spot.unwrap_or(0);

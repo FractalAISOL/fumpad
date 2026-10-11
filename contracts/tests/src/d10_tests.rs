@@ -275,15 +275,19 @@ fn sale_after_manipulation(mode: u8) -> (u128, u128, u128) {
         0 => ok(f.swap_sell(&whale, s)),
         1 => pumpswap_bundle(&mut f, &whale, &whale, (base * 347 / 100) as u64, s).0,
         _ => {
-            // Pump: buy with 2× the pool's quote (price ×9), sell S via FUMPAD, dump back.
-            let before = f.tokens(&wk);
-            let i = f.direct_buy_ix(&wk, (2 * q) as u64, true);
-            ok(f.env.send_as(&whale, &[cu_limit(400_000), i], &[&whale]));
-            let bought = f.tokens(&wk) - before;
+            // Pump: an accomplice buys with 2× the pool's quote (price ×9), the whale sells S
+            // via FUMPAD, the accomplice dumps back. (If the whale pumped from its OWN wallet,
+            // the freshly bought tokens would be sold first — R-L2 — and no ticket at all.)
+            let pumper = f.env.new_user(10);
+            let pk = kp_pk(&pumper);
+            ok(f.env.send_as(&pumper, &[create_ata_ix(&pk, &pk, &f.mint, &T22)], &[&pumper]));
+            let i = f.direct_buy_ix(&pk, (2 * q) as u64, true);
+            ok(f.env.send_as(&pumper, &[cu_limit(400_000), i], &[&pumper]));
+            let bought = f.tokens(&pk);
             assert!(f.spot_q64() > pre_attack * 8);
             let m = ok(f.swap_sell(&whale, s));
-            let i = f.direct_sell_ix(&wk, bought);
-            ok(f.env.send_as(&whale, &[cu_limit(400_000), i], &[&whale]));
+            let i = f.direct_sell_ix(&pk, bought);
+            ok(f.env.send_as(&pumper, &[cu_limit(400_000), i], &[&pumper]));
             m
         }
     };

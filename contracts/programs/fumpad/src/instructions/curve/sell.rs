@@ -5,10 +5,11 @@ use anchor_spl::{
 };
 
 use super::{accrue_fees, bump_stats, inline_buyback, reserves_of, store_reserves};
+use crate::math::reference::Touch;
 use crate::{
     constants::*,
     error::FumpadError,
-    events::{CurveCompleted, Trade},
+    events::{CurveCompleted, CurveReopened, Trade},
     instructions::rewards::hooks::{self, SellHookAccounts, SellInfo},
     math::{curve::quote_sell, fees::compute_fee, price::price_q64},
     state::{Coin, CoinStatus, Global, Position, PAUSE_TRADE},
@@ -16,6 +17,8 @@ use crate::{
 
 /// Sell on the bonding curve. The user receives the curve's SOL output minus the
 /// FUMPAD fee (see `curve/mod.rs`); `min_sol_out` applies to that net amount.
+/// Also the D13 escape hatch: allowed on a coin that has been `Complete` for ≥ 7 days
+/// (the coin goes back to `Curve`, emitting `CurveReopened`).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct Sell<'info> {
@@ -76,11 +79,24 @@ pub struct Sell<'info> {
 
 pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
     let a = &mut *ctx.accounts;
-    let p = a.global.params;
     require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
-    require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
     require!(tokens_in > 0, FumpadError::ZeroAmount);
     let now = Clock::get()?.unix_timestamp;
+    // D13 escape hatch: a coin stuck in `Complete` (graduation impossible, e.g. PumpSwap
+    // blocks create_pool) for ESCAPE_HATCH_SECS reopens as a plain curve. Its reserves are
+    // exactly a curve with real_token = 0, so the sell (and later buys) are ordinary curve
+    // trades; if buys exhaust it again it re-completes (fresh 7-day clock) and `graduate`
+    // can still run then — at the same final curve price, so the pool price invariant holds.
+    let reopened = a.coin.status == CoinStatus::Complete
+        && now >= a.coin.completed_at.saturating_add(ESCAPE_HATCH_SECS);
+    if reopened {
+        a.coin.status = CoinStatus::Curve;
+    }
+    let completed_at = a.coin.completed_at;
+    if reopened {
+        a.coin.completed_at = 0;
+    }
+    require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
     let balance_before = a.user_token_account.amount;
 
     // ── Quote ──
@@ -88,7 +104,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     let pre_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
     let gross = quote_sell(&r, tokens_in).ok_or(FumpadError::InsufficientReserves)?;
     require!(gross > 0, FumpadError::ZeroAmount);
-    let fee = compute_fee(gross, &p).ok_or(FumpadError::MathOverflow)?;
+    let fee = compute_fee(gross, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
     let net = gross.checked_sub(fee.total).ok_or(FumpadError::MathOverflow)?;
     require!(net >= min_sol_out, FumpadError::SlippageExceeded);
     r.apply_sell(tokens_in, gross).ok_or(FumpadError::MathOverflow)?;
@@ -118,7 +134,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     // D10: exact curve touch point. The ticket (if any) is floored at the updated average
     // scaled by this sell's own slippage from `pre_spot` (D12).
     let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
-    coin.touch_reference(now, pre_spot, post_spot, true);
+    coin.touch_reference(now, pre_spot, post_spot, Touch::Curve);
     let reference_price_q64 = coin.reference.avg_q64;
     // A sell's buyback can only finish the curve in pathological dust states; handle it anyway.
     let completed = r.real_token == 0;
@@ -178,6 +194,9 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
 
     let mint = a.mint.key();
     let user = a.user.key();
+    if reopened {
+        emit_cpi!(CurveReopened { mint, completed_at, ts: now });
+    }
     emit_cpi!(Trade {
         mint,
         user,

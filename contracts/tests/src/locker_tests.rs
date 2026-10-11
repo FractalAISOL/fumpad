@@ -525,7 +525,7 @@ fn graduate_and_skim_fit_a_legacy_transaction() {
             pool_authority: pa,
             curve_vault: f.curve_vault,
             wsol_mint: WSOL_MINT,
-            pool_authority_wsol: ata(&pa, &WSOL_MINT, &TOKEN),
+            graduation_wsol: fpda(&[fumpad::GRADUATION_WSOL_SEED, f.mint.as_ref()]),
             amm_pool: f.pool,
             amm_global_config: fumpad::PUMPSWAP_GLOBAL_CONFIG,
             lp_mint,
@@ -555,4 +555,27 @@ fn graduate_and_skim_fit_a_legacy_transaction() {
     let (s, ss) = (size(&skim, 1), size(&with_settle, 1));
     println!("tx bytes: graduate {g}, skim {s}, skim + settle {ss}");
     assert!(g <= 1232 && s <= 1232 && ss <= 1232);
+}
+
+/// C-Info4: the locker fails closed on an unexpected PumpSwap `Pool` size (e.g. PumpSwap
+/// reallocating its pools for a new layout): `skim` refuses with `UnknownPoolLayout` and the
+/// LP stays where it is; with the known layout back, skims resume.
+#[test]
+fn regression_skim_fails_closed_on_unknown_pool_layout() {
+    let (mut f, whale) = graduated();
+    outside_round_trips(&mut f, &whale, 5, 20 * SOL);
+    let lp0 = f.locked_lp();
+    let orig = f.env.account(&f.pool).unwrap();
+    assert_eq!(orig.data.len(), fumpad_lp_locker::POOL_LEN);
+    for len in [fumpad_lp_locker::POOL_LEN + 8, 300, fumpad_lp_locker::POOL_LEN - 1] {
+        let mut p = orig.clone();
+        p.data.resize(len, 0);
+        f.env.svm.set_account(addr(&f.pool), p).unwrap();
+        expect_custom(f.skim(), locker_code(LockerError::UnknownPoolLayout));
+        assert_eq!(f.locked_lp(), lp0, "principal untouched");
+    }
+    f.env.svm.set_account(addr(&f.pool), orig).unwrap();
+    let m = ok(f.skim());
+    assert!(skimmed(&m).lp_withdrawn > 0);
+    assert_principal_intact(&f);
 }

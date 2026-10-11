@@ -48,8 +48,16 @@ pub enum NoTicket {
 }
 
 /// Settle, cap and debit the position for a sell, and return the ticket candidate size.
-/// Always mutates the position (every sold token is debited) — even when no ticket results.
-/// The USD check is done by the caller (needs the oracle) on the returned amount.
+/// Always mutates the position (every tracked sold token is debited, `last_balance`
+/// updated) — even when no ticket results. The USD check is done by the caller (needs the
+/// oracle) on the returned amount.
+///
+/// R-L2: tokens that arrived since FUMPAD last observed the balance
+/// (`balance_before − last_balance`, if positive) are untracked and are sold FIRST; only
+/// the rest of the sale draws on the matured credit. Residual (documented, SPEC §5.3):
+/// FUMPAD only sees the balance at its own touch points, so tokens that left unseen and
+/// were replaced by at most as many fresh ones before the next touch are indistinguishable
+/// from tokens that never moved.
 pub fn plan_sell(
     pos: &mut Position,
     p: &Params,
@@ -59,9 +67,12 @@ pub fn plan_sell(
     now: i64,
 ) -> Result<u64, NoTicket> {
     pos.settle(now, p.min_hold_secs);
+    let unseen = balance_before.saturating_sub(pos.observed_balance());
     cap_tracked(pos, balance_before);
-    let ticket_tokens = tokens_sold.min(pos.matured);
-    debit_sold(pos, tokens_sold);
+    let tracked_sold = tokens_sold - tokens_sold.min(unseen);
+    let ticket_tokens = tracked_sold.min(pos.matured);
+    debit_sold(pos, tracked_sold);
+    pos.last_balance = balance_before.saturating_sub(tokens_sold);
     if is_creator {
         return Err(NoTicket::Creator);
     }
@@ -72,6 +83,16 @@ pub fn plan_sell(
         return Err(NoTicket::TooManyOpenTickets);
     }
     Ok(ticket_tokens)
+}
+
+/// A FUMPAD buy / `register_holdings` observation: cap what is tracked to the balance
+/// seen before the new tokens (unseen outflows came out of `matured` first), add the new
+/// tokens as pending, and record the balance after.
+pub fn observe_buy(pos: &mut Position, p: &Params, bought: u64, balance_before: u64, now: i64) {
+    pos.settle(now, p.min_hold_secs);
+    cap_tracked(pos, balance_before);
+    pos.add(bought, now, p.min_hold_secs);
+    pos.last_balance = balance_before.saturating_add(bought);
 }
 
 // ── open-ticket list ─────────────────────────────────────────────────────────
@@ -193,7 +214,8 @@ mod tests {
             next_ticket_seq: 0,
             open_tickets: [Pubkey::default(); crate::constants::MAX_OPEN_TICKETS],
             open_count: 0,
-            reserved: [0; 64],
+            last_balance: 0,
+            reserved: [0; 56],
         }
     }
 
@@ -243,6 +265,35 @@ mod tests {
         let mut b = s.clone();
         assert_eq!(plan_sell(&mut b, &p, false, 500, 200, 700), Ok(200));
         assert_eq!((b.matured, b.pending), (0, 0));
+    }
+
+    /// R-L2: tokens that arrived unseen since the last observation are sold first.
+    #[test]
+    fn unseen_arrivals_sold_first() {
+        let p = Params::default();
+        let mut s = pos();
+        observe_buy(&mut s, &p, 1_000, 0, 0); // FUMPAD buy: observed 1_000
+        assert_eq!((s.pending, s.last_balance), (1_000, 1_000));
+        // 10 min later 400 fresh tokens arrive by transfer; selling 400 → all unseen → none.
+        let mut a = s.clone();
+        assert_eq!(plan_sell(&mut a, &p, false, 400, 1_400, 600), Err(NoTicket::NotMatured));
+        assert_eq!((a.matured, a.last_balance), (1_000, 1_000), "matured credit kept for the held bag");
+        // Selling everything: 400 unseen + 1_000 matured → ticket 1_000.
+        let mut b = s.clone();
+        assert_eq!(plan_sell(&mut b, &p, false, 1_400, 1_400, 600), Ok(1_000));
+        assert_eq!((b.matured, b.pending, b.last_balance), (0, 0, 0));
+        // Bag moved out unseen and replaced by MORE fresh tokens (1_500): only the 1_000
+        // observed earlier can be matured (residual: ≤ the old credit, see SPEC §5.3).
+        let mut c = s.clone();
+        assert_eq!(plan_sell(&mut c, &p, false, 1_500, 1_500, 600), Ok(1_000));
+        // A buy observes an unseen outflow: tracked capped before adding the new tokens.
+        let mut d = s.clone();
+        observe_buy(&mut d, &p, 50, 200, 700);
+        assert_eq!((d.matured, d.pending, d.last_balance), (200, 50, 250));
+        // Legacy position (last_balance 0): treated as observed = tracked.
+        let mut e = pos();
+        e.add(1_000, 0, p.min_hold_secs);
+        assert_eq!(plan_sell(&mut e, &p, false, 1_000, 1_000, 600), Ok(1_000));
     }
 
     #[test]

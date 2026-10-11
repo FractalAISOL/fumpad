@@ -28,8 +28,17 @@ pub mod fumpad {
         instructions::handle_initialize_global(ctx, admin, platform_treasury, params)
     }
 
-    pub fn update_params(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
-        instructions::handle_update_params(ctx, params)
+    /// D15: queue a params change; `execute_params` applies it after 48h.
+    pub fn queue_params(ctx: Context<QueueParams>, params: Params) -> Result<()> {
+        instructions::handle_queue_params(ctx, params)
+    }
+
+    pub fn execute_params(ctx: Context<ExecuteParams>) -> Result<()> {
+        instructions::handle_execute_params(ctx)
+    }
+
+    pub fn cancel_params(ctx: Context<CancelParams>) -> Result<()> {
+        instructions::handle_cancel_params(ctx)
     }
 
     pub fn set_pause(ctx: Context<AdminOnly>, paused: u8) -> Result<()> {
@@ -88,6 +97,11 @@ pub mod fumpad {
 
     pub fn init_claim_queue(ctx: Context<InitClaimQueue>) -> Result<()> {
         instructions::handle_init_claim_queue(ctx)
+    }
+
+    /// D16: move an escrowed queue payout to the owner's token account of choice.
+    pub fn withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
+        instructions::handle_withdraw_escrow(ctx)
     }
 
     // ── venue: router, oracle, buyback ──────────────────────────────────────

@@ -10,7 +10,11 @@
 //! Rules (SPEC §5.4):
 //! * Signer must be a registered keeper — or anyone, per coin, once that coin has had no
 //!   keeper sample for more than `keeper_stale_secs` (flagged `fallback`).
-//! * ≥ `oracle_min_spacing_secs` since the coin's previous sample (any kind).
+//! * Spacing ≥ `oracle_min_spacing_secs`: a keeper sample vs the coin's previous KEEPER
+//!   sample (V-L1: fallback samples can't lock the keeper out); a fallback sample vs the
+//!   previous sample of any kind.
+//! * Fallback samples are a liveness signal only: excluded from the claim / buyback median
+//!   and its coverage (V-M1), and raise-only as D10 touch points (V-M2).
 //! * Transaction isolation: this must be a top-level instruction (not a CPI) and every
 //!   other instruction in the transaction must be a compute-budget instruction. This stops
 //!   "move the pool and sample it" inside one atomic transaction. It cannot stop a
@@ -26,7 +30,7 @@ use anchor_lang::{
     Discriminator,
 };
 
-use crate::{constants::*, error::FumpadError, events::SampleRecorded, external::pumpswap, state::*};
+use crate::{constants::*, error::FumpadError, events::SampleRecorded, external::pumpswap, math::reference::Touch, state::*};
 
 pub const SAMPLE_GROUP_LEN: usize = 5;
 pub const MAX_SAMPLE_COINS: usize = 10;
@@ -117,20 +121,29 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
         if fallback {
             let since_keeper = now.saturating_sub(obs.last_keeper_sample_ts);
             require!(since_keeper > p.keeper_stale_secs, FumpadError::Unauthorized);
-        }
-        // Spacing (also rejects the same coin twice in one batch).
-        if let Some(last) = obs.last_ts() {
+            // Fallback spacing: against the previous sample of any kind.
+            if let Some(last) = obs.last_ts() {
+                require!(now >= last && now - last >= p.oracle_min_spacing_secs, FumpadError::SampleTooSoon);
+            }
+        } else if obs.keeper_sampled != 0 {
+            // V-L1: keeper spacing only against the previous KEEPER sample, so a fallback
+            // sampler squatting every slot can't lock the keeper out (a keeper sample may
+            // land next to recent fallback ones). Also rejects the coin twice in one batch.
+            let last = obs.last_keeper_sample_ts;
             require!(now >= last && now - last >= p.oracle_min_spacing_secs, FumpadError::SampleTooSoon);
         }
 
         obs.push(now, price, fallback);
         if !fallback {
             obs.last_keeper_sample_ts = now;
+            obs.keeper_sampled = 1;
         }
         drop(data);
 
-        // D10 touch point (a sample observes spot without moving it: pre = post).
-        coin.touch_reference(now, price, price, false);
+        // D10 touch point (a sample observes spot without moving it: pre = post). Fallback
+        // samples are raise-only (V-M2); keeper samples fold their own upward observation
+        // with full weight (V-opt).
+        coin.touch_reference(now, price, price, if fallback { Touch::FallbackSample } else { Touch::KeeperSample });
         coin.try_serialize(&mut &mut coin_info.try_borrow_mut_data()?[..])?;
         events.push(SampleRecorded { mint: coin.mint, price_q64: price, fallback, ts: now });
     }

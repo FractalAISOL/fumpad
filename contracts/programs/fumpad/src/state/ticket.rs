@@ -23,7 +23,9 @@ pub struct Ticket {
     /// Tokens owed, fixed at queue entry or payout (claim_bps of `tokens`).
     pub claim_amount: u64,
     pub claimed_at: i64,
-    pub reserved: [u8; 32],
+    /// D16: who paid the rent of this ticket's escrow token account (`process_queue`
+    /// cranker); refunded to it by `withdraw_escrow`. Carved from `reserved` (size unchanged).
+    pub escrow_payer: Pubkey,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -34,4 +36,7 @@ pub enum TicketStatus {
     Expired,
     /// Reduced to zero by rebuys.
     Voided,
+    /// D16: paid from the queue into the ticket's escrow token account (["escrow", ticket])
+    /// because the owner's ATA refused the transfer; `withdraw_escrow` → `Claimed`.
+    Escrowed,
 }
