@@ -1,0 +1,1390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FUMPAD — Signal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=Martian+Mono:wdth,wght@75..112.5,300..700&display=swap" rel="stylesheet">
+<style>
+/* ============ Tokens ============ */
+:root{
+  --canvas:#ECEDEF;
+  --surface:#FFFFFF;
+  --sunken:#F5F6F7;
+  --ink:#000000;
+  --ink-2:#44474E;
+  --ink-3:#64676F;
+  --rule:#D5D7DB;
+  --rule-2:#B4B7BD;
+  --on-ink:#FFFFFF;
+  --flare:#FF4F00;          /* International orange: the only colour that means money */
+  --flare-soft:#FFE3D6;
+  --flare-text:#B93A00;     /* flare for small text on light, 5.6:1 */
+  --on-flare:#000000;
+  --hatch:rgba(0,0,0,.07);
+  --scrim:rgba(0,0,0,.55);
+
+  --f-sans:"Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-num:"Martian Mono", ui-monospace, Menlo, monospace;
+
+  --r-1:3px; --r-2:6px; --r-3:12px;
+  --gut:16px;
+  --ease: cubic-bezier(.2,.7,0,1);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --canvas:#000000; --surface:#0E0F11; --sunken:#16171A;
+    --ink:#F2F2EF; --ink-2:#B7B9BF; --ink-3:#8F929A;
+    --rule:#25272B; --rule-2:#3B3E44; --on-ink:#000000;
+    --flare:#FF5A14; --flare-soft:#2A1206; --flare-text:#FF8248; --on-flare:#000000;
+    --hatch:rgba(255,255,255,.06); --scrim:rgba(0,0,0,.7);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --canvas:#000000; --surface:#0E0F11; --sunken:#16171A;
+  --ink:#F2F2EF; --ink-2:#B7B9BF; --ink-3:#8F929A;
+  --rule:#25272B; --rule-2:#3B3E44; --on-ink:#000000;
+  --flare:#FF5A14; --flare-soft:#2A1206; --flare-text:#FF8248; --on-flare:#000000;
+  --hatch:rgba(255,255,255,.06); --scrim:rgba(0,0,0,.7);
+  color-scheme: dark;
+}
+@media (min-width:760px){ :root{ --gut:32px; } }
+
+/* ============ Base ============ */
+*,*::before,*::after{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{
+  margin:0; background:var(--canvas); color:var(--ink);
+  font-family:var(--f-sans); font-size:15px; line-height:1.45;
+  font-variation-settings:"wdth" 100; font-weight:420;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+button,input,select{ font:inherit; color:inherit; }
+button{ cursor:pointer; background:none; border:0; padding:0; }
+a{ color:inherit; }
+:focus-visible{ outline:2px solid var(--flare); outline-offset:2px; border-radius:2px; }
+.num{ font-family:var(--f-num); font-variation-settings:"wdth" 88; font-feature-settings:"zero" 0; letter-spacing:-.02em; font-weight:400; }
+.num sub{ font-size:.68em; vertical-align:-.25em; line-height:0; }
+.muted{ color:var(--ink-3); }
+.sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.wrap{ max-width:1320px; margin:0 auto; padding:0 var(--gut); }
+@media (max-width:899.98px){ .hide-m{ display:none !important; } }
+@media (min-width:900px){ .hide-d{ display:none !important; } }
+
+/* ============ Prototype bar ============ */
+.proto{
+  background:var(--ink); color:var(--on-ink); font-size:12.5px;
+}
+.proto .wrap{ display:flex; align-items:center; gap:4px 14px; flex-wrap:wrap; min-height:34px; padding-top:4px; padding-bottom:4px; }
+@media (max-width:600px){ .proto b{ display:none; } }
+.proto b{ font-weight:600; font-variation-settings:"wdth" 112; opacity:.6; margin-right:auto; }
+.proto button{ padding:4px 0; opacity:.78; border-bottom:1px solid transparent; }
+.proto button:hover{ opacity:1; }
+.proto button[aria-current="true"]{ opacity:1; border-color:var(--flare); }
+
+/* ============ Header ============ */
+.top{ position:sticky; top:0; z-index:30; background:color-mix(in srgb, var(--canvas) 88%, transparent); backdrop-filter:saturate(1.2) blur(10px); -webkit-backdrop-filter:blur(10px); border-bottom:1px solid var(--rule); }
+.top .wrap{ display:flex; align-items:center; gap:20px; height:58px; }
+.brand{ display:flex; align-items:center; gap:10px; text-decoration:none; }
+.wordmark{ font-weight:850; font-variation-settings:"wdth" 125; letter-spacing:-.035em; font-size:19px; line-height:1; }
+.nav{ display:flex; gap:2px; margin-left:12px; }
+.nav button{ padding:8px 12px; border-radius:var(--r-2); color:var(--ink-2); font-weight:520; }
+.nav button:hover{ color:var(--ink); background:var(--surface); }
+.nav button[aria-current="page"]{ color:var(--ink); background:var(--surface); box-shadow:inset 0 0 0 1px var(--rule); }
+.nav .count{ font-family:var(--f-num); font-size:11px; background:var(--flare); color:var(--on-flare); border-radius:9px; padding:1px 6px; margin-left:6px; vertical-align:1px; }
+.top-r{ margin-left:auto; display:flex; align-items:center; gap:8px; }
+.sol-px{ font-size:12.5px; color:var(--ink-3); }
+.btn{ display:inline-flex; align-items:center; justify-content:center; gap:8px; height:38px; padding:0 16px; border-radius:var(--r-2); font-weight:600; font-size:14px; white-space:nowrap; transition:transform .12s var(--ease), background .15s; }
+.btn:active{ transform:translateY(1px); }
+.btn-ink{ background:var(--ink); color:var(--on-ink); }
+.btn-line{ box-shadow:inset 0 0 0 1px var(--rule-2); }
+.btn-line:hover{ box-shadow:inset 0 0 0 1px var(--ink); }
+.btn-flare{ background:var(--flare); color:var(--on-flare); }
+.btn-flare:hover{ filter:brightness(1.05); }
+.btn-sm{ height:30px; padding:0 11px; font-size:13px; }
+.btn[disabled]{ opacity:.45; cursor:not-allowed; }
+.wallet{ display:flex; align-items:center; gap:8px; height:38px; padding:0 10px 0 6px; border-radius:var(--r-2); box-shadow:inset 0 0 0 1px var(--rule); background:var(--surface); font-size:13px; }
+.icon-btn{ width:38px; height:38px; display:grid; place-items:center; border-radius:var(--r-2); box-shadow:inset 0 0 0 1px var(--rule); background:var(--surface); }
+
+/* bottom tab bar (mobile) */
+.tabbar{ position:fixed; z-index:40; left:0; right:0; bottom:0; display:grid; grid-template-columns:repeat(4,1fr); background:var(--surface); border-top:1px solid var(--rule); padding-bottom:env(safe-area-inset-bottom); }
+.tabbar button{ padding:9px 0 10px; font-size:11.5px; color:var(--ink-3); display:flex; flex-direction:column; align-items:center; gap:4px; position:relative; font-weight:520; }
+.tabbar button[aria-current="page"]{ color:var(--ink); }
+.tabbar button[aria-current="page"]::before{ content:""; position:absolute; top:-1px; left:30%; right:30%; height:2px; background:var(--ink); }
+.tabbar .dot{ position:absolute; top:7px; right:calc(50% - 16px); width:7px; height:7px; border-radius:50%; background:var(--flare); }
+@media (min-width:900px){ .tabbar{ display:none; } }
+main{ padding-bottom:96px; }
+@media (min-width:900px){ main{ padding-bottom:64px; } }
+
+/* ============ Screens ============ */
+.screen{ display:none; }
+.screen.on{ display:block; animation:enter .35s var(--ease); }
+@keyframes enter{ from{ opacity:0; transform:translateY(4px);} to{ opacity:1; transform:none; } }
+
+.panel{ background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-3); }
+.panel-h{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:14px 16px 12px; border-bottom:1px solid var(--rule); }
+.panel-h h2,.panel-h h3{ margin:0; font-size:14px; font-weight:650; letter-spacing:-.005em; }
+.panel-h .aside{ font-size:12.5px; color:var(--ink-3); }
+.panel-b{ padding:16px; }
+.h-page{ font-weight:800; font-variation-settings:"wdth" 118; letter-spacing:-.035em; font-size:30px; line-height:1.02; margin:0; }
+@media (min-width:760px){ .h-page{ font-size:40px; } }
+.lede{ color:var(--ink-2); max-width:58ch; margin:8px 0 0; }
+.page-head{ padding:28px 0 20px; display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 24px; justify-content:space-between; }
+
+.seg{ display:inline-flex; padding:3px; border-radius:var(--r-2); background:var(--sunken); box-shadow:inset 0 0 0 1px var(--rule); max-width:100%; overflow-x:auto; scrollbar-width:none; }
+.seg::-webkit-scrollbar{ display:none; }
+.seg button{ padding:6px 11px; border-radius:4px; font-size:13px; color:var(--ink-2); font-weight:540; white-space:nowrap; }
+.seg button[aria-pressed="true"]{ background:var(--surface); color:var(--ink); box-shadow:0 0 0 1px var(--rule-2); }
+.seg .n{ font-family:var(--f-num); font-size:11px; color:var(--ink-3); margin-left:5px; }
+
+/* Coin tile */
+.tile{ flex:none; width:36px; height:36px; border-radius:var(--r-1); background:var(--ink); color:var(--on-ink); display:grid; place-items:center; font-weight:800; font-variation-settings:"wdth" 62; font-size:14px; letter-spacing:.01em; }
+.tile.s{ width:26px; height:26px; font-size:11px; }
+.tile.l{ width:56px; height:56px; font-size:21px; border-radius:var(--r-2); }
+.tile.v2{ background:var(--surface); color:var(--ink); box-shadow:inset 0 0 0 1.5px var(--ink); }
+.tile.v3{ background:linear-gradient(135deg, var(--ink) 50%, var(--ink-2) 50%); }
+.ticker{ font-weight:650; font-variation-settings:"wdth" 108; letter-spacing:-.005em; }
+
+/* Kind tags */
+.tag{ display:inline-flex; align-items:center; gap:5px; height:21px; padding:0 7px; border-radius:var(--r-1); font-size:11.5px; font-weight:620; white-space:nowrap; box-shadow:inset 0 0 0 1px var(--rule-2); color:var(--ink-2); }
+.tag-ink{ background:var(--ink); color:var(--on-ink); box-shadow:none; }
+.tag-flare{ background:var(--flare); color:var(--on-flare); box-shadow:none; }
+.tag-flare-line{ box-shadow:inset 0 0 0 1px var(--flare); color:var(--flare-text); }
+
+/* ============ Gauge (the instrument) ============ */
+.gauge{ position:relative; height:34px; --pos:0; user-select:none; }
+.gauge .track{ position:absolute; left:0; right:0; top:9px; height:6px; background:var(--sunken); box-shadow:inset 0 0 0 1px var(--rule); border-radius:1px; overflow:hidden; }
+.gauge .zone{ position:absolute; top:0; bottom:0; left:calc(var(--z10) * 100%); right:0; background:repeating-linear-gradient(-45deg, transparent 0 3px, color-mix(in srgb, var(--flare) 30%, transparent) 3px 4px); }
+.gauge .fill{ position:absolute; top:0; bottom:0; left:0; width:calc(min(var(--pos), var(--z10)) * 100%); background:var(--ink); transition:width 1.1s var(--ease); }
+.gauge .fill-x{ position:absolute; top:0; bottom:0; left:calc(var(--z10) * 100%); width:max(0px, calc((var(--pos) - var(--z10)) * 100%)); background:var(--flare); transition:width 1.1s var(--ease); }
+.gauge .ticks{ position:absolute; left:0; right:0; top:17px; height:6px; }
+.gauge .ticks i{ position:absolute; top:0; width:1px; height:4px; background:var(--rule-2); }
+.gauge .ticks i.maj{ height:6px; background:var(--ink-3); }
+.gauge .ticks i.ten{ height:8px; top:-1px; width:2px; margin-left:-.5px; background:var(--flare); }
+.gauge .lbl{ position:absolute; top:23px; font-family:var(--f-num); font-variation-settings:"wdth" 80; font-size:9.5px; color:var(--ink-3); transform:translateX(-50%); line-height:1; }
+.gauge .lbl.first{ transform:none; }
+.gauge .lbl.last{ transform:translateX(-100%); }
+.gauge .lbl.ten{ color:var(--flare-text); font-weight:600; }
+.gauge .needle{ position:absolute; top:3px; width:2px; height:18px; margin-left:-1px; left:calc(var(--pos) * 100%); background:var(--ink); transition:left 1.1s var(--ease); }
+.gauge.hit .needle{ background:var(--flare); }
+.gauge.dead .fill{ background:var(--rule-2); }
+.gauge.dead .needle{ background:var(--rule-2); }
+.gauge.mini{ height:14px; }
+.gauge.mini .track{ top:4px; height:5px; }
+.gauge.mini .ticks,.gauge.mini .lbl{ display:none; }
+.gauge.mini .needle{ top:0; height:13px; }
+
+.x-read{ font-family:var(--f-num); font-variation-settings:"wdth" 88; font-weight:500; letter-spacing:-.03em; }
+.x-read.hit{ color:var(--flare-text); }
+
+/* ============ Feed ============ */
+.feed-grid{ display:grid; gap:20px; padding-top:20px; }
+@media (min-width:1000px){ .feed-grid{ grid-template-columns:minmax(0,1fr) 380px; gap:28px; padding-top:28px; } }
+.wire{ display:flex; gap:0; border:1px solid var(--rule); border-radius:var(--r-3); background:var(--surface); overflow:hidden; }
+.wire > div{ flex:1 1 0; padding:12px 14px; border-left:1px solid var(--rule); min-width:0; }
+.wire > div:first-child{ border-left:0; }
+.wire .k{ font-size:12px; color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wire .v{ font-family:var(--f-num); font-variation-settings:"wdth" 85; font-size:17px; letter-spacing:-.03em; margin-top:3px; white-space:nowrap; }
+.wire .v.flare{ color:var(--flare-text); }
+@media (max-width:620px){ .wire{ flex-wrap:wrap; } .wire > div{ flex:1 1 50%; } .wire > div:nth-child(3){ border-left:0; } .wire > div:nth-child(n+3){ border-top:1px solid var(--rule); } }
+
+.composer{ display:flex; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--rule); }
+.composer .ph{ flex:1; color:var(--ink-3); font-size:14.5px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.feed-filter{ display:flex; gap:6px; padding:10px 16px; border-bottom:1px solid var(--rule); overflow-x:auto; scrollbar-width:none; }
+.feed-filter::-webkit-scrollbar{ display:none; }
+.chip{ height:28px; padding:0 11px; border-radius:14px; font-size:12.5px; font-weight:560; box-shadow:inset 0 0 0 1px var(--rule-2); color:var(--ink-2); white-space:nowrap; }
+.chip[aria-pressed="true"]{ background:var(--ink); color:var(--on-ink); box-shadow:none; }
+.live-dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--flare); margin-right:6px; vertical-align:1px; animation:pulse 1.6s infinite; }
+@keyframes pulse{ 50%{ opacity:.25; } }
+
+.post{ display:grid; grid-template-columns:40px minmax(0,1fr); gap:12px; padding:16px; border-bottom:1px solid var(--rule); }
+.post:last-child{ border-bottom:0; }
+.post.new{ animation:slidein .7s var(--ease); }
+@keyframes slidein{ from{ background:var(--flare-soft); } to{ background:transparent; } }
+.av{ width:40px; height:40px; border-radius:50%; overflow:hidden; background:var(--sunken); box-shadow:inset 0 0 0 1px var(--rule); display:grid; place-items:center; }
+.av svg{ width:26px; height:26px; }
+.av.sm{ width:28px; height:28px; } .av.sm svg{ width:18px; height:18px; }
+.post-h{ display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; font-size:14px; }
+.post-h b{ font-weight:650; }
+.post-h .addr{ color:var(--ink-3); font-size:12px; }
+.post-h time{ color:var(--ink-3); font-size:12.5px; }
+.post-h .tag{ margin-left:auto; }
+.post p{ margin:4px 0 0; color:var(--ink); font-size:14.5px; line-height:1.5; }
+.post p .ticker{ text-decoration:underline; text-decoration-color:var(--rule-2); text-underline-offset:3px; cursor:pointer; }
+.embed{ margin-top:10px; border:1px solid var(--rule); border-radius:var(--r-2); padding:12px; display:grid; gap:10px; }
+.embed-row{ display:flex; align-items:center; gap:10px; min-width:0; }
+.embed-row .grow{ flex:1; min-width:0; }
+.embed .meta{ font-size:12.5px; color:var(--ink-3); }
+.embed .big{ font-family:var(--f-num); font-variation-settings:"wdth" 88; font-size:15px; letter-spacing:-.03em; }
+.embed.hit{ border-color:var(--flare); box-shadow:inset 3px 0 0 var(--flare); }
+.post-f{ display:flex; gap:22px; margin-top:10px; color:var(--ink-3); font-size:12.5px; }
+.post-f button{ display:inline-flex; align-items:center; gap:6px; color:var(--ink-3); }
+.post-f button:hover{ color:var(--ink); }
+.post-f svg{ width:15px; height:15px; }
+
+.side{ display:grid; gap:20px; align-content:start; }
+@media (min-width:1000px){ .side{ position:sticky; top:78px; } }
+.trow{ display:grid; grid-template-columns:26px minmax(0,1fr) auto auto; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--rule); cursor:pointer; }
+.trow:last-child{ border-bottom:0; }
+.trow:hover{ background:var(--sunken); }
+.trow .nm{ font-size:13.5px; min-width:0; }
+.trow .nm small{ display:block; color:var(--ink-3); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.trow .r{ text-align:right; font-size:13px; }
+.chg-up::before{ content:"▲ "; font-size:.7em; vertical-align:.12em; }
+.chg-dn{ color:var(--ink-3); }
+.chg-dn::before{ content:"▼ "; font-size:.7em; vertical-align:.12em; }
+.close-row{ padding:12px 16px; border-bottom:1px solid var(--rule); }
+.close-row:last-child{ border-bottom:0; }
+.close-row .top-line{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-size:13px; margin-bottom:6px; }
+.close-row .top-line span:first-child{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ============ Coin page ============ */
+.coin-head{ display:grid; gap:16px; padding:24px 0 20px; grid-template-columns:auto minmax(0,1fr); align-items:center; }
+.coin-head h1{ margin:0; font-weight:800; font-variation-settings:"wdth" 118; letter-spacing:-.035em; font-size:26px; line-height:1.05; }
+@media (min-width:760px){ .coin-head h1{ font-size:34px; } }
+.coin-head .sub{ color:var(--ink-3); font-size:13px; margin-top:4px; display:flex; flex-wrap:wrap; gap:4px 12px; }
+.coin-price{ grid-column:1/-1; display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px 28px; }
+@media (min-width:900px){ .coin-head{ grid-template-columns:auto minmax(0,1fr) auto; } .coin-price{ grid-column:auto; justify-content:flex-end; } }
+.stat .k{ font-size:12px; color:var(--ink-3); }
+.stat .v{ font-family:var(--f-num); font-variation-settings:"wdth" 85; font-size:18px; letter-spacing:-.03em; }
+.stat .v.xl{ font-size:26px; }
+.coin-grid{ display:grid; gap:16px; grid-template-columns:minmax(0,1fr); }
+@media (min-width:1000px){ .coin-grid{ grid-template-columns:minmax(0,1fr) 360px; gap:20px; } }
+.chart-wrap{ position:relative; height:280px; }
+@media (min-width:760px){ .chart-wrap{ height:340px; } }
+.chart-wrap svg{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+.chart-lbl{ position:absolute; font-family:var(--f-num); font-size:10.5px; font-variation-settings:"wdth" 80; color:var(--ink-3); pointer-events:none; white-space:nowrap; }
+.chart-lbl.ten{ color:var(--flare-text); font-weight:600; background:var(--surface); padding:1px 4px; }
+.chart-lbl.me{ color:var(--ink); background:var(--surface); padding:1px 4px; box-shadow:0 0 0 1px var(--ink); border-radius:2px; }
+.xhair{ position:absolute; top:0; bottom:0; width:1px; background:var(--ink-3); pointer-events:none; opacity:0; }
+.xtip{ position:absolute; top:8px; transform:translateX(-50%); background:var(--ink); color:var(--on-ink); font-family:var(--f-num); font-size:11px; padding:4px 7px; border-radius:var(--r-1); pointer-events:none; opacity:0; white-space:nowrap; }
+.chart-wrap:hover .xhair,.chart-wrap:hover .xtip{ opacity:1; }
+.legend{ display:flex; flex-wrap:wrap; gap:6px 16px; font-size:12px; color:var(--ink-3); padding:10px 16px; border-top:1px solid var(--rule); }
+.legend i{ display:inline-block; vertical-align:middle; margin-right:6px; }
+
+.trade .seg{ width:100%; display:grid; grid-template-columns:1fr 1fr; }
+.field{ display:flex; align-items:center; border:1px solid var(--rule-2); border-radius:var(--r-2); padding:0 12px; height:52px; margin-top:12px; background:var(--sunken); }
+.field:focus-within{ border-color:var(--ink); }
+.field input{ flex:1; min-width:0; border:0; background:none; outline:none; font-family:var(--f-num); font-size:20px; font-variation-settings:"wdth" 85; letter-spacing:-.03em; }
+.field span{ font-weight:600; color:var(--ink-2); }
+.quick{ display:flex; gap:6px; margin-top:8px; }
+.quick button{ flex:1; height:28px; font-size:12px; border-radius:var(--r-1); box-shadow:inset 0 0 0 1px var(--rule); font-family:var(--f-num); }
+.quick button:hover{ box-shadow:inset 0 0 0 1px var(--ink); }
+.kv{ display:flex; justify-content:space-between; gap:12px; font-size:13px; padding:7px 0; border-bottom:1px dashed var(--rule); }
+.kv:last-child{ border-bottom:0; }
+.kv span:first-child{ color:var(--ink-3); }
+.ticket-preview{ margin-top:12px; padding:12px; border-radius:var(--r-2); background:var(--sunken); font-size:13px; color:var(--ink-2); }
+.ticket-preview b{ color:var(--ink); font-weight:620; }
+
+.split{ display:flex; height:30px; border-radius:var(--r-1); overflow:hidden; font-size:11.5px; font-weight:620; }
+.split div{ display:flex; align-items:center; padding:0 8px; white-space:nowrap; overflow:hidden; }
+.split .a{ flex:50; background:var(--ink); color:var(--on-ink); }
+.split .b{ flex:30; background:var(--ink-3); color:var(--on-ink); }
+.split .c{ flex:20; background:var(--rule); color:var(--ink); }
+
+.pool-meter{ position:relative; height:54px; margin:10px 0 4px; }
+.pool-meter .bar{ position:absolute; left:0; right:0; top:14px; height:16px; background:var(--sunken); box-shadow:inset 0 0 0 1px var(--rule); }
+.pool-meter .have{ position:absolute; left:0; top:14px; height:16px; background:var(--ink); }
+.pool-meter .cap{ position:absolute; top:14px; height:16px; background:repeating-linear-gradient(90deg, var(--flare) 0 2px, transparent 2px 4px); }
+.pool-meter .mark{ position:absolute; top:6px; width:1px; height:32px; background:var(--ink-3); }
+.pool-meter .mark span{ position:absolute; top:34px; left:0; transform:translateX(-50%); font-family:var(--f-num); font-size:9.5px; color:var(--ink-3); white-space:nowrap; }
+
+.tbl{ width:100%; border-collapse:collapse; font-size:13px; }
+.tbl th{ text-align:left; font-weight:520; color:var(--ink-3); font-size:12px; padding:10px 16px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+.tbl td{ white-space:nowrap; }
+@media (max-width:600px){ .tbl th,.tbl td{ padding-left:10px; padding-right:10px; } }
+.tbl td{ padding:11px 16px; border-bottom:1px solid var(--rule); vertical-align:middle; }
+.tbl tr:last-child td{ border-bottom:0; }
+.tbl .r{ text-align:right; }
+.tbl tr.me td{ background:var(--flare-soft); }
+.tbl-scroll{ overflow-x:auto; }
+.qpos{ font-family:var(--f-num); font-size:12px; display:inline-grid; place-items:center; width:24px; height:24px; border-radius:var(--r-1); box-shadow:inset 0 0 0 1px var(--rule-2); }
+.who{ display:flex; align-items:center; gap:8px; white-space:nowrap; }
+
+.lower{ display:grid; gap:16px; margin-top:16px; }
+.lower[hidden]{ display:none; }
+.lower{ align-items:start; }
+@media (max-width:999.98px){ .lower,.feed-grid,.lb-grid{ grid-template-columns:minmax(0,1fr); } }
+@media (min-width:1000px){ .lower{ grid-template-columns:repeat(3, minmax(0,1fr)); gap:20px; margin-top:20px; } .lower .span2{ grid-column:span 2; } }
+
+.curve-big{ padding:20px 16px 8px; }
+.curve-g{ position:relative; height:64px; }
+.curve-g .track{ position:absolute; left:0; right:0; top:10px; height:22px; background:repeating-linear-gradient(90deg, var(--rule) 0 1px, transparent 1px calc(100%/17)); box-shadow:inset 0 0 0 1px var(--rule-2); background-color:var(--sunken); }
+.curve-g .fill{ position:absolute; left:0; top:10px; height:22px; background:var(--ink); width:0; transition:width 1.4s var(--ease); }
+.curve-g .end{ position:absolute; right:0; top:2px; width:2px; height:38px; background:var(--flare); }
+.curve-g .lb{ position:absolute; top:42px; font-family:var(--f-num); font-size:10px; color:var(--ink-3); }
+
+/* ============ My Fumbles ============ */
+.sum{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); border:1px solid var(--rule); border-radius:var(--r-3); background:var(--surface); overflow:hidden; }
+.sum > div{ padding:14px 16px; border-right:1px solid var(--rule); border-bottom:1px solid var(--rule); }
+.sum > div:nth-child(2n){ border-right:0; }
+.sum > div:nth-last-child(-n+2){ border-bottom:0; }
+@media (min-width:900px){ .sum{ grid-template-columns:repeat(4, minmax(0,1fr)); } .sum > div{ border-bottom:0; border-right:1px solid var(--rule) !important; } .sum > div:last-child{ border-right:0 !important; } }
+.sum .k{ font-size:12.5px; color:var(--ink-3); }
+.sum .v{ font-family:var(--f-num); font-variation-settings:"wdth" 85; font-size:24px; letter-spacing:-.04em; margin-top:4px; }
+.sum .v small{ font-size:13px; color:var(--ink-3); letter-spacing:-.02em; }
+.sum .hot{ background:var(--flare); color:var(--on-flare); }
+.sum .hot .k{ color:var(--on-flare); opacity:.75; }
+.sum .hot small{ color:var(--on-flare); opacity:.7; }
+
+.tickets{ margin-top:16px; }
+.tk{ display:grid; gap:12px 20px; padding:16px; border-bottom:1px solid var(--rule); grid-template-columns:auto minmax(0,1fr) auto; align-items:center; }
+.tk:last-child{ border-bottom:0; }
+.tk .id{ display:flex; gap:12px; align-items:center; min-width:0; grid-column:1 / 3; }
+.tk .id .t{ font-weight:650; font-size:15px; }
+.tk .id .s{ font-size:12.5px; color:var(--ink-3); }
+.tk .g{ grid-column:1 / -1; display:grid; grid-template-columns:minmax(0,1fr) 64px; gap:14px; align-items:start; }
+.tk .g .x-read{ font-size:18px; text-align:right; margin-top:4px; }
+.tk .facts{ grid-column:1 / -1; display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; font-size:12.5px; }
+.tk .facts .k{ color:var(--ink-3); }
+.tk .facts .v{ font-family:var(--f-num); font-variation-settings:"wdth" 85; font-size:13px; letter-spacing:-.02em; margin-top:2px; }
+.tk .act{ grid-column:3; grid-row:1; text-align:right; }
+.tk .note{ grid-column:1 / -1; font-size:12.5px; color:var(--ink-2); padding:8px 10px; background:var(--sunken); border-radius:var(--r-1); }
+.tk.ready{ background:linear-gradient(90deg, var(--flare-soft), transparent 60%); box-shadow:inset 3px 0 0 var(--flare); }
+.tk.claimed .g{ opacity:.55; }
+.tk.expired{ color:var(--ink-3); }
+.tk.expired .t{ text-decoration:line-through; text-decoration-color:var(--ink-3); }
+@media (min-width:1000px){
+  .tk{ grid-template-columns:240px minmax(0,1fr) 300px 170px; }
+  .tk .id{ grid-column:1; }
+  .tk .g{ grid-column:2; grid-row:1; }
+  .tk .facts{ grid-column:3; grid-row:1; }
+  .tk .act{ grid-column:4; }
+  .tk .note{ grid-column:2 / -1; }
+}
+.days{ display:inline-flex; gap:2px; vertical-align:middle; }
+.empty{ padding:56px 24px; text-align:center; }
+.empty .glyph{ margin:0 auto 14px; width:56px; height:56px; }
+.empty h3{ margin:0; font-size:17px; font-weight:650; }
+.empty p{ margin:6px auto 16px; max-width:38ch; color:var(--ink-3); font-size:14px; }
+.skel{ display:block; height:12px; border-radius:2px; background:linear-gradient(90deg, var(--sunken), var(--rule), var(--sunken)); background-size:200% 100%; animation:sk 1.2s linear infinite; }
+@keyframes sk{ to{ background-position:-200% 0; } }
+
+/* ============ Leaderboard ============ */
+.lb-grid{ display:grid; gap:16px; }
+@media (min-width:1000px){ .lb-grid{ grid-template-columns:minmax(0,1fr) 380px; gap:20px; } }
+.rank{ font-family:var(--f-num); font-size:13px; color:var(--ink-3); width:28px; }
+.rank.top{ color:var(--ink); font-weight:600; }
+.prof{ padding:20px 16px; }
+.prof .hd{ display:flex; gap:14px; align-items:center; }
+.prof .hd .av{ width:64px; height:64px; } .prof .hd .av svg{ width:40px; height:40px; }
+.prof h2{ margin:0; font-weight:800; font-variation-settings:"wdth" 115; letter-spacing:-.03em; font-size:22px; }
+.lvl{ margin-top:18px; }
+.lvl .row{ display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px; }
+.lvl .bar{ height:6px; background:var(--sunken); box-shadow:inset 0 0 0 1px var(--rule); position:relative; }
+.lvl .bar i{ position:absolute; left:0; top:0; bottom:0; background:var(--ink); }
+.ach{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; margin-top:16px; }
+.badge{ border:1px solid var(--rule); border-radius:var(--r-2); padding:10px; text-align:left; min-width:0; }
+.badge svg{ width:28px; height:28px; display:block; margin-bottom:8px; }
+.badge b{ display:block; font-size:12.5px; font-weight:640; line-height:1.2; }
+.badge span{ display:block; font-size:11px; color:var(--ink-3); margin-top:2px; }
+.badge.locked{ opacity:.45; border-style:dashed; }
+.flag-note{ font-size:12px; color:var(--ink-3); padding:12px 16px; border-top:1px solid var(--rule); }
+
+/* ============ Brand sheet ============ */
+.bs-hero{ background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-3); padding:clamp(20px, 5vw, 56px); display:grid; gap:28px; overflow:hidden; position:relative; }
+.bs-word{ font-weight:900; font-variation-settings:"wdth" 125; letter-spacing:-.055em; font-size:clamp(56px, 15vw, 200px); line-height:.82; margin:0; }
+.bs-hero .lock{ display:flex; flex-wrap:wrap; align-items:center; gap:16px 28px; }
+.bs-grid{ display:grid; gap:16px; margin-top:16px; }
+@media (min-width:900px){ .bs-grid{ grid-template-columns:repeat(12, minmax(0,1fr)); gap:20px; margin-top:20px; } .c4{ grid-column:span 4; } .c5{ grid-column:span 5; } .c7{ grid-column:span 7; } .c8{ grid-column:span 8; } .c12{ grid-column:span 12; } .c6{ grid-column:span 6; } }
+.sw{ display:grid; grid-template-columns:56px minmax(0,1fr) auto; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--rule); font-size:13px; }
+.sw:last-child{ border-bottom:0; }
+.sw i{ height:40px; border-radius:var(--r-1); box-shadow:inset 0 0 0 1px var(--rule); }
+.sw b{ font-weight:640; }
+.sw small{ display:block; color:var(--ink-3); }
+.ts-row{ display:grid; grid-template-columns:80px minmax(0,1fr); gap:12px; align-items:baseline; padding:12px 0; border-bottom:1px solid var(--rule); }
+.ts-row:last-child{ border-bottom:0; }
+.ts-row .spec{ font-size:11.5px; color:var(--ink-3); line-height:1.3; }
+.ts-row .smp{ min-width:0; overflow-wrap:anywhere; }
+.voice li{ padding:10px 0; border-bottom:1px solid var(--rule); font-size:15px; }
+.voice li:last-child{ border-bottom:0; }
+.voice{ list-style:none; margin:0; padding:0; }
+.voice em{ font-style:normal; color:var(--ink-3); font-size:12.5px; display:block; }
+.construct{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px; }
+.construct figure{ margin:0; border:1px solid var(--rule); border-radius:var(--r-2); padding:14px; display:grid; gap:10px; justify-items:center; }
+.construct figcaption{ font-size:12px; color:var(--ink-3); text-align:center; }
+.construct svg{ width:100%; max-width:96px; height:auto; }
+
+/* ============ Share card ============ */
+.card-stage{ background:var(--surface); border:1px solid var(--rule); border-radius:var(--r-3); padding:clamp(12px, 3vw, 32px); }
+.og{ --bg:var(--flare); --fg:#000; --sub:rgba(0,0,0,.62); --ln:rgba(0,0,0,.22);
+  container-type:inline-size; aspect-ratio:1200/630; width:100%; background:var(--bg); color:var(--fg); border-radius:6px; position:relative; overflow:hidden; box-shadow:0 1px 0 rgba(0,0,0,.04), 0 20px 50px -24px rgba(0,0,0,.4); }
+.og.paper{ --bg:#FFFFFF; --fg:#000; --sub:#55585F; --ln:#D5D7DB; }
+.og.night{ --bg:#000; --fg:#F2F2EF; --sub:#9A9DA3; --ln:#2A2C30; }
+.og-in{ position:absolute; inset:0; padding:5cqw 5.2cqw 4.6cqw; display:grid; grid-template-rows:auto 1fr auto; }
+.og-top{ display:flex; justify-content:space-between; align-items:center; font-size:1.6cqw; }
+.og-top .wm{ display:flex; align-items:center; gap:1.1cqw; font-weight:900; font-variation-settings:"wdth" 125; letter-spacing:-.04em; font-size:2.5cqw; }
+.og-top .wm svg{ width:3.2cqw; height:3.2cqw; }
+.og-top .url{ font-family:var(--f-num); color:var(--sub); font-size:1.45cqw; }
+.og-mid{ align-self:end; display:grid; grid-template-columns:1.25fr 1fr; align-items:end; gap:3cqw; padding-bottom:3cqw; }
+.og-h{ font-weight:850; font-variation-settings:"wdth" 118; letter-spacing:-.05em; font-size:5.7cqw; line-height:.9; margin:0; }
+.og-p{ margin:1.6cqw 0 0; font-size:1.9cqw; line-height:1.3; max-width:40ch; color:var(--fg); }
+.og-p .q{ font-size:.9em; font-family:var(--f-num); font-variation-settings:"wdth" 85; letter-spacing:-.03em; }
+.og-x{ text-align:right; }
+.og-x .n{ font-family:var(--f-num); font-variation-settings:"wdth" 75; font-weight:600; letter-spacing:-.07em; font-size:15cqw; line-height:.8; }
+.og-x .c{ font-size:1.6cqw; color:var(--sub); margin-top:1.2cqw; }
+.og-g{ position:relative; height:5.4cqw; border-top:.17cqw solid var(--fg); }
+.og-g i{ position:absolute; top:0; width:.12cqw; height:1.1cqw; background:var(--fg); }
+.og-g i.maj{ height:1.8cqw; width:.17cqw; }
+.og-g .l{ position:absolute; top:2.3cqw; font-family:var(--f-num); font-size:1.25cqw; transform:translateX(-50%); color:var(--sub); }
+.og-g .needle{ position:absolute; top:-2.4cqw; width:.5cqw; height:4.2cqw; background:var(--fg); margin-left:-.25cqw; }
+.og-g i.ten{ height:2.8cqw; width:.4cqw; margin-left:-.15cqw; }
+.og-g .run{ position:absolute; left:0; top:-.5cqw; height:.9cqw; background:var(--fg); }
+.og-g .ring{ position:absolute; top:-1.3cqw; width:2.4cqw; height:2.4cqw; margin-left:-1.2cqw; border:.4cqw solid var(--fg); border-radius:50%; background:var(--bg); }
+.og.paper .og-g .needle, .og.night .og-g .needle, .og.paper .og-g .run, .og.night .og-g .run{ background:#FF4F00; }
+.og-foot{ display:flex; justify-content:space-between; gap:2cqw; font-size:1.4cqw; color:var(--sub); padding-top:.8cqw; }
+.og-foot .num{ color:var(--fg); }
+.card-tools{ display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; margin-top:16px; }
+.copybox{ margin-top:16px; padding:14px; border:1px dashed var(--rule-2); border-radius:var(--r-2); font-size:14px; color:var(--ink-2); }
+
+/* ============ The Moment ============ */
+.moment{ position:fixed; inset:0; z-index:100; background:#000; color:#F2F2EF; display:grid; place-items:center; overflow:hidden; --bg:#000; }
+.moment[hidden]{ display:none; }
+.moment.flash{ background:#FF4F00; color:#000; }
+.m-bar{ position:absolute; left:0; right:0; height:0; background:#000; z-index:2; transition:height .6s var(--ease); }
+.m-bar.t{ top:0; } .m-bar.b{ bottom:0; }
+.moment.p1 .m-bar{ height:7vh; }
+.m-close{ position:absolute; top:calc(7vh + 12px); right:16px; z-index:3; color:inherit; opacity:.7; font-size:13px; padding:6px 10px; border-radius:var(--r-1); box-shadow:inset 0 0 0 1px currentColor; }
+.m-close:hover{ opacity:1; }
+.m-stage{ width:min(1040px, 100%); padding:0 20px; position:relative; z-index:1; }
+.m-meta{ display:flex; justify-content:space-between; gap:12px; font-family:var(--f-num); font-variation-settings:"wdth" 80; font-size:11.5px; opacity:0; transition:opacity .4s; }
+.moment.p1 .m-meta{ opacity:.7; }
+.m-read{ font-family:var(--f-num); font-variation-settings:"wdth" 75; font-weight:600; letter-spacing:-.07em; font-size:clamp(84px, 22vw, 240px); line-height:.85; margin:18px 0 10px; opacity:0; }
+.moment.p1 .m-read{ opacity:1; }
+.m-rule{ position:relative; height:46px; }
+.m-rule .ln{ position:absolute; left:0; top:0; height:2px; width:0; background:currentColor; transition:width .7s var(--ease); }
+.moment.p1 .m-rule .ln{ width:100%; }
+.m-rule i{ position:absolute; top:0; width:1px; height:10px; background:currentColor; opacity:0; transition:opacity .3s; }
+.m-rule i.maj{ height:16px; width:2px; }
+.moment.p1 .m-rule i{ opacity:.8; }
+.m-rule .l{ position:absolute; top:20px; transform:translateX(-50%); font-family:var(--f-num); font-size:11px; opacity:0; transition:opacity .3s; }
+.moment.p1 .m-rule .l{ opacity:.7; }
+.m-rule .run{ position:absolute; left:0; top:-3px; height:8px; width:0; background:currentColor; }
+.m-rule i.ten{ height:26px; top:-12px; width:3px; margin-left:-1px; }
+.m-rule .nd{ position:absolute; top:-18px; width:4px; margin-left:-2px; height:36px; background:currentColor; left:0; opacity:0; }
+.moment.p1 .m-rule .nd{ opacity:1; }
+.m-rule .ring{ position:absolute; top:-9px; width:20px; height:20px; margin-left:-10px; border:3px solid currentColor; border-radius:50%; background:var(--bg); opacity:0; transition:opacity .3s; }
+.moment.flash .m-rule .ring{ background:#FF4F00; }
+.moment.p1 .m-rule .ring{ opacity:1; }
+.m-low{ display:grid; gap:20px; margin-top:28px; }
+@media (min-width:860px){ .m-low{ grid-template-columns:1.1fr 1fr; align-items:end; gap:40px; } }
+.m-title{ margin:0; font-weight:900; font-variation-settings:"wdth" 125; letter-spacing:-.05em; font-size:clamp(40px, 9vw, 92px); line-height:.88; clip-path:inset(0 100% 0 0); transition:clip-path .55s var(--ease); }
+.moment.p2 .m-title{ clip-path:inset(0 0 0 0); }
+.m-sub{ margin:14px 0 0; font-size:15px; line-height:1.45; max-width:46ch; opacity:0; transform:translateY(6px); transition:all .5s var(--ease) .15s; }
+.moment.p2 .m-sub{ opacity:1; transform:none; }
+.m-box{ border-top:2px solid currentColor; padding-top:14px; opacity:0; transition:opacity .4s .3s; }
+.moment.p2 .m-box{ opacity:1; }
+.m-amt{ font-family:var(--f-num); font-variation-settings:"wdth" 85; font-size:clamp(28px, 6vw, 44px); letter-spacing:-.05em; line-height:1; }
+.m-amt small{ font-family:var(--f-sans); font-size:.45em; font-weight:700; letter-spacing:0; margin-left:6px; }
+.m-amt-sub{ font-size:13px; margin-top:6px; opacity:.75; }
+.m-actions{ display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+.m-btn{ height:48px; padding:0 20px; border-radius:var(--r-2); font-weight:700; font-size:15px; background:#000; color:#FF4F00; transition:transform .12s; }
+.m-btn:active{ transform:scale(.98); }
+.m-btn.ghost{ background:none; color:#000; box-shadow:inset 0 0 0 1.5px #000; }
+.m-btn.done{ background:#000; color:#F2F2EF; }
+.m-stamp{ position:absolute; right:20px; top:-6px; transform:rotate(-6deg) scale(1.6); opacity:0; border:2px solid currentColor; padding:6px 10px; font-family:var(--f-num); font-size:12px; letter-spacing:.02em; transition:all .35s cubic-bezier(.3,1.6,.5,1); }
+.moment.p3 .m-stamp{ opacity:1; transform:rotate(-6deg) scale(1); }
+@media (max-width:600px){ .m-stamp{ position:static; display:inline-block; margin-bottom:12px; transform:rotate(-3deg) scale(1.4); } .moment.p3 .m-stamp{ transform:rotate(-3deg) scale(1); } .moment:not(.p3) .m-stamp{ display:none; } .m-low{ margin-top:20px; } .m-meta span:last-child{ display:none; } }
+
+/* toast */
+.toast{ position:fixed; z-index:120; left:50%; bottom:84px; transform:translate(-50%, 20px); background:var(--ink); color:var(--on-ink); padding:10px 14px; border-radius:var(--r-2); font-size:13.5px; opacity:0; transition:all .3s var(--ease); pointer-events:none; max-width:calc(100% - 32px); }
+.toast.on{ opacity:1; transform:translate(-50%, 0); }
+@media (min-width:900px){ .toast{ bottom:28px; } }
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{ animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; transition-delay:0s !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- Logo mark symbol: ring = your sell, dot = 10x. The line between them is the fumble. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="mark" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="5" fill="currentColor"/>
+      <circle cx="9" cy="22.5" r="3.6" fill="none" stroke="var(--mark-bg, #fff)" stroke-width="2.4"/>
+      <path d="M12.2 20.6 L21.5 11" stroke="var(--mark-bg, #fff)" stroke-width="1.6" stroke-dasharray="1.6 2"/>
+      <circle cx="23.5" cy="9" r="4.4" fill="#FF4F00"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="proto" role="navigation" aria-label="Prototype">
+  <div class="wrap">
+    <b>FUMPAD prototype, direction C</b>
+    <button data-go="brand">Brand sheet</button>
+    <button data-play>Play the unlock</button>
+    <button data-go="card">Share card</button>
+    <button id="themeBtn" aria-label="Toggle colour theme">Theme: system</button>
+  </div>
+</div>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#feed" data-go="feed" aria-label="FUMPAD home">
+      <svg width="28" height="28" style="color:var(--ink);--mark-bg:var(--canvas)"><use href="#mark"/></svg>
+      <span class="wordmark">FUMPAD</span>
+    </a>
+    <nav class="nav hide-m" aria-label="Main">
+      <button data-go="feed">Feed</button>
+      <button data-go="coin">Coins</button>
+      <button data-go="fumbles">My fumbles<span class="count">1</span></button>
+      <button data-go="leaders">Leaderboard</button>
+    </nav>
+    <div class="top-r">
+      <span class="sol-px num hide-m">SOL $152.40</span>
+      <button class="btn btn-ink btn-sm hide-m" data-toast="The launch flow is the next round of this direction.">Launch a coin</button>
+      <button class="wallet" data-go="leaders" aria-label="Your profile">
+        <span class="av sm" data-idn="7xKpR2mVq83fQe"></span>
+        <span class="num">7xKp…3fQe</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- ================= FEED ================= -->
+<section class="screen" id="s-feed" aria-label="Feed">
+  <div class="wrap feed-grid">
+    <div style="min-width:0">
+      <div class="wire" aria-label="Live totals, last 24 hours">
+        <div><div class="k">Paid back to fumblers, 24h</div><div class="v flare" id="w-paid">412.86 SOL</div></div>
+        <div><div class="k">Tickets crossing 10×, 24h</div><div class="v" id="w-cross">138</div></div>
+        <div><div class="k">Graduated today</div><div class="v">17</div></div>
+        <div><div class="k">Open tickets</div><div class="v" id="w-open">48,207</div></div>
+      </div>
+
+      <div class="panel" style="margin-top:16px">
+        <div class="composer">
+          <span class="av" data-idn="7xKpR2mVq83fQe"></span>
+          <span class="ph">Post your worst sell. We'll keep the receipt.</span>
+          <button class="btn btn-line btn-sm" data-toast="Posting is stubbed in this prototype.">Post</button>
+        </div>
+        <div class="feed-filter" role="group" aria-label="Filter feed">
+          <button class="chip" aria-pressed="true" data-ff="all"><span class="live-dot" aria-hidden="true"></span>Everything</button>
+          <button class="chip" aria-pressed="false" data-ff="cross">10× crossings</button>
+          <button class="chip" aria-pressed="false" data-ff="claim">Claims</button>
+          <button class="chip" aria-pressed="false" data-ff="fumble">Fumbles</button>
+          <button class="chip" aria-pressed="false" data-ff="grad">Graduations</button>
+          <button class="chip" aria-pressed="false" data-ff="launch">Launches</button>
+        </div>
+        <div id="feed" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-h"><h2>Closest to 10×</h2><span class="aside">public tickets, 30-min median</span></div>
+        <div id="closest"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h2>Trending</h2><span class="aside">by volume, 1h</span></div>
+        <div id="trending"></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ================= COIN ================= -->
+<section class="screen" id="s-coin" aria-label="Coin page">
+  <div class="wrap">
+    <div class="coin-head">
+      <span class="tile l" id="c-tile">MC</span>
+      <div style="min-width:0">
+        <h1 id="c-name">Mid Curve Mike</h1>
+        <div class="sub"><span class="ticker" style="color:var(--ink)" id="c-sym">$MIDC</span><span>by <span class="num">9pLw…Aa2c</span></span><span>launched Aug 14</span><span id="c-stage-txt">graduated Aug 16, PumpSwap</span></div>
+      </div>
+      <div class="coin-price">
+        <div class="stat"><div class="k">Price, 30-min median</div><div class="v xl" id="c-price"></div></div>
+        <div class="stat"><div class="k">Market cap</div><div class="v" id="c-mc"></div></div>
+        <div class="stat"><div class="k">24h</div><div class="v chg-up" id="c-chg">38.2%</div></div>
+      </div>
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; margin-bottom:16px">
+      <div class="seg" role="group" aria-label="Coin stage">
+        <button aria-pressed="true" data-stage="post">Graduated</button>
+        <button aria-pressed="false" data-stage="pre">On the curve</button>
+      </div>
+      <span class="muted" style="font-size:12.5px" id="c-stage-hint">Showing the post-graduation layout: pool and claim queue.</span>
+    </div>
+
+    <div class="coin-grid">
+      <div class="panel" style="min-width:0">
+        <div class="panel-h">
+          <h2>Price</h2>
+          <div class="seg" role="group" aria-label="Range">
+            <button aria-pressed="false" data-rng="1h">1h</button>
+            <button aria-pressed="false" data-rng="1d">1d</button>
+            <button aria-pressed="true" data-rng="7d">7d</button>
+            <button aria-pressed="false" data-rng="all">All</button>
+          </div>
+        </div>
+        <div class="chart-wrap" id="chart"></div>
+        <div class="legend">
+          <span><i style="width:14px;height:2px;background:var(--ink)"></i>Price</span>
+          <span><i style="width:14px;height:0;border-top:2px dashed var(--flare)"></i>10× of your sell</span>
+          <span><i style="width:10px;height:10px;border:2px solid var(--ink);border-radius:50%"></i>Your sell</span>
+          <span><i style="width:6px;height:6px;background:var(--ink-3)"></i>Other fumbles</span>
+        </div>
+      </div>
+
+      <div class="panel trade">
+        <div class="panel-b">
+          <div class="seg" role="group" aria-label="Side">
+            <button aria-pressed="false" data-side="buy">Buy</button>
+            <button aria-pressed="true" data-side="sell">Sell</button>
+          </div>
+          <label class="field"><span class="sr">Amount</span><input id="amt" inputmode="decimal" value="2,000,000" aria-label="Amount"><span id="amt-unit">MIDC</span></label>
+          <div class="quick"><button data-q="25">25%</button><button data-q="50">50%</button><button data-q="75">75%</button><button data-q="100">Max</button></div>
+          <div style="margin-top:14px">
+            <div class="kv"><span>You receive</span><span class="num" id="t-recv">21.42 SOL</span></div>
+            <div class="kv"><span>Fee, 1%</span><span class="num" id="t-fee">0.214 SOL</span></div>
+            <div class="kv"><span>Of which buys MIDC for the pool</span><span class="num" id="t-pool">0.107 SOL</span></div>
+          </div>
+          <div class="ticket-preview" id="t-prev"></div>
+          <button class="btn btn-ink" style="width:100%; margin-top:12px; height:46px" id="t-go">Sell and file a ticket</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- post-grad lower -->
+    <div class="lower" id="lower-post">
+      <div class="panel">
+        <div class="panel-h"><h2>Reward pool</h2><span class="aside">MIDC held for claims</span></div>
+        <div class="panel-b">
+          <div class="stat"><div class="v xl">9,620,400 <small class="muted" style="font-size:13px">MIDC</small></div><div class="k">≈ 103.03 SOL at the median price</div></div>
+          <div class="pool-meter" aria-label="Pool versus pending claims">
+            <div class="bar"></div>
+            <div class="have" style="width:52%"></div>
+            <div class="mark" style="left:52%"><span>pool</span></div>
+            <div class="mark" style="left:100%"><span style="transform:translateX(-100%)">18.4M needed</span></div>
+          </div>
+          <div style="margin-top:14px">
+            <div class="kv"><span>Largest single claim, 10% of pool</span><span class="num">962,040</span></div>
+            <div class="kv"><span>Buybacks, 24h</span><span class="num">+412,880</span></div>
+            <div class="kv"><span>Paid out, all time</span><span class="num">18,402,110</span></div>
+            <div class="kv"><span>Seeded at launch, 5%</span><span class="num">50,000,000</span></div>
+          </div>
+          <div style="margin-top:14px; font-size:12.5px; color:var(--ink-3)">Where each 1% trade fee goes</div>
+          <div class="split" style="margin-top:6px"><div class="a">50% pool</div><div class="b">30% FUMPAD</div><div class="c">20% creator</div></div>
+        </div>
+      </div>
+
+      <div class="panel span2" style="min-width:0">
+        <div class="panel-h"><h2>Claim queue</h2><span class="aside">ordered by sell time, small claims skip ahead</span></div>
+        <div class="tbl-scroll">
+        <table class="tbl">
+          <thead><tr><th>#</th><th>Wallet</th><th class="r">Claim</th><th class="r hide-m">Sold at</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><span class="qpos">1</span></td><td><span class="who"><span class="av sm" data-idn="Fq9vB2pp4"></span><span class="num">Fq9v…B2pp</span></span></td><td class="r num">1,840,000</td><td class="r num hide-m">Aug 15, 09:12</td><td><span class="tag">Waits for an 18.4M pool, ~6 days</span></td></tr>
+            <tr><td><span class="qpos">2</span></td><td><span class="who"><span class="av sm" data-idn="HbT1x0Ke"></span><span class="num">HbT1…x0Ke</span></span></td><td class="r num">1,200,000</td><td class="r num hide-m">Aug 15, 14:40</td><td><span class="tag">Waits for a 12.0M pool, ~3 days</span></td></tr>
+            <tr><td><span class="qpos">3</span></td><td><span class="who"><span class="av sm" data-idn="3mDw9iLo"></span><span class="num">3mDw…9iLo</span></span></td><td class="r num">980,000</td><td class="r num hide-m">Aug 16, 02:03</td><td><span class="tag">Waits for a 9.8M pool, ~10 hours</span></td></tr>
+            <tr class="me"><td><span class="qpos" style="background:var(--flare);color:#000;box-shadow:none">→</span></td><td><span class="who"><span class="av sm" data-idn="7xKpR2mVq83fQe"></span><span class="num">7xKp…3fQe</span> <b style="font-size:12px">you</b></span></td><td class="r num">420,000</td><td class="r num hide-m">Aug 19, 22:51</td><td><span class="tag tag-flare">Fits now, pays instantly</span></td></tr>
+          </tbody>
+        </table>
+        </div>
+        <div class="flag-note">Queued claims don't expire while they wait. Each claim can take at most 10% of the pool, so the pool grows into the big ones.</div>
+      </div>
+
+      <div class="panel span2" style="min-width:0">
+        <div class="panel-h"><h2>Recent fumbles</h2><span class="aside">sells over $50 through FUMPAD</span></div>
+        <div class="tbl-scroll">
+        <table class="tbl" id="fumbles-tbl"></table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><h2>Holders</h2><span class="aside num">2,914</span></div>
+        <div id="holders"></div>
+      </div>
+    </div>
+
+    <!-- pre-grad lower -->
+    <div class="lower" id="lower-pre" hidden>
+      <div class="panel span2">
+        <div class="panel-h"><h2>Bonding curve</h2><span class="aside">graduates at 85 SOL, then moves to PumpSwap</span></div>
+        <div class="curve-big">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
+            <div class="stat"><div class="v xl"><span id="curve-n">61.37</span> <small class="muted" style="font-size:13px">of 85 SOL</small></div><div class="k">23.63 SOL to go. Claims on this coin open at graduation.</div></div>
+            <div class="stat" style="text-align:right"><div class="v">72.2%</div><div class="k">+4.1 SOL in the last hour</div></div>
+          </div>
+          <div class="curve-g" style="margin-top:16px" id="curve-g">
+            <div class="track"></div><div class="fill"></div><div class="end" title="85 SOL"></div>
+            <span class="lb" style="left:0">0</span><span class="lb" style="left:50%; transform:translateX(-50%)">42.5</span><span class="lb" style="right:0">85 SOL</span>
+          </div>
+        </div>
+        <div class="flag-note">Sells on the curve still file tickets. They start counting toward 10× right away; you can claim once the coin graduates.</div>
+      </div>
+      <div class="panel">
+        <div class="panel-h"><h2>Reward pool</h2><span class="aside">filling</span></div>
+        <div class="panel-b">
+          <div class="stat"><div class="v xl">50,184,300</div><div class="k">5% seeded at launch, plus curve-fee buybacks</div></div>
+          <div class="kv" style="margin-top:12px"><span>Tickets waiting on graduation</span><span class="num">212</span></div>
+          <div class="kv"><span>Already past 10×</span><span class="num">9</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= MY FUMBLES ================= -->
+<section class="screen" id="s-fumbles" aria-label="My fumbles">
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <h1 class="h-page">My fumbles</h1>
+        <p class="lede">Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the 30-minute median holds there.</p>
+      </div>
+    </div>
+    <div class="sum">
+      <div class="hot"><div class="k">Claimable now</div><div class="v" id="sum-claim">4.50 <small>SOL</small></div></div>
+      <div><div class="k">Open tickets</div><div class="v">6 <small>of 7</small></div></div>
+      <div><div class="k">In a queue</div><div class="v">1 <small>position 4</small></div></div>
+      <div><div class="k">Next closest</div><div class="v">8.2× <small>$COPE</small></div></div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; margin-top:20px">
+      <div class="seg" role="group" aria-label="Filter tickets" id="tk-filter">
+        <button aria-pressed="true" data-tf="all">All<span class="n">7</span></button>
+        <button aria-pressed="false" data-tf="ready">Claimable<span class="n">1</span></button>
+        <button aria-pressed="false" data-tf="track">Tracking<span class="n">4</span></button>
+        <button aria-pressed="false" data-tf="queue">Queued<span class="n">1</span></button>
+        <button aria-pressed="false" data-tf="done">Closed<span class="n">1</span></button>
+        <button aria-pressed="false" data-tf="flag">Flagged<span class="n">0</span></button>
+      </div>
+      <span class="muted" style="font-size:12.5px">Sorted by closest to 10×</span>
+    </div>
+    <div class="panel tickets" id="tickets"></div>
+  </div>
+</section>
+
+<!-- ================= LEADERBOARD ================= -->
+<section class="screen" id="s-leaders" aria-label="Leaderboard">
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <h1 class="h-page">Leaderboard</h1>
+        <p class="lede">The hall of early exits. Ranked over the last 30 days; flagged wallets don't appear.</p>
+      </div>
+      <div class="seg" role="group" aria-label="Board" id="lb-tabs">
+        <button aria-pressed="true" data-lb="fumble">Biggest fumbles</button>
+        <button aria-pressed="false" data-lb="claim">Top claimers</button>
+        <button aria-pressed="false" data-lb="diamond">Diamond hands</button>
+      </div>
+    </div>
+    <div class="lb-grid">
+      <div class="panel" style="min-width:0">
+        <div class="panel-h"><h2 id="lb-title">Biggest fumbles</h2><span class="aside" id="lb-aside">what the sold tokens are worth today</span></div>
+        <div class="tbl-scroll"><table class="tbl" id="lb-tbl"></table></div>
+      </div>
+      <div class="panel">
+        <div class="prof">
+          <div class="hd">
+            <span class="av" data-idn="7xKpR2mVq83fQe"></span>
+            <div>
+              <h2>ramen_maxi</h2>
+              <div class="muted num" style="font-size:12.5px">7xKp…3fQe</div>
+              <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap"><span class="tag tag-ink">Level 14</span><span class="tag">Rank 212 in fumbles</span></div>
+            </div>
+          </div>
+          <div class="lvl">
+            <div class="row"><span>Level 14, certified early exit</span><span class="num muted">7,420 / 9,000</span></div>
+            <div class="bar"><i style="width:82%"></i></div>
+          </div>
+          <div style="margin-top:16px">
+            <div class="kv"><span>Tickets filed</span><span class="num">31</span></div>
+            <div class="kv"><span>Crossed 10×</span><span class="num">6</span></div>
+            <div class="kv"><span>Claimed, all time</span><span class="num">17.92 SOL</span></div>
+            <div class="kv"><span>Worst fumble</span><span class="num">$WBSC, 41.0×</span></div>
+          </div>
+          <div class="ach" id="ach"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= BRAND ================= -->
+<section class="screen" id="s-brand" aria-label="Brand sheet">
+  <div class="wrap" style="padding-top:24px">
+    <div class="bs-hero">
+      <div class="lock">
+        <svg width="72" height="72" style="color:var(--ink);--mark-bg:var(--surface)"><use href="#mark"/></svg>
+        <div style="max-width:44ch; color:var(--ink-2)">The launchpad that pays you back when you sell too early. Swiss-instrument calm, one orange signal for money, jokes in the copy only.</div>
+      </div>
+      <h1 class="bs-word">FUMPAD</h1>
+      <div class="gauge" id="bs-gauge" style="max-width:100%"></div>
+    </div>
+
+    <div class="bs-grid">
+      <div class="panel c5">
+        <div class="panel-h"><h2>Mark</h2><span class="aside">sell, fumble, signal</span></div>
+        <div class="panel-b">
+          <div class="construct">
+            <figure><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="5" fill="none" stroke="var(--rule-2)"/><circle cx="9" cy="22.5" r="3.6" fill="none" stroke="var(--ink)" stroke-width="2.4"/></svg><figcaption>Ring: your sell</figcaption></figure>
+            <figure><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="5" fill="none" stroke="var(--rule-2)"/><circle cx="9" cy="22.5" r="3.6" fill="none" stroke="var(--ink)" stroke-width="2.4"/><path d="M12.2 20.6 L21.5 11" stroke="var(--ink)" stroke-width="1.6" stroke-dasharray="1.6 2"/></svg><figcaption>Dotted: the run you missed</figcaption></figure>
+            <figure><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="5" fill="none" stroke="var(--rule-2)"/><circle cx="9" cy="22.5" r="3.6" fill="none" stroke="var(--ink)" stroke-width="2.4"/><path d="M12.2 20.6 L21.5 11" stroke="var(--ink)" stroke-width="1.6" stroke-dasharray="1.6 2"/><circle cx="23.5" cy="9" r="4.4" fill="#FF4F00"/></svg><figcaption>Dot: 10×, paid back</figcaption></figure>
+          </div>
+          <p style="font-size:13px; color:var(--ink-2); margin:14px 0 0">The mark is the product's own chart: a sell, a dotted run, a signal. The ring and dot recur on every chart and on the share card.</p>
+        </div>
+      </div>
+
+      <div class="panel c7">
+        <div class="panel-h"><h2>Palette</h2><span class="aside">one signal, everything else instrument grey</span></div>
+        <div class="panel-b" style="padding-top:4px; padding-bottom:4px">
+          <div class="sw"><i style="background:#FF4F00"></i><div><b>Flare</b><small>Money only: 10× crossings, claims, payouts. Never decoration.</small></div><span class="num">#FF4F00</span></div>
+          <div class="sw"><i style="background:#000"></i><div><b>Ink</b><small>Text, fills, the needle. Pure black, not tinted.</small></div><span class="num">#000000</span></div>
+          <div class="sw"><i style="background:#ECEDEF"></i><div><b>Instrument</b><small>Canvas. Cool, so the orange reads hotter.</small></div><span class="num">#ECEDEF</span></div>
+          <div class="sw"><i style="background:#FFFFFF"></i><div><b>Paper</b><small>Panels and cards.</small></div><span class="num">#FFFFFF</span></div>
+          <div class="sw"><i style="background:#64676F"></i><div><b>Graphite</b><small>Secondary text and losses. No red anywhere.</small></div><span class="num">#64676F</span></div>
+          <div class="sw"><i style="background:#B93A00"></i><div><b>Flare text</b><small>Orange at text size on light, 5.6:1.</small></div><span class="num">#B93A00</span></div>
+        </div>
+      </div>
+
+      <div class="panel c7">
+        <div class="panel-h"><h2>Type</h2><span class="aside">Archivo, width axis 62 to 125; Martian Mono for every number</span></div>
+        <div class="panel-b" style="padding-top:4px; padding-bottom:4px">
+          <div class="ts-row"><div class="spec">Display<br>Archivo 900, wdth 125</div><div class="smp" style="font-weight:900; font-variation-settings:'wdth' 125; letter-spacing:-.05em; font-size:clamp(34px,6vw,56px); line-height:.9">Claim unlocked.</div></div>
+          <div class="ts-row"><div class="spec">Title<br>800, wdth 118</div><div class="smp" style="font-weight:800; font-variation-settings:'wdth' 118; letter-spacing:-.035em; font-size:30px; line-height:1">My fumbles</div></div>
+          <div class="ts-row"><div class="spec">Body<br>420, 15/22</div><div class="smp">You sold 4,200,000 MIDC on Aug 19. It held 11.4× for thirty minutes. Officially, you fumbled.</div></div>
+          <div class="ts-row"><div class="spec">Tile<br>800, wdth 62</div><div class="smp"><span class="tile" style="display:inline-grid">MC</span> <span class="tile v2" style="display:inline-grid">CP</span> <span class="tile v3" style="display:inline-grid">GB</span></div></div>
+          <div class="ts-row"><div class="spec">Numbers<br>Martian Mono, wdth 85</div><div class="smp num" style="font-size:22px">11.4× 0.0<sub>5</sub>1071 SOL</div></div>
+        </div>
+      </div>
+
+      <div class="panel c5">
+        <div class="panel-h"><h2>Voice</h2><span class="aside">dry, exact, a little sorry for you</span></div>
+        <div class="panel-b" style="padding-top:4px; padding-bottom:4px">
+          <ul class="voice">
+            <li>Sold too early. Officially.<em>Share card headline</em></li>
+            <li>Post your worst sell. We'll keep the receipt.<em>Composer placeholder</em></li>
+            <li>Later. It might go higher.<em>Secondary action on the claim; it's true, the token count is fixed</em></li>
+            <li>No flags. Your wallet is clean, which is rarer than a 10×.<em>Empty state</em></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="panel c12">
+        <div class="panel-h"><h2>The 10× gauge</h2><span class="aside">log scale, 1× to 30×, hatched past 10×</span></div>
+        <div class="panel-b" style="display:grid; gap:18px">
+          <div><div style="font-size:12.5px; color:var(--ink-3); margin-bottom:4px">Tracking, 3.4×</div><div class="gauge" data-g="3.4"></div></div>
+          <div><div style="font-size:12.5px; color:var(--ink-3); margin-bottom:4px">Unlocked, 11.4×. Past 10× the fill turns to flare.</div><div class="gauge" data-g="11.4"></div></div>
+          <div><div style="font-size:12.5px; color:var(--ink-3); margin-bottom:4px">Below sell price, 0.4×</div><div class="gauge dead" data-g="0.4"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= SHARE CARD ================= -->
+<section class="screen" id="s-card" aria-label="Share card">
+  <div class="wrap">
+    <div class="page-head">
+      <div>
+        <h1 class="h-page">Share card</h1>
+        <p class="lede">1200 × 630, made for X. Ring is where you sold, the needle is where it went.</p>
+      </div>
+      <div class="seg" role="group" aria-label="Card style" id="og-style">
+        <button aria-pressed="true" data-og="">Flare</button>
+        <button aria-pressed="false" data-og="paper">Paper</button>
+        <button aria-pressed="false" data-og="night">Night</button>
+      </div>
+    </div>
+    <div class="card-stage">
+      <div class="og" id="og" role="img" aria-label="Share card: sold MIDC too early, it ran 11.4 times, FUMPAD paid back 420,000 MIDC">
+        <div class="og-in">
+          <div class="og-top">
+            <div class="wm"><svg style="color:var(--fg);--mark-bg:var(--bg)"><use href="#mark"/></svg>FUMPAD</div>
+            <div class="url">fumpad.app/c/MIDC</div>
+          </div>
+          <div class="og-mid">
+            <div>
+              <h2 class="og-h">Sold too early. Officially.</h2>
+              <p class="og-p">I sold <span class="q">4,200,000</span> $MIDC at <span class="q">0.0<sub>6</sub>94</span> SOL. It held <span class="q">11.4×</span>. FUMPAD paid me back <span class="q">420,000</span> MIDC.</p>
+            </div>
+            <div class="og-x"><div class="n">11.4×</div><div class="c">30-min median, Oct 11</div></div>
+          </div>
+          <div>
+            <div class="og-g" id="og-g"></div>
+            <div class="og-foot"><span>ramen_maxi <span class="num">7xKp…3fQe</span></span><span>Paid from the MIDC pool <span class="num">tx 4tQm…Zp8c</span></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-tools">
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn btn-ink" data-toast="Opened a post to X with the card attached.">Post to X</button>
+        <button class="btn btn-line" data-toast="Saved fumpad-MIDC-11.4x.png">Save image</button>
+        <button class="btn btn-line" id="copyTxt">Copy text</button>
+      </div>
+      <span class="muted" style="font-size:12.5px">The card links to the on-chain claim, so anyone can check it.</span>
+    </div>
+    <div class="copybox" id="copySrc">Sold $MIDC too early. It ran 11.4× and @fumpad paid me back 420,000 MIDC from the coin's own pool. fumpad.app/c/MIDC</div>
+  </div>
+</section>
+</main>
+
+<nav class="tabbar" aria-label="Main">
+  <button data-go="feed"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 5h14M3 10h14M3 15h9"/></svg>Feed</button>
+  <button data-go="coin"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 15l5-5 3 3 7-8"/></svg>Coins</button>
+  <button data-go="fumbles"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="5.5" cy="14.5" r="2.5"/><path d="M8 12l6-6" stroke-dasharray="1.5 2"/><circle cx="15" cy="5" r="2.5" fill="currentColor" stroke="none"/></svg>Fumbles<span class="dot"></span></button>
+  <button data-go="leaders"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 17V9M10 17V3M16 17v-5"/></svg>Ranks</button>
+</nav>
+
+<!-- ================= THE MOMENT ================= -->
+<div class="moment" id="moment" hidden role="dialog" aria-modal="true" aria-label="Claim unlocked">
+  <div class="m-bar t"></div><div class="m-bar b"></div>
+  <button class="m-close" id="m-close">Close</button>
+  <div class="m-stage">
+    <div class="m-meta"><span>$MIDC ticket, sold Aug 19 22:51 at 0.000000940 SOL</span><span>30-min median, checked 14:02:11</span></div>
+    <div class="m-read"><span id="m-x">1.0</span>×</div>
+    <div class="m-rule" id="m-rule"><div class="ln"></div></div>
+    <div class="m-low">
+      <div>
+        <h2 class="m-title">Claim<br>unlocked.</h2>
+        <p class="m-sub">You sold 4,200,000 MIDC on Aug 19. It just held above 10× your price for thirty minutes straight. Officially, you fumbled. Here's 10% back.</p>
+      </div>
+      <div class="m-box" style="position:relative">
+        <div class="m-stamp" id="m-stamp">PAID 14:02:19</div>
+        <div class="m-amt"><span id="m-amt">0</span><small>MIDC</small></div>
+        <div class="m-amt-sub" id="m-amt-sub">≈ 4.50 SOL now. Fits the pool, pays in one transaction.</div>
+        <div class="m-actions" id="m-actions">
+          <button class="m-btn" id="m-claim">Claim 420,000 MIDC</button>
+          <button class="m-btn ghost" id="m-later">Later. It might go higher.</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SOLUSD = 152.40;
+
+/* ---------- helpers ---------- */
+function hash(s){ let h=2166136261; for(const c of s){ h^=c.charCodeAt(0); h=Math.imul(h,16777619);} return h>>>0; }
+function rng(seed){ let s=seed>>>0||1; return ()=>{ s^=s<<13; s^=s>>>17; s^=s<<5; return ((s>>>0)%100000)/100000; }; }
+function identicon(seed){
+  const r=rng(hash(seed)); let cells='';
+  for(let y=0;y<5;y++) for(let x=0;x<3;x++){ if(r()>.5){ cells+=`<rect x="${x*4}" y="${y*4}" width="4" height="4"/>`; if(x<2) cells+=`<rect x="${(4-x)*4}" y="${y*4}" width="4" height="4"/>`; } }
+  return `<svg viewBox="0 0 20 20" fill="currentColor" style="color:var(--ink)" aria-hidden="true">${cells}</svg>`;
+}
+function hydrateIdn(root=document){ $$('[data-idn]',root).forEach(el=>{ if(!el.firstChild) el.innerHTML=identicon(el.dataset.idn); }); }
+const fmt = (n,d=0)=> n.toLocaleString('en-US',{minimumFractionDigits:d, maximumFractionDigits:d});
+function px(p){ // tiny SOL price with subscript zero count
+  if(p>=0.001) return p.toFixed(5);
+  const s=p.toFixed(14).slice(2); const z=s.match(/^0*/)[0].length; const sig=s.slice(z, z+4).replace(/0+$/,'');
+  return `0.0<sub>${z}</sub>${sig}`;
+}
+const LOG30=Math.log(30);
+const gpos = m => m<=1 ? 0 : Math.min(1, Math.log(m)/LOG30);
+const Z10 = Math.log(10)/LOG30;
+
+function gauge(el, m, opts={}){
+  el.style.setProperty('--z10', Z10);
+  const ticks=[1,2,3,4,5,6,7,8,9,10,20,30];
+  const maj=[1,2,5,10,20,30];
+  let t='', l='';
+  ticks.forEach(v=>{ const p=gpos(v)*100; t+=`<i class="${v===10?'ten':maj.includes(v)?'maj':''}" style="left:${p}%"></i>`; });
+  maj.forEach((v,i)=>{ const p=gpos(v)*100; l+=`<span class="lbl ${v===10?'ten':''} ${i===0?'first':''} ${i===maj.length-1?'last':''}" style="left:${p}%">${v}×</span>`; });
+  el.innerHTML=`<div class="track"><div class="zone"></div><div class="fill"></div><div class="fill-x"></div></div><div class="ticks">${t}</div>${l}<div class="needle"></div>`;
+  el.classList.toggle('hit', m>=10);
+  el.setAttribute('role','meter'); el.setAttribute('aria-valuemin','0'); el.setAttribute('aria-valuemax','30'); el.setAttribute('aria-valuenow', m); el.setAttribute('aria-label', `${m}× of sell price, 10× unlocks the claim`);
+  const target=gpos(m);
+  if(RM || opts.instant){ el.style.setProperty('--pos', target); }
+  else { el.style.setProperty('--pos',0); requestAnimationFrame(()=>requestAnimationFrame(()=>el.style.setProperty('--pos',target))); }
+}
+function miniGauge(m){ return `<div class="gauge mini ${m>=10?'hit':''}" data-g="${m}" style="--z10:${Z10}"></div>`; }
+function hydrateGauges(root=document){ $$('.gauge[data-g]',root).forEach(el=>gauge(el, parseFloat(el.dataset.g))); }
+
+let toastT;
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'), 2600); }
+$$('[data-toast]').forEach(b=>b.addEventListener('click',()=>toast(b.dataset.toast)));
+
+/* ---------- data ---------- */
+const COINS = [
+  {sym:'MIDC', name:'Mid Curve Mike', v:'', mc:1.63, chg:38.2, pool:'9.62M'},
+  {sym:'COPE', name:'Cope Harbor', v:'v2', mc:0.94, chg:12.7, pool:'21.4M'},
+  {sym:'GOBT', name:'Goblin Treasury', v:'v3', mc:2.71, chg:-6.3, pool:'1.90M'},
+  {sym:'FRGA', name:'Frog Accountant', v:'', mc:0.41, chg:4.4, pool:'33.0M'},
+  {sym:'WBSC', name:'Wet Biscuit', v:'v2', mc:5.12, chg:61.0, pool:'12.8M'},
+  {sym:'PIGN', name:'Sad Pigeon', v:'v3', mc:0.08, chg:22.9, pool:'curve 72%'},
+  {sym:'LGRN', name:'Uncle Lagrange', v:'', mc:0.02, chg:-41.5, pool:'48.1M'},
+];
+const tile=(sym,v='',size='s')=>`<span class="tile ${size} ${v}" aria-hidden="true">${sym.slice(0,2)}</span>`;
+const coin = s => COINS.find(c=>c.sym===s);
+
+const FEED = [
+  {k:'cross', who:'degen_matt', w:'D3gnM4tt9Wq', t:'1m', sym:'WBSC', x:41.0, txt:`<span class="ticker">$WBSC</span> ticket crossed 10× and kept going. Sold 12.5M at the bottom of the curve. The market would like to apologise.`, claim:'1,250,000 WBSC', sol:'38.71 SOL'},
+  {k:'claim', who:'sol_sister', w:'SoLs1st3rAA', t:'3m', sym:'MIDC', x:12.1, txt:`Claimed 610,000 <span class="ticker">$MIDC</span>. Paid in the same transaction. I'm a holder again, God help me.`, claim:'610,000 MIDC', sol:'6.53 SOL'},
+  {k:'fumble', who:'quietcapital', w:'Qu13tCap0pZ', t:'4m', sym:'COPE', sold:'38.20 SOL', txt:`Sold 5,400,000 <span class="ticker">$COPE</span> for 38.20 SOL. Ticket filed. See you at 10×, or never.`},
+  {k:'grad', who:'Sad Pigeon', w:'PIGNcurve1', t:'9m', sym:'GOBT', txt:`<span class="ticker">$GOBT</span> graduated. 85.0 SOL on the curve, liquidity now on PumpSwap. 340 fumble tickets just became claimable at 10×.`},
+  {k:'cross', who:'paperhandpete', w:'P4p3rP3t3x', t:'12m', sym:'MIDC', x:10.3, txt:`<span class="ticker">$MIDC</span> held 10.3× of my sell for thirty minutes. My ticket is live. My dignity is not.`, claim:'88,000 MIDC', sol:'0.94 SOL'},
+  {k:'launch', who:'frogcpa', w:'Fr0gCPA77', t:'18m', sym:'FRGA', txt:`Launched <span class="ticker">$FRGA</span>. 5% of supply already sits in its fumble pool. Sell it early, I dare you.`},
+  {k:'fumble', who:'nobody_sells', w:'N0b0dyS3ll', t:'26m', sym:'WBSC', sold:'112.40 SOL', txt:`Sold 9,000,000 <span class="ticker">$WBSC</span> for 112.40 SOL. Calling the top. Logging the ticket in case I'm wrong.`},
+  {k:'claim', who:'mfer_on_sol', w:'Mf3rS0lana', t:'41m', sym:'GOBT', x:13.1, txt:`Claim for 190,000 <span class="ticker">$GOBT</span> skipped the queue. Small claims fit first. Being poor finally paid off.`, claim:'190,000 GOBT', sol:'2.11 SOL'},
+];
+const NEW_EVENTS = [
+  {k:'fumble', who:'anon_7731', w:'An0n7731qq', t:'now', sym:'MIDC', sold:'2.85 SOL', txt:`Sold 260,000 <span class="ticker">$MIDC</span> for 2.85 SOL. Rent is due.`},
+  {k:'cross', who:'bagworker', w:'B4gW0rk3r', t:'now', sym:'COPE', x:10.0, txt:`<span class="ticker">$COPE</span> ticket at exactly 10.0×. Not a spike, the median held. Claim open.`, claim:'54,000 COPE', sol:'0.87 SOL'},
+  {k:'claim', who:'ramen_maxi', w:'7xKpR2mVq83fQe', t:'now', sym:'WBSC', x:41.0, txt:`Claimed 300,000 <span class="ticker">$WBSC</span>. Waited from 12× to 41×. Same tokens, more SOL.`, claim:'300,000 WBSC', sol:'9.31 SOL'},
+];
+const KIND = { cross:['10× crossed','tag-flare'], claim:['Claim paid','tag-flare-line'], fumble:['Fumble',''], grad:['Graduated','tag-ink'], launch:['Launch',''] };
+
+function postHTML(e, isNew){
+  const [lbl, cls] = KIND[e.k]; const c=coin(e.sym);
+  let embed='';
+  if(e.k==='cross' || e.k==='claim'){
+    embed=`<div class="embed ${e.k==='cross'?'hit':''}"><div class="embed-row">${tile(e.sym,c.v)}<div class="grow"><div class="ticker">$${e.sym}</div><div class="meta">${e.k==='cross'?'claim open':'paid'}: ${e.claim}</div></div><div style="text-align:right"><div class="big x-read hit">${e.x.toFixed(1)}×</div><div class="meta num">${e.sol}</div></div></div>${miniGauge(e.x)}</div>`;
+  } else if(e.k==='fumble'){
+    embed=`<div class="embed"><div class="embed-row">${tile(e.sym,c.v)}<div class="grow"><div class="ticker">$${e.sym}</div><div class="meta">ticket filed, claimable at 10×</div></div><div style="text-align:right"><div class="big">${e.sold}</div><div class="meta">sold</div></div></div>${miniGauge(1)}</div>`;
+  } else if(e.k==='grad'){
+    embed=`<div class="embed"><div class="embed-row">${tile(e.sym,c.v)}<div class="grow"><div class="ticker">$${e.sym}</div><div class="meta">bonding curve complete</div></div><div class="big">85.0 / 85 SOL</div></div></div>`;
+  }
+  return `<article class="post ${isNew?'new':''}" data-k="${e.k}">
+    <span class="av" data-idn="${e.w}"></span>
+    <div style="min-width:0">
+      <div class="post-h"><b>${e.who}</b><span class="addr num">${e.w.slice(0,4)}…${e.w.slice(-4)}</span><time>${e.t}</time><span class="tag ${cls}">${lbl}</span></div>
+      <p>${e.txt}</p>${embed}
+      <div class="post-f">
+        <button aria-label="Reply"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 3h12v8H6l-4 3z"/></svg>${(hash(e.w)%40)+2}</button>
+        <button aria-label="Repost"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 6V4h9l-2-2M13 10v2H4l2 2"/></svg>${(hash(e.who)%90)+5}</button>
+        <button data-coin="${e.sym}">Open $${e.sym}</button>
+      </div>
+    </div></article>`;
+}
+let feedFilter='all';
+function renderFeed(){
+  $('#feed').innerHTML = FEED.filter(e=>feedFilter==='all'||e.k===feedFilter).map(e=>postHTML(e)).join('') || `<div class="empty"><h3>Nothing yet</h3><p>No events of this kind in the last hour.</p></div>`;
+  hydrateIdn($('#feed')); hydrateGauges($('#feed'));
+}
+$$('[data-ff]').forEach(b=>b.addEventListener('click',()=>{ feedFilter=b.dataset.ff; $$('[data-ff]').forEach(x=>x.setAttribute('aria-pressed', x===b)); renderFeed(); }));
+document.addEventListener('click', e=>{ const b=e.target.closest('[data-coin], .ticker[data-c]'); if(b){ go('coin'); } });
+$('#feed').addEventListener('click', e=>{ if(e.target.classList.contains('ticker')) go('coin'); });
+
+let liveI=0, paid=412.86, cross=138;
+setInterval(()=>{
+  if(current!=='feed' || document.hidden) return;
+  const e={...NEW_EVENTS[liveI%NEW_EVENTS.length]}; liveI++;
+  FEED.unshift(e); FEED.forEach((f,i)=>{ if(i>0 && f.t==='now') f.t='1m'; });
+  if(feedFilter==='all'||feedFilter===e.k){
+    const div=document.createElement('div'); div.innerHTML=postHTML(e,true); const node=div.firstElementChild;
+    $('#feed').prepend(node); hydrateIdn(node); hydrateGauges(node);
+  }
+  if(e.k==='claim'){ paid+=parseFloat(e.sol); $('#w-paid').textContent=fmt(paid,2)+' SOL'; }
+  if(e.k==='cross'){ cross++; $('#w-cross').textContent=cross; }
+}, 7000);
+
+function renderSide(){
+  const close=[
+    {sym:'COPE', w:'7xKpR2mVq83fQe', who:'you', x:8.2},
+    {sym:'MIDC', w:'Lm3oPq99', who:'Lm3o…Pq99', x:9.6},
+    {sym:'FRGA', w:'Ty7uBb21', who:'Ty7u…Bb21', x:9.1},
+    {sym:'WBSC', w:'Kk2a0Pz1', who:'Kk2a…0Pz1', x:7.8},
+  ].sort((a,b)=>b.x-a.x);
+  $('#closest').innerHTML=close.map(c=>`<div class="close-row"><div class="top-line"><span><span class="ticker">$${c.sym}</span> <span class="muted">${c.who==='you'?'<b style="color:var(--ink)">your ticket</b>':'<span class=num>'+c.who+'</span>'}</span></span><span class="x-read">${c.x.toFixed(1)}×</span></div>${miniGauge(c.x)}</div>`).join('');
+  $('#trending').innerHTML=COINS.filter(c=>c.sym!=='LGRN').map(c=>`<div class="trow" data-coin="${c.sym}" tabindex="0">${tile(c.sym,c.v)}<div class="nm"><span class="ticker">$${c.sym}</span><small>${c.name}</small></div><div class="r num">$${c.mc.toFixed(2)}M</div><div class="r num ${c.chg>=0?'chg-up':'chg-dn'}" style="min-width:64px">${Math.abs(c.chg).toFixed(1)}%</div></div>`).join('');
+  hydrateGauges($('#closest'));
+}
+
+/* ---------- coin page ---------- */
+const MIDC_PX = 0.00001071, MY_SELL=0.00000094;
+$('#c-price').innerHTML = px(MIDC_PX)+' <small style="font-size:13px" class="muted">SOL</small>';
+$('#c-mc').textContent = '$1.63M';
+function chartData(seed, n){
+  const r=rng(seed); const pts=[]; let v=0.00000120;
+  for(let i=0;i<n;i++){
+    const t=i/n; const drift = t<.18 ? -0.01 : t<.55 ? 0.035 : t<.7 ? -0.012 : 0.03;
+    v *= 1 + drift + (r()-.5)*0.07; v=Math.max(v, 0.0000006); pts.push(v);
+  }
+  const k = MIDC_PX/pts[n-1]; return pts.map(p=>p*k);
+}
+let chartRange='7d';
+function renderChart(){
+  const el=$('#chart'); const n=140;
+  let data=chartData(hash(chartRange)+7, n);
+  const W=1000, H=340, pad={t:24,b:28,l:0,r:0};
+  const ten=MY_SELL*10;
+  const sellI = chartRange==='7d'?Math.floor(n*.16):chartRange==='all'?Math.floor(n*.3):null;
+  if(sellI!==null){ // remap in log space so the line passes exactly through your sell and today's median
+    const a0=Math.log(data[sellI]), a1=Math.log(data[n-1]), b0=Math.log(MY_SELL), b1=Math.log(MIDC_PX);
+    data=data.map(v=>Math.exp(b0+(Math.log(v)-a0)*(b1-b0)/(a1-a0)));
+  } else if(chartRange==='1d'){ data=data.map((v,i)=>MIDC_PX*(0.62+0.38*Math.pow(v/MIDC_PX,0.25))); }
+  else { data=data.map(v=>MIDC_PX*(0.9+0.1*Math.pow(v/MIDC_PX,0.2))); }
+  const max=Math.max(...data, ten)*1.12, min=chartRange==='1h'?ten*0.85:0;
+  const X=i=>pad.l+i/(n-1)*(W-pad.l-pad.r), Y=v=>pad.t+(1-(v-min)/(max-min))*(H-pad.t-pad.b);
+  const path=data.map((v,i)=>`${i?'L':'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('');
+  let grid=''; for(let g=1;g<=4;g++){ const y=pad.t+(H-pad.t-pad.b)*g/4; grid+=`<line x1="0" x2="${W}" y1="${y}" y2="${y}" stroke="var(--rule)" vector-effect="non-scaling-stroke"/>`; }
+  const others=[22,37,58,71,96,118].map(i=>`<rect x="${X(i)-3}" y="${Y(data[i])-3}" width="6" height="6" fill="var(--ink-3)"/>`).join('');
+  const crossI=data.findIndex(v=>v>=ten);
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="MIDC price chart, ${chartRange}">
+    ${grid}
+    <rect x="0" y="${pad.t}" width="${W}" height="${Y(ten)-pad.t}" fill="var(--flare)" opacity=".06"/>
+    <line x1="0" x2="${W}" y1="${Y(ten)}" y2="${Y(ten)}" stroke="var(--flare)" stroke-width="1.5" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>
+    <path d="${path} L${W},${H-pad.b} L0,${H-pad.b}Z" fill="var(--ink)" opacity=".04"/>
+    <path d="${path}" fill="none" stroke="var(--ink)" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    ${crossI>0?`<line x1="${X(crossI)}" x2="${X(crossI)}" y1="${pad.t}" y2="${H-pad.b}" stroke="var(--flare)" stroke-width="1" vector-effect="non-scaling-stroke"/>`:''}
+  </svg>
+  <span class="chart-lbl ten" style="right:8px; top:calc(${Y(ten)/H*100}% - 20px)">10× your sell, ${px(ten)}</span>
+  ${sellI!==null?`<span class="chart-lbl me" style="left:${X(sellI)/W*100}%; top:calc(${Y(data[sellI])/H*100}% + 14px); transform:translateX(-30%)">you sold, ${px(data[sellI])}</span>`:''}
+  <div class="xhair"></div><div class="xtip">—</div>`;
+  // markers as HTML so they stay round
+  const svgNS='http://www.w3.org/2000/svg';
+  const overlay=document.createElement('div'); overlay.style.cssText='position:absolute;inset:0;pointer-events:none';
+  overlay.innerHTML = others.replace(/<rect x="([\d.-]+)" y="([\d.-]+)"[^>]*>/g,(m,x,y)=>`<i style="position:absolute;left:${(+x+3)/W*100}%;top:${(+y+3)/H*100}%;width:6px;height:6px;margin:-3px 0 0 -3px;background:var(--ink-3)"></i>`)
+    + (sellI!==null?`<i style="position:absolute;left:${X(sellI)/W*100}%;top:${Y(data[sellI])/H*100}%;width:14px;height:14px;margin:-7px 0 0 -7px;border:2.5px solid var(--ink);border-radius:50%;background:var(--surface)"></i>`:'')
+    + `<i style="position:absolute;left:100%;top:${Y(data[n-1])/H*100}%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--flare)"></i>`;
+  el.appendChild(overlay);
+  const xh=$('.xhair',el), tip=$('.xtip',el);
+  el.onmousemove=ev=>{ const r=el.getBoundingClientRect(); const f=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)); const i=Math.round(f*(n-1)); xh.style.left=(f*100)+'%'; tip.style.left=Math.max(12,Math.min(88,f*100))+'%'; tip.innerHTML=`${px(data[i])} SOL  ${(data[i]/MY_SELL).toFixed(1)}× your sell`; };
+}
+$$('[data-rng]').forEach(b=>b.addEventListener('click',()=>{ chartRange=b.dataset.rng; $$('[data-rng]').forEach(x=>x.setAttribute('aria-pressed',x===b)); renderChart(); }));
+
+let side='sell';
+function updateTrade(){
+  const raw=parseFloat($('#amt').value.replace(/,/g,''))||0;
+  if(side==='sell'){
+    const sol=raw*MIDC_PX; const fee=sol*.01;
+    $('#t-recv').textContent=fmt(sol-fee,2)+' SOL'; $('#t-fee').textContent=fmt(fee,3)+' SOL'; $('#t-pool').textContent=fmt(fee/2,3)+' SOL';
+    const usd=sol*SOLUSD;
+    $('#t-prev').innerHTML = usd>=50
+      ? `This sell files a <b>fumble ticket</b>. If the 30-min median reaches <b class="num">${px(MIDC_PX*10)}</b> SOL (10×) within 90 days, you can claim <b class="num">${fmt(raw*.1)}</b> MIDC. You have 2 of 5 open tickets on this coin.`
+      : `Sells under $50 go through but don't file a ticket. This one is about <b class="num">$${fmt(usd,2)}</b>.`;
+    $('#amt-unit').textContent='MIDC'; $('#t-go').textContent='Sell and file a ticket';
+  } else {
+    const fee=raw*.01; $('#t-recv').textContent=fmt((raw-fee)/MIDC_PX)+' MIDC'; $('#t-fee').textContent=fmt(fee,3)+' SOL'; $('#t-pool').textContent=fmt(fee/2,3)+' SOL';
+    $('#t-prev').innerHTML=`Heads up: you sold MIDC 52 days ago. Rebuys within 7 days of a sell shrink that ticket; this one is safe.`;
+    $('#amt-unit').textContent='SOL'; $('#t-go').textContent='Buy MIDC';
+  }
+}
+$$('[data-side]').forEach(b=>b.addEventListener('click',()=>{ side=b.dataset.side; $$('[data-side]').forEach(x=>x.setAttribute('aria-pressed',x===b)); $('#amt').value= side==='sell'?'2,000,000':'5'; updateTrade(); }));
+$('#amt').addEventListener('input', updateTrade);
+$$('[data-q]').forEach(b=>b.addEventListener('click',()=>{ const bal=side==='sell'?6120000:24.8; const v=bal*b.dataset.q/100; $('#amt').value= side==='sell'?fmt(v):fmt(v,2); updateTrade(); }));
+$('#t-go').addEventListener('click',()=>toast(side==='sell'?'Sold. Ticket #3 filed for MIDC, claimable at 10×.':'Bought MIDC.'));
+
+$$('[data-stage]').forEach(b=>b.addEventListener('click',()=>{
+  const pre=b.dataset.stage==='pre'; $$('[data-stage]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  $('#lower-post').hidden=pre; $('#lower-pre').hidden=!pre;
+  $('#c-tile').textContent=pre?'SA':'MC'; $('#c-name').textContent=pre?'Sad Pigeon':'Mid Curve Mike'; $('#c-sym').textContent=pre?'$PIGN':'$MIDC';
+  $('#c-stage-txt').textContent=pre?'on the bonding curve':'graduated Aug 16, PumpSwap';
+  $('#c-stage-hint').textContent=pre?'Showing the pre-graduation layout: curve progress. Claims wait for 85 SOL.':'Showing the post-graduation layout: pool and claim queue.';
+  $('#c-mc').textContent=pre?'$80.4K':'$1.63M'; $('#c-chg').textContent=pre?'22.9%':'38.2%';
+  if(pre){ const f=$('#curve-g .fill'); f.style.width='0'; requestAnimationFrame(()=>requestAnimationFrame(()=>f.style.width=(61.37/85*100)+'%')); }
+}));
+
+function renderCoinTables(){
+  const rows=[
+    ['quietcapital','Qu13tCap0pZ','5,400,000','38.20','4m', 1.0],
+    ['nobody_sells','N0b0dyS3ll','1,100,000','11.78','26m', 1.0],
+    ['Hh4r…uu7Q','Hh4ruu7Q','820,000','3.11','3h', 2.8],
+    ['ramen_maxi','7xKpR2mVq83fQe','4,200,000','3.95','Aug 19', 11.4],
+    ['Bz0p…Lw3n','Bz0pLw3n','2,600,000','2.03','Aug 18', 13.7],
+  ];
+  $('#fumbles-tbl').innerHTML=`<thead><tr><th>Seller</th><th class="r">Sold</th><th class="r hide-m">For</th><th style="width:38%">Progress to 10×</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr ${r[1].startsWith('7xKp')?'class="me"':''}><td><span class="who"><span class="av sm" data-idn="${r[1]}"></span><span>${r[0]}</span></span><div class="muted" style="font-size:12px;margin-left:36px">${r[4]}</div></td><td class="r num">${r[2]}</td><td class="r num hide-m">${r[3]} SOL</td><td><div style="display:flex;gap:10px;align-items:center"><div style="flex:1">${miniGauge(r[5])}</div><span class="x-read ${r[5]>=10?'hit':''}" style="font-size:12.5px;width:42px;text-align:right">${r[5].toFixed(1)}×</span></div></td></tr>`).join('')+'</tbody>';
+  const hold=[['Pool, FUMPAD','0.96%','pool'],['9pLw…Aa2c (creator)','4.10%','9pLwAa2c'],['Ex7m…Ra0d','3.52%','Ex7mRa0d'],['Wq1d…Mt9s','2.88%','Wq1dMt9s'],['7xKp…3fQe (you)','0.61%','7xKpR2mVq83fQe'],['Jv0q…Hh3e','0.55%','Jv0qHh3e']];
+  $('#holders').innerHTML=hold.map(h=>`<div class="trow" style="grid-template-columns:28px minmax(0,1fr) auto; cursor:default"><span class="av sm" data-idn="${h[2]}"></span><span class="nm ${h[0].startsWith('7xKp')?'':''}" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h[0]}</span><span class="r num">${h[1]}</span></div>`).join('');
+  hydrateIdn($('#s-coin')); hydrateGauges($('#fumbles-tbl'));
+}
+
+/* ---------- my fumbles ---------- */
+const TICKETS = [
+  {id:'MIDC', st:'ready', sold:4200000, sp:0.00000094, x:11.4, days:52, claim:420000, val:'4.50 SOL', when:'Aug 19'},
+  {id:'GOBT', st:'queue', sold:2600000, sp:0.0000081, x:13.1, days:63, claim:260000, val:'2.76 SOL', when:'Aug 8', q:4, note:'Queued at position 4. The GOBT pool holds 1.90M; your 260,000 can take at most 10% of it, so it pays when the pool reaches 2.6M, about 3 days at current volume. Queued claims don’t expire.'},
+  {id:'COPE', st:'track', sold:1850000, sp:0.0000021, x:8.2, days:74, claim:185000, val:'3.19 SOL at 10×', when:'Aug 28'},
+  {id:'FRGA', st:'track', sold:900000, sp:0.0000068, x:3.4, days:12, claim:90000, val:'6.12 SOL at 10×', when:'Jul 23'},
+  {id:'PIGN', st:'track', sold:3300000, sp:0.00000019, x:2.1, days:88, claim:330000, val:'opens at graduation', when:'Oct 9', note:'$PIGN is still on the curve (61.4 of 85 SOL). Your ticket counts toward 10× now; claiming opens when it graduates.'},
+  {id:'WBSC', st:'track', sold:3000000, sp:0.0000043, x:1.6, days:81, claim:180000, val:'1.94 SOL at 10×', when:'Sep 30', note:'You rebought 1,200,000 WBSC within 7 days of this sell, so the claim shrank from 300,000 to 180,000.'},
+  {id:'LGRN', st:'done', sold:7400000, sp:0.0000031, x:0.4, days:0, claim:740000, val:'expired', when:'Jul 12', note:'Expired Oct 10, 90 days after the sell. It never got past 2.3×. Sometimes selling was right.'},
+];
+let tkFilter='all';
+function dayDots(d){ return `<span class="num">${d}d</span>`; }
+function tkHTML(t){
+  const c=coin(t.id);
+  const label = {ready:'Claimable', queue:'Queued', track:'Tracking', done:'Expired', claimed:'Claimed'}[t.st];
+  let act='';
+  if(t.st==='ready') act=`<button class="btn btn-flare" data-claim="${t.id}">Claim ${fmt(t.claim)}</button><div class="muted" style="font-size:12px;margin-top:6px">${t.days} days left</div>`;
+  else if(t.st==='claimed') act=`<button class="btn btn-line btn-sm" data-go="card">Share card</button><div class="muted" style="font-size:12px;margin-top:6px">Paid, tx 4tQm…Zp8c</div>`;
+  else if(t.st==='queue') act=`<span class="tag tag-flare-line">Queue #${t.q}</span><div class="muted" style="font-size:12px;margin-top:6px">${t.days} days left, paused</div>`;
+  else if(t.st==='done') act=`<span class="tag">Expired</span>`;
+  else act=`<span class="tag">${label}</span><div class="muted" style="font-size:12px;margin-top:6px">${t.days} days left</div>`;
+  return `<div class="tk ${t.st}">
+    <div class="id">${tile(t.id,c.v,'')}<div style="min-width:0"><div class="t ticker">$${t.id}</div><div class="s">${c.name}, sold ${t.when}</div></div></div>
+    <div class="g"><div class="gauge ${t.st==='done'?'dead':''}" data-g="${t.x}"></div><div class="x-read ${t.x>=10?'hit':''}">${t.x.toFixed(1)}×</div></div>
+    <div class="facts">
+      <div><div class="k">Sold</div><div class="v">${fmt(t.sold)}</div></div>
+      <div><div class="k">At, SOL</div><div class="v">${px(t.sp)}</div></div>
+      <div><div class="k">Claim, 10%</div><div class="v">${fmt(t.claim)}</div><div class="muted" style="font-size:11.5px">${t.val}</div></div>
+    </div>
+    <div class="act">${act}</div>
+    ${t.note?`<div class="note">${t.note}</div>`:''}
+  </div>`;
+}
+function renderTickets(){
+  const map={all:()=>true, ready:t=>t.st==='ready'||t.st==='claimed', track:t=>t.st==='track', queue:t=>t.st==='queue', done:t=>t.st==='done', flag:()=>false};
+  const list=TICKETS.filter(map[tkFilter]);
+  $('#tickets').innerHTML = list.length ? list.map(tkHTML).join('') :
+   `<div class="empty"><svg class="glyph" viewBox="0 0 56 56" fill="none" stroke="var(--ink)" stroke-width="2"><circle cx="16" cy="40" r="7"/><path d="M22 34l18-18" stroke-dasharray="3 4"/><circle cx="42" cy="14" r="7" stroke="var(--rule-2)"/></svg>
+    <h3>No flags</h3><p>Your wallet is clean, which is rarer than a 10×. Rebuys elsewhere within 7 days or linked wallets would show up here.</p><button class="btn btn-line btn-sm" data-tf-reset>Show all tickets</button></div>`;
+  hydrateGauges($('#tickets'));
+}
+$$('[data-tf]').forEach(b=>b.addEventListener('click',()=>{ tkFilter=b.dataset.tf; $$('[data-tf]').forEach(x=>x.setAttribute('aria-pressed',x===b)); renderTickets(); }));
+$('#tickets').addEventListener('click',e=>{
+  const c=e.target.closest('[data-claim]'); if(c){ playMoment(); }
+  if(e.target.closest('[data-tf-reset]')){ $('[data-tf="all"]').click(); }
+  const g=e.target.closest('[data-go]'); if(g) go(g.dataset.go);
+});
+
+/* ---------- leaderboard ---------- */
+const LB = {
+  fumble:{title:'Biggest fumbles', aside:'what the sold tokens are worth today', cols:['Wallet','Coin','Sold for','Worth now','×'], rows:[
+    ['whale_of_regret','Wh4LeR3g','WBSC','14.20 SOL','582.2 SOL',41.0],['nobody_sells','N0b0dyS3ll','GOBT','31.00 SOL','406.1 SOL',13.1],['Kk2a…0Pz1','Kk2a0Pz1','WBSC','8.75 SOL','358.8 SOL',41.0],['quietcapital','Qu13tCap0pZ','MIDC','22.10 SOL','251.9 SOL',11.4],['degen_matt','D3gnM4tt9Wq','WBSC','5.60 SOL','229.6 SOL',41.0],['sol_sister','SoLs1st3rAA','MIDC','12.30 SOL','148.8 SOL',12.1],['frogcpa','Fr0gCPA77','COPE','15.00 SOL','123.0 SOL',8.2],['paperhandpete','P4p3rP3t3x','FRGA','30.40 SOL','103.4 SOL',3.4]]},
+  claim:{title:'Top claimers', aside:'paid out in the last 30 days, valued at claim', cols:['Wallet','Claims','Best coin','Claimed','Best ×'], rows:[
+    ['degen_matt','D3gnM4tt9Wq','9','WBSC','121.4 SOL',41.0],['sol_sister','SoLs1st3rAA','6','MIDC','88.9 SOL',12.1],['mfer_on_sol','Mf3rS0lana','14','GOBT','61.0 SOL',13.1],['whale_of_regret','Wh4LeR3g','2','WBSC','58.2 SOL',41.0],['bagworker','B4gW0rk3r','11','COPE','40.7 SOL',10.0],['ramen_maxi','7xKpR2mVq83fQe','6','WBSC','17.9 SOL',41.0]]},
+  diamond:{title:'Diamond hands', aside:'claims held open longest after crossing 10×', cols:['Wallet','Coin','Unlocked at','Claimed at','Waited'], rows:[
+    ['ramen_maxi','7xKpR2mVq83fQe','WBSC','12.0×','41.0×',41.0,'34 days'],['Bz0p…Lw3n','Bz0pLw3n','WBSC','10.2×','38.5×',38.5,'29 days'],['sol_sister','SoLs1st3rAA','MIDC','10.0×','12.1×',12.1,'22 days'],['bagworker','B4gW0rk3r','GOBT','10.4×','13.1×',13.1,'19 days'],['Hh4r…uu7Q','Hh4ruu7Q','COPE','10.1×','10.9×',10.9,'17 days']]},
+};
+let lbKey='fumble';
+function renderLB(){
+  const d=LB[lbKey]; $('#lb-title').textContent=d.title; $('#lb-aside').textContent=d.aside;
+  const head=`<thead><tr><th>#</th><th>${d.cols[0]}</th><th class="hide-m">${d.cols[1]}</th><th class="r hide-m">${d.cols[2]}</th><th class="r">${d.cols[3]}</th><th class="r">${d.cols[4]}</th></tr></thead>`;
+  const body=d.rows.map((r,i)=>{
+    const me=r[1].startsWith('7xKp');
+    let c2,c3,c4,c5;
+    if(lbKey==='fumble'){ c2=`<span class="ticker">$${r[2]}</span>`; c3=r[3]; c4=r[4]; c5=`<span class="x-read ${r[5]>=10?'hit':''}">${r[5].toFixed(1)}×</span>`; }
+    else if(lbKey==='claim'){ c2=r[2]; c3=`$${r[3]}`; c4=r[4]; c5=`<span class="x-read hit">${r[5].toFixed(1)}×</span>`; }
+    else { c2=`<span class="ticker">$${r[2]}</span>`; c3=r[3]; c4=r[4]; c5=`<span class="num">${r[6]}</span>`; }
+    return `<tr ${me?'class="me"':''}><td><span class="rank ${i<3?'top':''}">${i+1}</span></td><td><span class="who"><span class="av sm" data-idn="${r[1]}"></span><span style="max-width:16ch;overflow:hidden;text-overflow:ellipsis">${r[0]}${me?' <b style="font-size:12px">you</b>':''}</span></span></td><td class="hide-m">${c2}</td><td class="r num hide-m">${c3}</td><td class="r num">${c4}</td><td class="r">${c5}</td></tr>`;
+  }).join('');
+  $('#lb-tbl').innerHTML=head+'<tbody>'+body+'</tbody>'; hydrateIdn($('#lb-tbl'));
+}
+$$('[data-lb]').forEach(b=>b.addEventListener('click',()=>{ lbKey=b.dataset.lb; $$('[data-lb]').forEach(x=>x.setAttribute('aria-pressed',x===b)); renderLB(); }));
+const ACH=[
+  ['First fumble','Filed a ticket','<circle cx="9" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="2.4"/>',1],
+  ['Ten-bagger regret','Ticket crossed 10×','<circle cx="9" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="2.4"/><circle cx="21" cy="8" r="5" fill="#FF4F00"/>',1],
+  ['Waited for 30×','Claimed past 30×','<path d="M3 25h22" stroke="currentColor" stroke-width="2"/><rect x="20" y="4" width="4" height="18" fill="#FF4F00"/>',1],
+  ['Queue jumper','Small claim, paid first','<rect x="3" y="12" width="6" height="6" fill="currentColor"/><rect x="11" y="12" width="6" height="6" fill="currentColor" opacity=".3"/><rect x="19" y="12" width="6" height="6" fill="currentColor" opacity=".3"/>',1],
+  ['Clean wallet','90 days, zero flags','<path d="M5 14l5 5 12-12" fill="none" stroke="currentColor" stroke-width="2.4"/>',1],
+  ['Sold the top','Ticket expired below 1×','<path d="M3 6l11 16L25 6" fill="none" stroke="currentColor" stroke-width="2"/>',0],
+];
+$('#ach').innerHTML=ACH.map(a=>`<div class="badge ${a[3]?'':'locked'}"><svg viewBox="0 0 28 28" style="color:var(--ink)">${a[2]}</svg><b>${a[0]}</b><span>${a[1]}</span></div>`).join('');
+
+/* ---------- brand + card gauges ---------- */
+gauge($('#bs-gauge'), 11.4, {});
+function ogGauge(){
+  const el=$('#og-g'); const vals=[1,2,3,4,5,6,7,8,9,10,20,30], maj=[1,2,5,10,20,30];
+  el.innerHTML = vals.map(v=>`<i class="${v===10?'maj ten':maj.includes(v)?'maj':''}" style="left:${gpos(v)*100}%"></i>`).join('') +
+    maj.map(v=>`<span class="l" style="left:${Math.min(97,Math.max(2,gpos(v)*100))}%">${v}×</span>`).join('') +
+    `<span class="run" style="width:${gpos(11.4)*100}%"></span><span class="ring" style="left:0%"></span><span class="needle" style="left:${gpos(11.4)*100}%"></span>`;
+}
+ogGauge();
+$$('[data-og]').forEach(b=>b.addEventListener('click',()=>{ $$('[data-og]').forEach(x=>x.setAttribute('aria-pressed',x===b)); $('#og').className='og '+b.dataset.og; }));
+$('#copyTxt').addEventListener('click',()=>{ const t=$('#copySrc').textContent; (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast('Copied the post text.')).catch(()=>toast('Copy the text below.')); });
+
+/* ---------- THE MOMENT ---------- */
+const M=$('#moment'); let mTimers=[], mRaf, lastFocus;
+(function buildRule(){
+  const r=$('#m-rule'); const vals=[1,2,3,4,5,6,7,8,9,10,20,30], maj=[1,2,5,10,20,30];
+  r.innerHTML += vals.map(v=>`<i class="${v===10?'maj ten':maj.includes(v)?'maj':''}" style="left:${gpos(v)*100}%"></i>`).join('')
+    + maj.map(v=>`<span class="l" style="left:${Math.min(97,Math.max(2,gpos(v)*100))}%">${v}×</span>`).join('')
+    + `<span class="run" id="m-run"></span><span class="ring" style="left:0"></span><span class="nd" id="m-nd"></span>`;
+})();
+function resetMoment(){
+  mTimers.forEach(clearTimeout); mTimers=[]; cancelAnimationFrame(mRaf);
+  M.className='moment'; $('.m-title').innerHTML='Claim<br>unlocked.'; $('#m-x').textContent='1.0'; $('#m-nd').style.left='0%'; $('#m-run').style.width='0'; $('#m-amt').textContent='0';
+  $('#m-actions').innerHTML=`<button class="m-btn" id="m-claim">Claim 420,000 MIDC</button><button class="m-btn ghost" id="m-later">Later. It might go higher.</button>`;
+  $('#m-amt-sub').textContent='≈ 4.50 SOL now. Fits the pool, pays in one transaction.';
+}
+function playMoment(){
+  lastFocus=document.activeElement; resetMoment(); M.hidden=false; document.body.style.overflow='hidden';
+  const T=(f,ms)=>mTimers.push(setTimeout(f, RM?0:ms));
+  const finalX=11.4;
+  if(RM){
+    M.classList.add('p1','p2','flash'); $('#m-x').textContent=finalX.toFixed(1); $('#m-nd').style.left=gpos(finalX)*100+'%'; $('#m-run').style.width=gpos(finalX)*100+'%'; $('#m-amt').textContent='420,000';
+  } else {
+    T(()=>M.classList.add('p1'), 80);
+    T(()=>{ // needle sweep, log-eased, with the hard cut at 10x
+      const t0=performance.now(), dur=1500; let flashed=false;
+      const step=now=>{
+        const k=Math.min(1,(now-t0)/dur); const e=1-Math.pow(1-k,3);
+        const x=Math.exp(e*Math.log(finalX));
+        $('#m-x').textContent=x.toFixed(1); $('#m-nd').style.left=gpos(x)*100+'%'; $('#m-run').style.width=gpos(x)*100+'%';
+        if(!flashed && x>=10){ flashed=true; M.classList.add('flash'); }
+        if(k<1) mRaf=requestAnimationFrame(step); else { M.classList.add('p2'); countAmt(); }
+      };
+      mRaf=requestAnimationFrame(step);
+    }, 900);
+  }
+  wireMoment(); setTimeout(()=>$('#m-claim')?.focus(), RM?0:2600);
+}
+function countAmt(){
+  const t0=performance.now(), dur=900;
+  const step=now=>{ const k=Math.min(1,(now-t0)/dur); const e=1-Math.pow(1-k,4); $('#m-amt').textContent=fmt(Math.round(420000*e/1000)*1000); if(k<1) mRaf=requestAnimationFrame(step); };
+  mRaf=requestAnimationFrame(step);
+}
+function closeMoment(){ resetMoment(); M.hidden=true; document.body.style.overflow=''; lastFocus?.focus?.(); }
+function wireMoment(){
+  $('#m-claim').onclick=()=>{
+    const b=$('#m-claim'); b.textContent='Confirming…'; b.disabled=true;
+    setTimeout(()=>{
+      M.classList.add('p3');
+      $('.m-title').innerHTML='Paid<br>back.';
+      $('#m-amt-sub').innerHTML='Sent to 7xKp…3fQe. tx <span class="num">4tQm…Zp8c</span>. You hold MIDC again. Congratulations, sort of.';
+      $('#m-actions').innerHTML=`<button class="m-btn done" id="m-card">Make the share card</button><button class="m-btn ghost" id="m-done">Done</button>`;
+      $('#m-card').onclick=()=>{ closeMoment(); go('card'); };
+      $('#m-done').onclick=closeMoment; $('#m-card').focus();
+      const t=TICKETS.find(t=>t.id==='MIDC'); t.st='claimed'; t.val='4.50 SOL, paid';
+      $('#sum-claim').innerHTML='0.00 <small>SOL</small>'; $$('.nav .count, .tabbar .dot').forEach(n=>n.remove());
+      renderTickets();
+    }, RM?0:650);
+  };
+  $('#m-later').onclick=closeMoment;
+}
+$('#m-close').onclick=closeMoment;
+M.addEventListener('keydown',e=>{ if(e.key==='Escape') closeMoment(); if(e.key==='Tab'){ const f=$$('button',M).filter(b=>!b.disabled); const i=f.indexOf(document.activeElement); if(e.shiftKey && i<=0){ e.preventDefault(); f[f.length-1].focus(); } else if(!e.shiftKey && i===f.length-1){ e.preventDefault(); f[0].focus(); } } });
+$$('[data-play]').forEach(b=>b.addEventListener('click',()=>{ const t=TICKETS.find(t=>t.id==='MIDC'); if(t.st==='claimed'){ t.st='ready'; t.val='4.50 SOL'; renderTickets(); } playMoment(); }));
+
+/* ---------- router ---------- */
+let current='feed';
+const SCREENS=['feed','coin','fumbles','leaders','brand','card'];
+function go(name, push=true){
+  if(!SCREENS.includes(name)) name='feed';
+  current=name;
+  SCREENS.forEach(s=>$('#s-'+s).classList.toggle('on', s===name));
+  $$('.nav [data-go], .tabbar [data-go]').forEach(b=>b.setAttribute('aria-current', b.dataset.go===name?'page':'false'));
+  $$('.proto [data-go]').forEach(b=>b.setAttribute('aria-current', b.dataset.go===name));
+  if(push && location.hash!=='#'+name) history.pushState(null,'','#'+name);
+  if(name==='fumbles') renderTickets();
+  if(name==='coin'){ renderChart(); }
+  if(name==='brand') hydrateGauges($('#s-brand'));
+  if(name==='feed') hydrateGauges($('#s-feed'));
+  window.scrollTo({top:0, behavior:'instant'});
+}
+document.addEventListener('click',e=>{ const g=e.target.closest('[data-go]'); if(g && !g.closest('#tickets')){ e.preventDefault(); go(g.dataset.go); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Enter'){ const r=e.target.closest('.trow[data-coin]'); if(r) go('coin'); } });
+addEventListener('popstate',()=>go(location.hash.slice(1),false));
+
+/* ---------- theme ---------- */
+const modes=['system','light','dark']; let mi=0;
+try{ const s=localStorage.getItem('fumpad-c-theme'); if(s) mi=Math.max(0,modes.indexOf(s)); }catch(e){}
+function applyTheme(){ const m=modes[mi]; if(m==='system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme',m); $('#themeBtn').textContent='Theme: '+m; try{ localStorage.setItem('fumpad-c-theme',m);}catch(e){} }
+$('#themeBtn').addEventListener('click',()=>{ mi=(mi+1)%3; applyTheme(); if(current==='coin') renderChart(); });
+applyTheme();
+
+/* ---------- boot ---------- */
+hydrateIdn(); renderFeed(); renderSide(); renderCoinTables(); updateTrade(); renderLB(); renderTickets(); renderChart();
+go(location.hash.slice(1)||'feed', false);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FUMPAD — Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Doto:wght@700;900&family=Schibsted+Grotesk:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* brand */
+  --ticket:#FFC21A;        /* Ticket Yellow — the hero */
+  --ticket-hi:#FFD95C;
+  --ticket-deep:#E5A400;
+  --ticket-wash:#FFF3CC;
+  --ink:#1E1B2E;           /* outlines, text, cabinet */
+  --ink-2:#423E56;
+  --ink-3:#625E78;
+  --chalk:#E9EBF2;         /* page */
+  --paper:#FFFFFF;
+  --line:#D5D8E3;
+  --line-2:#C3C6D4;
+  --cabinet:#1E1B2E;
+  --cabinet-2:#2B2742;
+  --cabinet-3:#3A3556;
+  /* semantic */
+  --up:#14A85A;  --up-ink:#0A7740;  --up-wash:#DDF6E7;
+  --down:#E5484D; --down-ink:#BF2328; --down-wash:#FDE3E3;
+  --fumble:#FF5C8A; --fumble-ink:#B8114A; --fumble-wash:#FFE1EA;
+  --grad:#14A85A;
+  /* type */
+  --display:"Dela Gothic One", "Arial Black", sans-serif;
+  --ui:"Schibsted Grotesk", system-ui, sans-serif;
+  --led:"Doto", "Courier New", monospace;
+  /* shape */
+  --r-panel:20px; --r-btn:14px; --r-tkt:12px;
+  --press:4px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--chalk);color:var(--ink);font-family:var(--ui);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+button{font:inherit;color:inherit;cursor:pointer}
+a{color:inherit}
+h1,h2,h3{margin:0;font-weight:800;letter-spacing:-.01em}
+p{margin:0}
+:focus-visible{outline:3px solid var(--ink);outline-offset:2px;border-radius:8px;box-shadow:0 0 0 6px var(--ticket)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.num{font-variant-numeric:lining-nums}
+.muted{color:var(--ink-3)}
+.up{color:var(--up-ink)} .down{color:var(--down-ink)}
+
+/* ------------ prototype strip ------------ */
+.proto{background:var(--ink);color:#fff;display:flex;align-items:center;gap:10px;padding:8px 16px;font-size:13px;position:sticky;top:0;z-index:40}
+.proto b{font-weight:600;color:#B9B5CC;white-space:nowrap}
+.proto-list{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;min-width:0}
+.proto-list::-webkit-scrollbar{display:none}
+.proto-list a{white-space:nowrap;text-decoration:none;padding:4px 10px;border-radius:99px;color:#E7E5F0;border:1px solid var(--cabinet-3)}
+.proto-list a[aria-current="true"]{background:var(--ticket);color:var(--ink);border-color:var(--ticket);font-weight:700}
+
+/* ------------ shell ------------ */
+.shell{max-width:1320px;margin:0 auto;display:grid;grid-template-columns:1fr;min-height:100vh}
+.rail{display:none}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--chalk);position:sticky;top:37px;z-index:30;border-bottom:1px solid var(--line)}
+main{padding:16px 16px 110px;min-width:0}
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:35;background:var(--paper);border-top:2px solid var(--ink);display:grid;grid-template-columns:repeat(4,1fr);padding:6px 6px calc(6px + env(safe-area-inset-bottom))}
+.tabbar a{display:flex;flex-direction:column;align-items:center;gap:2px;text-decoration:none;font-size:12px;font-weight:700;color:var(--ink-3);padding:6px 0;border-radius:12px}
+.tabbar a svg{width:24px;height:24px}
+.tabbar a[aria-current="true"]{color:var(--ink);background:var(--ticket-wash)}
+.tabbar .badge{position:absolute;margin-left:22px;margin-top:-4px}
+@media (min-width:960px){
+  .shell{grid-template-columns:232px minmax(0,1fr)}
+  .rail{display:flex;flex-direction:column;gap:18px;padding:22px 18px;position:sticky;top:37px;height:calc(100vh - 37px)}
+  .topbar,.tabbar{display:none}
+  main{padding:24px 28px 60px}
+}
+.rail nav{display:flex;flex-direction:column;gap:4px}
+.rail nav a{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:14px;text-decoration:none;font-weight:700;font-size:16px;color:var(--ink-2)}
+.rail nav a svg{width:22px;height:22px;flex:none}
+.rail nav a:hover{background:var(--paper)}
+.rail nav a[aria-current="true"]{background:var(--paper);color:var(--ink);box-shadow:inset 0 0 0 2px var(--ink)}
+.rail .launch{margin-top:6px}
+.rail .me{margin-top:auto}
+.count-badge{margin-left:auto;background:var(--fumble);color:#fff;font-size:12px;font-weight:800;padding:1px 7px;border-radius:99px}
+
+/* ------------ logo ------------ */
+.logo{display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+.logo svg{width:40px;height:34px;flex:none}
+.logo .word{font-family:var(--display);font-size:22px;letter-spacing:.01em;line-height:1}
+
+/* ------------ buttons ------------ */
+.btn{--bg:var(--ticket);--fg:var(--ink);--edge:var(--ink);display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:46px;padding:0 18px;border:2px solid var(--ink);border-radius:var(--r-btn);background:var(--bg);color:var(--fg);font-weight:800;font-size:16px;text-decoration:none;box-shadow:0 var(--press) 0 var(--edge);transform:translateY(0);transition:transform .08s ease,box-shadow .08s ease,background .15s;margin-bottom:var(--press);white-space:nowrap;user-select:none}
+.btn:hover{background:var(--ticket-hi)}
+.btn:active,.btn.is-pressed{transform:translateY(var(--press));box-shadow:0 0 0 var(--edge)}
+.btn.sm{min-height:36px;padding:0 12px;font-size:14px;border-radius:11px;--press:3px}
+.btn.lg{min-height:58px;font-size:19px;padding:0 26px;border-radius:16px;--press:5px}
+.btn.block{width:100%}
+.btn.ghost{--bg:var(--paper)} .btn.ghost:hover{background:#F6F7FB}
+.btn.dark{--bg:var(--ink);--fg:#fff;--edge:#000} .btn.dark:hover{background:var(--cabinet-2)}
+.btn.buy{--bg:var(--up);--fg:#fff;--edge:#07502B;border-color:#07502B} .btn.buy:hover{background:#17B864}
+.btn.sell{--bg:var(--fumble);--fg:var(--ink);--edge:var(--ink)} .btn.sell:hover{background:#FF77A0}
+.btn[disabled]{--bg:#E3E5ED;--fg:#7A778C;--edge:#B9BCCB;border-color:#B9BCCB;cursor:not-allowed;transform:none}
+.btn[disabled]:hover{background:#E3E5ED}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;border:1.5px solid var(--line-2);background:var(--paper);font-weight:700;font-size:14px;white-space:nowrap}
+.chip[aria-pressed="true"],.chip[aria-selected="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.seg{display:inline-flex;background:var(--paper);border:2px solid var(--ink);border-radius:14px;padding:3px;gap:3px;max-width:100%;overflow-x:auto;scrollbar-width:none}
+.seg button{border:0;background:none;padding:7px 12px;border-radius:10px;font-weight:800;font-size:14px;white-space:nowrap}
+.seg button[aria-selected="true"]{background:var(--ticket);box-shadow:inset 0 0 0 2px var(--ink)}
+
+/* ------------ panels ------------ */
+.panel{background:var(--paper);border:1.5px solid var(--line);border-radius:var(--r-panel);padding:18px}
+.panel h2{font-size:17px;display:flex;align-items:center;gap:8px}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:8px 12px;font-size:14px}
+.kv dt{color:var(--ink-3)} .kv dd{margin:0;font-weight:700;text-align:right}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat .l{font-size:13px;color:var(--ink-3);font-weight:600}
+.stat .v{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.stat .s{font-size:13px;color:var(--ink-3)}
+.screen{display:none}
+.screen.on{display:block;animation:screenIn .28s cubic-bezier(.2,.8,.2,1)}
+@keyframes screenIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.page-title{font-family:var(--display);font-size:clamp(28px,6vw,40px);line-height:1.05;letter-spacing:-.01em;font-weight:400}
+.page-sub{color:var(--ink-3);margin-top:6px;max-width:60ch}
+
+/* ------------ coin avatar ------------ */
+.av{--c:var(--ticket);width:40px;height:40px;border-radius:50%;background:var(--c);border:2px solid var(--ink);display:grid;place-items:center;font-family:var(--display);font-size:15px;color:var(--ink);flex:none;position:relative;overflow:hidden}
+.av::after{content:"";position:absolute;inset:3px 3px auto auto;width:9px;height:6px;border-radius:50%;background:rgba(255,255,255,.55);transform:rotate(30deg)}
+.av.sm{width:30px;height:30px;font-size:11px}
+.av.lg{width:64px;height:64px;font-size:24px;border-width:2.5px}
+.pfp{width:42px;height:42px;border-radius:14px;flex:none;border:2px solid var(--ink)}
+
+/* ------------ sticker ------------ */
+.sticker{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 10px 4px 8px;border-radius:99px;font-weight:800;font-size:12.5px;background:var(--bg,var(--ticket));color:var(--fg,var(--ink));box-shadow:0 0 0 2px var(--ink),0 0 0 4px #fff,0 3px 0 4px rgba(30,27,46,.18);white-space:nowrap;transform:rotate(var(--rot,0deg))}
+.sticker svg{width:14px;height:14px}
+.sticker.fumble{--bg:var(--fumble)}
+.sticker.tenx{--bg:var(--ticket)}
+.sticker.grad{--bg:#7BE3A6}
+.sticker.launch{--bg:#fff}
+.sticker.claim{--bg:var(--ink);--fg:var(--ticket)}
+.sticker.inq{--bg:#C9D3FF}
+
+/* ------------ power meter (1 segment = 1x) ------------ */
+.meter{display:grid;grid-template-columns:repeat(10,1fr);gap:3px;padding:4px;background:var(--ink);border-radius:10px;height:22px}
+.meter i{position:relative;background:var(--cabinet-3);border-radius:3px;overflow:hidden}
+.meter i::before{content:"";position:absolute;inset:0;width:calc(var(--f,0)*100%);background:var(--seg,var(--ticket))}
+.meter i:nth-child(n+8){--seg:#FFB000}
+.meter.full i{--seg:var(--ticket)}
+.meter.full{box-shadow:0 0 0 2px var(--ticket),0 0 18px rgba(255,194,26,.55)}
+.meter.lg{height:34px;border-radius:12px;gap:4px;padding:5px}
+.meter.lg i{border-radius:5px}
+.meter-row{display:flex;align-items:baseline;justify-content:space-between;font-size:13px;margin-bottom:6px;gap:8px}
+.meter-row .x{font-weight:900;font-size:16px}
+.meter-scale{display:grid;grid-template-columns:repeat(10,1fr);font-size:10.5px;color:var(--ink-3);text-align:right;margin-top:3px;padding:0 4px;font-weight:600}
+
+/* ------------ fumble ticket ------------ */
+.tkt{--notch:13px;--sw:72px;position:relative;display:grid;grid-template-columns:var(--sw) minmax(0,1fr);background:var(--paper);border-radius:var(--r-tkt);
+  -webkit-mask:radial-gradient(circle var(--notch) at var(--sw) 0,#0000 98%,#000) top/100% 51% no-repeat,radial-gradient(circle var(--notch) at var(--sw) 100%,#0000 98%,#000) bottom/100% 51% no-repeat;
+          mask:radial-gradient(circle var(--notch) at var(--sw) 0,#0000 98%,#000) top/100% 51% no-repeat,radial-gradient(circle var(--notch) at var(--sw) 100%,#0000 98%,#000) bottom/100% 51% no-repeat}
+@media (min-width:640px){.tkt{--sw:96px}}
+.tkt-wrap{filter:drop-shadow(0 3px 0 rgba(30,27,46,.14)) drop-shadow(0 0 1px rgba(30,27,46,.35))}
+.tkt-stub{background:var(--stub,#F1F2F7);padding:14px 6px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:8px;text-align:center;border-right:2px dashed rgba(30,27,46,.28)}
+.tkt-stub .serial{font-family:var(--led);font-weight:900;font-size:13px;letter-spacing:.02em;line-height:1.1}
+.tkt-stub .tk{font-weight:900;font-size:14px}
+.tkt-body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.tkt-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.tkt-top h3{font-size:17px}
+.tkt-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;font-size:13px}
+.tkt-facts .l{color:var(--ink-3);font-weight:600}
+.tkt-facts .v{font-weight:800;font-size:15px;overflow-wrap:anywhere}
+@media (min-width:640px){.tkt-facts{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.tkt-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.tkt.ready{--stub:var(--ticket)}
+.tkt.queued{--stub:#C9D3FF}
+.tkt.curve{--stub:#E9EBF2}
+.tkt.expiring{--stub:var(--fumble-wash)}
+.note{display:flex;gap:8px;align-items:flex-start;font-size:13px;padding:9px 11px;border-radius:12px;background:#F3F4F8;color:var(--ink-2)}
+.note svg{width:16px;height:16px;flex:none;margin-top:1px}
+.note.warn{background:var(--fumble-wash);color:var(--fumble-ink)}
+.note.good{background:var(--up-wash);color:var(--up-ink)}
+.note.gold{background:var(--ticket-wash);color:#6B4A00}
+
+/* ------------ feed ------------ */
+.home-grid{display:grid;gap:20px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:1180px){.home-grid{grid-template-columns:minmax(0,640px) minmax(0,1fr)}}
+.feed{display:flex;flex-direction:column;background:var(--paper);border:1.5px solid var(--line);border-radius:var(--r-panel);overflow:hidden}
+.feed-tabs{display:flex;gap:6px;padding:12px 14px;border-bottom:1.5px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--down);box-shadow:0 0 0 0 rgba(229,72,77,.6);animation:pulse 1.8s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+.post{display:grid;grid-template-columns:42px minmax(0,1fr);gap:12px;padding:16px;border-bottom:1.5px solid var(--line)}
+.post.new{animation:postIn .5s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes postIn{from{opacity:0;transform:translateY(-14px) scale(.98);background:var(--ticket-wash)}to{opacity:1;transform:none}}
+.post-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:14px}
+.post-head .name{font-weight:800}
+.post-head .h{color:var(--ink-3)}
+.post-head .t{color:var(--ink-3);margin-left:auto}
+.post-body{margin-top:4px;font-size:15px}
+.post-body .tkr{font-weight:800;text-decoration:underline;text-decoration-thickness:2px;text-decoration-color:var(--ticket);text-underline-offset:2px}
+.embed{margin-top:10px;border:1.5px solid var(--line);border-radius:16px;padding:12px;display:flex;flex-direction:column;gap:10px;background:#FBFBFD}
+.embed-row{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
+.embed .big{font-weight:900;font-size:18px}
+.post-actions{display:flex;gap:4px;margin-top:10px;color:var(--ink-3);font-size:13px;font-weight:600}
+.post-actions button{background:none;border:0;display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:99px;color:inherit}
+.post-actions button:hover{background:#F1F2F7;color:var(--ink)}
+.post-actions svg{width:17px;height:17px}
+.post-actions button[aria-pressed="true"]{color:var(--fumble-ink)}
+.composer{display:grid;grid-template-columns:42px minmax(0,1fr);gap:12px;padding:16px;border-bottom:1.5px solid var(--line)}
+.composer textarea{width:100%;border:0;resize:none;font:inherit;font-size:16px;min-height:44px;background:none;color:var(--ink)}
+.composer textarea:focus{outline:none}
+.composer-bar{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+.skel{display:grid;grid-template-columns:42px 1fr;gap:12px;padding:16px}
+.skel i{display:block;border-radius:8px;background:linear-gradient(90deg,#EEF0F5 0,#F7F8FB 40%,#EEF0F5 80%);background-size:200% 100%;animation:shimmer 1.3s infinite linear;height:12px}
+@keyframes shimmer{to{background-position:-200% 0}}
+.trend{display:flex;flex-direction:column;gap:2px}
+.trend a{display:grid;grid-template-columns:22px 40px minmax(0,1fr) auto;align-items:center;gap:10px;padding:9px 6px;border-radius:12px;text-decoration:none}
+.trend a:hover{background:#F4F5F9}
+.trend .rk{font-family:var(--led);font-weight:900;font-size:16px;color:var(--ink-3)}
+.trend .nm{font-weight:800;line-height:1.2}
+.trend .sub{font-size:12.5px;color:var(--ink-3)}
+.trend .chg{text-align:right;font-weight:800;font-size:14px}
+.side{display:flex;flex-direction:column;gap:16px}
+.hero-strip{display:flex;gap:12px;overflow-x:auto;scrollbar-width:none;margin:0 -16px 16px;padding:2px 16px 8px}
+@media (min-width:960px){.hero-strip{margin:0 0 16px;padding:2px 0 8px}}
+.tile{flex:none;width:200px;background:var(--paper);border:1.5px solid var(--line);border-radius:18px;padding:12px;display:flex;flex-direction:column;gap:8px;text-decoration:none}
+.tile:hover{border-color:var(--ink)}
+.tile-top{display:flex;gap:8px;align-items:center}
+.tile .px{font-weight:800;font-size:15px}
+
+/* ------------ coin page ------------ */
+.coin-head{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:16px}
+.coin-head .names{min-width:0;flex:1}
+.coin-head h1{font-family:var(--display);font-weight:400;font-size:clamp(24px,5vw,34px);line-height:1.05}
+.coin-head .meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--ink-3);font-size:13.5px;margin-top:4px}
+.coin-price{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.coin-price .p{font-size:30px;font-weight:900;letter-spacing:-.02em}
+.coin-grid{display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:1100px){.coin-grid{grid-template-columns:minmax(0,1fr) 360px}}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.chart-wrap{position:relative}
+.chart{width:100%;height:auto;display:block}
+.chart-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2);margin-top:8px}
+.chart-legend span{display:inline-flex;align-items:center;gap:6px}
+.chart-legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.trade-tabs{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:#F1F2F7;padding:4px;border-radius:14px;margin-bottom:14px}
+.trade-tabs button{border:0;background:none;padding:9px;border-radius:10px;font-weight:800}
+.trade-tabs button[aria-selected="true"]{background:var(--paper);box-shadow:0 0 0 2px var(--ink)}
+.amt{display:flex;align-items:center;border:2px solid var(--ink);border-radius:14px;padding:4px 6px 4px 14px;gap:8px;background:var(--paper)}
+.amt input{flex:1;min-width:0;border:0;font:inherit;font-size:24px;font-weight:800;background:none;color:var(--ink);padding:6px 0}
+.amt input:focus{outline:none}
+.amt:focus-within{box-shadow:0 0 0 4px var(--ticket)}
+.amt .unit{font-weight:800;color:var(--ink-3)}
+.quick{display:flex;gap:6px;margin:10px 0 14px;flex-wrap:wrap}
+.quick button{flex:1;border:1.5px solid var(--line-2);background:var(--paper);border-radius:10px;padding:6px 0;font-weight:700;font-size:13px}
+.quick button:hover{border-color:var(--ink)}
+.preview-tkt{margin:0 0 14px}
+.pool-big{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pool-big .v{font-size:30px;font-weight:900;letter-spacing:-.02em;line-height:1}
+.pool-bar{height:14px;border-radius:99px;background:#EEF0F5;overflow:hidden;display:flex;margin:12px 0 6px;border:1.5px solid var(--ink)}
+.pool-bar span{height:100%}
+.split{display:grid;grid-template-columns:50fr 30fr 20fr;gap:4px;margin-top:6px}
+.split div{border-radius:10px;padding:8px 10px;font-size:12.5px;font-weight:700;line-height:1.25;min-width:0}
+.split b{display:block;font-size:17px;font-weight:900}
+.queue{display:flex;flex-direction:column}
+.q-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1.5px solid var(--line);font-size:14px}
+.q-row:first-child{border-top:0}
+.q-pos{font-family:var(--led);font-weight:900;font-size:18px;text-align:center}
+.q-row.you{background:var(--ticket-wash);margin:0 -10px;padding:10px;border-radius:12px;border-top-color:transparent}
+.q-row .w{font-weight:700}
+.q-row .s{font-size:12.5px;color:var(--ink-3)}
+.rows{display:flex;flex-direction:column}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1.5px solid var(--line);font-size:14px}
+.row:first-child{border-top:0}
+.curve-panel{background:var(--cabinet);color:#fff;border-radius:var(--r-panel);padding:18px;position:relative;overflow:hidden}
+.curve-panel .meter{background:#000}
+.curve-panel .big{font-family:var(--led);font-weight:900;font-size:40px;color:var(--ticket);line-height:1;letter-spacing:.02em}
+.curve-panel .muted{color:#BEBAD0}
+
+/* ------------ fumbles dashboard ------------ */
+.score-strip{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;background:var(--cabinet);border-radius:var(--r-panel);padding:2px;margin:18px 0}
+@media (min-width:760px){.score-strip{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.score-strip>div{background:var(--cabinet-2);padding:14px 16px;color:#fff;display:flex;flex-direction:column;gap:4px;min-width:0}
+.score-strip>div:first-child{border-radius:18px 0 0 0}
+.score-strip .l{font-size:12.5px;color:#C4C0D6;font-weight:600}
+.score-strip .v{font-family:var(--led);font-weight:900;font-size:clamp(24px,5vw,32px);line-height:1;color:var(--ticket);letter-spacing:.02em;overflow-wrap:anywhere}
+.score-strip .s{font-size:12.5px;color:#C4C0D6}
+@media (max-width:759px){.score-strip>div:first-child{border-radius:18px 0 0 0}.score-strip>div:nth-child(2){border-radius:0 18px 0 0}.score-strip>div:nth-child(3){border-radius:0 0 0 18px}.score-strip>div:nth-child(4){border-radius:0 0 18px 0}}
+@media (min-width:760px){.score-strip>div:first-child{border-radius:18px 0 0 18px}.score-strip>div:last-child{border-radius:0 18px 18px 0}}
+.tkt-list{display:flex;flex-direction:column;gap:14px;max-width:880px}
+.filters{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 2px 6px;margin-bottom:8px}
+.empty{text-align:center;padding:40px 20px;background:var(--paper);border:2px dashed var(--line-2);border-radius:var(--r-panel);display:flex;flex-direction:column;align-items:center;gap:10px}
+.empty svg{width:72px;height:60px}
+.rules{margin-top:18px;max-width:880px}
+.rules summary{cursor:pointer;font-weight:800;padding:4px 0}
+.rules ul{margin:10px 0 0;padding-left:18px;color:var(--ink-2);font-size:14px;display:grid;gap:6px}
+
+/* ------------ jackpot overlay ------------ */
+.jackpot{position:fixed;inset:0;z-index:100;display:none;place-items:center;background:rgba(18,16,30,.86);padding:16px;overflow-y:auto}
+.jackpot.on{display:grid}
+.jp{position:relative;width:min(460px,100%);background:var(--cabinet);color:#fff;border-radius:28px;padding:26px 20px 22px;text-align:center;overflow:hidden;border:3px solid var(--ticket);box-shadow:0 0 0 6px var(--cabinet),0 30px 80px rgba(0,0,0,.5);animation:jpIn .45s cubic-bezier(.2,1.3,.4,1)}
+@keyframes jpIn{from{transform:scale(.8) translateY(30px);opacity:0}}
+.jp-rays{position:absolute;left:50%;top:150px;width:900px;height:900px;margin:-450px 0 0 -450px;background:repeating-conic-gradient(from 0deg,rgba(255,194,26,.13) 0 10deg,transparent 10deg 20deg);border-radius:50%;animation:spin 18s linear infinite;pointer-events:none;-webkit-mask:radial-gradient(circle,#000 10%,transparent 62%);mask:radial-gradient(circle,#000 10%,transparent 62%)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.jp>.jp-pre,.jp>.jp-done{position:relative}
+.jp-close{position:absolute;right:12px;top:12px;width:38px;height:38px;border-radius:12px;border:2px solid var(--cabinet-3);background:var(--cabinet-2);color:#fff;display:grid;place-items:center;z-index:2}
+.jp-kicker{font-weight:700;color:#D3CFE3;font-size:14px}
+.jp-x{font-family:var(--led);font-weight:900;font-size:clamp(60px,19vw,84px);line-height:.95;color:var(--ticket);letter-spacing:.01em;text-shadow:0 0 24px rgba(255,194,26,.5);margin:6px 0 10px}
+.jp .meter{margin:0 auto;background:#000}
+.jp-stamp{display:inline-block;white-space:nowrap;margin:22px auto 4px;font-family:var(--display);font-size:clamp(22px,7vw,30px);line-height:1;color:var(--ink);background:var(--ticket);padding:10px 18px 12px;border-radius:14px;box-shadow:0 0 0 3px var(--ink),0 0 0 6px var(--ticket);transform:rotate(-4deg) scale(0);opacity:0}
+.jp-stamp.go{animation:stamp .5s cubic-bezier(.2,1.6,.4,1) forwards}
+@keyframes stamp{0%{transform:rotate(-14deg) scale(2.4);opacity:0}60%{opacity:1}100%{transform:rotate(-4deg) scale(1);opacity:1}}
+.jp-print{margin:18px auto 0;width:min(320px,100%);display:grid;grid-template-rows:0fr;transition:grid-template-rows .8s cubic-bezier(.3,.9,.3,1)}
+.jp-print>.jp-ticket{min-height:0;overflow:hidden}
+.jp-print.go{grid-template-rows:1fr}
+.jp-slot{width:min(340px,100%);height:12px;margin:14px auto -6px;background:#000;border-radius:99px;box-shadow:inset 0 3px 4px rgba(0,0,0,.8),0 1px 0 var(--cabinet-3)}
+.jp-ticket{background:var(--ticket);color:var(--ink);border-radius:0 0 12px 12px;padding:0 16px;text-align:left;position:relative;
+  -webkit-mask:radial-gradient(circle 9px at 0 50%,#0000 98%,#000) left/51% 100% no-repeat,radial-gradient(circle 9px at 100% 50%,#0000 98%,#000) right/51% 100% no-repeat;
+  mask:radial-gradient(circle 9px at 0 50%,#0000 98%,#000) left/51% 100% no-repeat,radial-gradient(circle 9px at 100% 50%,#0000 98%,#000) right/51% 100% no-repeat}
+.jp-ticket .amt-big{font-family:var(--display);font-size:30px;line-height:1.05}
+.jp-ticket .row2{display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:6px;gap:8px;flex-wrap:wrap}
+.jp-ticket .perf{border-top:2px dashed rgba(30,27,46,.35);margin:10px -16px 8px}
+.jp-ticket .serial{font-family:var(--led);font-weight:900;font-size:14px}
+.jp-actions{display:grid;gap:4px;margin-top:20px}
+.jp-actions .btn.ghost{--bg:transparent;--fg:#fff;--edge:#000;border-color:var(--cabinet-3)}
+.jp-actions .btn.ghost:hover{background:var(--cabinet-2)}
+.jp-fine{font-size:13px;color:#C4C0D6;margin-top:8px;max-width:38ch;margin-inline:auto}
+.jp-done{display:none}
+.jp.claimed .jp-pre{display:none}
+.jp.claimed .jp-done{display:block}
+.jp-done .coinstack{width:96px;height:96px;margin:6px auto 8px}
+.jp-done h2{font-family:var(--display);font-weight:400;font-size:30px;line-height:1.08}
+.jp-done .tx{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:#C4C0D6;margin-top:10px}
+.jp-done .tx a{color:#fff;font-weight:700}
+.confetti{position:fixed;inset:0;pointer-events:none;z-index:120;overflow:hidden}
+.confetti i{position:absolute;top:-30px;left:var(--x);width:var(--w,12px);height:var(--h,18px);background:var(--c);border-radius:var(--br,3px);border:2px solid var(--ink);animation:fall var(--d,2.4s) cubic-bezier(.25,.6,.45,1) var(--dl,0s) forwards}
+@keyframes fall{0%{transform:translate3d(0,0,0) rotate(0)}100%{transform:translate3d(var(--dx,0),110vh,0) rotate(var(--r,540deg))}}
+
+/* ------------ share card ------------ */
+.og-wrap{width:100%;max-width:960px;aspect-ratio:1200/630;position:relative;overflow:hidden;border-radius:18px;box-shadow:0 0 0 2px var(--ink),0 8px 0 var(--ink)}
+.og{position:absolute;left:0;top:0;width:1200px;height:630px;transform-origin:0 0;transform:scale(var(--s,.3));background:var(--ticket);color:var(--ink);overflow:hidden;font-family:var(--ui)}
+.og-bg{position:absolute;inset:0;background:radial-gradient(circle at 1px 1px,rgba(30,27,46,.16) 2px,transparent 2.5px) 0 0/28px 28px}
+.og-inner{position:absolute;inset:48px 56px;display:grid;grid-template-columns:1fr 410px;gap:44px}
+.og h2{font-family:var(--display);font-weight:400;font-size:64px;line-height:1;letter-spacing:-.01em;margin-top:20px}
+.og .lede{font-size:25px;font-weight:600;margin-top:18px;max-width:30ch;line-height:1.3}
+.og .foot{position:absolute;left:0;bottom:0;display:flex;align-items:center;gap:16px;font-size:22px;font-weight:700}
+.og .tk2{background:var(--paper);border-radius:22px;padding:28px;align-self:center;box-shadow:0 0 0 4px var(--ink),0 10px 0 4px var(--ink);transform:rotate(3deg);display:flex;flex-direction:column;gap:18px}
+.og .tk2 .x{font-family:var(--led);font-weight:900;font-size:96px;line-height:.9;color:var(--ink)}
+.og .tk2 .meter{height:40px;gap:5px;padding:6px;border-radius:12px}
+.og .tk2 .facts{display:grid;grid-template-columns:1.35fr 1fr;gap:14px 16px;font-size:18px}
+.og .tk2 .facts .l{color:var(--ink-3);font-weight:600}
+.og .tk2 .facts .v{font-weight:900;font-size:24px}
+.og .tk2 .perf{border-top:3px dashed rgba(30,27,46,.3);margin:0 -28px}
+.og .serial{font-family:var(--led);font-weight:900;font-size:22px}
+.card-layout{display:grid;gap:18px;grid-template-columns:minmax(0,1fr)}
+.card-actions{display:flex;gap:10px;flex-wrap:wrap}
+.variants{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ------------ leaderboard ------------ */
+.lb-grid{display:grid;gap:18px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:1150px){.lb-grid{grid-template-columns:minmax(0,1fr) 380px}}
+.board{background:var(--cabinet);border-radius:24px;padding:6px;color:#fff;box-shadow:0 6px 0 #000}
+.board-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px 14px;flex-wrap:wrap}
+.board-top h2{font-family:var(--display);font-weight:400;font-size:22px;color:var(--ticket)}
+.board .seg{background:var(--cabinet-2);border-color:var(--cabinet-3)}
+.board .seg button{color:#D9D6E6}
+.board .seg button[aria-selected="true"]{color:var(--ink)}
+.board-screen{background:#14121F;border-radius:18px;padding:6px 10px;box-shadow:inset 0 0 0 2px #2B2742}
+.lb-row{display:grid;grid-template-columns:44px 36px minmax(0,1fr) auto;gap:10px;align-items:center;padding:12px 4px;border-top:1px dashed #36314F}
+.lb-row:first-child{border-top:0}
+.lb-rank{font-family:var(--led);font-weight:900;font-size:24px;color:#8F8AA8;text-align:center}
+.lb-row.top .lb-rank{color:var(--ticket);text-shadow:0 0 10px rgba(255,194,26,.6)}
+.lb-row .who{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb-row .what{font-size:12.5px;color:#BDB9CF;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb-row .val{text-align:right;font-family:var(--led);font-weight:900;font-size:19px;color:#fff}
+.lb-row .val small{display:block;font-family:var(--ui);font-weight:600;font-size:12px;color:#BDB9CF}
+.lb-row.you{background:rgba(255,194,26,.12);border-radius:12px;border-top-color:transparent}
+.board-foot{padding:10px 12px 8px;font-size:12.5px;color:#BDB9CF;display:flex;gap:8px;align-items:center}
+.profile-card{background:var(--paper);border:1.5px solid var(--line);border-radius:24px;padding:20px;display:flex;flex-direction:column;gap:16px}
+.lvl{display:flex;gap:14px;align-items:center}
+.lvl-badge{width:68px;height:68px;flex:none;position:relative}
+.lvl-badge b{position:absolute;inset:0;display:grid;place-items:center;font-family:var(--display);font-size:24px;padding-top:2px}
+.xp{height:16px;background:#EEF0F5;border:2px solid var(--ink);border-radius:99px;overflow:hidden}
+.xp span{display:block;height:100%;background:repeating-linear-gradient(-45deg,var(--ticket) 0 10px,var(--ticket-deep) 10px 20px)}
+.stickers{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:14px 10px}
+.stk{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;font-size:12.5px;font-weight:700;line-height:1.2}
+.stk .die{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;background:var(--c,var(--ticket));box-shadow:0 0 0 2.5px var(--ink),0 0 0 6px #fff,0 0 0 7px var(--line-2),0 5px 0 7px rgba(30,27,46,.12);transform:rotate(var(--rot,0deg));transition:transform .2s cubic-bezier(.2,1.6,.4,1)}
+.stk:hover .die{transform:rotate(0) scale(1.06)}
+.stk .die svg{width:38px;height:38px}
+.stk.locked .die{background:#EEF0F5;box-shadow:0 0 0 2px var(--line-2),0 0 0 6px #fff,0 0 0 7px var(--line);}
+.stk.locked .die svg{opacity:.35}
+.stk.locked span{color:var(--ink-3)}
+.stk small{font-weight:600;color:var(--ink-3);font-size:11.5px}
+
+/* ------------ brand sheet ------------ */
+.bs-grid{display:grid;gap:16px;grid-template-columns:minmax(0,1fr)}
+@media (min-width:900px){.bs-grid{grid-template-columns:repeat(6,minmax(0,1fr))}.bs-a{grid-column:span 4}.bs-b{grid-column:span 2}.bs-c{grid-column:span 3}.bs-full{grid-column:1/-1}}
+.bs-hero{background:var(--ticket);border-radius:24px;padding:28px;display:flex;flex-direction:column;justify-content:space-between;gap:30px;min-height:260px;position:relative;overflow:hidden;box-shadow:0 0 0 2px var(--ink),0 6px 0 2px var(--ink)}
+.bs-hero .logo .word{font-size:clamp(44px,10vw,88px)}
+.bs-hero .logo svg{width:clamp(60px,11vw,104px);height:auto}
+.bs-hero p{font-weight:700;font-size:17px;max-width:40ch}
+.marks{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.marks div{aspect-ratio:1;border-radius:18px;display:grid;place-items:center}
+.marks svg{width:58%;height:auto}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+.sw{border-radius:16px;overflow:hidden;border:1.5px solid var(--line)}
+.sw .c{height:74px}
+.sw .t{padding:8px 10px;font-size:12.5px;background:var(--paper)}
+.sw .t b{display:block;font-size:14px}
+.typescale{display:flex;flex-direction:column;gap:14px}
+.ts-row{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;align-items:baseline;border-top:1.5px solid var(--line);padding-top:12px}
+.ts-row:first-child{border-top:0;padding-top:0}
+.ts-row .spec{font-size:12px;color:var(--ink-3);line-height:1.3}
+.comp-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+
+/* toast */
+.toast{position:fixed;left:50%;bottom:96px;transform:translate(-50%,20px);background:var(--ink);color:#fff;padding:10px 16px;border-radius:14px;font-weight:700;font-size:14px;opacity:0;transition:.25s;z-index:130;pointer-events:none;box-shadow:0 0 0 2px var(--ticket);max-width:calc(100% - 32px)}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+@media (min-width:960px){.toast{bottom:28px}}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  .jp-rays{display:none}
+  .confetti{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- SVG sprite -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="mark" viewBox="0 0 48 40">
+      <path d="M7 3h34a4 4 0 0 1 4 4v8.2a4.8 4.8 0 0 0 0 9.6V33a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4v-8.2a4.8 4.8 0 0 0 0-9.6V7a4 4 0 0 1 4-4z" fill="var(--mk-fill,#FFC21A)" stroke="var(--mk-ink,#1E1B2E)" stroke-width="2.6" stroke-linejoin="round"/>
+      <path d="M15 8v24" stroke="var(--mk-ink,#1E1B2E)" stroke-width="2.4" stroke-dasharray="2.6 3" stroke-linecap="round"/>
+      <path d="M36.2 15.4a7.6 7.6 0 1 0 .7 7.8" fill="none" stroke="var(--mk-ink,#1E1B2E)" stroke-width="4" stroke-linecap="round"/>
+      <path d="M32.6 13.6l4.6 1.6.6-4.9" fill="none" stroke="var(--mk-ink,#1E1B2E)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M9 9.5h4.5a2 2 0 0 1 0 4H10m0-4v7m0-3h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M9 7v10" stroke="currentColor" stroke-width="2" stroke-dasharray="2 2"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v1.5A3.5 3.5 0 0 0 7.5 11M17 6h3v1.5a3.5 3.5 0 0 1-3.5 3.5M12 14v3m-4 3h8l-1-3H9z" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/></symbol>
+    <symbol id="i-brand" viewBox="0 0 24 24"><circle cx="8" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="13" y="13" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M4 20l4-6 4 6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-repost" viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 13v6h14v-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 0h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/></symbol>
+    <symbol id="i-grad" viewBox="0 0 24 24"><path d="M2 9l10-5 10 5-10 5zM6 11v5c3 2.5 9 2.5 12 0v-5" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v13m0 0-5-5m5 5 5-5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sprout" viewBox="0 0 24 24"><path d="M12 21V11m0 0C12 7 9 5 4 5c0 4 3 6 8 6zm0 0c0-4 3-6 8-6 0 4-3 6-8 6z" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<div class="proto" role="navigation" aria-label="Prototype screens">
+  <b>Prototype</b>
+  <div class="proto-list" id="protoList">
+    <a href="#brand">Brand sheet</a>
+    <a href="#home">Feed</a>
+    <a href="#coin">Coin, graduated</a>
+    <a href="#coin-curve">Coin, on curve</a>
+    <a href="#fumbles">My Fumbles</a>
+    <a href="#claim">Claim moment</a>
+    <a href="#card">Share card</a>
+    <a href="#leaders">Leaderboard</a>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="rail" aria-label="Primary">
+    <a href="#home" class="logo" aria-label="FUMPAD home"><svg aria-hidden="true"><use href="#mark"/></svg><span class="word">FUMPAD</span></a>
+    <nav>
+      <a href="#home" data-nav="home"><svg><use href="#i-home"/></svg>Feed</a>
+      <a href="#coin" data-nav="coin"><svg><use href="#i-coin"/></svg>Coins</a>
+      <a href="#fumbles" data-nav="fumbles"><svg><use href="#i-ticket"/></svg>My Fumbles<span class="count-badge" aria-label="1 claim ready">1</span></a>
+      <a href="#leaders" data-nav="leaders"><svg><use href="#i-trophy"/></svg>Leaderboard</a>
+      <a href="#brand" data-nav="brand"><svg><use href="#i-brand"/></svg>Brand sheet</a>
+    </nav>
+    <button class="btn launch block" onclick="toast('Launch flow is out of scope for this pass')"><svg width="18" height="18"><use href="#i-plus"/></svg>Launch a coin</button>
+    <a href="#leaders" class="me panel" style="padding:12px;display:flex;gap:10px;align-items:center;text-decoration:none">
+      <span class="pfp" style="background:conic-gradient(from 40deg,#FF5C8A,#FFC21A,#7BE3A6,#FF5C8A)"></span>
+      <span style="min-width:0"><b style="display:block">butterfingers.sol</b><span class="muted" style="font-size:13px">Level 7, Grand Fumbler</span></span>
+    </a>
+  </aside>
+
+  <header class="topbar">
+    <a href="#home" class="logo" aria-label="FUMPAD home"><svg aria-hidden="true"><use href="#mark"/></svg><span class="word">FUMPAD</span></a>
+    <a href="#leaders" class="chip" style="text-decoration:none"><span class="pfp" style="width:22px;height:22px;border-radius:7px;border-width:1.5px;background:conic-gradient(from 40deg,#FF5C8A,#FFC21A,#7BE3A6,#FF5C8A)"></span>12.48 SOL</a>
+  </header>
+
+  <main id="main" tabindex="-1">
+
+    <!-- ===================== BRAND SHEET ===================== -->
+    <section class="screen" data-screen="brand" aria-labelledby="bs-t">
+      <h1 class="page-title" id="bs-t">Brand sheet</h1>
+      <p class="page-sub">Arcade direction. Regret becomes a game: every sell prints a ticket, every 10x is a jackpot. Loud where it celebrates, quiet where money moves.</p>
+      <div class="bs-grid" style="margin-top:20px">
+        <div class="bs-hero bs-a">
+          <span class="logo"><svg aria-hidden="true"><use href="#mark"/></svg><span class="word">FUMPAD</span></span>
+          <p>Sell too early? Keep the ticket. If the coin holds 10x, you get 10% of what you sold back.</p>
+        </div>
+        <div class="panel bs-b">
+          <div class="panel-head"><h2>Mark</h2></div>
+          <div class="marks">
+            <div style="background:var(--ticket);box-shadow:inset 0 0 0 2px var(--ink)"><svg><use href="#mark"/></svg></div>
+            <div style="background:var(--ink);--mk-fill:#FFC21A;--mk-ink:#1E1B2E"><svg><use href="#mark"/></svg></div>
+            <div style="background:var(--fumble);box-shadow:inset 0 0 0 2px var(--ink);--mk-fill:#fff"><svg><use href="#mark"/></svg></div>
+          </div>
+          <p class="muted" style="font-size:13.5px;margin-top:12px">An arcade prize ticket with a return arrow: the sell you made comes back. The perforation is the stub you keep.</p>
+        </div>
+        <div class="panel bs-c">
+          <div class="panel-head"><h2>Palette</h2></div>
+          <div class="swatches">
+            <div class="sw"><div class="c" style="background:#FFC21A"></div><div class="t"><b>Ticket Yellow</b>#FFC21A, the hero</div></div>
+            <div class="sw"><div class="c" style="background:#1E1B2E"></div><div class="t"><b>Cabinet Ink</b>#1E1B2E</div></div>
+            <div class="sw"><div class="c" style="background:#E9EBF2"></div><div class="t"><b>Chalk</b>#E9EBF2, page</div></div>
+            <div class="sw"><div class="c" style="background:#FF5C8A"></div><div class="t"><b>Fumble Pink</b>#FF5C8A, sells</div></div>
+            <div class="sw"><div class="c" style="background:#14A85A"></div><div class="t"><b>Win Green</b>#14A85A, up</div></div>
+            <div class="sw"><div class="c" style="background:#E5484D"></div><div class="t"><b>Loss Red</b>#E5484D, down</div></div>
+          </div>
+          <p class="muted" style="font-size:13.5px;margin-top:12px">Yellow is reserved for rewards: claimable tickets, the 10x line, jackpots. Pink only ever means a sell. Numbers that move money stay ink on white.</p>
+        </div>
+        <div class="panel bs-c">
+          <div class="panel-head"><h2>Type</h2></div>
+          <div class="typescale">
+            <div class="ts-row"><div class="spec">Display<br>Dela Gothic One<br>40/42</div><div style="font-family:var(--display);font-size:clamp(28px,5vw,40px);line-height:1.05">10x hit.</div></div>
+            <div class="ts-row"><div class="spec">Scoreboard<br>Doto 900<br>LED digits only</div><div style="font-family:var(--led);font-weight:900;font-size:36px;line-height:1;background:var(--ink);color:var(--ticket);padding:8px 12px;border-radius:10px;width:max-content;max-width:100%">240,000</div></div>
+            <div class="ts-row"><div class="spec">Heading<br>Schibsted 800<br>22/28</div><div style="font-size:22px;font-weight:800">Claim 240,000 CAPY</div></div>
+            <div class="ts-row"><div class="spec">Body<br>Schibsted 400<br>15/22</div><div>Token count is fixed. If CAPY keeps climbing, this claim is worth more.</div></div>
+            <div class="ts-row"><div class="spec">Data<br>Schibsted 700<br>subscript zeros</div><div style="font-weight:700">0.0₆418 SOL &nbsp; 1.085 SOL &nbsp; 10.8x</div></div>
+          </div>
+        </div>
+        <div class="panel bs-full">
+          <div class="panel-head"><h2>Components</h2><span class="muted" style="font-size:13px">Press the buttons</span></div>
+          <div class="comp-row" style="margin-bottom:18px">
+            <button class="btn">Claim</button>
+            <button class="btn buy">Buy</button>
+            <button class="btn sell">Sell</button>
+            <button class="btn ghost">Keep waiting</button>
+            <button class="btn dark">Share</button>
+            <button class="btn" disabled>Queued</button>
+          </div>
+          <div class="comp-row" style="margin-bottom:22px;gap:14px">
+            <span class="sticker fumble" style="--rot:-3deg"><svg><use href="#i-down"/></svg>Fumble</span>
+            <span class="sticker tenx" style="--rot:2deg"><svg><use href="#i-bolt"/></svg>10x</span>
+            <span class="sticker grad" style="--rot:-2deg"><svg><use href="#i-grad"/></svg>Graduated</span>
+            <span class="sticker claim" style="--rot:3deg"><svg><use href="#i-check"/></svg>Claimed</span>
+            <span class="sticker launch"><svg><use href="#i-sprout"/></svg>New coin</span>
+            <span class="sticker inq" style="--rot:-2deg"><svg><use href="#i-clock"/></svg>In queue</span>
+          </div>
+          <div style="max-width:420px">
+            <div class="meter-row"><span class="muted">Power meter, one segment per x</span><span class="x" id="demoX">6.2x</span></div>
+            <div class="meter" id="demoMeter" aria-hidden="true"></div>
+            <div class="meter-scale" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10x</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== HOME / FEED ===================== -->
+    <section class="screen" data-screen="home" aria-labelledby="home-t">
+      <h1 class="sr" id="home-t">Feed</h1>
+      <div class="hero-strip" id="tiles" aria-label="Trending coins"></div>
+      <div class="home-grid">
+        <div class="feed">
+          <div class="feed-tabs" role="tablist" aria-label="Feed filter">
+            <button class="chip" role="tab" aria-selected="true" data-ff="all"><span class="live-dot" aria-hidden="true"></span>Live</button>
+            <button class="chip" role="tab" aria-selected="false" data-ff="fumble">Fumbles</button>
+            <button class="chip" role="tab" aria-selected="false" data-ff="tenx">10x</button>
+            <button class="chip" role="tab" aria-selected="false" data-ff="claim">Claims</button>
+            <button class="chip" role="tab" aria-selected="false" data-ff="grad">Graduations</button>
+            <button class="chip" role="tab" aria-selected="false" data-ff="launch">Launches</button>
+          </div>
+          <div class="composer">
+            <span class="pfp" style="background:conic-gradient(from 40deg,#FF5C8A,#FFC21A,#7BE3A6,#FF5C8A)"></span>
+            <div>
+              <label class="sr" for="cmp">Post to the feed</label>
+              <textarea id="cmp" rows="1" placeholder="Post your worst fumble"></textarea>
+              <div class="composer-bar">
+                <button class="chip" onclick="toast('Attach one of your fumble tickets to the post')"><svg width="16" height="16"><use href="#i-ticket"/></svg>Attach a ticket</button>
+                <button class="btn sm" onclick="toast('Posted')">Post</button>
+              </div>
+            </div>
+          </div>
+          <div id="feed" aria-live="polite"></div>
+          <div class="skel" aria-hidden="true"><span class="pfp" style="border:0;background:#EEF0F5"></span><div style="display:grid;gap:8px"><i style="width:40%"></i><i style="width:90%"></i><i style="width:70%"></i></div></div>
+        </div>
+        <div class="side">
+          <div class="panel">
+            <div class="panel-head"><h2>Trending</h2><span class="muted" style="font-size:13px">Last 1h</span></div>
+            <div class="trend" id="trend"></div>
+          </div>
+          <div class="panel" style="background:var(--ticket);border:2px solid var(--ink);box-shadow:0 5px 0 var(--ink)">
+            <div class="panel-head" style="margin-bottom:8px"><h2>You have a claim ready</h2></div>
+            <p style="font-size:14px;margin-bottom:14px">$CAPY is holding 10.8x your sell price. 240,000 CAPY is waiting for you.</p>
+            <a href="#claim" class="btn dark block">Open the ticket</a>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>How a fumble pays</h2></div>
+            <ol style="margin:0;padding-left:20px;display:grid;gap:8px;font-size:14px;color:var(--ink-2)">
+              <li>Sell $50 or more here. You get a fumble ticket.</li>
+              <li>The coin graduates from its curve. Claims open.</li>
+              <li>The 30-minute median price holds 10x your sell.</li>
+              <li>Claim 10% of the tokens you sold, within 90 days.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== COIN ===================== -->
+    <section class="screen" data-screen="coin" aria-label="Coin page" id="coinScreen"></section>
+
+    <!-- ===================== MY FUMBLES ===================== -->
+    <section class="screen" data-screen="fumbles" aria-labelledby="mf-t">
+      <h1 class="page-title" id="mf-t">My Fumbles</h1>
+      <p class="page-sub">Every sell you made here is a ticket. Fill the meter to 10x and it pays.</p>
+      <div class="score-strip">
+        <div><span class="l">Claimable now</span><span class="v">1.085</span><span class="s">SOL in 1 ticket</span></div>
+        <div><span class="l">Open tickets</span><span class="v">6</span><span class="s">across 5 coins</span></div>
+        <div><span class="l">Lifetime claimed</span><span class="v">3.412</span><span class="s">SOL from 4 claims</span></div>
+        <div><span class="l">Biggest fumble</span><span class="v">142x</span><span class="s">$WOMP, sold in May</span></div>
+      </div>
+      <div class="filters" role="tablist" aria-label="Ticket filter">
+        <button class="chip" role="tab" aria-selected="true" data-tf="open">Open, 6</button>
+        <button class="chip" role="tab" aria-selected="false" data-tf="ready">Ready, 1</button>
+        <button class="chip" role="tab" aria-selected="false" data-tf="claimed">Claimed, 4</button>
+        <button class="chip" role="tab" aria-selected="false" data-tf="expired">Expired, 0</button>
+      </div>
+      <div class="tkt-list" id="tickets"></div>
+      <details class="rules panel">
+        <summary>Ticket rules</summary>
+        <ul>
+          <li>Only sells of $50 or more made through FUMPAD print a ticket. You must have held for 10 minutes.</li>
+          <li>Buying the same coin back within 7 days shrinks that ticket by the amount you rebought.</li>
+          <li>Up to 5 open tickets per coin. Creators can't claim on their own coin.</li>
+          <li>10x is checked against the 30-minute median price, so one spike can't unlock a ticket.</li>
+          <li>If the pool is short, you join the queue in order of sell time. Queued tickets don't expire. A smaller claim that fits the pool can go first.</li>
+          <li>One claim can take at most 10% of the pool. This is a reward, not insurance.</li>
+        </ul>
+      </details>
+    </section>
+
+    <!-- ===================== SHARE CARD ===================== -->
+    <section class="screen" data-screen="card" aria-labelledby="sc-t">
+      <h1 class="page-title" id="sc-t">Share your fumble</h1>
+      <p class="page-sub">A 1200 by 630 card, sized for posts on X. Every claim is public on-chain, so the numbers here are checkable.</p>
+      <div class="card-layout" style="margin-top:20px">
+        <div class="variants" role="tablist" aria-label="Card style">
+          <button class="chip" role="tab" aria-selected="true" data-cv="claimed">Claimed</button>
+          <button class="chip" role="tab" aria-selected="false" data-cv="fumble">Still fumbling</button>
+        </div>
+        <div class="og-wrap" id="ogWrap">
+          <div class="og" id="og" role="img" aria-label="Share card: butterfingers.sol fumbled CAPY at 10.8x and claimed 240,000 CAPY back"></div>
+        </div>
+        <div class="card-actions">
+          <button class="btn dark" onclick="toast('Opens X with the card and a link to the claim transaction')"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M17.8 3h3.1l-6.8 7.7L22 21h-6.2l-4.9-6.3L5.3 21H2.2l7.3-8.3L2 3h6.4l4.4 5.8zm-1.1 16.2h1.7L7.4 4.7H5.6z"/></svg>Post to X</button>
+          <button class="btn ghost" onclick="toast('Saved fumpad-capy-claim.png')"><svg width="18" height="18"><use href="#i-down"/></svg>Save image</button>
+          <button class="btn ghost" onclick="toast('Link copied')">Copy link</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== LEADERBOARD ===================== -->
+    <section class="screen" data-screen="leaders" aria-labelledby="lb-t">
+      <h1 class="page-title" id="lb-t">Leaderboard</h1>
+      <p class="page-sub">This week's biggest regrets and best comebacks. Resets Monday 00:00 UTC.</p>
+      <div class="lb-grid" style="margin-top:20px">
+        <div class="board">
+          <div class="board-top">
+            <h2>High scores</h2>
+            <div class="seg" role="tablist" aria-label="Leaderboard">
+              <button role="tab" aria-selected="true" data-lb="fumbles">Biggest fumbles</button>
+              <button role="tab" aria-selected="false" data-lb="claimers">Top claimers</button>
+              <button role="tab" aria-selected="false" data-lb="diamond">Diamond hands</button>
+            </div>
+          </div>
+          <div class="board-screen" id="board"></div>
+          <div class="board-foot"><svg width="16" height="16" style="flex:none"><use href="#i-flag"/></svg>Wallets flagged for rebuys elsewhere or linked clusters are left off. 3 hidden this week.</div>
+        </div>
+        <div class="profile-card">
+          <div class="lvl">
+            <div class="lvl-badge" aria-hidden="true">
+              <svg viewBox="0 0 68 68" width="68" height="68"><path d="M34 3l8 6 10-1 3 9 9 5-3 10 3 10-9 5-3 9-10-1-8 6-8-6-10 1-3-9-9-5 3-10-3-10 9-5 3-9 10 1z" fill="var(--ticket)" stroke="var(--ink)" stroke-width="2.5" stroke-linejoin="round"/></svg>
+              <b>7</b>
+            </div>
+            <div style="min-width:0;flex:1">
+              <div style="font-weight:900;font-size:19px">butterfingers.sol</div>
+              <div class="muted" style="font-size:13.5px">9xQe…Lp2V, joined August</div>
+              <div style="font-weight:800;margin-top:2px">Grand Fumbler</div>
+            </div>
+          </div>
+          <div>
+            <div class="meter-row"><span class="muted">2,340 / 3,000 XP</span><span style="font-weight:800;font-size:13px">Level 8: Legendary Paper Hands</span></div>
+            <div class="xp" role="progressbar" aria-valuenow="78" aria-valuemin="0" aria-valuemax="100" aria-label="Level progress"><span style="width:78%"></span></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center">
+            <div class="stat"><span class="v">31</span><span class="l">Tickets</span></div>
+            <div class="stat"><span class="v">4</span><span class="l">Claims</span></div>
+            <div class="stat"><span class="v">#212</span><span class="l">This week</span></div>
+          </div>
+          <div>
+            <h2 style="font-size:17px;margin-bottom:14px">Stickers, 6 of 10</h2>
+            <div class="stickers" id="stickers"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar" aria-label="Primary">
+    <a href="#home" data-nav="home"><svg><use href="#i-home"/></svg>Feed</a>
+    <a href="#coin" data-nav="coin"><svg><use href="#i-coin"/></svg>Coins</a>
+    <a href="#fumbles" data-nav="fumbles"><svg><use href="#i-ticket"/></svg>Fumbles</a>
+    <a href="#leaders" data-nav="leaders"><svg><use href="#i-trophy"/></svg>Scores</a>
+  </nav>
+</div>
+
+<!-- ===================== JACKPOT OVERLAY ===================== -->
+<div class="jackpot" id="jackpot" role="dialog" aria-modal="true" aria-labelledby="jp-title">
+  <div class="jp" id="jp">
+    <div class="jp-rays" aria-hidden="true"></div>
+    <button class="jp-close" aria-label="Close" onclick="closeJackpot()"><svg width="18" height="18"><use href="#i-x"/></svg></button>
+    <div class="jp-pre">
+      <div class="jp-kicker">$CAPY, ticket CAPY-0412</div>
+      <div class="jp-x" id="jpX" aria-hidden="true">1.0x</div>
+      <div class="meter lg" id="jpMeter" aria-hidden="true" style="max-width:340px"></div>
+      <h2 id="jp-title" class="jp-stamp" aria-live="polite">Claim unlocked</h2>
+      <div class="jp-slot" aria-hidden="true"></div>
+      <div class="jp-print" id="jpPrint">
+        <div class="jp-ticket"><div style="padding:14px 0">
+          <div style="font-size:13px;font-weight:700">Your claim, 10% of 2,400,000 sold</div>
+          <div class="amt-big">240,000 CAPY</div>
+          <div class="row2"><span>Worth 1.085 SOL now</span><span>You sold at 0.0₆418</span></div>
+          <div class="perf"></div>
+          <div class="row2" style="margin-top:0"><span class="serial">CAPY-0412</span><span>84 days left</span></div>
+        </div></div>
+      </div>
+      <div class="jp-actions">
+        <button class="btn lg block" id="claimBtn">Claim 240,000 CAPY</button>
+        <button class="btn ghost block" onclick="closeJackpot();toast('Ticket kept. We\'ll keep the meter running.')">Keep waiting</button>
+      </div>
+      <p class="jp-fine">Token count is fixed. If CAPY keeps climbing, this claim is worth more. The pool holds 38.3M CAPY, so it pays out in the same transaction.</p>
+    </div>
+    <div class="jp-done" aria-live="polite">
+      <svg class="coinstack" viewBox="0 0 96 96" aria-hidden="true">
+        <ellipse cx="48" cy="78" rx="30" ry="9" fill="#C08A00" stroke="#1E1B2E" stroke-width="3"/>
+        <rect x="18" y="60" width="60" height="18" fill="#E5A400" stroke="#1E1B2E" stroke-width="3"/>
+        <ellipse cx="48" cy="60" rx="30" ry="9" fill="#FFC21A" stroke="#1E1B2E" stroke-width="3"/>
+        <rect x="18" y="42" width="60" height="18" fill="#E5A400" stroke="#1E1B2E" stroke-width="3"/>
+        <ellipse cx="48" cy="42" rx="30" ry="9" fill="#FFC21A" stroke="#1E1B2E" stroke-width="3"/>
+        <rect x="18" y="24" width="60" height="18" fill="#E5A400" stroke="#1E1B2E" stroke-width="3"/>
+        <ellipse cx="48" cy="24" rx="30" ry="9" fill="#FFD95C" stroke="#1E1B2E" stroke-width="3"/>
+        <path d="M40 24h16" stroke="#1E1B2E" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      <div class="jp-kicker">Fumble cashed in</div>
+      <h2>240,000 CAPY is in your wallet.</h2>
+      <p class="jp-fine" style="margin-top:10px">Sold at 0.0₆418 SOL, claimed at 10.8x. Ticket CAPY-0412 is now a sticker on your profile.</p>
+      <div class="tx"><svg width="14" height="14"><use href="#i-check"/></svg>Confirmed in slot 318,402,117, <a href="#" onclick="event.preventDefault();toast('Opens Solscan')">3fKq…w9Lm</a></div>
+      <div class="jp-actions">
+        <a href="#card" class="btn lg block" onclick="closeJackpot(true)"><svg width="20" height="20"><use href="#i-share"/></svg>Share the fumble</a>
+        <button class="btn ghost block" onclick="closeJackpot()">Back to My Fumbles</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/* ---------------- helpers ---------------- */
+const $ = (s, el=document) => el.querySelector(s);
+const $$ = (s, el=document) => [...el.querySelectorAll(s)];
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SUB = '₀₁₂₃₄₅₆₇₈₉';
+function px(p){ // memecoin price with subscript zeros: 0.000000418 -> 0.0₆418
+  if (p >= 0.001) return p.toFixed(4);
+  const s = p.toFixed(14).split('.')[1];
+  const z = s.match(/^0+/)[0].length;
+  const d = s.slice(z, z+3).replace(/0+$/,'') || '0';
+  return '0.0' + String(z).split('').map(c=>SUB[c]).join('') + d;
+}
+const n = (v, d=0) => v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+function short(v){ if(v>=1e6) return (v/1e6).toFixed(v>=1e7?1:2).replace(/\.0+$/,'')+'M'; if(v>=1e3) return (v/1e3).toFixed(v>=1e4?0:1).replace(/\.0$/,'')+'K'; return n(v); }
+let toastT;
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('on'),2200); }
+function meter(x, cls=''){ // x = multiple; 1 segment per 1x
+  let h = '';
+  for (let i=0;i<10;i++){ const f = Math.max(0, Math.min(1, x - i)); h += `<i style="--f:${f}"></i>`; }
+  return `<div class="meter ${x>=10?'full':''} ${cls}" role="meter" aria-valuemin="0" aria-valuemax="10" aria-valuenow="${Math.min(x,10)}" aria-label="${x}x of 10x">${h}</div>`;
+}
+function av(t, c, cls=''){ return `<span class="av ${cls}" style="--c:${c}" aria-hidden="true">${t.slice(0,2)}</span>`; }
+
+/* ---------------- data ---------------- */
+const SOL_USD = 168.4;
+const COINS = {
+  CAPY:{t:'CAPY',name:'Sleepy Capybara',c:'#F2A65A',p:0.00000452,chg:38.2,mc:4520,grad:true,vol:1840,holders:6212,age:'9d',pool:38_310_000,poolSeed:50_000_000,poolBuy:6_420_000,paid:18_110_000},
+  PELI:{t:'PELI',name:'Pelican Pete',c:'#9AD7F0',p:0.00001310,chg:12.5,mc:13100,grad:true,vol:3920,holders:11408,age:'21d'},
+  TOAST:{t:'TOAST',name:'Toast Dog',c:'#E9C46A',p:0.000001302,chg:-4.1,mc:1302,grad:true,vol:610,holders:2988,age:'14d'},
+  GOOB:{t:'GOOB',name:'Goober',c:'#B5E48C',p:0.000000134,chg:210.4,mc:66.6,grad:false,curve:66.6,vol:142,holders:812,age:'3h'},
+  SNOOT:{t:'SNOOT',name:'Snoot Boop',c:'#FFB3C7',p:0.00000071,chg:-11.8,mc:710,grad:true,vol:88,holders:1730,age:'33d'},
+  SNORK:{t:'SNORK',name:'Snorkel Frog',c:'#7BE3A6',p:0.000000031,chg:0,mc:3.4,grad:false,curve:3.4,vol:3.1,holders:24,age:'2m'},
+};
+
+/* ---------------- router ---------------- */
+const ROUTES = ['brand','home','coin','coin-curve','fumbles','claim','card','leaders'];
+function route(){
+  let r = location.hash.slice(1) || 'home';
+  if (!ROUTES.includes(r)) r = 'home';
+  let screen = r, nav = r;
+  if (r === 'coin-curve'){ screen='coin'; nav='coin'; renderCoin('GOOB'); }
+  else if (r === 'coin'){ renderCoin('CAPY'); }
+  if (r === 'claim'){ screen='fumbles'; nav='fumbles'; }
+  $$('.screen').forEach(s => s.classList.toggle('on', s.dataset.screen === screen));
+  $$('[data-nav]').forEach(a => a.setAttribute('aria-current', a.dataset.nav === nav ? 'true':'false'));
+  $$('#protoList a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === '#'+r ? 'true':'false'));
+  const cur = $('#protoList a[aria-current="true"]'); if (cur) cur.scrollIntoView({block:'nearest',inline:'nearest'});
+  if (r === 'claim') openJackpot(); else if ($('#jackpot').classList.contains('on')) hideJackpot();
+  if (screen === 'card') fitOG();
+  window.scrollTo(0,0);
+  if (r !== 'claim') $('#main').focus({preventScroll:true});
+}
+addEventListener('hashchange', route);
+
+/* ---------------- brand demo meter ---------------- */
+$('#demoMeter').outerHTML = meter(6.2).replace('class="meter','id="demoMeter" class="meter');
+
+/* ---------------- home ---------------- */
+$('#tiles').innerHTML = ['CAPY','GOOB','PELI','TOAST','SNORK'].map(k=>{
+  const c = COINS[k];
+  const line = c.grad ? `<span class="sticker grad" style="font-size:11px;padding:2px 8px 2px 6px;align-self:flex-start;margin:2px 0 4px 4px"><svg><use href="#i-grad"/></svg>Graduated</span>` :
+    `<div><div class="meter-row" style="margin:0 0 4px;font-size:12px"><span class="muted">Curve</span><b>${c.curve}%</b></div><div class="pool-bar" style="margin:0;height:10px"><span style="width:${c.curve}%;background:var(--ticket)"></span></div></div>`;
+  return `<a class="tile" href="${k==='GOOB'?'#coin-curve':'#coin'}">
+    <div class="tile-top">${av(k,c.c,'sm')}<div style="min-width:0"><div style="font-weight:800;line-height:1.1">$${k}</div><div class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}</div></div></div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="px">${px(c.p)}</span><span class="${c.chg>=0?'up':'down'}" style="font-weight:800;font-size:13px">${c.chg>0?'+':''}${c.chg}%</span></div>
+    ${line}</a>`;
+}).join('');
+
+$('#trend').innerHTML = ['CAPY','PELI','GOOB','TOAST','SNOOT'].map((k,i)=>{
+  const c = COINS[k];
+  return `<a href="${k==='GOOB'?'#coin-curve':'#coin'}"><span class="rk">${i+1}</span>${av(k,c.c)}<span style="min-width:0"><span class="nm" style="display:block">$${k}</span><span class="sub">${c.grad?'MC '+n(Math.round(c.mc*SOL_USD/1000))+'K':'Curve '+c.curve+'%'}, vol ${short(c.vol)} SOL</span></span><span class="chg ${c.chg>=0?'up':'down'}">${c.chg>0?'+':''}${c.chg}%</span></a>`;
+}).join('');
+
+const PFP = ['#FF5C8A','#FFC21A','#7BE3A6','#9AD7F0','#C9D3FF','#F2A65A'];
+function pfp(seed, extra=''){ const a=PFP[seed%6], b=PFP[(seed+2)%6]; return `<span class="pfp" style="background:linear-gradient(${seed*47}deg,${a} 0 50%,${b} 50%);${extra}" aria-hidden="true"></span>`; }
+function botPfp(){ return `<span class="pfp" style="background:var(--ticket);display:grid;place-items:center" aria-hidden="true"><svg width="30" height="26"><use href="#mark"/></svg></span>`; }
+
+const POSTS = [
+  {k:'claim',who:'fumblelord.sol',h:'4kTm…9QaZ',seed:1,t:'1m',
+   body:`sold <span class="tkr">$CAPY</span> at 40k mc to pay for a sandwich. just got paid back the sandwich plus a second sandwich`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker claim"><svg><use href="#i-check"/></svg>Claimed</span><span class="muted" style="font-size:13px">Ticket CAPY-0388</span></div>
+     <div class="embed-row"><div><div class="big">410,000 CAPY</div><div class="muted" style="font-size:13px">1.853 SOL at claim, sold at 0.0₆395</div></div><div style="text-align:right"><div class="big">11.4x</div><div class="muted" style="font-size:13px">30-min median</div></div></div></div>`,
+   r:48,rp:112,l:1204},
+  {k:'tenx',bot:true,who:'FUMPAD',h:'fumpad',t:'3m',
+   body:`<span class="tkr">$PELI</span> is holding 10x for 214 tickets. Claims are open for sellers from Sep 22 to Sep 24.`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker tenx"><svg><use href="#i-bolt"/></svg>10x crossing</span><span class="muted" style="font-size:13px">Pool 61.2M PELI</span></div>${meter(10)}<div class="embed-row" style="font-size:13px"><span class="muted">214 tickets unlocked</span><b>Queue: 0</b></div></div>`,
+   r:9,rp:61,l:388},
+  {k:'fumble',who:'7xKp…3mQe',h:'7xKp…3mQe',seed:3,t:'4m',
+   body:`out of <span class="tkr">$TOAST</span>. it's over for toast`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker fumble"><svg><use href="#i-down"/></svg>Fumble</span><span class="muted" style="font-size:13px">Ticket TOAST-1177 printed</span></div>
+     <div class="embed-row"><div><div class="big">Sold 18.2M TOAST</div><div class="muted" style="font-size:13px">for 23.70 SOL at 0.0₅130</div></div><div style="text-align:right"><div class="big">1.0x</div><div class="muted" style="font-size:13px">needs 0.0₅130 × 10</div></div></div></div>`,
+   r:212,rp:20,l:96},
+  {k:'grad',bot:true,who:'FUMPAD',h:'fumpad',t:'7m',
+   body:`<span class="tkr">$WOBBL</span> graduated. 85.0 SOL moved to PumpSwap and 1,382 tickets can now claim once they hit 10x.`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker grad"><svg><use href="#i-grad"/></svg>Graduated</span><span class="muted" style="font-size:13px">Curve filled in 5h 12m</span></div><div class="pool-bar" style="margin:0"><span style="width:100%;background:var(--grad)"></span></div></div>`,
+   r:14,rp:88,l:540},
+  {k:'launch',who:'2yLp…k81W',h:'2yLp…k81W',seed:4,t:'9m',
+   body:`launched <span class="tkr">$SNORK</span>. a frog who only breathes through a snorkel. that's the whole lore`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker launch"><svg><use href="#i-sprout"/></svg>New coin</span><span class="muted" style="font-size:13px">Curve 3.4%, 24 holders</span></div><div class="pool-bar" style="margin:0"><span style="width:3.4%;background:var(--ticket)"></span></div></div>`,
+   r:6,rp:3,l:41},
+  {k:'claim',who:'degenmom.sol',h:'Bv3r…22Pk',seed:5,t:'14m',
+   body:`waited on my <span class="tkr">$PELI</span> ticket until 31x instead of claiming at 10. same 1.2M tokens, 3x the value. diamond regret`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker claim"><svg><use href="#i-check"/></svg>Claimed at 31.2x</span><span class="muted" style="font-size:13px">120,000 PELI, 1.572 SOL</span></div></div>`,
+   r:77,rp:240,l:2880},
+];
+const LIVE = [
+  {k:'fumble',who:'Hn8w…Qe0r',h:'Hn8w…Qe0r',seed:2,t:'now',body:`took profit on <span class="tkr">$CAPY</span> at 9x. see you at 90x`,
+   embed:`<div class="embed"><div class="embed-row"><span class="sticker fumble"><svg><use href="#i-down"/></svg>Fumble</span><span class="muted" style="font-size:13px">Ticket CAPY-0419 printed</span></div><div class="embed-row"><div><div class="big">Sold 6.1M CAPY</div><div class="muted" style="font-size:13px">for 27.57 SOL at 0.0₅452</div></div></div></div>`,r:0,rp:1,l:4},
+  {k:'tenx',bot:true,who:'FUMPAD',h:'fumpad',t:'now',body:`<span class="tkr">$CAPY</span> is holding 10x for 37 more tickets. Pool 38.3M CAPY.`,embed:`<div class="embed">${meter(10)}</div>`,r:2,rp:9,l:31},
+];
+const KICON = {claim:['claim','i-check','Claim'],tenx:['tenx','i-bolt','10x'],fumble:['fumble','i-down','Fumble'],grad:['grad','i-grad','Graduation'],launch:['launch','i-sprout','Launch']};
+function postHTML(p, isNew){
+  return `<article class="post ${isNew?'new':''}" data-k="${p.k}">
+    ${p.bot?botPfp():pfp(p.seed)}
+    <div style="min-width:0">
+      <div class="post-head"><span class="name">${p.who}</span>${p.bot?'<svg width="16" height="16" style="color:var(--ticket-deep)" aria-label="Official"><use href="#i-bolt"/></svg>':''}<span class="h">@${p.h}</span><span class="t"><time>${p.t}</time></span></div>
+      <p class="post-body">${p.body}</p>
+      ${p.embed||''}
+      <div class="post-actions">
+        <button aria-label="${p.r} replies"><svg><use href="#i-reply"/></svg>${n(p.r)}</button>
+        <button aria-label="${p.rp} reposts"><svg><use href="#i-repost"/></svg>${n(p.rp)}</button>
+        <button aria-pressed="false" aria-label="${p.l} likes" onclick="like(this,${p.l})"><svg><use href="#i-heart"/></svg><span>${n(p.l)}</span></button>
+      </div>
+    </div></article>`;
+}
+function like(b, base){ const on = b.getAttribute('aria-pressed')!=='true'; b.setAttribute('aria-pressed',on); b.querySelector('span').textContent = n(base + (on?1:0)); b.querySelector('svg use').closest('svg').style.fill = on ? 'var(--fumble)' : ''; }
+let feedFilter = 'all';
+function renderFeed(){ $('#feed').innerHTML = POSTS.filter(p=>feedFilter==='all'||p.k===feedFilter).map(p=>postHTML(p)).join('') || `<div class="empty" style="margin:16px;border-style:dashed"><b>Nothing here yet</b><span class="muted">New events show up live.</span></div>`; }
+renderFeed();
+$$('[data-ff]').forEach(b=>b.onclick=()=>{ $$('[data-ff]').forEach(x=>x.setAttribute('aria-selected',x===b)); feedFilter=b.dataset.ff; renderFeed(); });
+let liveI = 0;
+setInterval(()=>{ if (liveI>=LIVE.length || !$('[data-screen="home"]').classList.contains('on') || feedFilter!=='all') return;
+  const p = LIVE[liveI++]; POSTS.unshift(p); $('#feed').insertAdjacentHTML('afterbegin', postHTML(p, true)); }, 6000);
+
+/* ---------------- chart ---------------- */
+function rng(seed){ return ()=>{ seed = (seed*16807)%2147483647; return (seed-1)/2147483646; }; }
+function chartSVG(c, opts){
+  const mob=innerWidth<700, W=mob?420:800,H=mob?260:300,pad=10, N=mob?80:120, r=rng(opts.seed);
+  // build a path that starts near start and trends to end
+  const pts=[]; let v=opts.start;
+  for(let i=0;i<N;i++){ const target = opts.start + (opts.end-opts.start)*Math.pow(i/(N-1), opts.curve||1.4); v = v + (target - v)*0.25 + (r()-0.5)*opts.vol*target; pts.push(Math.max(v, opts.start*0.4)); }
+  pts[N-1]=opts.end;
+  const ys=(opts.marks||[]).filter(m=>m.y).map(m=>m.y); const lo = Math.min(...pts, ...ys)*0.85, hi = Math.max(...pts, ...ys)*1.08;
+  const X=i=>pad+(W-pad*2)*i/(N-1), Y=v=>H-pad-(H-pad*2)*(v-lo)/(hi-lo);
+  const d = pts.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join('');
+  let marks = '';
+  (opts.marks||[]).forEach(m=>{
+    if (m.type==='line') marks += `<line x1="0" x2="${W}" y1="${Y(m.y)}" y2="${Y(m.y)}" stroke="${m.c}" stroke-width="3" stroke-dasharray="8 6"/><rect x="6" y="${Y(m.y)-28}" width="112" height="22" rx="6" fill="${m.c}" stroke="#1E1B2E" stroke-width="1.5"/><text x="62" y="${Y(m.y)-10}" text-anchor="middle" font-size="13" font-weight="800" fill="#1E1B2E" font-family="Schibsted Grotesk">${m.label}</text>`;
+    if (m.type==='dot'){ const i=m.i; marks += `<circle cx="${X(i)}" cy="${Y(pts[i])}" r="8" fill="var(--fumble)" stroke="#1E1B2E" stroke-width="2.5"/><text x="${X(i)+12}" y="${Y(pts[i])+22}" font-size="13" font-weight="800" fill="#1E1B2E" font-family="Schibsted Grotesk">${m.label}</text>`; }
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${opts.aria}">
+    <defs><linearGradient id="cg${opts.seed}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFC21A" stop-opacity=".38"/><stop offset="1" stop-color="#FFC21A" stop-opacity="0"/></linearGradient></defs>
+    ${[1,2,3].map(g=>`<line x1="0" x2="${W}" y1="${H*g/4}" y2="${H*g/4}" stroke="#E6E8EF" stroke-width="1"/>`).join('')}
+    <path d="${d}L${X(N-1)} ${H}L${X(0)} ${H}Z" fill="url(#cg${opts.seed})"/>
+    <path d="${d}" fill="none" stroke="#1E1B2E" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    ${marks}
+    <circle cx="${X(N-1)}" cy="${Y(pts[N-1])}" r="6" fill="#FFC21A" stroke="#1E1B2E" stroke-width="2.5"/>
+  </svg>`;
+}
+
+/* ---------------- coin page ---------------- */
+const mob2=i=>innerWidth<700?Math.round(i*80/120):i;
+let tradeSide = 'buy';
+function renderCoin(k){
+  const c = COINS[k], el = $('#coinScreen'), g = c.grad;
+  const usdMC = Math.round(c.mc*SOL_USD);
+  const switcher = `<div class="seg" role="tablist" aria-label="Coin state" style="margin-bottom:16px">
+      <button role="tab" aria-selected="${g}" onclick="location.hash='coin'">Graduated, $CAPY</button>
+      <button role="tab" aria-selected="${!g}" onclick="location.hash='coin-curve'">On curve, $GOOB</button></div>`;
+  const head = `<div class="coin-head">${av(k,c.c,'lg')}
+    <div class="names"><h1>${c.name}</h1>
+      <div class="meta"><b style="color:var(--ink)">$${k}</b><span>by ${g?'6pRt…Mc7a':'Fq9d…1hVx'}</span><span>${c.age} old</span><span>${n(c.holders)} holders</span></div></div>
+    ${g?`<span class="sticker grad" style="--rot:-3deg"><svg><use href="#i-grad"/></svg>Graduated</span>`:`<span class="sticker launch" style="--rot:2deg"><svg><use href="#i-sprout"/></svg>On curve</span>`}
+  </div>`;
+  const chart = `<div class="panel chart-wrap">
+    <div class="panel-head" style="flex-wrap:wrap"><div class="coin-price"><span class="p">${px(c.p)} SOL</span><span class="${c.chg>=0?'up':'down'}" style="font-weight:800">${c.chg>0?'+':''}${c.chg}% 24h</span></div>
+      <div class="seg" role="tablist" aria-label="Range" style="border-width:1.5px"><button role="tab" aria-selected="false">1H</button><button role="tab" aria-selected="true">1D</button><button role="tab" aria-selected="false">1W</button><button role="tab" aria-selected="false">All</button></div></div>
+    ${g ? chartSVG(c,{seed:7,start:0.00000028,end:c.p,vol:.12,curve:1.6,aria:'CAPY price over 9 days, from 0.00000035 to 0.00000452 SOL',marks:[{type:'line',y:0.00000418,c:'#FFC21A',label:'Your 10x line'},{type:'dot',i:mob2(22),label:'You sold'}]})
+        : chartSVG(c,{seed:3,start:0.000000028,end:c.p,vol:.16,curve:1.2,aria:'GOOB price over 3 hours',marks:[{type:'dot',i:mob2(70),label:'You sold'}]})}
+    <div class="chart-legend"><span><i style="background:var(--ink)"></i>Price</span>${g?'<span><i style="background:var(--ticket)"></i>10x your sell, 0.0₅418</span>':''}<span><i style="background:var(--fumble);height:10px;width:10px;border-radius:50%"></i>Your sell</span></div>
+  </div>`;
+  const stats = `<div class="panel"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px">
+    <div class="stat"><span class="l">Market cap</span><span class="v">$${short(usdMC)}</span><span class="s">${n(c.mc)} SOL</span></div>
+    <div class="stat"><span class="l">24h volume</span><span class="v">${n(c.vol)} SOL</span><span class="s">${g?'PumpSwap via FUMPAD':'On curve'}</span></div>
+    <div class="stat"><span class="l">Fumbles, 24h</span><span class="v">${g?'312':'41'}</span><span class="s">tickets printed</span></div>
+    <div class="stat"><span class="l">At 10x now</span><span class="v">${g?'37':'0'}</span><span class="s">${g?'tickets claimable':'claims open after grad'}</span></div></div></div>`;
+
+  const curve = g ? '' : `<div class="curve-panel">
+      <div class="panel-head"><h2 style="color:#fff">Bonding curve</h2><span class="sticker tenx" style="font-size:11.5px">${(85-c.curve*0.85).toFixed(1)} SOL to go</span></div>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px"><span class="big">${(c.curve*0.85).toFixed(1)}</span><span class="muted">of 85 SOL, ${c.curve}%</span></div>
+      ${meter(c.curve/10,'lg')}
+      <div class="note" style="margin-top:14px;background:var(--cabinet-2);color:#E2DFEE"><svg><use href="#i-info"/></svg><span>412 fumble tickets are waiting on this curve. Sells here still count, but claims open only after $GOOB graduates and liquidity moves to PumpSwap.</span></div>
+    </div>`;
+
+  const pool = g ? `<div class="panel">
+      <div class="panel-head"><h2>Reward pool</h2><span class="sticker tenx" style="font-size:11.5px"><svg><use href="#i-bolt"/></svg>Paying instantly</span></div>
+      <div class="pool-big"><div><div class="v">38.3M CAPY</div><div class="muted" style="font-size:13.5px;margin-top:4px">${n(c.pool*c.p,1)} SOL, $${short(c.pool*c.p*SOL_USD)}</div></div>
+        <div style="text-align:right;font-size:13px"><div class="muted">Max per claim</div><b style="font-size:16px">3.83M CAPY</b></div></div>
+      <div class="pool-bar" role="img" aria-label="Pool history: 50M seeded, 6.42M bought back, 18.11M paid out, 38.31M remaining"><span style="width:68%;background:var(--ticket)"></span><span style="width:32%;background:repeating-linear-gradient(-45deg,#fff 0 5px,#E9EBF2 5px 10px)"></span></div>
+      <dl class="kv" style="margin:10px 0 0"><dt>Seeded at launch, 5% of supply</dt><dd>50.0M</dd><dt>Bought back from fees</dt><dd class="up">+6.42M</dd><dt>Paid to 96 claimers</dt><dd>−18.11M</dd></dl>
+      <div style="margin-top:16px"><div class="muted" style="font-size:13px;font-weight:600">Every 1% trade fee splits</div>
+      <div class="split"><div style="background:var(--ticket)"><b>50%</b>buys CAPY for the pool</div><div style="background:#F1F2F7"><b>30%</b>platform</div><div style="background:#F1F2F7"><b>20%</b>creator</div></div></div>
+    </div>` : `<div class="panel">
+      <div class="panel-head"><h2>Reward pool</h2><span class="sticker inq" style="font-size:11.5px"><svg><use href="#i-clock"/></svg>Opens at graduation</span></div>
+      <div class="pool-big"><div><div class="v">51.2M GOOB</div><div class="muted" style="font-size:13.5px;margin-top:4px">50M seeded, 1.2M bought from fees</div></div></div>
+      <div class="split" style="margin-top:14px"><div style="background:var(--ticket)"><b>50%</b>buys GOOB for the pool</div><div style="background:#F1F2F7"><b>30%</b>platform</div><div style="background:#F1F2F7"><b>20%</b>creator</div></div>
+    </div>`;
+
+  const queue = g ? `<div class="panel">
+      <div class="panel-head"><h2>Claim queue</h2><span class="muted" style="font-size:13px">Empty, paying instantly</span></div>
+      <p class="muted" style="font-size:13.5px;margin-bottom:10px">When the pool can't cover a claim, it waits here in order of sell time. This pool covers everyone right now. Recent claims:</p>
+      <div class="queue">
+        <div class="q-row"><span class="q-pos">✓</span><div style="min-width:0"><div class="w">fumblelord.sol</div><div class="s">410,000 CAPY, sold 8d ago</div></div><span class="sticker claim" style="font-size:11px">1m</span></div>
+        <div class="q-row"><span class="q-pos">✓</span><div style="min-width:0"><div class="w">Jt5c…aa1N</div><div class="s">1.20M CAPY, sold 8d ago</div></div><span class="sticker claim" style="font-size:11px">6m</span></div>
+        <div class="q-row you"><span class="q-pos">★</span><div style="min-width:0"><div class="w">You, ticket CAPY-0412</div><div class="s">240,000 CAPY ready, 10.8x</div></div><a href="#claim" class="btn sm">Claim</a></div>
+      </div></div>` : '';
+
+  const fumbles = `<div class="panel"><div class="panel-head"><h2>Recent fumbles</h2><span class="muted" style="font-size:13px">Sells over $50</span></div><div class="rows">
+    ${(g?[['Hn8w…Qe0r','6.1M',27.57,'now'],['dgn.sol','2.4M',10.85,'12m'],['Lk2p…0vZa','880K',3.98,'31m'],['4kTm…9QaZ','12.0M',54.24,'1h']]:[['Mm3e…Tz9q','40.2M',5.39,'2m'],['Pq0a…h3Lk','12.8M',1.71,'9m'],['sol4.sol','9.1M',1.22,'22m']])
+      .map(([w,a,s,t])=>`<div class="row"><div style="min-width:0"><b>${w}</b> <span class="muted">sold ${a} ${k}</span></div><div style="text-align:right"><b>${s.toFixed(2)} SOL</b><div class="muted" style="font-size:12px">${t}</div></div></div>`).join('')}
+    </div></div>`;
+
+  const trade = `<div class="panel" id="tradePanel">
+      <div class="trade-tabs" role="tablist" aria-label="Trade"><button role="tab" aria-selected="${tradeSide==='buy'}" data-side="buy">Buy</button><button role="tab" aria-selected="${tradeSide==='sell'}" data-side="sell">Sell</button></div>
+      ${tradeSide==='buy' ? `
+        <label for="amtIn" class="muted" style="font-size:13px;font-weight:600">You pay</label>
+        <div class="amt" style="margin-top:6px"><input id="amtIn" inputmode="decimal" value="0.5"><span class="unit">SOL</span></div>
+        <div class="quick"><button>0.1</button><button>0.5</button><button>1</button><button>5</button></div>
+        <dl class="kv" style="margin:0 0 14px"><dt>You receive</dt><dd>${short(0.495/c.p)} ${k}</dd><dt>Fee, 1%</dt><dd>0.005 SOL</dd><dt>Goes to the pool</dt><dd class="up">0.0025 SOL of ${k}</dd></dl>
+        <button class="btn buy block lg" onclick="toast('Bought ${short(0.495/c.p)} ${k}')">Buy $${k}</button>`
+      : `
+        <label for="amtIn" class="muted" style="font-size:13px;font-weight:600">You sell</label>
+        <div class="amt" style="margin-top:6px"><input id="amtIn" inputmode="decimal" value="${g?'2,000,000':'10,000,000'}"><span class="unit">${k}</span></div>
+        <div class="quick"><button>25%</button><button>50%</button><button>75%</button><button>All</button></div>
+        <div class="tkt-wrap preview-tkt"><div class="tkt ready" style="grid-template-columns:72px minmax(0,1fr);-webkit-mask:none;mask:none;border-radius:12px">
+          <div class="tkt-stub" style="padding:10px 6px"><svg width="34" height="28"><use href="#mark"/></svg></div>
+          <div class="tkt-body" style="padding:10px 12px;gap:4px"><b style="font-size:14px">This sell prints a fumble ticket</b>
+          <span style="font-size:13px;color:var(--ink-2)">If $${k} holds ${px(c.p*10)} SOL${g?'':' after graduation'}, claim ${g?'200,000':'1,000,000'} ${k}. 90 days.</span></div></div></div>
+        <dl class="kv" style="margin:0 0 14px"><dt>You receive</dt><dd>${(g?2e6:1e7)*c.p*0.99 > 1 ? ((g?2e6:1e7)*c.p*0.99).toFixed(2) : ((g?2e6:1e7)*c.p*0.99).toFixed(3)} SOL</dd><dt>Open tickets on ${k}</dt><dd>${g?'2 of 5':'1 of 5'}</dd></dl>
+        <button class="btn sell block lg" onclick="toast('Sold. Ticket printed, check My Fumbles')">Sell and print ticket</button>`}
+    </div>`;
+
+  el.innerHTML = switcher + head + `<div class="coin-grid"><div class="col">${chart}${g?'':curve}${stats}${fumbles}</div><div class="col">${trade}${pool}${queue}</div></div>`;
+  $$('[data-side]', el).forEach(b=>b.onclick=()=>{ tradeSide=b.dataset.side; renderCoin(k); $('[data-side="'+tradeSide+'"]').focus(); });
+}
+
+/* ---------------- tickets ---------------- */
+const TICKETS = [
+  {id:'CAPY-0412',coin:'CAPY',state:'ready',sold:2_400_000,sp:0.000000418,cur:0.00000452,solGot:1.003,days:84,when:'Oct 5, 14:22'},
+  {id:'PELI-2207',coin:'PELI',state:'queued',sold:1_200_000,sp:0.00000124,cur:0.0000131,solGot:1.488,days:null,when:'Sep 30, 09:41',queue:3,eta:'~2 days at current fee flow'},
+  {id:'CAPY-0455',coin:'CAPY',state:'open',sold:800_000,sp:0.000000497,cur:0.00000452,solGot:0.398,days:86,when:'Oct 7, 21:03',rebuy:300_000},
+  {id:'TOAST-1009',coin:'TOAST',state:'open',sold:5_000_000,sp:0.00000021,cur:0.000001302,solGot:1.05,days:61,when:'Sep 10, 18:15'},
+  {id:'GOOB-0031',coin:'GOOB',state:'curve',sold:10_000_000,sp:0.0000000394,cur:0.000000134,solGot:0.394,days:90,when:'Today, 11:08'},
+  {id:'SNOOT-0870',coin:'SNOOT',state:'expiring',sold:3_100_000,sp:0.00000055,cur:0.00000071,solGot:1.705,days:4,when:'Jul 17, 23:50'},
+];
+function ticketHTML(t){
+  const c = COINS[t.coin], x = +(t.cur/t.sp).toFixed(1);
+  const base = t.sold*0.1, claim = t.rebuy ? (t.sold - t.rebuy)*0.1 : base;
+  const val = claim*t.cur;
+  let stick='', foot='', note='';
+  if (t.state==='ready'){ stick=`<span class="sticker tenx" style="--rot:-3deg"><svg><use href="#i-bolt"/></svg>Ready</span>`;
+    foot=`<span style="font-size:13px"><b>${t.days} days</b> <span class="muted">left to claim</span></span><a href="#claim" class="btn">Claim ${short(claim)} ${t.coin}</a>`; }
+  if (t.state==='queued'){ stick=`<span class="sticker inq" style="--rot:2deg"><svg><use href="#i-clock"/></svg>In queue</span>`;
+    note=`<div class="note"><svg><use href="#i-info"/></svg><span>The $PELI pool is short after 214 tickets unlocked at once. You're <b>#${t.queue}</b> in line, ${t.eta}. Queued tickets don't expire.</span></div>`;
+    foot=`<span style="font-size:13px"><b>Position #${t.queue}</b> <span class="muted">of 9</span></span><button class="btn" disabled>Queued</button>`; }
+  if (t.state==='open'){ foot=`<span style="font-size:13px"><b>${t.days} days</b> <span class="muted">left, needs ${px(t.sp*10)} SOL</span></span><a href="#coin" class="btn ghost sm">View coin</a>`; }
+  if (t.rebuy){ note=`<div class="note warn"><svg><use href="#i-info"/></svg><span>You bought back 300,000 CAPY within 7 days, so this ticket pays 50,000 CAPY instead of 80,000.</span></div>`; }
+  if (t.state==='curve'){ stick=`<span class="sticker launch" style="--rot:2deg"><svg><use href="#i-sprout"/></svg>On curve</span>`;
+    note=`<div class="note"><svg><use href="#i-info"/></svg><span>$GOOB is 66.6% up its curve. Claims open after it graduates, and the 90 days start from your sell.</span></div>`;
+    foot=`<span style="font-size:13px"><b>${t.days} days</b> <span class="muted">left</span></span><a href="#coin-curve" class="btn ghost sm">View curve</a>`; }
+  if (t.state==='expiring'){ stick=`<span class="sticker fumble" style="--rot:-2deg"><svg><use href="#i-clock"/></svg>4 days left</span>`;
+    foot=`<span style="font-size:13px;color:var(--fumble-ink)"><b>Expires Oct 15</b></span><a href="#coin" class="btn ghost sm">View coin</a>`; }
+  return `<div class="tkt-wrap" data-state="${t.state}"><article class="tkt ${t.state}" aria-label="Ticket ${t.id}">
+    <div class="tkt-stub">${av(t.coin,c.c)}<span class="tk">$${t.coin}</span><span class="serial">${t.id.split('-')[1]}</span></div>
+    <div class="tkt-body">
+      <div class="tkt-top"><div><h3>Sold ${short(t.sold)} ${t.coin}</h3><div class="muted" style="font-size:13px">${t.when}, got ${t.solGot.toFixed(3)} SOL</div></div>${stick}</div>
+      <div>
+        <div class="meter-row"><span class="muted">Now ${px(t.cur)}, 30-min median</span><span class="x">${x}x</span></div>
+        ${meter(x)}
+      </div>
+      <div class="tkt-facts">
+        <div><div class="l">Sell price</div><div class="v">${px(t.sp)}</div></div>
+        <div><div class="l">10x target</div><div class="v">${px(t.sp*10)}</div></div>
+        <div><div class="l">Your claim</div><div class="v">${short(claim)} ${t.coin}</div></div>
+        <div><div class="l">Worth now</div><div class="v">${val.toFixed(3)} SOL</div></div>
+      </div>
+      ${note}
+      <div class="tkt-foot">${foot}</div>
+    </div></article></div>`;
+}
+function renderTickets(f){
+  const list = f==='open' ? TICKETS : f==='ready' ? TICKETS.filter(t=>t.state==='ready') : [];
+  if (f==='claimed'){
+    $('#tickets').innerHTML = [['WOMP','4.1M','142x','1.62 SOL','May 28'],['PELI','600K','31.2x','0.98 SOL','Sep 24'],['MOCHI','2.2M','10.3x','0.47 SOL','Aug 2'],['CAPY','150K','10.1x','0.34 SOL','Oct 9']]
+      .map(([k,a,x,s,d])=>`<div class="panel" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="sticker claim"><svg><use href="#i-check"/></svg>${x}</span><div style="flex:1;min-width:140px"><b>${a} ${k}</b> <span class="muted">claimed ${d}</span></div><b>${s}</b></div>`).join('');
+    return;
+  }
+  if (f==='expired'){
+    $('#tickets').innerHTML = `<div class="empty"><svg viewBox="0 0 72 60" aria-hidden="true"><use href="#mark" x="0" y="0" width="72" height="60" style="--mk-fill:#fff;--mk-ink:#9C99AE"/></svg><b style="font-size:17px">No expired tickets</b><span class="muted" style="max-width:36ch">Tickets expire 90 days after the sell if they never reach 10x. Your oldest open ticket, SNOOT-0870, has 4 days left.</span><a href="#coin" class="btn ghost sm" style="margin-top:6px">View $SNOOT</a></div>`;
+    return;
+  }
+  $('#tickets').innerHTML = list.map(ticketHTML).join('');
+}
+renderTickets('open');
+$$('[data-tf]').forEach(b=>b.onclick=()=>{ $$('[data-tf]').forEach(x=>x.setAttribute('aria-selected',x===b)); renderTickets(b.dataset.tf); });
+
+/* ---------------- jackpot ---------------- */
+let jpTimers = [], lastFocus;
+function openJackpot(){
+  const jk = $('#jackpot'), jp = $('#jp');
+  lastFocus = document.activeElement;
+  jk.classList.add('on'); jp.classList.remove('claimed');
+  document.body.style.overflow='hidden';
+  const stamp = $('.jp-stamp'), print = $('#jpPrint'), mEl = $('#jpMeter');
+  stamp.classList.remove('go'); print.classList.remove('go');
+  jpTimers.forEach(clearTimeout); jpTimers=[];
+  mEl.outerHTML = meter(0,'lg').replace('class="meter','id="jpMeter" style="max-width:340px" class="meter');
+  const target = 10.8;
+  const finish = () => {
+    $('#jpX').textContent = target.toFixed(1)+'x';
+    $('#jpMeter').outerHTML = meter(target,'lg').replace('class="meter','id="jpMeter" style="max-width:340px" class="meter');
+    stamp.classList.add('go'); print.classList.add('go');
+    if (!reduce) confetti(40, ['#FFC21A','#FFD95C','#fff']);
+    $('#claimBtn').focus({preventScroll:true});
+  };
+  if (reduce){ finish(); return; }
+  const t0 = performance.now(), dur = 1600;
+  (function tick(now){
+    const p = Math.min(1,(now-t0)/dur), e = 1-Math.pow(1-p,3), x = 1 + (target-1)*e;
+    $('#jpX').textContent = x.toFixed(1)+'x';
+    $$('#jpMeter i').forEach((s,i)=>s.style.setProperty('--f', Math.max(0,Math.min(1,x-i))));
+    if (p<1) requestAnimationFrame(tick); else { $('#jpMeter').classList.add('full'); jpTimers.push(setTimeout(finish, 180)); }
+  })(t0);
+}
+$('#claimBtn').onclick = function(){
+  const b = this; b.disabled = true; b.textContent = 'Confirming in wallet…';
+  setTimeout(()=>{ $('#jp').classList.add('claimed'); b.disabled=false; b.textContent='Claim 240,000 CAPY';
+    if (!reduce) confetti(90, ['#FFC21A','#FF5C8A','#7BE3A6','#fff','#C9D3FF']);
+    $('.jp-done .btn').focus({preventScroll:true});
+    // reflect on dashboard
+    const t = TICKETS.find(t=>t.id==='CAPY-0412'); if (t && t.state==='ready'){ TICKETS.splice(TICKETS.indexOf(t),1); renderTickets('open');
+      $$('.count-badge').forEach(b=>b.remove()); const sv=$$('.score-strip .v'); sv[0].textContent='0.000'; sv[1].textContent='5'; sv[2].textContent='4.497'; }
+  }, reduce?200:1100);
+};
+function hideJackpot(){ $('#jackpot').classList.remove('on'); document.body.style.overflow=''; }
+function closeJackpot(toCard){ hideJackpot(); if (!toCard && location.hash==='#claim') location.hash='fumbles'; if (lastFocus && !toCard) lastFocus.focus?.(); }
+addEventListener('keydown', e=>{ if (e.key==='Escape' && $('#jackpot').classList.contains('on')) closeJackpot();
+  if (e.key==='Tab' && $('#jackpot').classList.contains('on')){ const f=$$('#jp button:not([disabled]), #jp a').filter(x=>x.offsetParent); const a=f[0], z=f[f.length-1];
+    if (e.shiftKey && document.activeElement===a){ e.preventDefault(); z.focus(); } else if (!e.shiftKey && document.activeElement===z){ e.preventDefault(); a.focus(); } } });
+function confetti(count, colors){
+  const box = document.createElement('div'); box.className='confetti'; box.setAttribute('aria-hidden','true');
+  for (let i=0;i<count;i++){
+    const el = document.createElement('i'), tkt = Math.random()<.5;
+    el.style.cssText = `--x:${Math.random()*100}vw;--c:${colors[i%colors.length]};--dx:${(Math.random()-.5)*240}px;--r:${(Math.random()*900+200)*(Math.random()<.5?-1:1)}deg;--d:${1.8+Math.random()*1.6}s;--dl:${Math.random()*.6}s;--w:${tkt?22:14}px;--h:${tkt?12:14}px;--br:${tkt?'3px':'50%'}`;
+    box.appendChild(el);
+  }
+  document.body.appendChild(box); setTimeout(()=>box.remove(), 4200);
+}
+
+/* ---------------- share card ---------------- */
+let cardV = 'claimed';
+function renderOG(){
+  const claimed = cardV==='claimed';
+  $('#og').innerHTML = `<div class="og-bg"></div><div class="og-inner">
+    <div style="position:relative">
+      <span class="logo"><svg style="width:64px;height:54px"><use href="#mark"/></svg><span class="word" style="font-size:40px">FUMPAD</span></span>
+      <h2>${claimed?'I fumbled $CAPY. FUMPAD paid me back.':'I fumbled $TOAST. The meter is still running.'}</h2>
+      <p class="lede">${claimed?'Sold 2.4M CAPY at 0.0₆418 SOL. It held 10.8x, so I claimed 10% of what I sold.':'Sold 5M TOAST at 0.0₆210 SOL. At 10x I get 500,000 TOAST back.'}</p>
+      <div class="foot">${pfp(0,'width:56px;height:56px;border-radius:16px;border-width:3px;background:conic-gradient(from 40deg,#FF5C8A,#FFC21A,#7BE3A6,#FF5C8A)')}<span>butterfingers.sol<br><span style="font-weight:500;font-size:19px">fumpad.fun/f/${claimed?'CAPY-0412':'TOAST-1009'}</span></span></div>
+    </div>
+    <div class="tk2">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="sticker ${claimed?'claim':'fumble'}" style="font-size:18px;padding:8px 16px">${claimed?'Claimed':'Still fumbling'}</span><span class="serial">${claimed?'CAPY-0412':'TOAST-1009'}</span></div>
+      <div class="x">${claimed?'10.8x':'6.2x'}</div>
+      ${meter(claimed?10.8:6.2)}
+      <div class="perf"></div>
+      <div class="facts">
+        <div><div class="l">${claimed?'Claimed':'Claim at 10x'}</div><div class="v">${claimed?'240,000 CAPY':'500,000 TOAST'}</div></div>
+        <div><div class="l">${claimed?'Worth':'Worth now'}</div><div class="v">${claimed?'1.085 SOL':'0.651 SOL'}</div></div>
+      </div>
+    </div></div>`;
+}
+renderOG();
+function fitOG(){ const w = $('#ogWrap').clientWidth; if (w) $('#og').style.setProperty('--s', w/1200); }
+new ResizeObserver(fitOG).observe($('#ogWrap'));
+$$('[data-cv]').forEach(b=>b.onclick=()=>{ $$('[data-cv]').forEach(x=>x.setAttribute('aria-selected',x===b)); cardV=b.dataset.cv; renderOG(); });
+
+/* ---------------- leaderboard ---------------- */
+const LB = {
+  fumbles:[['sendor.sol','Sold $WOMP at $3.1K mcap','142x',''],['Qz7v…nB2c','Sold $PELI at 0.0₆98','133x',''],['grandmaxi.sol','Sold $CAPY on the curve','88.4x',''],['W1fe…Hk9s','Sold $TOAST at launch','61.0x',''],['3eLm…pP0d','Sold $MOCHI after 10 min','47.2x',''],['dgn.sol','Sold $PELI twice','39.9x',''],['butterfingers.sol','Sold $WOMP in May','31.6x','you']],
+  claimers:[['degenmom.sol','11 claims this week','42.18','SOL'],['fumblelord.sol','8 claims','30.02','SOL'],['Hn8w…Qe0r','6 claims','21.77','SOL'],['Jt5c…aa1N','5 claims','17.40','SOL'],['sol4.sol','4 claims','12.95','SOL'],['8Hq2…vT4c','4 claims','9.81','SOL'],['butterfingers.sol','1 claim this week','1.085','SOL','you']],
+  diamond:[['degenmom.sol','Waited on $PELI to claim','31.2x','at claim'],['Zx1a…Ty8u','Waited on $WOMP','28.7x','at claim'],['grandmaxi.sol','Waited on $CAPY','19.4x','at claim'],['Pp4k…Lm2r','Waited on $PELI','17.0x','at claim'],['mochimom.sol','Waited on $MOCHI','15.5x','at claim'],['4kTm…9QaZ','Waited on $CAPY','14.1x','at claim']],
+};
+function renderLB(k){
+  $('#board').innerHTML = LB[k].map((r,i)=>{ const you = r[4]==='you'||r[3]==='you'; const unit = k==='fumbles'?'':r[3];
+    return `<div class="lb-row ${i<3?'top':''} ${you?'you':''}"><span class="lb-rank">${you?212:String(i+1).padStart(2,'0')}</span>${pfp(i+2,'width:36px;height:36px;border-radius:11px;border-color:#000')}
+      <div style="min-width:0"><div class="who">${r[0]}${you?' (you)':''}</div><div class="what">${r[1]}</div></div>
+      <div class="val">${r[2]}${unit?`<small>${unit}</small>`:''}</div></div>`; }).join('');
+}
+renderLB('fumbles');
+$$('[data-lb]').forEach(b=>b.onclick=()=>{ $$('[data-lb]').forEach(x=>x.setAttribute('aria-selected',x===b)); renderLB(b.dataset.lb); });
+
+const STK = [
+  ['First fumble','Printed a ticket','#FF5C8A','i-down',-6,0],
+  ['10x club','Claimed at 10x','#FFC21A','i-bolt',4,0],
+  ['Diamond regret','Claimed past 30x','#C9D3FF','i-trophy',-3,0],
+  ['Curve sitter','Ticket from the curve','#7BE3A6','i-sprout',5,0],
+  ['Patient','Waited in the queue','#9AD7F0','i-clock',-4,0],
+  ['Grad day','Held through graduation','#F2A65A','i-grad',3,0],
+  ['100x fumble','Sell something that runs 100x','','i-bolt',0,1],
+  ['Fumble of the week','Top the board','','i-trophy',0,1],
+  ['Full set','5 open tickets on one coin','','i-ticket',0,1],
+  ['Comeback','Claim on 3 coins','','i-check',0,1],
+];
+$('#stickers').innerHTML = STK.map(([t,d,c,ic,r,l])=>`<div class="stk ${l?'locked':''}"><span class="die" style="--c:${c};--rot:${r}deg"><svg aria-hidden="true"><use href="#${ic}"/></svg></span><span>${t}</span><small>${d}</small></div>`).join('');
+
+/* ---------------- press feel for keyboard ---------------- */
+addEventListener('keydown',e=>{ if((e.key===' '||e.key==='Enter') && e.target.classList?.contains('btn')) e.target.classList.add('is-pressed'); });
+addEventListener('keyup',e=>{ e.target.classList?.remove('is-pressed'); });
+$$('.btn').forEach(b=>{ if(!b.onclick && b.tagName==='BUTTON' && !b.id && !b.closest('.jp')) b.addEventListener('click',()=>toast(b.textContent.trim()+' pressed')); });
+
+route();
+</script>
+</body>
+</html>

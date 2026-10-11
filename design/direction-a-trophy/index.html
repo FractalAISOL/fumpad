@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FUMPAD — Trophy Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800;900&family=Cormorant+Garamond:ital,wght@1,500;1,600;1,700&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Surfaces: the vault */
+  --vault:#15100C;       /* page: oiled walnut, nearly black */
+  --leather:#201812;     /* panels */
+  --leather-2:#2A2018;   /* raised */
+  --seam:#3A2D22;        /* borders */
+  /* Paper */
+  --bone:#EEE4D0;        /* primary text, ticket stock */
+  --bone-2:#CDBFA6;      /* secondary text */
+  --dust:#A3937B;        /* tertiary text (6.4:1 on vault) */
+  --ink:#1B140F;         /* text on bone & brass */
+  /* Metal */
+  --brass:#C9A14A;
+  --brass-hi:#EED38C;
+  --brass-lo:#7E5F24;
+  --foil:linear-gradient(135deg,#7E5F24 0%,#D9B866 28%,#F3DD9C 42%,#C9A14A 58%,#8C6A2B 100%);
+  /* Signals */
+  --felt:#2F6B52;        /* claimable / crossed: billiard felt */
+  --felt-hi:#7FC4A2;
+  --claret:#7A2430;      /* the fumble, the curtain */
+  --claret-hi:#E07A84;
+  /* Type */
+  --f-display:"Big Shoulders Display", "Arial Narrow", sans-serif;
+  --f-engrave:"Cormorant Garamond", Georgia, serif;
+  --f-ui:"Hanken Grotesk", system-ui, sans-serif;
+  /* Scale (1.25, display steps jump) */
+  --t-xs:.75rem; --t-sm:.875rem; --t-md:1rem; --t-lg:1.25rem; --t-xl:1.75rem; --t-2xl:2.5rem; --t-3xl:3.75rem; --t-4xl:5.5rem;
+  --r-plate:4px; --r-panel:14px; --r-pill:999px;
+  --ease-out:cubic-bezier(.2,.8,.2,1);
+  --maxw:1180px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--vault);
+  color:var(--bone);
+  font-family:var(--f-ui);
+  font-size:var(--t-md);
+  line-height:1.5;
+  font-variant-numeric:tabular-nums;
+  min-height:100vh;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{ /* leather grain */
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.35;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .38 0 0 0 0 .25 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer;background:none;border:0}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--brass-hi);outline-offset:3px;border-radius:4px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+img,svg{display:block;max-width:100%}
+
+/* ---------- Chrome ---------- */
+.top{
+  position:sticky;top:0;z-index:20;
+  background:linear-gradient(var(--vault) 70%, rgba(21,16,12,.0));
+  padding:14px 16px 18px;
+}
+.top-in{max-width:var(--maxw);margin:0 auto;display:flex;align-items:center;gap:20px}
+.wordmark{display:flex;align-items:center;gap:10px;text-decoration:none}
+.wordmark b{font-family:var(--f-display);font-weight:900;font-size:1.65rem;letter-spacing:.02em;line-height:1}
+.mark{width:34px;height:34px;flex:none}
+.nav{display:none;gap:2px;margin-left:12px}
+.nav button{padding:8px 12px;border-radius:var(--r-pill);color:var(--bone-2);font-weight:500;font-size:var(--t-sm)}
+.nav button:hover{color:var(--bone)}
+.nav button[aria-current="page"]{color:var(--ink);background:var(--bone)}
+.wallet{margin-left:auto;display:flex;align-items:center;gap:8px;padding:5px 6px 5px 12px;border:1px solid var(--seam);border-radius:var(--r-pill);font-size:var(--t-sm);color:var(--bone-2)}
+.wallet .lvl{font-family:var(--f-display);font-weight:800;font-size:.95rem;color:var(--ink);background:var(--foil);border-radius:var(--r-pill);padding:2px 9px}
+.tabbar{
+  position:fixed;left:0;right:0;bottom:0;z-index:30;
+  display:grid;grid-template-columns:repeat(5,1fr);
+  background:rgba(21,16,12,.96);border-top:1px solid var(--seam);
+  padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+  backdrop-filter:blur(8px);
+}
+.tabbar button{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0;font-size:.6875rem;color:var(--dust);font-weight:600}
+.tabbar svg{width:22px;height:22px}
+.tabbar button[aria-current="page"]{color:var(--brass-hi)}
+main{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 16px 110px}
+.screen{display:none}
+.screen.on{display:block;animation:enter .35s var(--ease-out)}
+@keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (min-width:900px){
+  .nav{display:flex}
+  .tabbar{display:none}
+  main{padding:8px 32px 80px}
+  .top{padding:18px 32px 22px}
+}
+
+/* ---------- Primitives ---------- */
+h1,h2,h3{font-weight:400}
+.display{font-family:var(--f-display);font-weight:900;line-height:.9;letter-spacing:-.005em}
+.engr,.ticket .inscr,.og .in,.mini-stub .engr{font-family:var(--f-engrave);font-style:italic;font-weight:600;font-variant-numeric:lining-nums tabular-nums}
+sub.z{font-size:.62em;vertical-align:-.28em;line-height:0;font-family:var(--f-ui);font-style:normal;font-weight:700;padding:0 .04em}
+.muted{color:var(--bone-2)}
+.dust{color:var(--dust)}
+.brass{color:var(--brass)}
+.felt{color:var(--felt-hi)}
+.claret{color:var(--claret-hi)}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.panel{background:var(--leather);border:1px solid var(--seam);border-radius:var(--r-panel)}
+.hr{height:1px;background:var(--seam);border:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:var(--r-plate);font-weight:700;font-size:var(--t-sm);letter-spacing:.01em;transition:transform .12s, filter .2s}
+.btn:active{transform:translateY(1px)}
+.btn-brass{background:var(--foil);color:var(--ink);box-shadow:inset 0 1px 0 rgba(255,245,210,.6), inset 0 -2px 0 rgba(60,40,10,.35), 0 6px 18px -8px rgba(201,161,74,.6)}
+.btn-brass:hover{filter:brightness(1.07)}
+.btn-bone{background:var(--bone);color:var(--ink)}
+.btn-ghost{border:1px solid var(--seam);color:var(--bone)}
+.btn-ghost:hover{border-color:var(--dust)}
+.btn[disabled]{opacity:.55;cursor:not-allowed}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--r-pill);border:1px solid var(--seam);font-size:var(--t-sm);color:var(--bone-2);white-space:nowrap}
+.chip[aria-pressed="true"]{background:var(--bone);color:var(--ink);border-color:var(--bone)}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.chips::-webkit-scrollbar{display:none}
+
+/* Coin enamel pin avatar */
+.av{--h:30;width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;
+  font-family:var(--f-display);font-weight:900;font-size:.95rem;color:hsl(var(--h) 40% 92%);
+  background:radial-gradient(circle at 35% 30%, hsl(var(--h) 45% 46%), hsl(var(--h) 50% 24%) 70%);
+  box-shadow:inset 0 0 0 2px rgba(238,211,140,.55), inset 0 0 0 4px hsl(var(--h) 50% 20%);}
+.av.sm{width:30px;height:30px;font-size:.75rem}
+.av.lg{width:64px;height:64px;font-size:1.4rem}
+
+/* Section heads: a plaque, not an eyebrow */
+.head{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px;margin:28px 0 14px}
+.head h2{font-family:var(--f-display);font-weight:800;font-size:var(--t-xl);line-height:1}
+.head p{color:var(--dust);font-size:var(--t-sm)}
+
+/* ---------- Ticket (signature) ---------- */
+.ticket{position:relative;display:grid;grid-template-columns:84px 1fr;background:var(--leather);border:1px solid var(--seam);border-radius:var(--r-panel);overflow:hidden}
+.ticket .stub{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:10px;padding:14px 6px;border-right:2px dashed rgba(238,228,208,.16);background:var(--leather-2);text-align:center}
+.ticket .stub::before,.ticket .stub::after{content:"";position:absolute;right:-9px;width:16px;height:16px;border-radius:50%;background:var(--vault);border:1px solid var(--seam)}
+.ticket .stub::before{top:-9px}
+.ticket .stub::after{bottom:-9px}
+.serial{font-family:var(--f-display);font-weight:700;font-size:.8125rem;color:var(--dust);letter-spacing:.04em;writing-mode:vertical-rl;transform:rotate(180deg)}
+.stub .tk{font-family:var(--f-display);font-weight:900;font-size:1rem;line-height:1}
+.ticket .body{padding:14px 16px 14px 18px;min-width:0}
+@media (max-width:480px){.ticket{grid-template-columns:70px 1fr}.ticket .body{padding:14px 14px 14px 16px}}
+.ticket .inscr{font-family:var(--f-engrave);font-style:italic;font-weight:600;font-size:1.125rem;line-height:1.3;color:var(--bone)}
+.ticket .meta{font-size:var(--t-xs);color:var(--dust);margin-top:2px}
+.ticket .foot{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-top:12px}
+.ticket .foot .stat{display:flex;flex-direction:column;line-height:1.2}
+.ticket .foot .stat small{font-size:.6875rem;color:var(--dust)}
+.ticket .foot .stat b{font-weight:600;font-size:var(--t-sm)}
+.ticket .foot .act{margin-left:auto}
+.ticket.claimable{border-color:rgba(201,161,74,.55);background:linear-gradient(100deg, rgba(201,161,74,.08), transparent 55%), var(--leather)}
+.ticket.claimable .stub{background:var(--foil);color:var(--ink)}
+.ticket.claimable .serial{color:rgba(27,20,15,.7)}
+.ticket.expired{opacity:.62}
+.ticket.expired .inscr{text-decoration:line-through;text-decoration-color:rgba(238,228,208,.35)}
+.badge{white-space:nowrap;flex:none;display:inline-flex;align-items:center;gap:5px;font-size:.6875rem;font-weight:700;padding:3px 8px;border-radius:var(--r-plate);letter-spacing:.01em}
+.badge.felt{background:rgba(47,107,82,.35);color:var(--felt-hi)}
+.badge.brass{background:rgba(201,161,74,.16);color:var(--brass-hi)}
+.badge.claret{background:rgba(122,36,48,.45);color:#F2B3B9}
+.badge.dust{background:rgba(163,147,123,.14);color:var(--bone-2)}
+
+/* Gauge: log scale 1x→10x */
+.gauge{position:relative;margin:32px 0 22px;height:8px;border-radius:2px;background:#110C09;box-shadow:inset 0 1px 2px rgba(0,0,0,.6), 0 0 0 1px var(--seam)}
+.gauge .fill{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:linear-gradient(90deg,#5b4520,var(--brass));transform-origin:left;}
+.gauge.done .fill{background:var(--foil)}
+.gauge .tick{position:absolute;top:-3px;bottom:-3px;width:1px;background:rgba(238,228,208,.22)}
+.gauge .tick span{position:absolute;top:15px;left:50%;transform:translateX(-50%);font-size:.625rem;color:var(--dust);font-weight:600}
+.gauge .post{position:absolute;right:-1px;top:-6px;bottom:-6px;width:3px;border-radius:2px;background:var(--foil)}
+.gauge .now{position:absolute;top:50%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:var(--bone);box-shadow:0 0 0 3px var(--vault)}
+.gauge .now.end em{left:auto;right:-4px;transform:none}
+.gauge .now em{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);font-style:normal;font-family:var(--f-display);font-weight:800;font-size:.9375rem;color:var(--bone);white-space:nowrap}
+
+/* ---------- FEED ---------- */
+.hero-strip{display:grid;gap:16px;margin-top:6px}
+.hero-row{display:grid;gap:18px;align-items:end;grid-template-columns:minmax(0,1fr)}
+@media (min-width:900px){.hero-row{grid-template-columns:minmax(0,1fr) 400px}}
+.case{position:relative;display:grid;grid-template-columns:118px 1fr;gap:6px 16px;align-items:center;padding:16px 18px 16px 10px;border-radius:var(--r-panel);border:1px solid var(--seam);
+  background:radial-gradient(60% 90% at 18% 0%, rgba(238,211,140,.20), transparent 70%), linear-gradient(180deg,#241A12,#1A130E)}
+.case::before{content:"";position:absolute;inset:6px;border-radius:10px;border:1px solid rgba(238,228,208,.06);pointer-events:none}
+.case svg{width:118px}
+.case .engr{font-size:1.125rem;line-height:1.3}
+.case .who{font-size:var(--t-xs);color:var(--dust);margin-bottom:4px}
+.case .btn{min-height:36px;padding:0 12px;margin-top:10px;font-size:var(--t-xs)}
+.hero-title{font-size:clamp(2.6rem,11vw,5.25rem)}
+.hero-title .l2{display:block;font-variant-numeric:lining-nums;font-family:var(--f-engrave);font-style:italic;font-weight:600;font-size:.52em;line-height:1.15;color:var(--brass);letter-spacing:0;margin-top:6px}
+.ticker{display:flex;gap:22px;overflow:hidden;border-block:1px solid var(--seam);padding:10px 0;font-size:var(--t-sm);white-space:nowrap;mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)}
+.ticker-run{display:flex;gap:28px;animation:run 48s linear infinite}
+@keyframes run{to{transform:translateX(-50%)}}
+.ticker b{font-weight:700}
+.feed-grid{display:grid;gap:24px;margin-top:8px}
+.feed-grid,.hall-grid,.coin-grid{grid-template-columns:minmax(0,1fr)}
+.feed-grid > *,.hall-grid > *,.coin-grid > *,.hero-row > *{min-width:0}
+@media (min-width:900px){.feed-grid{grid-template-columns:minmax(0,1fr) 340px}}
+.post{display:grid;grid-template-columns:40px 1fr;gap:12px;padding:16px 0;border-bottom:1px solid var(--seam)}
+.post .who{font-size:var(--t-sm);color:var(--dust);display:flex;gap:6px;flex-wrap:wrap;align-items:baseline}
+.post .who b{color:var(--bone);font-weight:600}
+.post .txt{margin-top:2px;font-size:.96875rem}
+.post .txt strong{font-weight:700}
+.post .attach{margin-top:10px}
+.post .acts{display:flex;gap:18px;margin-top:10px;color:var(--dust);font-size:var(--t-xs)}
+.post .acts span{display:inline-flex;gap:5px;align-items:center}
+.kind{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--seam);background:var(--leather)}
+.kind svg{width:18px;height:18px}
+.mini-stub{display:flex;align-items:stretch;border:1px solid var(--seam);border-radius:10px;overflow:hidden;background:var(--leather)}
+.mini-stub .l{padding:10px 12px;background:var(--leather-2);border-right:2px dashed rgba(238,228,208,.14);font-family:var(--f-display);font-weight:800;font-size:var(--t-sm);display:flex;align-items:center}
+.mini-stub .r{padding:10px 12px;flex:1;min-width:0;font-size:var(--t-sm)}
+.mini-stub .r .engr{font-size:1rem}
+.mini-stub.gold .l{background:var(--foil);color:var(--ink)}
+.cross{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;background:radial-gradient(120% 140% at 0% 0%, rgba(47,107,82,.35), transparent 60%), var(--leather);border:1px solid rgba(127,196,162,.25)}
+.cross .big{font-family:var(--f-display);font-weight:900;font-size:2.5rem;line-height:.9;color:var(--felt-hi)}
+.new-pill{position:sticky;top:76px;z-index:5;display:flex;justify-content:center;margin:8px 0 -4px}
+.new-pill button{background:var(--bone);color:var(--ink);font-weight:700;font-size:var(--t-xs);padding:7px 14px;border-radius:var(--r-pill);box-shadow:0 8px 20px -6px rgba(0,0,0,.6)}
+.skel{height:84px;border-radius:10px;margin:14px 0;background:linear-gradient(90deg,var(--leather) 0%,var(--leather-2) 50%,var(--leather) 100%);background-size:200% 100%;animation:sh 1.1s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.side .row{display:grid;grid-template-columns:20px 30px 1fr auto;gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid var(--seam);font-size:var(--t-sm)}
+.side .rk{font-family:var(--f-display);font-weight:800;color:var(--dust)}
+.side .bar{height:3px;background:#110C09;border-radius:2px;margin-top:5px;overflow:hidden}
+.side .bar i{display:block;height:100%;background:var(--brass)}
+.how{padding:18px}
+.how ol{list-style:none;counter-reset:s;display:grid;gap:12px;margin-top:12px}
+.how li{counter-increment:s;display:grid;grid-template-columns:28px 1fr;gap:10px;font-size:var(--t-sm);color:var(--bone-2)}
+.how li::before{content:counter(s);font-family:var(--f-display);font-weight:900;font-size:1.25rem;color:var(--brass);line-height:1.1}
+.how li b{color:var(--bone);font-weight:600}
+
+/* ---------- COIN ---------- */
+.coin-hd{display:flex;gap:14px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.coin-hd h1{font-family:var(--f-display);font-weight:900;font-size:clamp(2rem,8vw,3.25rem);line-height:.95}
+.coin-hd .px{margin-left:auto;text-align:right}
+.coin-hd > div:nth-child(2){flex:1;min-width:0}
+@media (max-width:599px){.coin-hd .av.lg{width:52px;height:52px;font-size:1.15rem}.coin-hd .px{width:100%;margin-left:0;text-align:left;display:flex;gap:10px;align-items:baseline}}
+.coin-hd .px b{font-family:var(--f-display);font-weight:800;font-size:1.75rem;display:block;line-height:1}
+.seg{display:inline-flex;border:1px solid var(--seam);border-radius:var(--r-pill);padding:3px;gap:2px}
+.seg button{padding:6px 12px;border-radius:var(--r-pill);font-size:var(--t-xs);font-weight:600;color:var(--bone-2)}
+.seg button[aria-pressed="true"]{background:var(--leather-2);color:var(--bone);box-shadow:inset 0 0 0 1px var(--seam)}
+.coin-grid{display:grid;gap:16px;margin-top:16px}
+@media (min-width:900px){.coin-grid{grid-template-columns:minmax(0,1fr) 360px;align-items:start}}
+.chart{padding:14px 14px 8px}
+.chart svg{width:100%;height:auto}
+.chart-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--seam);border-radius:var(--r-panel);overflow:hidden;border:1px solid var(--seam)}
+@media (min-width:600px){.stats{grid-template-columns:repeat(4,1fr)}}
+.stats > div{background:var(--leather);padding:12px 14px}
+.stats small{display:block;font-size:var(--t-xs);color:var(--dust)}
+.stats b{font-family:var(--f-display);font-weight:800;font-size:1.5rem;line-height:1.1}
+.trade{padding:16px}
+.trade .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:#110C09;border-radius:var(--r-plate);padding:3px}
+.trade .tabs button{padding:9px;border-radius:3px;font-weight:700;font-size:var(--t-sm);color:var(--dust)}
+.trade .tabs button[aria-pressed="true"]{background:var(--bone);color:var(--ink)}
+.trade .tabs button.sell[aria-pressed="true"]{background:var(--claret);color:#FBE3E5}
+.field{margin-top:14px;display:flex;align-items:center;gap:8px;border:1px solid var(--seam);border-radius:var(--r-plate);padding:10px 12px;background:#120D0A}
+.field input{flex:1;min-width:0;background:none;border:0;font-family:var(--f-display);font-weight:800;font-size:1.6rem;outline:none}
+.field:focus-within{border-color:var(--brass)}
+.quick{display:flex;gap:6px;margin-top:8px}
+.quick button{flex:1;padding:7px 0;border:1px solid var(--seam);border-radius:var(--r-plate);font-size:var(--t-xs);color:var(--bone-2);font-weight:600}
+.ticket-preview{margin-top:14px;padding:12px;border-radius:10px;border:1px dashed rgba(201,161,74,.45);font-size:var(--t-sm);color:var(--bone-2)}
+.ticket-preview .engr{color:var(--bone);font-size:1.0625rem}
+.pool{padding:16px}
+.pool .vault-num{font-family:var(--f-display);font-weight:900;font-size:2.75rem;line-height:1}
+.split{display:flex;height:10px;border-radius:2px;overflow:hidden;margin:12px 0 8px;gap:2px}
+.split i:nth-child(1){flex:50;background:var(--brass)}
+.split i:nth-child(2){flex:30;background:var(--bone-2)}
+.split i:nth-child(3){flex:20;background:var(--claret-hi)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:var(--t-xs);color:var(--bone-2)}
+.legend span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:1px;margin-right:6px;background:var(--c)}
+.queue .q{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--seam);font-size:var(--t-sm)}
+.queue .q:last-child{border-bottom:0}
+.queue .pos{font-family:var(--f-display);font-weight:900;font-size:1.25rem;color:var(--dust)}
+.queue .q.you{background:linear-gradient(90deg,rgba(201,161,74,.12),transparent);margin:0 -16px;padding:10px 16px}
+.queue .q.you .pos{color:var(--brass)}
+.queue .q.skip .pos{color:var(--felt-hi)}
+.curve{padding:18px}
+.curve-track{position:relative;height:44px;margin:16px 0 10px;border-radius:var(--r-plate);background:repeating-linear-gradient(90deg,#120D0A 0 10px,#17110D 10px 20px);border:1px solid var(--seam);overflow:hidden}
+.curve-track .fill{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,rgba(201,161,74,.15),rgba(201,161,74,.55));border-right:2px solid var(--brass-hi)}
+.curve-track .fin{position:absolute;right:0;top:0;bottom:0;width:10px;background:repeating-linear-gradient(0deg,var(--bone) 0 5px,var(--ink) 5px 10px)}
+.curve-track .lbl{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-family:var(--f-display);font-weight:800;font-size:1.25rem}
+.empty{padding:22px;border:1px dashed var(--seam);border-radius:var(--r-panel);text-align:center;color:var(--bone-2);font-size:var(--t-sm)}
+.empty .engr{display:block;font-size:1.375rem;color:var(--bone);margin-bottom:4px}
+.tbl{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.tbl td,.tbl th{padding:9px 0;border-bottom:1px solid var(--seam);text-align:left}
+.tbl th{font-weight:500;color:var(--dust);font-size:var(--t-xs)}
+.tbl td:last-child,.tbl th:last-child{text-align:right}
+
+/* ---------- MY FUMBLES ---------- */
+.cab-hd{display:grid;gap:18px;margin-top:6px}
+@media (min-width:900px){.cab-hd{grid-template-columns:1.1fr 1fr;align-items:end}}
+.cab-hd h1{font-size:clamp(2.6rem,10vw,4.5rem)}
+.cab-hd h1 .engr{display:block;font-weight:600;font-size:.42em;color:var(--bone-2);line-height:1.3;margin-top:8px;letter-spacing:0}
+.tally{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--seam);border-radius:var(--r-panel);overflow:hidden}
+.tally > div{padding:14px;border-right:1px solid var(--seam)}
+.tally > div:last-child{border-right:0}
+.tally small{display:block;font-size:var(--t-xs);color:var(--dust)}
+.tally b{font-family:var(--f-display);font-weight:900;font-size:clamp(1.5rem,6vw,2.25rem);line-height:1}
+.tally .gold b{background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.tickets{display:grid;gap:14px}
+@media (min-width:900px){.tickets{grid-template-columns:1fr 1fr}}
+.rules{margin-top:28px;display:grid;gap:10px;font-size:var(--t-sm);color:var(--bone-2)}
+@media (min-width:700px){.rules{grid-template-columns:repeat(3,1fr)}}
+.rules div{padding:14px;border-top:2px solid var(--seam)}
+.rules b{display:block;color:var(--bone);font-weight:600;margin-bottom:2px}
+
+/* ---------- HALL ---------- */
+.hall-grid{display:grid;gap:20px;margin-top:10px}
+@media (min-width:900px){.hall-grid{grid-template-columns:360px minmax(0,1fr);align-items:start}}
+.profile{padding:20px;position:relative;overflow:hidden}
+.profile .lvlring{width:84px;height:84px}
+.profile h2{font-family:var(--f-display);font-weight:900;font-size:2rem;line-height:1}
+.xp{height:6px;background:#110C09;border-radius:3px;margin:8px 0 4px;overflow:hidden}
+.xp i{display:block;height:100%;width:64%;background:var(--foil)}
+.medals{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.medal{text-align:center;font-size:.6875rem;color:var(--bone-2);line-height:1.25}
+.medal svg{width:56px;height:56px;margin:0 auto 6px}
+.medal.locked{color:var(--dust)}
+.medal.locked svg{opacity:.35;filter:grayscale(1)}
+.board .r{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;padding:14px 4px;border-bottom:1px solid var(--seam)}
+.board .rank{font-family:var(--f-display);font-weight:900;font-size:1.9rem;line-height:1;color:var(--dust);text-align:center}
+.board .r:nth-child(1) .rank{background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent;font-size:2.4rem}
+.board .r:nth-child(2) .rank{color:#D8D2C6}
+.board .r:nth-child(3) .rank{color:#C08A5A}
+.board .r .engr{font-size:1.0625rem}
+.board .r .v{text-align:right}
+.board .r .v b{font-family:var(--f-display);font-weight:800;font-size:1.3rem;display:block;line-height:1}
+.board .r .v small{color:var(--dust);font-size:var(--t-xs)}
+.board .r.me{background:rgba(201,161,74,.08);border-radius:8px}
+
+/* ---------- SHARE CARD ---------- */
+.share-wrap{position:relative;width:100%;margin-top:14px}
+.og{position:absolute;left:0;top:0;width:1200px;height:630px;transform-origin:0 0;overflow:hidden;border-radius:6px;
+  background:
+   radial-gradient(90% 120% at 100% 0%, rgba(201,161,74,.16), transparent 55%),
+   var(--bone);color:var(--ink);display:grid;grid-template-columns:760px 440px;box-shadow:0 30px 60px -20px rgba(0,0,0,.7)}
+.og::after{content:"";position:absolute;inset:18px;border:2px solid rgba(27,20,15,.85);border-radius:2px;pointer-events:none;box-shadow:inset 0 0 0 6px var(--bone), inset 0 0 0 7px rgba(27,20,15,.35)}
+.og .l{padding:64px 0 56px 72px;display:flex;flex-direction:column}
+.og .brandrow{display:flex;align-items:center;gap:12px;font-family:var(--f-display);font-weight:900;font-size:34px}
+.og .no{margin-left:auto;margin-right:20px;font-family:var(--f-display);font-weight:700;font-size:22px;color:#6B5A44}
+.og .big{font-family:var(--f-display);font-weight:900;font-size:128px;line-height:.84;margin-top:34px;letter-spacing:-.01em}
+.og .big .x{display:inline-block;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.og .in{font-family:var(--f-engrave);font-style:italic;font-weight:600;font-size:34px;line-height:1.2;margin-top:20px;max-width:620px}
+.og .facts{display:flex;gap:44px;margin-top:auto;font-size:20px;color:#5A4A38}
+.og .facts b{display:block;font-family:var(--f-display);font-weight:800;font-size:40px;color:var(--ink);line-height:1.05}
+.og .r{position:relative;background:var(--ink);display:grid;place-items:center;margin:18px 18px 18px 0}
+.og .r::before{content:"";position:absolute;inset:0;background:radial-gradient(60% 50% at 50% 42%, rgba(238,211,140,.28), transparent 70%)}
+.og .r svg{position:relative;width:300px}
+.og .r .url{position:absolute;bottom:30px;left:0;right:0;text-align:center;color:var(--bone-2);font-size:20px;font-weight:600}
+
+/* ---------- CELEBRATION ---------- */
+.unveil{position:fixed;inset:0;z-index:100;display:none;place-items:center;overflow:hidden;
+  background:radial-gradient(55% 45% at 50% 42%, #3A2A16 0%, #15100C 70%);}
+.unveil.on{display:grid}
+.unveil .spot{position:absolute;left:50%;top:-10%;width:120vmax;height:120vmax;transform:translateX(-50%);background:conic-gradient(from 180deg at 50% 0%, transparent 168deg, rgba(238,211,140,.13) 180deg, transparent 192deg);pointer-events:none}
+.curtain{position:absolute;top:0;bottom:0;width:51%;z-index:3;
+  background:
+    repeating-linear-gradient(90deg, rgba(0,0,0,.28) 0 6px, rgba(255,255,255,.04) 14px, rgba(0,0,0,.22) 26px, rgba(0,0,0,.0) 34px),
+    linear-gradient(#8E2A37,#5C1922);
+  box-shadow:inset 0 -40px 60px rgba(0,0,0,.45)}
+.curtain.l{left:0;transform-origin:left}
+.curtain.r{right:0;transform-origin:right}
+.curtain::after{content:"";position:absolute;left:0;right:0;bottom:0;height:16px;background:var(--foil);opacity:.85}
+.unveil.go .curtain.l{animation:pullL 1.15s .25s cubic-bezier(.7,0,.2,1) forwards}
+.unveil.go .curtain.r{animation:pullR 1.15s .25s cubic-bezier(.7,0,.2,1) forwards}
+@keyframes pullL{to{transform:translateX(-42%) scaleX(.5)}}
+@keyframes pullR{to{transform:translateX(42%) scaleX(.5)}}
+.stage{position:relative;z-index:2;text-align:center;padding:24px 16px;max-width:560px;width:100%}
+.stage .trophy{width:min(230px,52vw);margin:0 auto;opacity:0;transform:translateY(30px) scale(.92)}
+.unveil.go .trophy{animation:rise 1s 1s var(--ease-out) forwards}
+@keyframes rise{to{opacity:1;transform:none}}
+.unveil.go .shine{animation:shine 1.3s 1.9s ease-in-out forwards}
+@keyframes shine{from{transform:translateX(-260px) skewX(-20deg)}to{transform:translateX(320px) skewX(-20deg)}}
+.stage .line{opacity:0;transform:translateY(10px)}
+.unveil.go .line{animation:rise .6s var(--ease-out) forwards}
+.unveil.go .line.d1{animation-delay:1.6s}.unveil.go .line.d2{animation-delay:1.9s}.unveil.go .line.d3{animation-delay:2.2s}.unveil.go .line.d4{animation-delay:2.5s}
+.stage .k{font-size:var(--t-sm);color:var(--brass-hi);font-weight:600;margin-top:18px}
+.stage h2{font-family:var(--f-display);font-weight:900;font-size:clamp(2.6rem,11vw,4.5rem);line-height:.9;margin-top:6px}
+.stage .amt{font-family:var(--f-display);font-weight:900;font-size:clamp(2rem,9vw,3.25rem);line-height:1;margin-top:14px;background:var(--foil);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stage .engr{font-size:1.25rem;color:var(--bone-2);margin-top:8px}
+.stage .cta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:22px}
+.flake{position:absolute;top:-20px;width:7px;height:12px;background:var(--foil);z-index:1;opacity:0;border-radius:1px}
+.unveil.go .flake{animation:fall var(--d) var(--dl) linear forwards}
+@keyframes fall{0%{opacity:1;transform:translate(0,0) rotate(0)}100%{opacity:.9;transform:translate(var(--x),110vh) rotate(var(--r))}}
+.x-close{position:absolute;top:14px;right:14px;z-index:4;width:44px;height:44px;border-radius:50%;border:1px solid rgba(238,228,208,.25);display:grid;place-items:center;color:var(--bone)}
+
+/* ---------- BRAND ---------- */
+.brand-hero{padding:28px 20px;display:grid;gap:24px;place-items:center;text-align:center;background:radial-gradient(70% 90% at 50% 0%, rgba(201,161,74,.12), transparent 70%), var(--leather)}
+.brand-hero .wm{font-family:var(--f-display);font-weight:900;font-size:clamp(4rem,20vw,9rem);line-height:.8;letter-spacing:.01em}
+.marks{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.marks > div{width:clamp(72px,22vw,96px);height:clamp(72px,22vw,96px);border-radius:20px;display:grid;place-items:center}
+.sw{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media (min-width:700px){.sw{grid-template-columns:repeat(4,1fr)}}
+.sw div{border-radius:10px;padding:56px 12px 10px;font-size:var(--t-xs);border:1px solid var(--seam)}
+.sw b{display:block;font-size:var(--t-sm)}
+.typespec{display:grid;gap:18px}
+.typespec .row{display:grid;grid-template-columns:72px 1fr;gap:12px;align-items:baseline;border-bottom:1px solid var(--seam);padding-bottom:14px;min-width:0}
+.typespec .row small{color:var(--dust);font-size:var(--t-xs)}
+.typespec .row > div{min-width:0;overflow-wrap:anywhere}
+.voice{display:grid;gap:10px}
+@media (min-width:700px){.voice{grid-template-columns:1fr 1fr}}
+.voice div{padding:14px;border-radius:10px;font-size:var(--t-sm)}
+.voice .no{border:1px solid rgba(224,122,132,.35);color:var(--bone-2)}
+.voice .yes{border:1px solid rgba(127,196,162,.35)}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition:none!important}
+  .ticker-run{animation:none}
+  .flake{display:none}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-brass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7E5F24"/><stop offset=".3" stop-color="#D9B866"/><stop offset=".45" stop-color="#F3DD9C"/><stop offset=".62" stop-color="#C9A14A"/><stop offset="1" stop-color="#7A5A20"/>
+    </linearGradient>
+    <linearGradient id="g-brass-v" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6E521E"/><stop offset=".25" stop-color="#C9A14A"/><stop offset=".42" stop-color="#F6E3A8"/><stop offset=".6" stop-color="#C9A14A"/><stop offset="1" stop-color="#5E4518"/>
+    </linearGradient>
+    <linearGradient id="g-wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B2A1C"/><stop offset="1" stop-color="#1E140D"/></linearGradient>
+    <!-- Mark: the fumbled ball. Football, tipped 30deg, laces cut as a tally to ten. -->
+    <symbol id="mark" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r="31" fill="url(#g-brass)"/>
+      <circle cx="32" cy="32" r="27.5" fill="none" stroke="#1B140F" stroke-opacity=".35" stroke-width="1"/>
+      <g transform="rotate(-32 32 32)">
+        <path d="M8 32 C16 18 48 18 56 32 C48 46 16 46 8 32Z" fill="#1B140F"/>
+        <path d="M20 32 H44" stroke="#EEE4D0" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M24 28.2v7.6M28 28.2v7.6M32 28.2v7.6M36 28.2v7.6M40 28.2v7.6" stroke="#EEE4D0" stroke-width="2" stroke-linecap="round"/>
+        <path d="M12.5 27.5 Q14 32 12.5 36.5 M51.5 27.5 Q50 32 51.5 36.5" stroke="#C9A14A" stroke-width="1.6" fill="none"/>
+      </g>
+    </symbol>
+    <symbol id="i-feed" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></symbol>
+    <symbol id="i-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 14l2.5-3 2.5 2 3-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h14a2 2 0 012 2v2a3 3 0 000 6v2a2 2 0 01-2 2H5a2 2 0 01-2-2v-2a3 3 0 000-6z" stroke="currentColor" stroke-width="2" fill="none"/><path d="M9 6v12" stroke="currentColor" stroke-width="2" stroke-dasharray="2 2"/></symbol>
+    <symbol id="i-cup" viewBox="0 0 24 24"><path d="M7 4h10v5a5 5 0 01-10 0zM7 6H4a3 3 0 003 4M17 6h3a3 3 0 01-3 4M12 14v4M8 20h8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-kit" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2" fill="none"/><rect x="13" y="4" width="7" height="7" rx="3.5" stroke="currentColor" stroke-width="2" fill="none"/><rect x="4" y="13" width="16" height="7" rx="1.5" stroke="currentColor" stroke-width="2" fill="none"/></symbol>
+    <symbol id="k-launch" viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M5 20h14" stroke="#EEE4D0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="k-fumble" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="5.5" transform="rotate(-30 12 12)" fill="#E07A84"/><path d="M9 13.7l6-3.4" stroke="#1B140F" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="k-cross" viewBox="0 0 24 24"><path d="M4 17l5-5 4 3 7-8M15 7h5v5" stroke="#7FC4A2" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="k-grad" viewBox="0 0 24 24"><path d="M4 20V5M4 5h13l-3 4 3 4H4" stroke="#EEE4D0" stroke-width="2" fill="none" stroke-linejoin="round"/></symbol>
+    <symbol id="k-claim" viewBox="0 0 24 24"><path d="M7 4h10v5a5 5 0 01-10 0zM12 14v4M8 20h8" stroke="#C9A14A" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- The trophy -->
+    <symbol id="trophy" viewBox="0 0 240 270">
+      <path d="M62 44 C26 40 22 100 74 112" fill="none" stroke="url(#g-brass-v)" stroke-width="9" stroke-linecap="round"/>
+      <path d="M178 44 C214 40 218 100 166 112" fill="none" stroke="url(#g-brass-v)" stroke-width="9" stroke-linecap="round"/>
+      <path d="M56 24 H184 V62 C184 122 154 150 120 156 C86 150 56 122 56 62 Z" fill="url(#g-brass-v)"/>
+      <ellipse cx="120" cy="24" rx="64" ry="7" fill="#F6E3A8"/>
+      <ellipse cx="120" cy="25" rx="58" ry="4.5" fill="#6E521E"/>
+      <g transform="rotate(-24 120 88)">
+        <path d="M86 88 C96 72 144 72 154 88 C144 104 96 104 86 88Z" fill="#5E4518" opacity=".55"/>
+        <path d="M104 88 H136 M110 84v8 M116 84v8 M122 84v8 M128 84v8" stroke="#F3DD9C" stroke-width="2" stroke-linecap="round" opacity=".8"/>
+      </g>
+      <rect x="110" y="155" width="20" height="26" fill="url(#g-brass-v)"/>
+      <ellipse cx="120" cy="183" rx="26" ry="6" fill="#C9A14A"/>
+      <path d="M86 192 H154 L168 222 H72 Z" fill="url(#g-brass-v)"/>
+      <rect x="52" y="222" width="136" height="44" rx="3" fill="url(#g-wood)"/>
+      <rect x="68" y="232" width="104" height="24" rx="2" fill="url(#g-brass)"/>
+      <text x="120" y="248.5" text-anchor="middle" font-family="Big Shoulders Display" font-weight="800" font-size="11" fill="#1B140F" letter-spacing=".3">FUMBLE No. 004417</text>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="top">
+  <div class="top-in">
+    <a class="wordmark" href="#feed" aria-label="FUMPAD home"><svg class="mark"><use href="#mark"/></svg><b>FUMPAD</b></a>
+    <nav class="nav" aria-label="Primary">
+      <button data-go="feed">Feed</button>
+      <button data-go="coin">Coin</button>
+      <button data-go="fumbles">My Fumbles</button>
+      <button data-go="hall">Leaderboard</button>
+      <button data-go="card">Claim card</button>
+      <button data-go="brand">Brand</button>
+    </nav>
+    <button class="wallet" data-go="hall" aria-label="Your profile, level 14"><span class="num">Gx7q…9KfD</span><span class="lvl">14</span></button>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ============ FEED ============ -->
+<section class="screen" id="s-feed" aria-label="Feed">
+  <div class="hero-strip">
+    <div class="hero-row">
+      <h1 class="display hero-title">Sold too early?<span class="l2">Bring it back here. Fumbles that hit 10x pay you back.</span></h1>
+      <figure class="case">
+        <svg viewBox="0 0 240 270" aria-hidden="true"><use href="#trophy"/></svg>
+        <figcaption>
+          <div class="who">Trophy of the hour · 8sLw…mQ2c</div>
+          <div class="engr">Sold $PEW at 0.0₆93 on Sep 19. Collected 310,400 PEW today, 23.4x later.</div>
+          <button class="btn btn-ghost" data-go="card">See the claim card</button>
+        </figcaption>
+      </figure>
+    </div>
+    <div class="ticker" aria-label="Live claims"><div class="ticker-run" id="ticker"></div></div>
+  </div>
+  <div class="feed-grid">
+    <div>
+      <div class="chips" role="group" aria-label="Filter feed" id="feedFilters">
+        <button class="chip" aria-pressed="true" data-f="all">Everything</button>
+        <button class="chip" aria-pressed="false" data-f="fumble">Fumbles</button>
+        <button class="chip" aria-pressed="false" data-f="cross">10x crossings</button>
+        <button class="chip" aria-pressed="false" data-f="claim">Claims</button>
+        <button class="chip" aria-pressed="false" data-f="grad">Graduations</button>
+        <button class="chip" aria-pressed="false" data-f="launch">Launches</button>
+      </div>
+      <div class="new-pill" id="newPill" hidden><button>4 new posts</button></div>
+      <div id="feed" aria-live="polite"></div>
+    </div>
+    <aside class="side">
+      <div class="head" style="margin-top:8px"><h2>Trending</h2><p>by 1h volume</p></div>
+      <div id="trending"></div>
+      <div class="panel how" style="margin-top:22px">
+        <h3 class="display" style="font-size:1.5rem">How a fumble pays</h3>
+        <ol>
+          <li><span><b>Sell through FUMPAD.</b> Any sell over $50 is stamped as a fumble ticket.</span></li>
+          <li><span><b>The coin graduates.</b> Claims open once it leaves the curve at 85 SOL.</span></li>
+          <li><span><b>It holds 10x your price.</b> Measured on a 30-minute median, not a spike.</span></li>
+          <li><span><b>Claim 10% of what you sold.</b> Paid in the coin, within 90 days.</span></li>
+        </ol>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============ COIN ============ -->
+<section class="screen" id="s-coin" aria-label="Coin page">
+  <div class="coin-hd">
+    <div class="av lg" style="--h:28">GG</div>
+    <div>
+      <h1>Grub Goblin</h1>
+      <div class="muted" style="font-size:var(--t-sm)"><b class="brass">$GRUB</b> <span class="dust">by</span> 4mPz…tR2a <span class="dust">· launched 11 days ago</span></div>
+    </div>
+    <div class="px"><b class="num" id="coinPx">0.0₅517</b><span class="felt" style="font-size:var(--t-sm);font-weight:600">+18.4% today</span></div>
+  </div>
+  <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <div class="seg" role="group" aria-label="Coin stage">
+      <button aria-pressed="true" data-stage="post">Graduated</button>
+      <button aria-pressed="false" data-stage="pre">On the curve</button>
+    </div>
+    <span class="dust" style="font-size:var(--t-xs)">Preview both states</span>
+  </div>
+
+  <div class="coin-grid">
+    <div style="display:grid;gap:16px;min-width:0">
+      <div class="panel chart">
+        <div class="chart-top">
+          <div class="chips" role="group" aria-label="Timeframe">
+            <button class="chip" aria-pressed="false">1H</button><button class="chip" aria-pressed="false">6H</button><button class="chip" aria-pressed="true">1D</button><button class="chip" aria-pressed="false">All</button>
+          </div>
+          <span style="font-size:var(--t-xs)" class="dust"><span class="brass">— —</span> 10x your sell</span>
+        </div>
+        <svg id="chart" viewBox="0 0 700 300" role="img" aria-label="Price chart for GRUB, now above 10x your sell price"></svg>
+      </div>
+      <div class="stats" id="coinStats"></div>
+
+      <!-- post-grad -->
+      <div id="postGrad" style="display:grid;gap:16px">
+        <div class="panel pool">
+          <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:end">
+            <div>
+              <div class="dust" style="font-size:var(--t-sm)">Reward pool</div>
+              <div class="vault-num num">41.8M <span style="font-size:.5em" class="muted">GRUB</span></div>
+              <div class="muted" style="font-size:var(--t-sm)">≈ 216.1 SOL · 4.18% of supply</div>
+            </div>
+            <div style="text-align:right">
+              <div class="dust" style="font-size:var(--t-xs)">Added by buybacks, 24h</div>
+              <div class="display felt" style="font-size:1.6rem">+1.92M</div>
+            </div>
+          </div>
+          <div class="split" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="legend"><span style="--c:var(--brass)">50% buys GRUB for the pool</span><span style="--c:var(--bone-2)">30% platform</span><span style="--c:var(--claret-hi)">20% creator</span></div>
+          <p class="dust" style="font-size:var(--t-xs);margin-top:10px">Largest single claim right now: 4.18M GRUB (10% of the pool).</p>
+          <div class="mini-stub gold" style="margin-top:14px"><div class="l">No. 004417</div><div class="r" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:150px"><div class="engr">Your ticket fits the pool.</div><div class="dust">240,000 GRUB pays in the same transaction.</div></div><button class="btn btn-brass" data-claim="004417">Claim</button></div></div>
+        </div>
+        <div class="panel pool queue">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
+            <h3 class="display" style="font-size:1.5rem">Claim queue</h3>
+            <span class="dust" style="font-size:var(--t-xs)">6 waiting · paid in order of sell time</span>
+          </div>
+          <div id="queue" style="margin-top:6px"></div>
+          <p class="dust" style="font-size:var(--t-xs);margin-top:10px">A claim can take at most 10% of the pool, so bigger ones wait for buybacks to grow it. Smaller claims that fit go ahead. Queued claims don't expire.</p>
+        </div>
+      </div>
+
+      <!-- pre-grad -->
+      <div id="preGrad" hidden style="display:grid;gap:16px">
+        <div class="panel curve">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
+            <h3 class="display" style="font-size:1.5rem">Bonding curve</h3>
+            <span class="muted" style="font-size:var(--t-sm)">Graduates at 85 SOL</span>
+          </div>
+          <div class="curve-track" role="progressbar" aria-valuemin="0" aria-valuemax="85" aria-valuenow="61.2" aria-label="Curve progress"><div class="fill" style="width:72%"></div><div class="fin"></div><div class="lbl num">61.2 / 85 SOL</div></div>
+          <p class="muted" style="font-size:var(--t-sm)">23.8 SOL to go. At graduation, liquidity moves to PumpSwap and claims open for every ticket stamped on the curve.</p>
+        </div>
+        <div class="empty"><span class="engr">No tickets on this coin yet.</span>Sell $50 or more of it through FUMPAD and it gets stamped. Hold at least 10 minutes first.</div>
+      </div>
+
+      <div class="panel" style="padding:16px" id="recentPanel">
+        <h3 class="display" style="font-size:1.5rem">Recent fumbles</h3>
+        <table class="tbl" style="margin-top:6px"><thead><tr><th>Seller</th><th>Sold</th><th>Now</th></tr></thead><tbody id="recentF"></tbody></table>
+      </div>
+    </div>
+
+    <div style="display:grid;gap:16px">
+      <div class="panel trade">
+        <div class="tabs" role="group" aria-label="Trade side">
+          <button aria-pressed="false" data-side="buy">Buy</button>
+          <button class="sell" aria-pressed="true" data-side="sell">Sell</button>
+        </div>
+        <label class="field"><span class="sr">Amount</span><input id="amt" inputmode="decimal" value="1,200,000" aria-label="Amount of GRUB to sell"><span class="muted" style="font-weight:600" id="unit">GRUB</span></label>
+        <div class="quick"><button>25%</button><button>50%</button><button>75%</button><button>Max</button></div>
+        <div style="display:flex;justify-content:space-between;font-size:var(--t-sm);margin-top:12px" class="muted"><span>You receive</span><b class="num" style="color:var(--bone)" id="recv">≈ 6.18 SOL</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:var(--t-xs);margin-top:4px" class="dust"><span>Fee 1% · half buys GRUB for the pool</span><span class="num" id="fee">0.062 SOL</span></div>
+        <div class="ticket-preview" id="tPrev">
+          <div class="engr">This sell will be stamped as a fumble ticket.</div>
+          If $GRUB holds <b style="color:var(--bone)">0.0₄517</b> (10x) you can claim <b style="color:var(--bone)">120,000 GRUB</b> within 90 days. Ticket 2 of 5 on this coin.
+        </div>
+        <button class="btn" style="width:100%;margin-top:14px;background:var(--claret);color:#FBE3E5" id="tradeBtn">Sell 1,200,000 GRUB</button>
+      </div>
+      <div class="panel" style="padding:16px">
+        <h3 class="display" style="font-size:1.5rem">Holders</h3>
+        <table class="tbl" style="margin-top:6px"><tbody id="holders"></tbody></table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MY FUMBLES ============ -->
+<section class="screen" id="s-fumbles" aria-label="My Fumbles">
+  <div class="cab-hd">
+    <h1 class="display">My Fumbles<span class="engr">Seven tickets, one ready to cash. Not bad for someone who keeps selling the bottom.</span></h1>
+    <div class="tally">
+      <div class="gold"><small>Claimable now</small><b class="num">1.24 SOL</b></div>
+      <div><small>Open tickets</small><b class="num">5</b></div>
+      <div><small>In queue</small><b class="num">#4</b></div>
+    </div>
+  </div>
+  <div class="chips" role="group" aria-label="Filter tickets" style="margin-top:22px" id="tFilters">
+    <button class="chip" aria-pressed="true" data-t="all">All 7</button>
+    <button class="chip" aria-pressed="false" data-t="claimable">Ready</button>
+    <button class="chip" aria-pressed="false" data-t="open">Climbing</button>
+    <button class="chip" aria-pressed="false" data-t="queued">Queued</button>
+    <button class="chip" aria-pressed="false" data-t="expired">Expired</button>
+  </div>
+  <div class="tickets" id="tickets" style="margin-top:14px"></div>
+  <div class="rules">
+    <div><b>Time-averaged, not a spike</b>10x is checked against the 30-minute median price.</div>
+    <div><b>Rebuys shrink rewards</b>Buying the same coin back within 7 days reduces the ticket by what you rebought.</div>
+    <div><b>Five per coin</b>At most five open tickets per wallet on any one coin.</div>
+  </div>
+</section>
+
+<!-- ============ HALL ============ -->
+<section class="screen" id="s-hall" aria-label="Leaderboard and profile">
+  <h1 class="display" style="font-size:clamp(2.6rem,10vw,4.5rem);margin-top:6px">The Hall</h1>
+  <p class="engr muted" style="font-size:1.25rem">Where the worst timing on Solana gets a plaque.</p>
+  <div class="hall-grid">
+    <div class="panel profile">
+      <div style="display:flex;gap:16px;align-items:center">
+        <svg class="lvlring" viewBox="0 0 84 84" aria-hidden="true"><circle cx="42" cy="42" r="38" fill="none" stroke="#3A2D22" stroke-width="5"/><circle cx="42" cy="42" r="38" fill="none" stroke="url(#g-brass)" stroke-width="5" stroke-dasharray="153 239" stroke-linecap="round" transform="rotate(-90 42 42)"/><text x="42" y="52" text-anchor="middle" font-family="Big Shoulders Display" font-weight="900" font-size="30" fill="#EEE4D0">14</text></svg>
+        <div>
+          <div class="dust" style="font-size:var(--t-xs)">Level 14</div>
+          <h2>Gx7q…9KfD</h2>
+          <div class="engr brass" style="font-size:1.0625rem">Seasoned Fumbler</div>
+        </div>
+      </div>
+      <div class="xp" aria-hidden="true"><i></i></div>
+      <div class="dust" style="font-size:var(--t-xs)">640 / 1,000 XP to Level 15, “Paper Hands Emeritus”</div>
+      <div class="stats" style="margin-top:16px;grid-template-columns:repeat(2,1fr)">
+        <div><small>Fumbled</small><b class="num">38.2 SOL</b></div>
+        <div><small>Clawed back</small><b class="num brass">4.71 SOL</b></div>
+        <div><small>Tickets stamped</small><b class="num">23</b></div>
+        <div><small>Best crossing</small><b class="num felt">31.4x</b></div>
+      </div>
+      <div class="medals" id="medals"></div>
+    </div>
+    <div>
+      <div class="chips" role="group" aria-label="Leaderboard" id="boardTabs">
+        <button class="chip" aria-pressed="true" data-b="fumbles">Biggest fumbles</button>
+        <button class="chip" aria-pressed="false" data-b="claimers">Top claimers</button>
+        <button class="chip" aria-pressed="false" data-b="diamond">Diamond hands</button>
+      </div>
+      <p class="dust" style="font-size:var(--t-xs);margin-top:10px">This week. Flagged wallets and linked clusters are left off.</p>
+      <div class="board" id="board" style="margin-top:6px"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SHARE CARD ============ -->
+<section class="screen" id="s-card" aria-label="Shareable claim card">
+  <div style="display:flex;justify-content:space-between;align-items:end;gap:12px;flex-wrap:wrap;margin-top:6px">
+    <div>
+      <h1 class="display" style="font-size:clamp(2.4rem,9vw,4rem)">Your claim card</h1>
+      <p class="muted" style="font-size:var(--t-sm)">1200 × 630, sized for X. Every claim is on-chain, so the receipts are real.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-ghost" id="replay">Replay the unveiling</button>
+      <button class="btn btn-bone">Post to X</button>
+    </div>
+  </div>
+  <div class="share-wrap" id="shareWrap">
+    <div class="og" id="og">
+      <div class="l">
+        <div class="brandrow"><svg width="46" height="46"><use href="#mark"/></svg>FUMPAD<span class="no">No. 004417</span></div>
+        <div class="big">FUMBLED.<br><span class="x">12.6X.</span></div>
+        <div class="in">Sold 2.4M $GRUB at 0.0₆41 SOL on Oct 3. It came back for me anyway.</div>
+        <div class="facts">
+          <div><b>240,000</b>GRUB claimed</div>
+          <div><b>1.24 SOL</b>worth today</div>
+          <div><b>Gx7q…9KfD</b>Level 14</div>
+        </div>
+      </div>
+      <div class="r">
+        <svg viewBox="0 0 240 270"><use href="#trophy"/></svg>
+        <div class="url">fumpad.fun/t/004417</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BRAND ============ -->
+<section class="screen" id="s-brand" aria-label="Brand sheet">
+  <div class="panel brand-hero" style="margin-top:6px">
+    <div class="wm">FUMPAD</div>
+    <p class="engr" style="font-size:1.4rem;color:var(--bone-2);max-width:32ch">Every fumble is a trophy. Some of them pay.</p>
+    <div class="marks">
+      <div style="background:var(--vault);border:1px solid var(--seam)"><svg width="60" height="60"><use href="#mark"/></svg></div>
+      <div style="background:var(--bone)"><svg width="60" height="60"><use href="#mark"/></svg></div>
+      <div style="background:var(--claret)"><svg width="60" height="60"><use href="#mark"/></svg></div>
+    </div>
+    <p class="dust" style="font-size:var(--t-xs);max-width:46ch">The mark is the fumbled ball, tipped as it leaves the hand. Its laces are a tally of five: one per open ticket you can hold on a coin.</p>
+  </div>
+
+  <div class="head"><h2>Palette</h2><p>Brass is earned: claims, trophies and levels. Nothing else gets it.</p></div>
+  <div class="sw">
+    <div style="background:var(--vault)"><b>Vault</b>#15100C · page</div>
+    <div style="background:var(--leather)"><b>Leather</b>#201812 · panels</div>
+    <div style="background:var(--bone);color:var(--ink)"><b>Bone</b>#EEE4D0 · text, card stock</div>
+    <div style="background:var(--foil);color:var(--ink)"><b>Brass</b>#C9A14A · claimable only</div>
+    <div style="background:var(--felt)"><b>Felt</b>#2F6B52 · crossed 10x</div>
+    <div style="background:var(--claret)"><b>Claret</b>#7A2430 · sells, the curtain</div>
+    <div style="background:var(--ink)"><b>Ink</b>#1B140F · on bone</div>
+    <div style="background:var(--leather-2);color:var(--dust)"><b style="color:var(--bone-2)">Dust</b>#A3937B · tertiary</div>
+  </div>
+
+  <div class="head"><h2>Type</h2><p>Jersey numerals, engraved plaques, a clean ledger.</p></div>
+  <div class="typespec">
+    <div class="row"><small>Display<br>88 / Black</small><div class="display" style="font-size:clamp(3rem,13vw,5.5rem)">12.6X</div></div>
+    <div class="row"><small>Heading<br>28 / XBold</small><div style="font-family:var(--f-display);font-weight:800;font-size:1.75rem">Claim queue</div></div>
+    <div class="row"><small>Engraving<br>20 / Italic</small><div class="engr" style="font-size:1.25rem">Sold 2.4M $GRUB at 0.0₆41 SOL on Oct 3.</div></div>
+    <div class="row"><small>UI<br>16 / 14 / 12</small><div><div>Hanken Grotesk carries the ledger.</div><div class="muted" style="font-size:.875rem">Tabular numerals everywhere: 1,240,000 · 0.0₅517</div><div class="dust" style="font-size:.75rem">Fee 1% · half buys the coin for its pool</div></div></div>
+  </div>
+
+  <div class="head"><h2>The ticket</h2><p>Stub, perforation, engraved line, a log gauge to 10x.</p></div>
+  <div class="tickets" id="brandTicket"></div>
+
+  <div class="head"><h2>Voice</h2><p>Laugh with the seller, never at them.</p></div>
+  <div class="voice">
+    <div class="no"><b>Not this</b><br>“You missed $41,200 by selling GRUB.”</div>
+    <div class="yes"><b>This</b><br>“GRUB ran 12.6x after you left. Come collect your 10%.”</div>
+  </div>
+</section>
+</main>
+
+<nav class="tabbar" aria-label="Primary">
+  <button data-go="feed"><svg><use href="#i-feed"/></svg>Feed</button>
+  <button data-go="coin"><svg><use href="#i-coin"/></svg>Coin</button>
+  <button data-go="fumbles"><svg><use href="#i-ticket"/></svg>Fumbles</button>
+  <button data-go="hall"><svg><use href="#i-cup"/></svg>Hall</button>
+  <button data-go="brand"><svg><use href="#i-kit"/></svg>Brand</button>
+</nav>
+
+<!-- ============ CELEBRATION ============ -->
+<div class="unveil" id="unveil" role="dialog" aria-modal="true" aria-labelledby="uvTitle">
+  <div class="spot"></div>
+  <div class="curtain l"></div><div class="curtain r"></div>
+  <button class="x-close" id="uvClose" aria-label="Close"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 3l12 12M15 3L3 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+  <div class="stage">
+    <div class="trophy" style="position:relative">
+      <svg viewBox="0 0 240 270" aria-hidden="true" style="overflow:hidden">
+        <defs><clipPath id="cupclip"><path d="M56 24 H184 V62 C184 122 154 150 120 156 C86 150 56 122 56 62 Z M86 192 H154 L168 222 H72 Z"/></clipPath>
+        <linearGradient id="g-shine" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#FFF6DA" stop-opacity=".85"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
+        <use href="#trophy"/>
+        <g clip-path="url(#cupclip)"><rect class="shine" x="0" y="0" width="60" height="270" fill="url(#g-shine)" transform="translate(-260 0)"/></g>
+      </svg>
+    </div>
+    <div class="line d1 k">Ticket No. 004417 crossed 10x</div>
+    <h2 class="line d2" id="uvTitle">Your fumble paid.</h2>
+    <div class="line d3 amt num" id="uvAmt">+240,000 GRUB</div>
+    <p class="line d3 engr">Sold too early on Oct 3. It came back for you anyway.</p>
+    <div class="line d4 cta">
+      <button class="btn btn-brass" data-go="card" id="uvShare">Share the trophy</button>
+      <button class="btn btn-ghost" id="uvBack">Back to my fumbles</button>
+    </div>
+    <p class="line d4 dust" style="font-size:var(--t-xs);margin-top:12px">≈ 1.24 SOL at today’s price. Paid from the GRUB reward pool in the same transaction.</p>
+  </div>
+</div>
+
+<script>
+(() => {
+history.scrollRestoration='manual';
+const SOL_USD = 172.4;
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const sub = '₀₁₂₃₄₅₆₇₈₉';
+// 0.00000041 -> 0.0₆41  (count of zeros after the decimal point)
+function px(x){
+  if (x >= 0.001) return x.toFixed(4);
+  const s = x.toFixed(14).split('.')[1];
+  const z = s.match(/^0*/)[0].length;
+  const sig = s.slice(z, z+3).replace(/0+$/,'');
+  return '0.0' + String(z).split('').map(d=>sub[d]).join('') + sig;
+}
+const fmt = n => n.toLocaleString('en-US');
+const short = n => n >= 1e6 ? (n/1e6).toFixed(n>=1e7?1:2).replace(/\.?0+$/,'')+'M' : n>=1e3 ? (n/1e3).toFixed(0)+'K' : String(n);
+const av = (c, sz='') => `<div class="av ${sz}" style="--h:${c.h}" aria-hidden="true">${c.ini}</div>`;
+
+const C = {
+  GRUB:{name:'Grub Goblin',ini:'GG',h:28},
+  MOTH:{name:'Mothman Capital',ini:'MC',h:255},
+  TOAD:{name:'Toadal Recall',ini:'TR',h:110},
+  NAPKIN:{name:'Napkin Math',ini:'NM',h:45},
+  WOBL:{name:'Wobble Inc',ini:'WI',h:330},
+  FERN:{name:'Fern Gully Fund',ini:'FG',h:150},
+  CRUMB:{name:'Crumb Cartel',ini:'CC',h:15},
+  LARD:{name:'Lard Lord',ini:'LL',h:200},
+  PEW:{name:'Pew Pew Pigeon',ini:'PP',h:180},
+};
+Object.entries(C).forEach(([k,v])=>v.t=k);
+
+/* ---------- Router ---------- */
+const screens = ['feed','coin','fumbles','hall','card','brand'];
+function go(id){
+  if(!screens.includes(id)) id='feed';
+  $$('.screen').forEach(s=>s.classList.toggle('on', s.id==='s-'+id));
+  $$('.nav [data-go], .tabbar [data-go]').forEach(b=>{ if(b.dataset.go===id) b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current'); });
+  if (location.hash.slice(1)!==id) history.replaceState(null,'','#'+id);
+  window.scrollTo({top:0});
+  if(id==='card') fitCard();
+  if(id==='coin') chart(curStage);
+}
+document.addEventListener('click', e=>{
+  const b = e.target.closest('[data-go]');
+  if(b){ e.preventDefault(); closeUnveil(); go(b.dataset.go); }
+});
+window.addEventListener('hashchange', ()=>go(location.hash.slice(1)));
+
+/* ---------- Ticker ---------- */
+const tick = [
+  ['8sLw…mQ2c','claimed','310,400 PEW','1.92 SOL'],['Gx7q…9KfD','crossed 10x on','GRUB',''],['dK3e…Vv8n','claimed','2.1M LARD','0.88 SOL'],
+  ['Pq9r…a1Zs','fumbled','14.2 SOL of','MOTH'],['FERN','is 72% to','graduation',''],['b2Nf…uX4o','claimed','96,000 TOAD','0.41 SOL']
+];
+const tHTML = tick.map(t=>`<span><b>${t[0]}</b> <span class="dust">${t[1]}</span> <b class="brass">${t[2]}</b> <span class="muted">${t[3]}</span></span>`).join('');
+$('#ticker').innerHTML = tHTML + tHTML;
+
+/* ---------- Feed ---------- */
+const feed = [
+  {k:'cross', who:'GRUB', at:'just now', html:`<strong>$GRUB</strong> is holding 10x for 412 fumble tickets. Their owners can claim now.`,
+    att:`<div class="cross"><div class="big">10x</div><div style="font-size:var(--t-sm)"><div><b>412 tickets</b> unlocked</div><div class="dust">30-min median 0.0₅517 SOL · pool 41.8M GRUB</div></div></div>`},
+  {k:'fumble', who:'Pq9r…a1Zs', at:'2m', html:`Sold <strong>2.74M $MOTH</strong> for 14.2 SOL. That’s the biggest fumble of the hour.`,
+    att:`<div class="mini-stub"><div class="l">No. 004902</div><div class="r"><div class="engr">Sold at 0.0₅518 SOL, Oct 11, 13:52</div><div class="dust">Pays 274,000 MOTH if it holds 0.0₄518</div></div></div>`},
+  {k:'claim', who:'8sLw…mQ2c', at:'6m', html:`Claimed <strong>310,400 $PEW</strong> (1.92 SOL). Sold it at 0.0₆93 three weeks ago and watched it go 23x.`,
+    att:`<div class="mini-stub gold"><div class="l">No. 003318</div><div class="r"><div class="engr">Fumbled Sep 19. Collected Oct 11.</div><div class="dust">23.4x at claim · ticket closed</div></div></div>`},
+  {k:'grad', who:'TOAD', at:'14m', html:`<strong>$TOAD</strong> graduated at 85 SOL and moved to PumpSwap. Claims are open for 1,118 tickets stamped on the curve.`},
+  {k:'launch', who:'r7Hc…pE0k', at:'19m', html:`Launched <strong>$NAPKIN</strong> Napkin Math. “Back-of-the-napkin tokenomics, front-of-the-napkin conviction.”`},
+  {k:'fumble', who:'dK3e…Vv8n', at:'23m', html:`Sold <strong>9.6M $LARD</strong> for 3.07 SOL after a 40-minute hold.`,
+    att:`<div class="mini-stub"><div class="l">No. 004871</div><div class="r"><div class="engr">Sold at 0.0₆32 SOL, Oct 11, 13:21</div><div class="dust">Pays 960,000 LARD at 10x</div></div></div>`},
+  {k:'claim', who:'b2Nf…uX4o', at:'31m', html:`Claimed <strong>96,000 $TOAD</strong>. Skipped the queue because it fit the pool.`},
+  {k:'cross', who:'PEW', at:'48m', html:`<strong>$PEW</strong> crossed 20x for 37 sellers from launch week.`},
+  {k:'launch', who:'Hh2a…Lq7y', at:'1h', html:`Launched <strong>$FERN</strong> Fern Gully Fund. Curve at 4 SOL.`},
+];
+feed.forEach((p,i)=>{p.rt=[48,12,61,23,7,4,15,31,2][i]; p.lk=[312,40,488,96,22,18,51,140,9][i];});
+const kindLabel = {cross:'10x crossing', fumble:'Fumble', claim:'Claim', grad:'Graduation', launch:'Launch'};
+function renderFeed(f='all'){
+  const list = feed.filter(p=>f==='all'||p.k===f);
+  $('#feed').innerHTML = list.length ? list.map(p=>`
+    <article class="post" data-k="${p.k}">
+      <div class="kind" title="${kindLabel[p.k]}"><svg><use href="#k-${p.k}"/></svg></div>
+      <div style="min-width:0">
+        <div class="who"><b>${p.who}</b><span>${kindLabel[p.k]}</span><span>${p.at}</span></div>
+        <div class="txt">${p.html}</div>
+        ${p.att?`<div class="attach">${p.att}</div>`:''}
+        <div class="acts"><span>↻ ${p.rt}</span><span>♥ ${p.lk}</span><span>Share</span></div>
+      </div>
+    </article>`).join('') : `<div class="empty" style="margin-top:14px"><span class="engr">Quiet in here.</span>Nothing of this kind in the last hour. Try Everything.</div>`;
+}
+// loading state first
+$('#feed').innerHTML = '<div class="skel"></div><div class="skel"></div><div class="skel"></div>';
+setTimeout(()=>{ renderFeed(); setTimeout(()=>$('#newPill').hidden=false, 2600); }, 700);
+$('#newPill').addEventListener('click', ()=>{ $('#newPill').hidden=true; window.scrollTo({top:0,behavior:'smooth'}); });
+$('#feedFilters').addEventListener('click', e=>{
+  const b=e.target.closest('[data-f]'); if(!b) return;
+  $$('#feedFilters .chip').forEach(c=>c.setAttribute('aria-pressed', c===b));
+  renderFeed(b.dataset.f);
+});
+const trending = [['GRUB','+18.4%',100,'grad'],['MOTH','+42.1%',100,'grad'],['FERN','+9.7%',72,'curve'],['PEW','−3.2%',100,'grad'],['NAPKIN','+211%',18,'curve']];
+$('#trending').innerHTML = trending.map((t,i)=>`
+  <div class="row"><span class="rk">${i+1}</span>${av(C[t[0]],'sm')}
+   <div style="min-width:0"><b>$${t[0]}</b> <span class="dust">${t[3]==='grad'?'graduated':t[2]+'% to grad'}</span>${t[3]==='curve'?`<div class="bar"><i style="width:${t[2]}%"></i></div>`:''}</div>
+   <span class="${t[1].startsWith('+')?'felt':'claret'}" style="font-weight:600">${t[1]}</span></div>`).join('');
+
+/* ---------- Tickets ---------- */
+const T = [
+  {no:'004417', c:'GRUB', sold:2400000, at:0.00000041, mult:12.6, date:'Oct 3', days:82, state:'claimable'},
+  {no:'004520', c:'MOTH', sold:880000, at:0.0000023, mult:7.9, spot:8.4, date:'Oct 5', days:84, state:'open'},
+  {no:'003991', c:'TOAD', sold:5100000, at:0.000000088, mult:11.2, date:'Sep 24', days:73, state:'queued', q:4},
+  {no:'004633', c:'NAPKIN', sold:1250000, at:0.0000012, mult:2.3, date:'Oct 8', days:87, state:'open', pre:true},
+  {no:'004102', c:'WOBL', sold:640000, at:0.0000031, mult:3.4, date:'Sep 27', days:76, state:'open', rebuy:43000},
+  {no:'004610', c:'LARD', sold:3300000, at:0.00000052, mult:1.6, date:'Oct 7', days:86, state:'open'},
+  {no:'002208', c:'CRUMB', sold:1900000, at:0.0000008, mult:1.4, date:'Jul 10', days:0, state:'expired'},
+];
+const pos = m => Math.max(0, Math.min(1, Math.log10(Math.max(m,1))));
+function gauge(t){
+  const ticks=[2,3,5].map(v=>`<div class="tick" style="left:${pos(v)*100}%"><span>${v}x</span></div>`).join('');
+  const p = pos(t.mult)*100;
+  return `<div class="gauge ${t.mult>=10?'done':''}" role="meter" aria-valuemin="1" aria-valuemax="10" aria-valuenow="${t.mult}" aria-label="${t.mult}x of 10x">
+    <div class="tick" style="left:0"><span>1x</span></div>${ticks}
+    <div class="fill" style="width:${p}%"></div><div class="post"></div>
+    <div class="now ${p>88?'end':''}" style="left:${p}%"><em>${t.mult}x</em></div></div>`;
+}
+function ticketHTML(t){
+  const c=C[t.c], claim=Math.round(t.sold*0.1) - (t.rebuy||0);
+  const nowPx = t.at*t.mult, valSol=(claim*nowPx);
+  let badge='', act='';
+  if(t.state==='claimable'){badge=`<span class="badge felt">Ready to claim</span>`; act=`<button class="btn btn-brass act" data-claim="${t.no}">Claim ${short(claim)} ${t.c}</button>`;}
+  if(t.state==='queued'){badge=`<span class="badge brass">Queued #${t.q}</span>`; act=`<span class="act dust" style="font-size:var(--t-xs);max-width:20ch;text-align:right">Pool is short. Doesn’t expire while queued.</span>`;}
+  if(t.state==='open'){badge = t.pre?`<span class="badge dust">On the curve</span>`:`<span class="badge dust">+${Math.round((10/t.mult-1)*100)}% to 10x</span>`; }
+  if(t.state==='expired'){badge=`<span class="badge dust">Expired</span>`;}
+  const note = t.rebuy?`<div class="meta claret" style="margin-top:6px">Rebought 430,000 within 7 days. Reward cut from 64,000 to ${fmt(claim)}.</div>`
+    : t.pre?`<div class="meta" style="margin-top:6px">Claims open when $NAPKIN graduates (18% there).</div>`
+    : t.spot?`<div class="meta" style="margin-top:6px">Spot is 8.4x. The 30-min median decides.</div>`:'';
+  return `<article class="ticket ${t.state}" data-state="${t.state}">
+    <div class="stub">${av(c,'sm')}<div class="tk">$${t.c}</div><div class="serial">No. ${t.no}</div></div>
+    <div class="body">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:start">
+        <div class="inscr">Sold ${short(t.sold)} at ${px(t.at)} SOL</div>${badge}
+      </div>
+      <div class="meta">${c.name} · ${t.date}${t.state==='expired'?' · closed at 1.4x':''}</div>
+      ${gauge(t)}
+      ${note}
+      <div class="foot">
+        <div class="stat"><small>Claim</small><b class="num">${fmt(Math.max(claim,0))}</b></div>
+        <div class="stat"><small>Worth now</small><b class="num">${valSol.toFixed(2)} SOL</b></div>
+        <div class="stat"><small>Days left</small><b class="num">${t.state==='expired'?'—':t.state==='queued'?'Paused':t.days}</b></div>
+        ${act}
+      </div>
+    </div></article>`;
+}
+function renderTickets(f='all'){
+  const L=T.filter(t=>f==='all'||t.state===f);
+  $('#tickets').innerHTML = L.map(ticketHTML).join('');
+}
+renderTickets();
+$('#brandTicket').innerHTML = ticketHTML(T[0]) + ticketHTML(T[1]);
+$('#tFilters').addEventListener('click', e=>{
+  const b=e.target.closest('[data-t]'); if(!b) return;
+  $$('#tFilters .chip').forEach(c=>c.setAttribute('aria-pressed', c===b));
+  renderTickets(b.dataset.t);
+});
+document.addEventListener('click', e=>{ const b=e.target.closest('[data-claim]'); if(b) openUnveil(b); });
+
+/* ---------- Coin ---------- */
+function chart(stage){
+  const cw=$('#chart').parentElement.clientWidth-28; const W=Math.round(Math.max(320,Math.min(700,cw||700))), H=W<520?240:300, pad=8, n=90;
+  $('#chart').setAttribute('viewBox',`0 0 ${W} ${H}`); let seed=7; const r=()=> (seed=(seed*9301+49297)%233280)/233280;
+  let v=1, pts=[];
+  for(let i=0;i<n;i++){ v *= 1 + (r()-.42)*.11 + (stage==='post'&&i>55? .012:0); pts.push(Math.max(v,.3)); }
+  if(stage==='pre') pts = pts.map((p,i)=>p*0.35 + i*0.012);
+  const max=Math.max(...pts)*1.1, min=0;
+  const X=i=>pad+i*(W-2*pad)/(n-1), Y=p=>H-28-(p-min)/(max-min)*(H-50);
+  const d=pts.map((p,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(p).toFixed(1)).join(' ');
+  const sellI=18, tenY = Y(pts[sellI]*10 > max ? max*.86 : pts[sellI]*10);
+  let g = `<defs><linearGradient id="ar" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C9A14A" stop-opacity=".28"/><stop offset="1" stop-color="#C9A14A" stop-opacity="0"/></linearGradient></defs>`;
+  for(let i=1;i<4;i++) g+=`<line x1="0" x2="${W}" y1="${i*H/4-10}" y2="${i*H/4-10}" stroke="#3A2D22" stroke-width="1"/>`;
+  g += `<path d="${d} L${X(n-1)} ${H-28} L${X(0)} ${H-28}Z" fill="url(#ar)"/>`;
+  g += `<path d="${d}" fill="none" stroke="#EEE4D0" stroke-width="2" stroke-linejoin="round"/>`;
+  if(stage==='post'){
+    g += `<line x1="0" x2="${W}" y1="${tenY}" y2="${tenY}" stroke="#C9A14A" stroke-width="1.5" stroke-dasharray="6 5"/>`;
+    g += `<text x="10" y="${tenY-8}" text-anchor="start" font-family="Hanken Grotesk" font-weight="600" font-size="13" fill="#E0C27A">10x your sell · 0.0₅41</text>`;
+    g += `<line x1="${X(sellI)}" x2="${X(sellI)}" y1="${Y(pts[sellI])}" y2="${H-28}" stroke="#E07A84" stroke-dasharray="2 3"/>`;
+    g += `<circle cx="${X(sellI)}" cy="${Y(pts[sellI])}" r="6" fill="#7A2430" stroke="#EEE4D0" stroke-width="2"/>`;
+    g += `<text x="${X(sellI)+10}" y="${Y(pts[sellI])-10}" font-family="Cormorant Garamond" font-style="italic" font-weight="700" font-size="17" fill="#EEE4D0">you sold here</text>`;
+    g += `<line x1="${X(62)}" x2="${X(62)}" y1="12" y2="${H-28}" stroke="#EEE4D0" stroke-opacity=".25"/>`;
+    g += `<text x="${X(62)+6}" y="24" font-family="Hanken Grotesk" font-size="12" fill="#A3937B">graduated</text>`;
+  }
+  g += `<circle cx="${X(n-1)}" cy="${Y(pts[n-1])}" r="4" fill="#EEE4D0"/>`;
+  ['Oct 1','Oct 4','Oct 7','Oct 11'].forEach((t,i)=> g+=`<text x="${pad+i*(W-2*pad)/3}" y="${H-8}" text-anchor="${i===0?'start':i===3?'end':'middle'}" font-family="Hanken Grotesk" font-size="12" fill="#A3937B">${t}</text>`);
+  $('#chart').innerHTML = g;
+}
+const statsPost = [['Market cap','4,310 SOL'],['24h volume','1,127 SOL'],['Holders','6,204'],['Tickets open','1,906']];
+const statsPre  = [['Market cap','52.8 SOL'],['24h volume','38.4 SOL'],['Holders','211'],['Tickets stamped','47']];
+let curStage='post';
+addEventListener('resize',()=>{ if($('#s-coin').classList.contains('on')) chart(curStage); });
+function stage(s){ curStage=s;
+  $$('[data-stage]').forEach(b=>b.setAttribute('aria-pressed', b.dataset.stage===s));
+  $('#postGrad').hidden = s!=='post'; $('#preGrad').hidden = s!=='pre';
+  $('#postGrad').style.display = s==='post'?'grid':'none'; $('#preGrad').style.display = s==='pre'?'grid':'none';
+  $('#coinStats').innerHTML=(s==='post'?statsPost:statsPre).map(x=>`<div><small>${x[0]}</small><b class="num">${x[1]}</b></div>`).join('');
+  $('#coinPx').textContent = s==='post' ? '0.0₅517' : '0.0₇52';
+  $('#recentPanel').style.display = s==='post'?'block':'none';
+  $('#tPrev').innerHTML = s==='post'
+    ? `<div class="engr">This sell will be stamped as a fumble ticket.</div>If $GRUB holds <b style="color:var(--bone)">0.0₄517</b> (10x) you can claim <b style="color:var(--bone)">120,000 GRUB</b> within 90 days. Ticket 2 of 5 on this coin.`
+    : `<div class="engr">This sell will be stamped as a fumble ticket.</div>It counts now, but claims open only after $GRUB graduates at 85 SOL. At 10x (0.0₆52) you could claim <b style="color:var(--bone)">1,200,000 GRUB</b>. Ticket 1 of 5.`;
+  const sell = $('[data-side=sell]').getAttribute('aria-pressed')==='true';
+  if(sell){ $('#amt').value = s==='post'?'1,200,000':'12,000,000'; $('#tradeBtn').textContent = 'Sell '+$('#amt').value+' GRUB'; }
+  $('#recv').textContent = s==='post'?'≈ 6.18 SOL':'≈ 0.62 SOL'; $('#fee').textContent = s==='post'?'0.062 SOL':'0.006 SOL';
+  chart(s);
+}
+$$('[data-stage]').forEach(b=>b.addEventListener('click',()=>stage(b.dataset.stage)));
+stage('post');
+const Q=[
+  ['1','Vn4s…kE9w','6.20M','Oct 2 sell · waiting 6h'],
+  ['2','Ra8u…02Lm','5.90M','Oct 2 sell'],
+  ['3','tY6p…Qd3x','5.05M','Oct 3 sell'],
+  ['4','Jw2k…Hc6r','4.61M','Oct 3 sell'],
+  ['↑','b2Nf…uX4o','96,000','Skipped ahead, fit the pool','skip'],
+  ['5','Zc1h…8nPo','4.40M','Oct 4 sell'],
+];
+$('#queue').innerHTML = Q.map(q=>`<div class="q ${q[4]||''}"><span class="pos">${q[0]}</span><div><b class="num">${q[1]}</b><div class="dust" style="font-size:var(--t-xs)">${q[3]}</div></div><b class="num">${q[2]}</b></div>`).join('');
+const RF=[['Pq9r…a1Zs','4.1M at 0.0₆39','13.3x','felt'],['h4Kd…Rz2w','820K at 0.0₅22','2.4x',''],['Gx7q…9KfD','2.4M at 0.0₆41','12.6x','felt'],['mN0b…Te5a','610K at 0.0₅48','1.1x','']];
+$('#recentF').innerHTML = RF.map(r=>`<tr><td>${r[0]==='Gx7q…9KfD'?'<b class="brass">You</b>':r[0]}</td><td class="num">${r[1]}</td><td class="num ${r[3]}" style="font-weight:700">${r[2]}</td></tr>`).join('');
+const H=[['Reward pool','4.18%','brass'],['tY6p…Qd3x','3.02%',''],['Bonding: PumpSwap LP','2.77%',''],['Vn4s…kE9w','1.94%',''],['4mPz…tR2a (creator)','1.50%','dust']];
+$('#holders').innerHTML = H.map(h=>`<tr><td class="${h[2]}">${h[0]}</td><td class="num">${h[1]}</td></tr>`).join('');
+$$('[data-side]').forEach(b=>b.addEventListener('click',()=>{
+  const s=b.dataset.side; $$('[data-side]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  $('#tPrev').style.display = s==='sell'?'block':'none';
+  $('#unit').textContent = s==='sell'?'GRUB':'SOL'; $('#amt').value = s==='sell'?(curStage==='post'?'1,200,000':'12,000,000'):'2.5';
+  const btn=$('#tradeBtn'); btn.textContent = s==='sell'?'Sell '+$('#amt').value+' GRUB':'Buy GRUB with 2.5 SOL';
+  btn.style.background = s==='sell'?'var(--claret)':'var(--bone)'; btn.style.color = s==='sell'?'#FBE3E5':'var(--ink)';
+}));
+
+/* ---------- Hall ---------- */
+const medalsData=[
+  ['First Fumble','#C9A14A',1],['Ten-Bagger','#7FC4A2',1],['Bottom Seller','#E07A84',1],['Queue Jumper','#EEE4D0',1],
+  ['Diamond Return','#7FC4A2',0],['Pool Party','#C9A14A',0],['Full Card','#EEE4D0',0],['30x Club','#E07A84',0]
+];
+$('#medals').innerHTML = medalsData.map(([n,c,on],i)=>`<div class="medal ${on?'':'locked'}"><svg viewBox="0 0 56 56" aria-hidden="true">
+  <path d="M18 2 L28 18 L38 2" fill="none" stroke="${c}" stroke-width="5"/>
+  <circle cx="28" cy="33" r="19" fill="url(#g-brass)"/><circle cx="28" cy="33" r="14" fill="#201812"/>
+  <text x="28" y="39.5" text-anchor="middle" font-family="Big Shoulders Display" font-weight="900" font-size="${i===1||i===7?14:17}" fill="${c}">${['1st','10x','↓','↑','◆','%','5/5','30x'][i]}</text></svg>${n}${on?'':'<br><span class="sr">locked</span>'}</div>`).join('');
+const boards={
+  fumbles:[['Pq9r…a1Zs','Sold 41.2M $MOTH a day before it ran','31.0x','after a 10.1 SOL sell'],['8sLw…mQ2c','Sold $PEW at 0.0₆12 on launch day','23.4x','after a 1.2 SOL sell'],['Hh2a…Lq7y','Sold all of $TOAD for a sandwich','18.9x','after a 0.4 SOL sell'],['Gx7q…9KfD','Sold 2.4M $GRUB, Oct 3','12.6x','after a 0.98 SOL sell','me'],['r7Hc…pE0k','Sold $LARD in a panic, 9 minutes in','6.0x','after a 3.1 SOL sell']],
+  claimers:[['8sLw…mQ2c','14 trophies this week','22.9 SOL','claimed'],['dK3e…Vv8n','Claimed $LARD 3 times','11.4 SOL','claimed'],['b2Nf…uX4o','Lives in the queue','6.2 SOL','claimed'],['Gx7q…9KfD','One ready, one queued','4.71 SOL','claimed','me'],['Zc1h…8nPo','Patient, mostly','3.9 SOL','claimed']],
+  diamond:[['Ra8u…02Lm','Waited past 30x on $PEW','44.0x','at claim'],['Vn4s…kE9w','Let $MOTH ride 61 days','27.3x','at claim'],['tY6p…Qd3x','Claimed $GRUB at the top','19.8x','at claim'],['mN0b…Te5a','Never sells twice','15.1x','at claim'],['Gx7q…9KfD','Best: $PEW','31.4x','crossing','me']]
+};
+function renderBoard(k){
+  $('#board').innerHTML = boards[k].map((r,i)=>`<div class="r ${r[4]||''}"><div class="rank">${i+1}</div><div style="min-width:0"><b class="num">${r[0]===('Gx7q…9KfD')?'You':r[0]}</b><div class="engr muted">${r[1]}</div></div><div class="v"><b class="num">${r[2]}</b><small>${r[3]}</small></div></div>`).join('');
+}
+renderBoard('fumbles');
+$('#boardTabs').addEventListener('click',e=>{const b=e.target.closest('[data-b]'); if(!b)return; $$('#boardTabs .chip').forEach(c=>c.setAttribute('aria-pressed',c===b)); renderBoard(b.dataset.b);});
+
+/* ---------- Share card scaling ---------- */
+function fitCard(){
+  const w=$('#shareWrap').clientWidth; if(!w) return;
+  const s=Math.min(1, w/1200);
+  $('#og').style.transform=`scale(${s})`; $('#shareWrap').style.height=(630*s)+'px';
+}
+new ResizeObserver(fitCard).observe($('#shareWrap'));
+
+/* ---------- Unveiling ---------- */
+const uv=$('#unveil'); let lastFocus=null;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function openUnveil(src){
+  lastFocus=src||document.activeElement;
+  uv.querySelectorAll('.flake').forEach(f=>f.remove());
+  if(!reduce){
+    for(let i=0;i<46;i++){
+      const f=document.createElement('i'); f.className='flake';
+      f.style.left=(Math.random()*100)+'%';
+      f.style.setProperty('--d',(2.4+Math.random()*2.2)+'s');
+      f.style.setProperty('--dl',(1.7+Math.random()*1.4)+'s');
+      f.style.setProperty('--x',((Math.random()-.5)*160)+'px');
+      f.style.setProperty('--r',((Math.random()-.5)*900)+'deg');
+      f.style.width=(4+Math.random()*6)+'px';
+      uv.appendChild(f);
+    }
+  }
+  uv.classList.remove('go'); uv.classList.add('on'); void uv.offsetWidth; uv.classList.add('go');
+  document.body.style.overflow='hidden';
+  // count-up
+  const el=$('#uvAmt'), target=240000, t0=performance.now()+ (reduce?0:2200), dur=reduce?1:900;
+  (function step(now){ const k=Math.min(1,Math.max(0,(now-t0)/dur)); el.textContent='+'+fmt(Math.round(target*(1-Math.pow(1-k,3))))+' GRUB'; if(k<1&&uv.classList.contains('on')) requestAnimationFrame(step); })(performance.now());
+  setTimeout(()=>$('#uvShare').focus({preventScroll:true}), reduce?0:2600);
+  // mark the ticket as claimed in the dashboard
+  const t=T.find(x=>x.no==='004417'); if(t && src && src.dataset && src.dataset.claim){ t.state='closed'; }
+}
+function closeUnveil(){
+  if(!uv.classList.contains('on')) return;
+  uv.classList.remove('on','go'); document.body.style.overflow='';
+  const t=T.find(x=>x.no==='004417');
+  if(t.state==='closed'){ t.state='claimable'; } // prototype: keep it claimable so the moment can be replayed
+  lastFocus && lastFocus.focus && lastFocus.focus({preventScroll:true});
+}
+$('#uvClose').addEventListener('click',closeUnveil);
+$('#uvBack').addEventListener('click',()=>{closeUnveil(); go('fumbles');});
+$('#replay').addEventListener('click',e=>openUnveil(e.currentTarget));
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeUnveil(); });
+
+/* subscript zeros: 0.0₅517 -> 0.0<sub>5</sub>517 in HTML text */
+const SUBS=/[₀-₉]+/g;
+function subify(root){
+  const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:n=>/[₀-₉]/.test(n.data)&&!n.parentElement.closest('svg,script,style,sub')?1:2});
+  const nodes=[]; while(w.nextNode()) nodes.push(w.currentNode);
+  nodes.forEach(n=>{ const span=document.createElement('span'); span.innerHTML=n.data.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(SUBS,m=>'<sub class="z">'+[...m].map(c=>'₀₁₂₃₄₅₆₇₈₉'.indexOf(c)).join('')+'</sub>'); n.replaceWith(...span.childNodes); });
+}
+subify(document.body);
+new MutationObserver(()=>subify(document.body)).observe(document.body,{childList:true,subtree:true});
+go(location.hash.slice(1)||'feed');
+})();
+</script>
+</body>
+</html>
