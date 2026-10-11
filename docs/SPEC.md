@@ -18,6 +18,10 @@ Status: v0.2 — matches the merged contracts · 2026-10-11 · Source concept: `
 | D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). Rule and analysis: §5.3. |
 | D11 | **LP locked forever, fees skimmed.** At graduation the LP tokens go to a separate, **immutable** `fumpad_lp_locker` program (upgrade authority removed at deploy) instead of being burned. It can only skim fee growth (principal measured in √k per LP — `Pool.lp_supply` as denominator — stays constant, re-checked after every skim); skimmed base tokens go to the coin's reward pool and skimmed SOL is split 60/40 platform/creator, ≈50/30/20 by value. Earns PumpSwap's 0.20% LP fee on all post-graduation volume, including trades routed by other apps. Details §3.1. |
 | D12 | **Slippage-fair floor, capped.** Refines D10: ticket price = max(execution price, ⌈reference × max(execution ÷ pre-trade spot, 0.90)⌉). Honest sellers get their real fill when their own price impact is ≤ 10%; a staged crash makes the ratio ≈ 1 so the floor stays at the reference; the 10% cap (`MAX_SELF_IMPACT_DISCOUNT_BPS`) limits the self-impact round trip to a 10% discount — §5.3. |
+| D13 | **Escape hatch.** A coin stuck in `Complete` for **7 days** (graduation impossible, e.g. PumpSwap blocks `create_pool`) reopens curve sells so holders can exit. |
+| D14 | **Graduation fee hard cap: 1 SOL**, snapshotted into each coin at `create_coin` (no retroactive changes). Fee params likewise snapshotted per coin. Beta value stays 0. |
+| D15 | **48h timelock** on all admin parameter changes (queue → execute). Pause flags stay immediate. |
+| D16 | **Max 2 claim-queue entries per wallet per coin**; payouts to accounts that refuse transfers go to a per-ticket escrow the owner withdraws later, so such entries leave the queue. |
 
 ## 1. Verified facts (Phase 0 check)
 
