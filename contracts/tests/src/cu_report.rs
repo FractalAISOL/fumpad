@@ -84,6 +84,14 @@ fn cu_report() {
         cu(w.env.send(&[fl::cu_limit(1_400_000), i], signers))
     };
 
+    // ── init_claim_queue: all CLAIM_QUEUE_INIT_CALLS (9) calls in one transaction ──
+    let mut w = World::bare(fumpad::state::CoinStatus::Graduated);
+    let i = w.init_queue_ix(&kp_pk(&w.env.payer));
+    let mut ixs = vec![fl::cu_limit(1_400_000)];
+    ixs.extend(std::iter::repeat_n(i, fumpad::CLAIM_QUEUE_INIT_CALLS));
+    rows.push((format!("init_claim_queue × {} (one tx, total)", fumpad::CLAIM_QUEUE_INIT_CALLS), cu(w.env.send(&ixs, &[]))));
+    assert_eq!(w.queue_state().mint, w.mint);
+
     // ── claim / claim_for ────────────────────────────────────────────────────
     let mut w = World::new();
     let u = w.user(0);
