@@ -1,0 +1,23 @@
+# Local Postgres for the indexer + API.
+#   docker compose up -d postgres
+#   export DATABASE_URL=postgres://fumpad:fumpad@127.0.0.1:5432/fumpad
+# (Without Docker, `npm run local` / `npm run validator` start a throwaway initdb cluster.)
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: fumpad
+      POSTGRES_PASSWORD: fumpad
+      POSTGRES_DB: fumpad
+    ports:
+      - "5432:5432"
+    volumes:
+      - fumpad-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fumpad"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  fumpad-pg:
