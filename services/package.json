@@ -1,0 +1,30 @@
+{
+  "name": "fumpad-services",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "sdk",
+    "indexer",
+    "api",
+    "keeper"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b sdk indexer api keeper",
+    "typecheck": "tsc -b sdk indexer api keeper",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "sync-idl": "node scripts/sync-idl.mjs",
+    "vectors": "node scripts/gen-vectors.mjs",
+    "local": "tsx scripts/local-e2e.ts",
+    "validator": "bash scripts/local-validator.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

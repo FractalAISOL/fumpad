@@ -1,0 +1,24 @@
+{
+  "name": "@fumpad/keeper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@fumpad/sdk": "0.1.0",
+    "@solana/web3.js": "^1.98.0",
+    "pino": "^9.5.0"
+  }
+}
