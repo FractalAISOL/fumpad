@@ -22,6 +22,8 @@ pub const CLAIM_QUEUE_SEED: &[u8] = b"claim_queue"; // ["claim_queue", mint]
 #[constant]
 pub const POOL_AUTHORITY_SEED: &[u8] = b"pool_authority"; // ["pool_authority"] — creator of PumpSwap pools + signer for program-owned token moves
 #[constant]
+pub const ESCROW_SEED: &[u8] = b"escrow"; // ["escrow", ticket] — D16 per-ticket escrow token account
+#[constant]
 pub const GRADUATION_WSOL_SEED: &[u8] = b"graduation_wsol"; // ["graduation_wsol", mint] — graduate's own WSOL account (created + closed in-instruction)
 
 // ── Fixed-point ──────────────────────────────────────────────────────────────
@@ -57,6 +59,8 @@ pub const DEFAULT_MIN_HOLD_SECS: i64 = 600; // 10 min
 pub const DEFAULT_REBUY_WINDOW_SECS: i64 = 7 * 86_400;
 pub const DEFAULT_CLAIM_WINDOW_SECS: i64 = 90 * 86_400;
 pub const MAX_OPEN_TICKETS: usize = 5;
+/// D16: a wallet may hold at most this many claim-queue entries per coin.
+pub const MAX_QUEUED_PER_WALLET: usize = 2;
 
 pub const DEFAULT_ORACLE_WINDOW_SECS: i64 = 1_800; // 30 min
 pub const DEFAULT_ORACLE_MIN_SPACING_SECS: i64 = 10;

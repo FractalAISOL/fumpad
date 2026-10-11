@@ -23,6 +23,11 @@ fn entry_key(e: &QueueEntry) -> (i64, [u8; 32]) {
 }
 
 /// Is there a queued entry strictly ahead of `(sell_ts, ticket)` that fits the pool now?
+///
+/// Every entry counted here can currently be paid by `process_queue`: amounts are exact
+/// (rebuys update entries in place, R-L1), entries only exist for `Queued` tickets, and an
+/// entry whose owner's ATA refuses transfers is paid into its escrow (D16), so it leaves
+/// the queue at the next crank instead of blocking it.
 pub fn has_older_fitting(q: &ClaimQueue, sell_ts: i64, ticket: &Pubkey, pool: u64, max_bps: u16) -> bool {
     let k = order_key(sell_ts, ticket);
     q.entries[..q.len as usize].iter().take_while(|e| entry_key(e) < k).any(|e| fits(e.amount, pool, max_bps))
@@ -40,6 +45,25 @@ pub fn insert(q: &mut ClaimQueue, e: QueueEntry) -> Result<u16> {
     q.len += 1;
     q.total_owed = q.total_owed.checked_add(e.amount).ok_or(FumpadError::MathOverflow)?;
     Ok(q.len)
+}
+
+/// R-L1: lower the amount of `ticket`'s entry (a rebuy debited the queued ticket). The
+/// position in the queue is unchanged (keyed by sell time). Returns whether it was found.
+pub fn set_amount(q: &mut ClaimQueue, ticket: &Pubkey, amount: u64) -> bool {
+    let len = q.len as usize;
+    match q.entries[..len].iter_mut().find(|e| e.ticket == *ticket) {
+        Some(e) => {
+            q.total_owed = q.total_owed.saturating_sub(e.amount).saturating_add(amount);
+            e.amount = amount;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Number of entries owned by `owner` (D16 per-wallet cap).
+pub fn count_owner(q: &ClaimQueue, owner: &Pubkey) -> usize {
+    q.entries[..q.len as usize].iter().filter(|e| e.owner == *owner).count()
 }
 
 /// Remove the entry for `ticket` if present.

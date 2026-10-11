@@ -99,6 +99,11 @@ pub mod fumpad {
         instructions::handle_init_claim_queue(ctx)
     }
 
+    /// D16: move an escrowed queue payout to the owner's token account of choice.
+    pub fn withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
+        instructions::handle_withdraw_escrow(ctx)
+    }
+
     // ── venue: router, oracle, buyback ──────────────────────────────────────
     pub fn swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::handle_swap_buy(ctx, sol_in, min_tokens_out)

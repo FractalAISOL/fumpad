@@ -8,13 +8,17 @@ use crate::{
     state::{Coin, Global, Position},
 };
 
-use super::{hooks::apply_rebuy, logic};
+use super::{
+    hooks::{apply_rebuy, split_rebuy_accounts},
+    logic,
+};
 
 /// Lets a wallet that acquired tokens outside FUMPAD (or before tracking) become eligible:
 /// the canonical Token-2022 ATA balance not yet tracked by the position is added as
 /// *pending* (the 10-minute hold starts now). Counts as a rebuy for the rebuy rule.
 ///
-/// remaining_accounts: exactly the position's open tickets (writable), any order.
+/// remaining_accounts: exactly the position's open tickets (writable), any order, then the
+/// coin's ClaimQueue (writable) only if one of them is `Queued`.
 #[event_cpi]
 #[derive(Accounts)]
 pub struct RegisterHoldings<'info> {
@@ -60,8 +64,11 @@ pub fn handle_register_holdings(ctx: Context<RegisterHoldings>) -> Result<()> {
     let added = balance.saturating_sub(tracked);
     require!(added > 0, FumpadError::ZeroAmount);
 
-    apply_rebuy(&p, position, ctx.remaining_accounts, added, now, &ctx.accounts.event_authority)?;
+    let (rebuy, rest) = split_rebuy_accounts(position, ctx.remaining_accounts)?;
+    require!(rest.is_empty(), FumpadError::OpenTicketsMismatch);
+    apply_rebuy(&p, position, &rebuy, added, now, &ctx.accounts.event_authority)?;
     position.add(added, now, p.min_hold_secs);
+    position.last_balance = balance; // R-L2: observed
 
     emit_cpi!(HoldingsRegistered { mint, wallet: user, added, ts: now });
     Ok(())

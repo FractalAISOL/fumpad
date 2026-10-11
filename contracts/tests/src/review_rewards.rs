@@ -1,6 +1,6 @@
-//! Pre-audit review of the rewards module: each `bug_*` test demonstrates behaviour that
-//! contradicts SPEC §5.3 / concept §07 and PASSES while the bug exists (flip the final
-//! assertions once fixed).
+//! Pre-audit review of the rewards module, fixed in v0.3: each `regression_*` test replays
+//! the original `bug_*` scenario and asserts the attack now FAILS (R-L2 also pins down the
+//! documented residual).
 //!
 //! Queue tests reuse the fabricated `rewards_tests::World` (tickets written exactly as
 //! `on_sell` writes them; claim / process_queue / register_holdings are the real program).
@@ -57,99 +57,93 @@ fn base_price() -> u128 {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HIGH — memo-refusing queue entries: never paid, never expire, still "fit"
+// HIGH (R-H1, D16) — memo-refusing queue entries
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// process_queue skips an entry whose ATA requires memos (so it "can't block the queue"),
-/// but the entry stays forever (D5) and still counts as an OLDER FITTING entry in
-/// `claim`'s `has_older_fitting`. One such entry forces every newer claim into the queue
-/// even when the pool is huge; an attacker then parks ~256 cheap, legitimately-owed
-/// claims behind it (52 wallets × ≤5 tickets), all memo-refusing, and the queue is full
-/// forever: every honest claim on the coin reverts with QueueFull until its ticket expires.
-/// The attacker loses nothing — turning memos off later gets each entry paid in full,
-/// from a pool nobody else could draw down in the meantime.
+/// Was: process_queue skipped an entry whose ATA requires memos but kept it forever, and it
+/// still counted as an older fitting entry, forcing every newer claim into the queue; ~256
+/// such entries (52 wallets × 5) filled the queue for good (QueueFull for everyone).
+/// Now: the crank pays a refusing entry into the ticket's escrow (the entry leaves the
+/// queue), newer claims are paid instantly again, and a wallet can hold at most 2 queue
+/// entries per coin (the 3rd claim reverts with WalletQueueLimit; ticket stays Open).
 #[test]
-fn bug_memo_refusing_entries_block_instant_claims_and_fill_queue_forever() {
+fn regression_memo_refusing_entries_are_escrowed_and_cannot_fill_the_queue() {
     let mut w = World::new(); // graduated, 50M-token pool, median at 10x of base_price()
     let now = w.now();
 
-    // 1) The anchor entry: one attacker claim gets queued (here: pool momentarily low —
-    //    in practice also: claim > 10% of the pool and the pool later grows from
-    //    buybacks/skims, or a rebuy shrinking a queued entry until it fits).
+    // 1) The anchor entry: queued while the pool was momentarily low, then memos on.
     let a0 = w.user(0);
     let t0 = w.add_ticket(&a0.key, 1_000 * M, base_price(), now - 3 * DAY); // owes 100 tokens
     w.set_pool(1);
     ok(w.claim(&a0, t0));
     w.set_pool(POOL);
-    w.set_balance(&a0, 0, true); // owner-only: Token-2022 reallocate + enable_required_transfer_memos
+    w.set_balance(&a0, 0, true);
 
-    // The crank skips it (no halt) and keeps it — the pool could pay it 50_000 times over.
+    // The crank escrows it: the entry leaves the queue.
     ok(w.process(10, &[(t0, a0.key)]));
-    assert_eq!(w.queue_state().len, 1);
-    assert_eq!(w.ticket(&t0).status, TicketStatus::Queued);
+    assert_eq!(w.queue_state().len, 0);
+    assert_eq!(w.ticket(&t0).status, TicketStatus::Escrowed);
+    assert_eq!(token_amount(&w.env, &w.escrow_key(&t0)), 100 * M);
 
-    // 2) An honest, newer, small claim on a 50M pool is NOT paid instantly.
+    // 2) An honest, newer, small claim on a 50M pool is paid instantly.
     let h = w.user(0);
     let th = w.add_ticket(&h.key, 1_000 * M, base_price(), now - DAY);
     ok(w.claim(&h, th));
-    assert_eq!(w.ticket(&th).status, TicketStatus::Queued, "forced into the queue by a refusing entry");
-    ok(w.process(10, &[(t0, a0.key), (th, h.key)]));
     assert_eq!(w.ticket(&th).status, TicketStatus::Claimed);
-    assert_eq!(w.queue_state().len, 1, "the refusing entry stays");
 
-    // 3) Attacker fills the queue: 51 more wallets × 5 tickets (spec limits respected),
-    //    each sold after t0 → each claim is forced into the queue behind t0.
-    let mut attackers: Vec<(Keypair, Pubkey, Pubkey)> = vec![];
-    for i in 0..51i64 {
+    // 3) Queue-filling attempt: with claims forced into the queue (pool too small to pay
+    //    them), each wallet gets at most 2 entries; the 3rd reverts and stays Open.
+    w.set_pool(1_000 * M); // cap 100 → a 101-token claim doesn't fit
+    let mut attackers: Vec<(Pubkey, Pubkey)> = vec![];
+    let mut wallets = vec![];
+    for i in 0..3i64 {
         let u = w.user(0);
         for j in 0..5i64 {
-            let t = w.add_ticket(&u.key, 1_000 * M, base_price(), now - 2 * DAY + i * 5 + j);
-            ok(w.claim(&u, t));
-            assert_eq!(w.ticket(&t).status, TicketStatus::Queued);
-            attackers.push((u.kp.insecure_clone(), u.key, t));
+            let t = w.add_ticket(&u.key, 1_010 * M, base_price(), now - 2 * DAY + i * 5 + j);
+            if j < 2 {
+                ok(w.claim(&u, t));
+                assert_eq!(w.ticket(&t).status, TicketStatus::Queued);
+                attackers.push((t, u.key));
+            } else {
+                assert_fumpad_err(w.claim(&u, t), FumpadError::WalletQueueLimit);
+                assert_eq!(w.ticket(&t).status, TicketStatus::Open);
+            }
         }
-        w.set_balance(&u, 0, true);
+        w.set_balance(&u, 0, true); // memos on
+        wallets.push(u);
     }
-    let q = w.queue_state();
-    assert_eq!(q.len as usize, fumpad::CLAIM_QUEUE_CAPACITY);
-    assert_eq!(q.total_owed, 256 * 100 * M, "0.05% of the pool in total");
+    assert_eq!(w.queue_state().len, 6);
 
-    // A full crank pass (in chunks, queue order) frees nothing.
-    let mut order: Vec<(Pubkey, Pubkey)> = vec![(t0, a0.key)];
-    order.extend(attackers.iter().map(|(_, o, t)| (*t, *o)));
-    for chunk in order.chunks(10) {
-        ok(w.process(10, chunk));
+    // 4) Pool back: one crank pass escrows every refusing entry; the queue is empty and an
+    //    honest claimant is paid at once (no QueueFull, no forced queueing).
+    w.set_pool(POOL);
+    ok(w.process(10, &attackers));
+    assert_eq!(w.queue_state().len, 0);
+    for (t, _) in &attackers {
+        assert_eq!(w.ticket(t).status, TicketStatus::Escrowed);
     }
-    assert_eq!(w.queue_state().len as usize, fumpad::CLAIM_QUEUE_CAPACITY);
-
-    // 4) Honest claimant, 10x met, claim = 0.0002% of the pool: QueueFull.
     let h2 = w.user(0);
     let t2 = w.add_ticket(&h2.key, 1_000 * M, base_price(), now - DAY / 2);
-    assert_fumpad_err(w.claim(&h2, t2), FumpadError::QueueFull);
-    assert_eq!(w.ticket(&t2).status, TicketStatus::Open);
-    // ...and it simply expires 90 days later (anyone may close it), while the attacker's
-    // queued entries never expire.
-    w.env.warp(90 * DAY);
-    assert_fumpad_err(w.claim(&h2, t2), FumpadError::TicketExpired);
+    ok(w.claim(&h2, t2));
+    assert_eq!(w.ticket(&t2).status, TicketStatus::Claimed);
 
-    // 5) Attacker cashes out whenever they like.
-    w.set_balance(&a0, 0, false);
-    ok(w.process(10, &[(t0, a0.key)]));
-    assert_eq!(token_amount(&w.env, &a0.ata), 100 * M);
+    // 5) The attacker still gets exactly what was owed, via withdraw_escrow.
+    let side = w.side_account(&a0);
+    ok(w.withdraw_escrow(&a0, t0, side));
+    assert_eq!(token_amount(&w.env, &side), 100 * M);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LOW — stale queue amount after a rebuy debit lets newer claims jump ahead
+// LOW (R-L1) — queue amount after a rebuy debit is exact
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// `apply_rebuy` lowers a queued ticket's `claim_amount`, but its queue entry keeps the old
-/// (larger) amount until a crank re-syncs it. Both ordering guards read the stale entry:
-/// - `claim`'s `has_older_fitting` sees "doesn't fit" → a newer claim pays instantly;
-/// - `process_queue` only halts for a triple-less entry that fits by its STALE amount, so a
-///   crank that omits the older entry's triple pays newer entries ahead of it.
-/// D4/§5.3: "processed in sell-time order … a crank can't reorder it".
+/// Was: `apply_rebuy` lowered a queued ticket's `claim_amount` but its queue entry kept the
+/// old (larger) amount until a crank re-synced it, so `has_older_fitting` and the crank's
+/// halt rule read the stale amount and newer claims jumped ahead. Now the rebuy updates the
+/// entry in the same instruction (the ClaimQueue account is required when a ticket is
+/// Queued): newer claims queue behind A, and a crank omitting A halts instead of paying them.
 #[test]
-fn bug_stale_queue_amount_after_rebuy_lets_newer_claims_jump_ahead() {
+fn regression_rebuy_updates_queue_entry_so_order_holds() {
     let mut w = World::new();
     let now = w.now();
     w.set_pool(1_000 * M); // cap 100
@@ -158,35 +152,36 @@ fn bug_stale_queue_amount_after_rebuy_lets_newer_claims_jump_ahead() {
     ok(w.claim(&a, ta));
     assert_eq!(w.ticket(&ta).status, TicketStatus::Queued);
 
-    // A rebuys 1_400 within 7 days → ticket 600 tokens, owes 60 (fits the cap of 100).
+    // A rebuys 1_400 within 7 days → ticket 600 tokens, owes 60; the entry follows at once.
     w.set_balance(&a, 1_400 * M, false);
     ok(w.register(&a, &[ta]));
     let tk = w.ticket(&ta);
     assert_eq!((tk.status, tk.claim_amount), (TicketStatus::Queued, 60 * M));
-    assert_eq!(w.queue_state().entries[0].amount, 200 * M, "queue entry is stale");
+    let q = w.queue_state();
+    assert_eq!((q.entries[0].amount, q.total_owed), (60 * M, 60 * M), "queue entry exact");
 
-    // (1) claim path: newer B (owes 100, fits) is paid instantly although older A fits.
+    // (1) claim path: newer B (owes 100, fits) waits behind the older fitting A.
     let b = w.user(0);
     let tb = w.add_ticket(&b.key, 1_000 * M, base_price(), now - 2 * DAY);
     ok(w.claim(&b, tb));
-    assert_eq!(w.ticket(&tb).status, TicketStatus::Claimed, "B jumped ahead of fitting A");
-    assert_eq!(w.ticket(&ta).status, TicketStatus::Queued);
+    assert_eq!(w.ticket(&tb).status, TicketStatus::Queued, "B no longer jumps ahead of A");
 
-    // (2) crank path: newer C gets queued (owes 95 > cap 90), pool refills to 1_000.
+    // (2) crank path: a crank passing only a newer entry halts at A.
     let c = w.user(0);
     let tc = w.add_ticket(&c.key, 950 * M, base_price(), now - DAY);
     ok(w.claim(&c, tc));
     assert_eq!(w.ticket(&tc).status, TicketStatus::Queued);
-    w.set_pool(1_000 * M);
-    // A crank passing only C's triple: A (really owes 60, fits) is silently passed over.
     ok(w.process(10, &[(tc, c.key)]));
-    assert_eq!(w.ticket(&tc).status, TicketStatus::Claimed, "C paid ahead of fitting A");
+    assert_eq!(w.ticket(&tc).status, TicketStatus::Queued, "C not paid ahead of fitting A");
     assert_eq!(w.ticket(&ta).status, TicketStatus::Queued);
-    assert_eq!(token_amount(&w.env, &a.ata), 1_400 * M, "A got nothing");
+    // A full crank pays in order: A first.
+    ok(w.process(10, &[(ta, a.key), (tb, b.key), (tc, c.key)]));
+    assert_eq!(w.ticket(&ta).status, TicketStatus::Claimed);
+    assert_eq!(token_amount(&w.env, &a.ata), 1_460 * M, "A paid its exact 60");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LOW — matured eligibility is a credit not tied to the tokens (10-min hold bypass)
+// LOW (R-L2) — matured eligibility vs tokens that arrive unseen
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn t22_transfer(f: &mut Flow, from: &Keypair, to: &Pubkey, amount: u64) {
@@ -210,54 +205,71 @@ fn t22_transfer(f: &mut Flow, from: &Keypair, to: &Pubkey, amount: u64) {
     ok(f.env.send_as(&p, &[create, i], &[&p, from]));
 }
 
-/// `matured` is only ever capped by the balance FUMPAD sees at a sell / register. Tokens
-/// that leave the wallet by transfer (or a sell on another venue) leave the credit behind,
-/// and any tokens that arrive later — bought seconds ago, by anyone — inherit it. Here a
-/// FUMPAD buy by wallet C is handed to A and dumped through FUMPAD in the same second, and
-/// A gets a ticket: SPEC §5.3 rule 3 / concept §07 "minimum hold … stops buy-then-dump
-/// farming". The same credit can be copied to more wallets by passing one bag around
-/// (each `register_holdings` + 10 min), since none of them is ever capped down.
+/// Was: `matured` was a credit capped only by the balance seen at a sell, so tokens bought
+/// seconds ago by anyone, handed to a wallet holding matured credit, were dumped with a
+/// ticket (no 10-min hold). Now Position.last_balance records the balance FUMPAD last
+/// observed; anything above it at the sell arrived unseen and is sold FIRST, without
+/// eligibility. Part 1: A still holds its matured bag and dumps the fresh tokens → no
+/// ticket. Part 2 (original scenario, bag moved out first): only the part of the fresh
+/// tokens up to the previously observed balance can still use the old credit — the
+/// documented residual (FUMPAD can't see transfers between its touch points, SPEC §5.3),
+/// bounded by a credit that required really holding that many tokens for 10 min.
 #[test]
-fn bug_matured_credit_outlives_tokens_and_backs_instant_dump() {
+fn regression_unseen_arrivals_cannot_ride_matured_credit() {
+    // Part 1: bag kept, fresh tokens handed over and dumped at once → no ticket.
+    let mut f = Flow::new();
+    let a = f.env.new_user(100);
+    let ak = kp_pk(&a);
+    ok(f.buy(&a, 2 * SOL));
+    let x = f.tokens(&ak);
+    f.env.warp(3_600);
+    let c = f.env.new_user(100);
+    let ck = kp_pk(&c);
+    ok(f.buy(&c, 2 * SOL));
+    let y = f.tokens(&ck);
+    t22_transfer(&mut f, &c, &ak, y);
+    let tk = f.next_ticket(&ak);
+    ok(f.sell(&a, y));
+    assert!(f.env.account(&tk).map_or(true, |acc| acc.lamports == 0), "fresh tokens: no ticket");
+    let p = f.position(&ak).unwrap();
+    assert_eq!((p.matured, p.last_balance), (x, x), "the held bag keeps its credit");
+    // Selling the held bag afterwards still qualifies (it was held ≥ 10 min).
+    let tk = f.next_ticket(&ak);
+    ok(f.sell(&a, x));
+    assert_eq!(f.ticket(&tk).tokens, x);
+
+    // Part 2: the original scenario — bag moved out unseen, MORE fresh tokens arrive.
     let mut f = Flow::new();
     let a = f.env.new_user(100);
     let ak = kp_pk(&a);
     ok(f.buy(&a, 2 * SOL));
     let x = f.tokens(&ak);
     f.env.warp(600);
-    // A moves the matured bag out (FUMPAD can't see it).
-    let cold = Pubkey::new_unique();
-    t22_transfer(&mut f, &a, &cold, x);
-    assert_eq!(f.tokens(&ak), 0);
-    assert_eq!(f.position(&ak).unwrap().pending, x, "credit still tracked");
+    t22_transfer(&mut f, &a, &Pubkey::new_unique(), x);
     f.env.warp(3_600);
-
-    // An hour later: C buys through FUMPAD, hands the tokens to A, A sells at once.
     let c = f.env.new_user(100);
     let ck = kp_pk(&c);
-    ok(f.buy(&c, 2 * SOL));
-    let bought_at = f.now();
+    ok(f.buy(&c, 10 * SOL));
     let y = f.tokens(&ck);
+    assert!(y > x);
     t22_transfer(&mut f, &c, &ak, y);
     let tk = f.next_ticket(&ak);
     ok(f.sell(&a, y));
     let t = f.ticket(&tk);
-    assert_eq!(t.sell_ts, bought_at, "tokens held for 0 seconds");
-    assert_eq!(t.tokens, y.min(x));
-    assert!(t.tokens > 0);
+    assert_eq!(t.tokens, x, "only the previously observed balance can carry credit (residual), not {y}");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LOW — router sell from a non-ATA account wipes eligibility of the ATA's tokens
+// LOW (R-L3) — router sell must use the canonical ATA
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// `swap_sell` accepts any token account of the user, and `on_sell` caps the WHOLE
-/// position to that one account's balance (`cap_tracked(balance_before)`). Selling a few
-/// tokens from a secondary account deletes the matured credit of tokens still sitting in
-/// the ATA (which `register_holdings` measures), so a later qualifying sell from the ATA
-/// gets no ticket, and re-registering counts as a rebuy.
+/// Was: `swap_sell` accepted any token account of the user and capped the WHOLE position to
+/// that account's balance, so selling 1 token from a side account wiped the matured credit
+/// of the tokens in the ATA. Now `swap_sell` (like the curve sell and `swap_buy`) requires
+/// the canonical ATA: the side-account sell is rejected and the ATA's tokens keep their
+/// eligibility.
 #[test]
-fn bug_swap_sell_from_secondary_account_wipes_ata_eligibility() {
+fn regression_swap_sell_requires_canonical_ata() {
     let mut f = Flow::new();
     let whale = f.env.new_user(1_000);
     ok(f.buy(&whale, 200 * SOL));
@@ -270,9 +282,8 @@ fn bug_swap_sell_from_secondary_account_wipes_ata_eligibility() {
     ok(f.swap_buy(&u, 3 * SOL));
     let held = f.tokens(&uk);
     f.env.warp(600);
-    let _ = f.keeper_sample(); // keep the reference fresh (not required)
+    let _ = f.keeper_sample();
 
-    // Secondary Token-2022 account owned by u, holding 1 token.
     let side = Pubkey::new_unique();
     fl::put_token_account(&mut f.env, side, f.mint, uk, 0, fl::T22);
     let mut data = vec![12u8];
@@ -285,7 +296,7 @@ fn bug_swap_sell_from_secondary_account_wipes_ata_eligibility() {
     );
     ok(f.env.send_as(&u, &[tr], &[&u]));
 
-    // Router sell of that 1 token from `side` (same instruction, user_token_account swapped).
+    // Router sell of that 1 token from `side`: rejected (Anchor ConstraintAssociated).
     let ata_u = addr(&fl::ata(&uk, &f.mint, &fl::T22));
     let mut i = f.swap_sell_ix(&uk, M);
     for m in i.accounts.iter_mut() {
@@ -293,22 +304,14 @@ fn bug_swap_sell_from_secondary_account_wipes_ata_eligibility() {
             m.pubkey = addr(&side);
         }
     }
-    ok(f.env.send_as(&u, &[fl::cu_limit(1_400_000), i], &[&u]));
+    let res = f.env.send_as(&u, &[fl::cu_limit(1_400_000), i], &[&u]);
+    let err = format!("{:?}", res.expect_err("side-account sell must fail").err);
+    assert!(err.contains("Custom(2009)"), "{err}");
     let pos = f.position(&uk).unwrap();
-    assert_eq!(pos.matured + pos.pending, 0, "credit for {} tokens still in the ATA wiped", held - M);
-    assert_eq!(f.tokens(&uk), held - M);
+    assert_eq!(pos.matured + pos.pending, held, "ATA eligibility intact");
 
-    // A normal, otherwise qualifying sell of the ATA's matured tokens: no ticket.
+    // The ATA's matured tokens sell with a ticket.
     let tk = f.next_ticket(&uk);
     ok(f.swap_sell(&u, f.tokens(&uk)));
-    assert!(f.env.account(&tk).map_or(true, |a| a.lamports == 0), "no ticket for 10-min-held tokens");
-
-    // Control: the same buy → 10 min → sell from the ATA, without the side sell, qualifies.
-    let v = f.env.new_user(100);
-    let vk = kp_pk(&v);
-    ok(f.swap_buy(&v, 3 * SOL));
-    f.env.warp(600);
-    let tk = f.next_ticket(&vk);
-    ok(f.swap_sell(&v, f.tokens(&vk)));
-    assert!(f.env.account(&tk).is_some_and(|a| a.lamports > 0), "control sell gets a ticket");
+    assert!(f.env.account(&tk).is_some_and(|a| a.lamports > 0), "10-min-held tokens get a ticket");
 }

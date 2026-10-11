@@ -39,7 +39,7 @@ fn transfer_ix(f: &Flow, from: &Pubkey, to: &Pubkey, amount: u64) -> solana_inst
 }
 
 fn register_holdings_ix(f: &Flow, user: &Pubkey) -> solana_instruction::Instruction {
-    let open: Vec<Meta> = f.open_tickets(user).into_iter().map(w).collect();
+    let open = f.rebuy_metas(user);
     ix_with_remaining(
         fumpad::accounts::RegisterHoldings {
             user: *user,

@@ -1197,8 +1197,8 @@ fn swap_buy_open_tickets_precede_venue_slice() {
     assert_eq!((pos.open_count, pos.open_tickets[0]), (1, ticket));
     assert_eq!(fetch_coin(&fx.env, &fx.coin).tickets_created, 1);
 
-    // Without the ticket the venue slice is shifted by one → rejected.
-    expect_err(fx.buy(&user, SOL, 1), FumpadError::WrongVenue);
+    // Without the ticket the open set doesn't match (the venue would be shifted) → rejected.
+    expect_err(fx.buy(&user, SOL, 1), FumpadError::OpenTicketsMismatch);
     // With it, the buy goes through (and the rebuy rule debits the ticket).
     let before: Ticket = fx.env.fetch(&ticket);
     let mut remaining = vec![w(ticket)];

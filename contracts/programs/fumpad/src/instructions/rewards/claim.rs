@@ -13,7 +13,9 @@ use super::{logic, queue};
 
 /// Claim a ticket once the coin has held `trigger_multiple` × the sell price (30-min
 /// median of keeper samples). Pays immediately when the amount fits the per-claim cap
-/// and no older fitting claim is waiting; otherwise enters the claim queue.
+/// and no older fitting claim is waiting; otherwise enters the claim queue — unless the
+/// wallet already has `MAX_QUEUED_PER_WALLET` (2) entries there (D16: reverts with
+/// `WalletQueueLimit`, the ticket stays Open).
 ///
 /// Queued tickets stay in `position.open_tickets` (the rebuy rule still applies to them,
 /// SPEC §5.3) until paid or voided. Paid tickets leave the open list.
@@ -122,6 +124,8 @@ pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
             ts: now,
         });
     } else {
+        // D16: at most MAX_QUEUED_PER_WALLET entries per wallet per coin (the ticket stays Open).
+        require!(queue::count_owner(&q, &owner) < MAX_QUEUED_PER_WALLET, FumpadError::WalletQueueLimit);
         let queue_len = queue::insert(&mut q, QueueEntry { ticket: ticket_key, owner, amount, sell_ts })?;
         drop(q);
         t.status = TicketStatus::Queued;

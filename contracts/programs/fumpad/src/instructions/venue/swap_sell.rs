@@ -62,11 +62,13 @@ pub struct SwapSell<'info> {
     pub ticket: UncheckedAccount<'info>,
     /// CHECK: Pyth PriceUpdateV2; owner/feed/staleness checked by `hooks::on_sell`.
     pub sol_usd_price: UncheckedAccount<'info>,
+    /// R-L3: the user's canonical Token-2022 ATA (as on the curve): eligibility is capped by
+    /// the balance FUMPAD observes, so a sell from a secondary account must not stand in for it.
     #[account(
         mut,
-        token::mint = mint,
-        token::authority = user,
-        token::token_program = token_2022_program,
+        associated_token::mint = mint,
+        associated_token::authority = user,
+        associated_token::token_program = token_2022_program,
     )]
     pub user_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(

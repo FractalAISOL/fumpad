@@ -10,6 +10,7 @@
 //! the user already held there comes back as native SOL too (value-neutral).
 //!
 //! remaining_accounts = [ the position's open tickets (exactly `position.open_count`) ,
+//!                        the coin's ClaimQueue — only if one of those tickets is Queued ,
 //!                        PumpSwap `buy_exact_quote_in_v2` accounts, in PumpSwap order ]
 //! The venue slice's `user` is this instruction's `user`, its `user_base_token_account`
 //! is `user_token_account`, its `user_quote_token_account` is `user_wsol`.
@@ -94,9 +95,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
 
-    let open = a.position.open_count as usize;
-    require!(remaining.len() >= open, FumpadError::OpenTicketsMismatch);
-    let (open_tickets, venue) = remaining.split_at(open);
+    let (rebuy, venue) = hooks::split_rebuy_accounts(&a.position, remaining)?;
 
     let user_info = a.user.to_account_info();
     let token_acc_info = a.user_token_account.to_account_info();
@@ -143,10 +142,11 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
             global: &a.global,
             coin: &a.coin,
             position: &mut a.position,
-            open_tickets,
+            rebuy,
             event_authority: &a.event_authority,
         },
         tokens_out,
+        tokens_before,
         now,
     )?;
 

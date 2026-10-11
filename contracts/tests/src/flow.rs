@@ -248,6 +248,18 @@ impl Flow {
             .map(|p| p.open_tickets.iter().copied().filter(|k| *k != Pubkey::default()).collect())
             .unwrap_or_default()
     }
+    /// Rebuy-rule accounts for a buy / register_holdings: the open tickets (writable), then
+    /// the claim queue iff one of them is Queued (R-L1).
+    pub fn rebuy_metas(&self, user: &Pubkey) -> Vec<Meta> {
+        let open = self.open_tickets(user);
+        let queued = open.iter().any(|k| self.ticket(k).status == TicketStatus::Queued);
+        let mut v: Vec<Meta> = open.into_iter().map(w).collect();
+        if queued {
+            v.push(w(self.queue));
+        }
+        v
+    }
+
     pub fn next_ticket(&self, user: &Pubkey) -> Pubkey {
         let seq = self.position(user).map_or(0, |p| p.next_ticket_seq);
         fpda(&[fumpad::TICKET_SEED, self.mint.as_ref(), user.as_ref(), &seq.to_le_bytes()])
@@ -284,7 +296,7 @@ impl Flow {
     // ── curve ───────────────────────────────────────────────────────────────
 
     pub fn buy_ix(&self, user: &Pubkey, sol_in: u64) -> Instruction {
-        let open: Vec<Meta> = self.open_tickets(user).into_iter().map(w).collect();
+        let open = self.rebuy_metas(user);
         ix_with_remaining(
             fumpad::accounts::Buy {
                 user: *user,
@@ -444,7 +456,7 @@ impl Flow {
     }
 
     pub fn swap_buy_ix(&self, u: &Pubkey, sol_in: u64) -> Instruction {
-        let mut rem: Vec<Meta> = self.open_tickets(u).into_iter().map(w).collect();
+        let mut rem = self.rebuy_metas(u);
         rem.extend(self.user_venue(u));
         ix_with_remaining(
             fumpad::accounts::SwapBuy {
@@ -635,11 +647,13 @@ impl Flow {
         q
     }
 
-    /// process_queue with triples for `entries` = (ticket, owner), in queue order.
+    /// process_queue with quadruples for `entries` = (ticket, owner), in queue order.
     pub fn process_queue(&mut self, max_entries: u8, entries: &[(Pubkey, Pubkey)]) -> TransactionResult {
         let rem: Vec<Meta> = entries
             .iter()
-            .flat_map(|(t, o)| [w(*t), w(self.position_key(o)), w(ata(o, &self.mint, &T22))])
+            .flat_map(|(t, o)| {
+                [w(*t), w(self.position_key(o)), w(ata(o, &self.mint, &T22)), w(fpda(&[fumpad::ESCROW_SEED, t.as_ref()]))]
+            })
             .collect();
         let i = ix_with_remaining(
             fumpad::accounts::ProcessQueue {
@@ -651,6 +665,7 @@ impl Flow {
                 pool_authority: pool_authority(),
                 reward_vault: self.reward_vault,
                 token_program: T22,
+                system_program: SYSTEM,
                 event_authority: event_authority(),
                 program: fumpad::ID,
             },

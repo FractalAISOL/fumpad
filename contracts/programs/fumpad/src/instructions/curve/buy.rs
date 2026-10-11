@@ -20,7 +20,8 @@ use crate::{
 /// is charged on top of the lamports actually used (see `curve/mod.rs`).
 ///
 /// remaining_accounts: the position's open tickets (exactly `position.open_count`,
-/// any order) — consumed by `hooks::on_buy` for the rebuy rule.
+/// any order), then the coin's ClaimQueue only if one of them is `Queued` — consumed by
+/// `hooks::on_buy` for the rebuy rule (`hooks::split_rebuy_accounts`).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct Buy<'info> {
@@ -76,6 +77,9 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     require!(sol_in > 0, FumpadError::ZeroAmount);
     let now = Clock::get()?.unix_timestamp;
 
+    // Canonical ATA balance before the buy (R-L2 observation).
+    let balance_before = a.user_token_account.amount;
+
     // ── Quote ──
     let mut r = reserves_of(&a.coin);
     let pre_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
@@ -118,18 +122,19 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     }
 
     // ── Rewards hook ──
-    let open = a.position.open_count as usize;
-    require!(ctx.remaining_accounts.len() >= open, FumpadError::OpenTicketsMismatch);
+    let (rebuy, rest) = hooks::split_rebuy_accounts(&a.position, ctx.remaining_accounts)?;
+    require!(rest.is_empty(), FumpadError::OpenTicketsMismatch);
     a.position.init_if_new(a.user.key(), a.mint.key(), ctx.bumps.position);
     hooks::on_buy(
         BuyHookAccounts {
             global: &a.global,
             coin: &a.coin,
             position: &mut a.position,
-            open_tickets: &ctx.remaining_accounts[..open],
+            rebuy,
             event_authority: &a.event_authority,
         },
         q.tokens_out,
+        balance_before,
         now,
     )?;
 

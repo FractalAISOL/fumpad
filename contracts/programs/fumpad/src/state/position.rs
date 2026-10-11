@@ -26,7 +26,13 @@ pub struct Position {
     /// them so the rebuy rule can be applied.
     pub open_tickets: [Pubkey; MAX_OPEN_TICKETS],
     pub open_count: u8,
-    pub reserved: [u8; 64],
+    /// R-L2: the wallet's canonical-ATA balance as of FUMPAD's last observation of it
+    /// (after a FUMPAD buy/sell, or at `register_holdings`). At the next observation, any
+    /// balance above it arrived unseen (transfer / other venue): it is untracked, and a sell
+    /// draws on it FIRST, so fresh tokens can't ride on matured credit. Carved from
+    /// `reserved` (size unchanged).
+    pub last_balance: u64,
+    pub reserved: [u8; 56],
 }
 
 impl Position {
@@ -45,6 +51,12 @@ impl Position {
             self.matured = self.matured.saturating_add(self.pending);
             self.pending = 0;
         }
+    }
+
+    /// Last observed balance; never below what is tracked (positions created before v0.3
+    /// have `last_balance` = 0).
+    pub fn observed_balance(&self) -> u64 {
+        self.last_balance.max(self.matured.saturating_add(self.pending))
     }
 
     /// Record newly acquired tokens (FUMPAD buy or registered holdings).
