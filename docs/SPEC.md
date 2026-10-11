@@ -22,6 +22,7 @@ Status: v0.3 — matches the merged contracts (pre-audit fixes, D13–D16 implem
 | D14 | **Graduation fee hard cap: 1 SOL**, snapshotted into each coin at `create_coin` (no retroactive changes). Fee params likewise snapshotted per coin (`Coin.fees`); `fee_bps` capped at 200. Beta value stays 0. |
 | D15 | **48h timelock** on all admin parameter changes (`queue_params` → `execute_params`, `cancel_params`). Pause flags stay immediate. Details §6.1. |
 | D16 | **Max 2 claim-queue entries per wallet per coin**; payouts to accounts that refuse transfers go to a per-ticket escrow the owner withdraws later (`withdraw_escrow`), so such entries leave the queue. Details §5.3.1. |
+| D17 | **Reward pool 8% of supply** (was 5%), keeping 10% claims and the 50/30/20 split; curve re-derived: virtual tokens ≈987.18M, ≈729.66M on the curve, ≈190.34M to the LP (§3). **Claim queue capacity 1024** (was 256). **Auto-claim:** a keeper may claim on a ticket owner's behalf (payout always to the owner, or escrow); on by default, owner can opt out. Source: `sim/REPORT.md` option C. |
 
 ## 1. Verified facts (Phase 0 check)
 
