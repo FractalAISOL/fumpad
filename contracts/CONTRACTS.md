@@ -40,6 +40,50 @@ program + PumpSwap GlobalConfig, global initialized, one keeper). Devnet account
 in `tests/fixtures/` (`solana account -u d <addr> --output json -o <file>`;
 `solana program dump -u d <id> <file>.so`).
 
+## v0.4 interface changes (D17 — backend SDK / keeper must pick these up)
+Regenerate the client from `target/idl/fumpad.json`. SPEC §3, §5.3 and §10 have the rationale.
+
+**Defaults / constants**
+- Curve defaults (in `Global.params`, read them from chain, don't hard-code): `reward_pool_supply` 80,000,000,000,000 (8%), `initial_virtual_token` 987,180,527,383,367, `curve_supply` 729,655,172,413,793, `lp_supply` 190,344,827,586,207 (`initial_virtual_sol` 30 SOL and `graduation_lamports` 85 SOL unchanged). Re-init Global on devnet to pick them up.
+- `CLAIM_QUEUE_CAPACITY` 256 → **1024**. `ClaimQueue` account = 8 + 48 + 80 × 1024 = **81,976 bytes** (decoders: entries array is 1024 × 80 B; rent ≈ 0.571 SOL).
+- New `CLAIM_QUEUE_INIT_CALLS` = **9**: `init_claim_queue` must be called 9× (one transaction; was 3×) before the queue is usable.
+
+**Instructions (new)**
+| Instruction | Accounts / args |
+|---|---|
+| `claim_for()` (registered keeper) | `keeper` (signer, mut — pays escrow rent if needed), `global`, `coin` (mut), `mint`, `ticket` (mut), `position` (mut, `["position", mint, ticket.owner]`), `claim_queue` (mut), `observations`, `pool_authority`, `reward_vault` (mut), `owner_ata` (mut, **must be** ATA(ticket.owner, mint, Token-2022) — may not exist), `escrow` (mut, PDA `["escrow", ticket]`), `token_program` (Token-2022), `system_program`, `event_authority`, `program`. Errors: `Unauthorized` (not a keeper), `AutoClaimDisabled` (owner opted out), `InvalidAccount` (wrong ATA), plus every `claim` error. Prepend an idempotent ATA create (keeper-paid) to avoid escrow. |
+| `set_auto_claim(enabled: bool)` (wallet) | `wallet` (signer), `position` (mut, `["position", mint, wallet]` — must exist), `event_authority`, `program` |
+
+`claim` (owner-signed) is unchanged (same accounts/args).
+
+**State layout**
+- `Position`: `auto_claim_opt_out: u8` carved from `reserved` (56 → 55); size unchanged (322). 0 = auto-claim on (default), 1 = opted out.
+
+**Events:** `ClaimPaid`, `ClaimQueued`, `ClaimEscrowed` get a trailing `triggered_by: Pubkey` (owner for `claim`, keeper for `claim_for`, cranker for `process_queue`) — layout change, update decoders. New `AutoClaimSet { mint, wallet, enabled, ts }`.
+**Errors (appended):** 6035 `AutoClaimDisabled`.
+
+**Keeper behaviour:** after `graduate`, `init_observations` + 9× `init_claim_queue`; auto-claim: `claim_for` each `Open` ticket whose trigger holds with coverage (skip positions with `auto_claim_opt_out = 1`; a wallet already at 2 queue entries can only be paid now, else `WalletQueueLimit`), creating a missing owner ATA first; `process_queue` as before.
+
+**Compute (measured, `cargo test -p tests cu_report -- --nocapture` + `venue_tests::compute_units_and_batch_size`; ranges = 4 runs, the spread comes from PDA bump searches on random keys)** — default budget is 200k per instruction; `cu_report` asserts every row < 1M:
+| Instruction | CU | Explicit compute budget? |
+|---|---|---|
+| `init_claim_queue` × 9 (one transaction, total) | 69k | no |
+| `claim` paid now (empty queue / behind 1024 older non-fitting entries) | 57k / 72k | no |
+| `claim` queued at the end (1023 ahead → full) / at the **front** (1023 shifted → full) | 69k / 71–80k | no |
+| `claim_for` paid now / queued at front (1023 in queue) / escrowed (1024 scanned) | 74–77k / 71–77k / 78–87k | no |
+| `process_queue` full queue (1024), walk only / 1 paid / 1 escrowed | 94k / 107–111k / 116–122k | no |
+| `process_queue` full queue (1024), 13 entries paid directly | 280–294k | **yes** (e.g. 450k) |
+| `process_queue` full queue (1024), 13 entries escrowed | 393–413k | **yes** (e.g. 600k) |
+| `process_queue` full queue (1024), 13 voided entries dropped | 114k | no |
+| `register_holdings` rebuy voiding the front entry of a full queue (`buy`/`swap_buy` share the hook) | 25–37k | no |
+| `close_ticket` voided, queue passed (full 1024 scanned) | 21–22k | no |
+| `record_samples` 1 / 5 / 10 coins | 16k / 56k / 107k | no (10 coins needs a v0 tx + ALT for size) |
+| `graduate` | 250–273k | **yes** (400k) |
+| `swap_buy` (first buy, creates ATA+position / 5 open tickets) | 139–166k / 126–153k | no (clients set 1.4M today; ≥ 200k advisable) |
+| `swap_sell` (creates ticket) | 120–147k | no |
+| `execute_buyback` | 143k | no |
+All far below the 1.4M transaction limit; the 1024 queue costs ~90 CU per entry walked, every queue operation is one linear pass, so no bounded-walk cursor is needed. 13 queue entries is the most a legacy transaction can carry under 64 account locks (11 + 13 × 4).
+
 ## v0.3 interface changes (backend SDK / keeper must pick these up)
 Regenerate the client from `target/idl/fumpad.json` (and `fumpad_lp_locker.json`). SPEC §10 has the rationale.
 
@@ -71,18 +115,7 @@ Regenerate the client from `target/idl/fumpad.json` (and `fumpad_lp_locker.json`
 
 **Keeper behaviour:** heartbeat-sample **every** graduated coin < 10 min (batched); only keeper samples count for medians, spread over ≥ 5 of 6 five-minute buckets (start full rate ≥ ~25 min before claims/buybacks need a median); create missing owner ATAs before `process_queue`; `execute_params` after 48h.
 
-**Compute (measured, `cargo test -p tests cu_report -- --nocapture` + `venue_tests::compute_units_and_batch_size`)** — default budget is 200k per instruction:
-| Instruction | CU | Explicit compute budget? |
-|---|---|---|
-| `claim` (paid now / queued behind 255 / inserted at front of 255) | 57.8k / 58.7k / 61.9k | no |
-| `process_queue` full queue (256), 13 entries paid directly | 244k | **yes** (e.g. 400k) |
-| `process_queue` full queue (256), 13 entries escrowed | 323k | **yes** (e.g. 450k) |
-| `record_samples` 1 / 5 / 10 coins | 16k / 56k / 107k | no (10 coins needs a v0 tx + ALT for size) |
-| `graduate` | 270k | **yes** (400k) |
-| `swap_buy` (first buy, creates ATA+position / 5 open tickets) | 151k / 135k | no (clients set 1.4M today; ≥ 200k advisable) |
-| `swap_sell` (creates ticket) | 127k | no |
-| `execute_buyback` | 143k | no |
-All fit the 1.4M transaction limit. 13 queue entries is the most a transaction can carry under 64 account locks (11 + 13 × 4).
+**Compute:** see the v0.4 table above.
 
 ## Module ownership (parallel branches — stay in your lane)
 | Module | Files you own |
