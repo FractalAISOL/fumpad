@@ -1,6 +1,6 @@
-# FUMPAD — Technical Spec v0.3
+# FUMPAD — Technical Spec v0.4
 
-Status: v0.3 — matches the merged contracts (pre-audit fixes, D13–D16 implemented) · 2026-10-11 · Source concept: `concept-overview.pdf`
+Status: v0.4 — matches the contracts (D13–D17 implemented) · 2026-10-11 · Source concept: `concept-overview.pdf`
 
 ## 0. Locked decisions
 
@@ -22,7 +22,8 @@ Status: v0.3 — matches the merged contracts (pre-audit fixes, D13–D16 implem
 | D14 | **Graduation fee hard cap: 1 SOL**, snapshotted into each coin at `create_coin` (no retroactive changes). Fee params likewise snapshotted per coin (`Coin.fees`); `fee_bps` capped at 200. Beta value stays 0. |
 | D15 | **48h timelock** on all admin parameter changes (`queue_params` → `execute_params`, `cancel_params`). Pause flags stay immediate. Details §6.1. |
 | D16 | **Max 2 claim-queue entries per wallet per coin**; payouts to accounts that refuse transfers go to a per-ticket escrow the owner withdraws later (`withdraw_escrow`), so such entries leave the queue. Details §5.3.1. |
-| D17 | **Reward pool 8% of supply** (was 5%), keeping 10% claims and the 50/30/20 split; curve re-derived: virtual tokens ≈987.18M, ≈729.66M on the curve, ≈190.34M to the LP (§3). **Claim queue capacity 1024** (was 256). **Auto-claim:** a keeper may claim on a ticket owner's behalf (payout always to the owner, or escrow); on by default, owner can opt out. Source: `sim/REPORT.md` option C. |
+| D17 | **Reward pool 8% of supply** (was 5%), keeping 10% claims and the 50/30/20 split; curve re-derived: virtual tokens ≈987.18M, ≈729.66M on the curve, ≈190.34M to the LP (§3). **Claim queue capacity 1024** (was 256). **Auto-claim:** a registered keeper may claim on a ticket owner's behalf (`claim_for`; payout always to the owner's canonical ATA, or escrow); on by default, the owner can opt out per coin (`set_auto_claim`). Details §3, §5.3. Source: `sim/REPORT.md` option C. |
+| D18 | **Vanity mints ending `fmbL`**, app-level only (not enforced on-chain, like pump.fun). A backend service pre-grinds a pool of mint keypairs; the launch flow co-signs `create_coin` server-side so mint secrets never leave the server. Lowercase `fmbl` is impossible (base58 excludes `l`). |
 
 ## 1. Verified facts (Phase 0 check)
 
@@ -56,8 +57,17 @@ One main program, four modules, plus a tiny immutable satellite. The main progra
 ## 3. Token & curve
 
 - **Mint:** Token-2022 with metadata-pointer + token-metadata extensions only (no transfer hooks, no transfer fees). 1,000,000,000 supply, 6 decimals. Mint authority revoked after mint; no freeze authority.
-- **Allocation at launch:** 50M (5%) → coin's reward pool vault · ~753.4M → curve · ~196.6M → reserved for PumpSwap LP.
-- **Curve:** constant product on virtual reserves (pump.fun style). Initial virtual SOL 30, initial virtual tokens **~1,019.4M** (re-derived so the graduation price equals the LP price with 950M non-pool supply). Start→graduation price ratio ≈ 14.7x. All parameters live in `Global` so the simulation can tune them.
+- **Allocation at launch (D17):** 80M (8%) → coin's reward pool vault · ~729.66M → curve · ~190.34M → reserved for PumpSwap LP.
+- **Curve:** constant product on virtual reserves (pump.fun style). Initial virtual SOL 30, initial virtual tokens **~987.18M**, re-derived so the graduation price equals the LP price with N = 920M non-pool supply. With V₀ = 30 SOL, raised R = 85 SOL, V₁ = V₀ + R = 115 SOL and T₁ the virtual tokens left at completion: curve C = T₀ − T₁ = T₁·R/V₀, LP L = T₁·R/V₁ (so V₁/T₁ = R/L), C + L = N ⇒ T₁ = N·V₀·V₁ / (R·(V₀+V₁)) = N·3450/12325. Exact values (base units, 6 decimals, each rounded to the nearest unit; pool + curve + LP = 10¹⁵ exactly):
+
+  | param | value |
+  |---|---|
+  | `reward_pool_supply` | 80,000,000,000,000 |
+  | `initial_virtual_token` (T₀ = T₁·V₁/V₀) | 987,180,527,383,367 |
+  | `curve_supply` (C) | 729,655,172,413,793 |
+  | `lp_supply` (L) | 190,344,827,586,207 |
+
+  Start→graduation price ratio = (V₁/V₀)² ≈ 14.7x (independent of the pool share). Unit test `default_curve_constants_match_spec_derivation`. All parameters live in `Global` so the simulation can tune them.
 - **Completion:** the curve completes when its **real tokens are exhausted**: the buy that would take more than what is left is partially filled (charged exactly the cost of the remaining tokens) and the coin becomes `Complete` (no trading). The parameters make that happen at ≈85 SOL raised (`graduation_lamports` is a sanity bound, not the trigger).
 - **Graduation:** anyone calls `graduate`, which creates the PumpSwap pool (index 0, creator = program PDA, coin_creator = default) with the **whole curve vault** (= `lp_supply`) + raised SOL minus the coin's **snapshotted** graduation fee (D14: `Coin.fees.graduation_fee_lamports`, ≤ 1 SOL, never the current global value), and **locks every LP token** in the immutable `fumpad_lp_locker` (D11, CPI `lock`; replaces the burn): the LP lands in a vault owned by the locker's PDA and a `Lock` account ["lock", pool] records the principal. Afterwards LP mint supply == the locker's balance. The raised SOL is wrapped in graduation's **own** WSOL account, PDA `["graduation_wsol", mint]`, created and closed inside `graduate` (never the pool authority's WSOL ATA, which is `execute_buyback`'s persistent account). The caller pays PumpSwap's account rent plus the Lock and LP-vault rent (~0.01 SOL net; 0.05 SOL is lent to the PDA and the unused part returned in the same instruction). ~270k CU (set a 400k compute budget); the transaction is ~1011 bytes.
 
@@ -144,12 +154,20 @@ The **reference** (`math/reference.rs`, 40 bytes of `Coin`) is a time-weighted a
 - now ≤ sell timestamp + 90 days
 - oracle median ≥ 10 × sell price, with sample coverage met
 
-Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no older fitting entry is waiting → paid in the same transaction. Otherwise → `Queued`, unless the wallet already has **2 entries** in this coin's queue (D16, `MAX_QUEUED_PER_WALLET`): the claim then reverts with `WalletQueueLimit` and the ticket stays `Open` (retry once an entry is paid). Every entry counted as "older fitting" can currently be paid by the crank: amounts are exact (rebuy rule above), entries exist only for `Queued` tickets, and a refusing destination is escrowed (§5.3.1) rather than skipped.
+Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no older fitting entry is waiting → paid in the same transaction (owner-signed `claim`: to any token account of the owner for the mint). Otherwise → `Queued`, unless the wallet already has **2 entries** in this coin's queue (D16, `MAX_QUEUED_PER_WALLET`): the claim then reverts with `WalletQueueLimit` and the ticket stays `Open` (retry once an entry is paid). Every entry counted as "older fitting" can currently be paid by the crank: amounts are exact (rebuy rule above), entries exist only for `Queued` tickets, and a refusing destination is escrowed (§5.3.1) rather than skipped.
 
-**Queue (per coin, zero-copy PDA `["claim_queue", mint]`, sorted by sell timestamp, capacity 256).** ~20 KB, more than one instruction may allocate, so the permissionless, repeatable `init_claim_queue` grows it by ≤10 KiB per call (3 calls, one transaction) and writes the header only at full size. `process_queue` is a permissionless crank: it walks in order and pays every entry whose amount ≤ 10% of the current pool, skipping the rest (D4); a crank can't reorder it (an entry that fits but whose accounts weren't passed halts payment). Queued entries never expire (D5). If the queue is full, the claim reverts with "queue full" and the ticket stays `Open`. Per call the crank takes `[ticket, position, owner ATA, escrow PDA]` per entry (13 entries fit a legacy transaction's 64 account locks; ~245k CU paying, ~323k CU escrowing, on a full queue — set a compute budget).
+**Auto-claim (D17).** `claim_for(ticket)` lets a **registered keeper** (`Global.keepers`) claim on the owner's behalf. It runs the exact checks of `claim` (one shared code path: pause, graduated, `Open`, 90-day window, keeper median ≥ trigger with coverage, D16 limit, capacity) and differs only in where a payout goes:
+- **Always to the owner:** the owner's **canonical** Token-2022 ATA (address enforced — the keeper can't pass another account), or, if that ATA can't receive a plain transfer (missing/closed, frozen, memo required), the ticket's D16 escrow `["escrow", ticket]`, created with the **keeper's** lamports (`Ticket.escrow_payer` = keeper, refunded on `withdraw_escrow`). The owner is never charged: a keeper that wants a direct payout prepends an idempotent ATA create it pays for.
+- A queued result is just a normal queue entry (the crank pays it later).
+- **Opt-out:** on by default; `set_auto_claim(enabled)`, signed by the wallet, sets `Position.auto_claim_opt_out` for that coin (all its tickets, current and future); opted-out → `AutoClaimDisabled`. The owner-signed `claim` works either way.
+- Events `ClaimPaid` / `ClaimQueued` / `ClaimEscrowed` carry `triggered_by` (owner, keeper, or the `process_queue` cranker).
+- *Why keeper-only, not anyone:* claiming is not purely in the owner's favour at every moment — it fixes `claim_amount`, spends one of the wallet's 2 queue slots (D16) and claims queue capacity. Letting arbitrary third parties choose that moment adds griefing surface (e.g. filling a wallet's 2 slots with its smallest tickets, or racing tickets into a nearly full queue) for no benefit, since the keeper already runs full-rate sampling and the queue crank. A keeper key can't move funds anywhere but to the owner. *Why per position, not per ticket:* `Ticket` has no reserved bytes left (D16's `escrow_payer` used them) and a size change would break existing tickets; `Position` had 56 reserved bytes, and per-coin is the granularity an owner actually wants.
+- Keeper policy: claim each `Open` ticket as soon as its trigger holds with coverage, oldest first (skip opted-out positions; for a wallet already at 2 queue entries, only claims that pay now succeed).
+
+**Queue (per coin, zero-copy PDA `["claim_queue", mint]`, sorted by sell timestamp, capacity 1024, D17).** 48 + 80 × 1024 bytes + discriminator = 81,976 bytes (rent ≈ 0.571 SOL per graduated coin, paid by whoever initializes it — the keeper), more than one instruction may allocate, so the permissionless, repeatable `init_claim_queue` grows it by ≤10 KiB per call (`CLAIM_QUEUE_INIT_CALLS` = 9 calls, one transaction) and writes the header only at full size. `process_queue` is a permissionless crank: it walks in order and pays every entry whose amount ≤ 10% of the current pool, skipping the rest (D4); a crank can't reorder it (an entry that fits but whose accounts weren't passed halts payment). Queued entries never expire (D5). If the queue is full, the claim reverts with "queue full" and the ticket stays `Open`. Per call the crank takes `[ticket, position, owner ATA, escrow PDA]` per entry (13 entries fit a legacy transaction's 64 account locks). On a full 1024 queue the walk alone costs ~94k CU (~90 CU per entry); paying 13 entries ≤ ~295k, escrowing 13 ≤ ~415k (~15k / ~24k per entry) — set a compute budget. Every queue operation is one linear pass (≤ 80 KB moved by a front insert), so the worst cases stay far below 1.4M (CONTRACTS.md table); even a future 128-account-lock transaction (29 entries, all escrowed) would be ≈ 0.8M.
 
 #### 5.3.1 Escrow (D16)
-If the owner's canonical ATA can't receive a plain transfer when the crank pays the entry — incoming-transfer **memo required**, frozen, or **missing/closed** — the payout goes into the ticket's escrow token account, PDA `["escrow", ticket]` (Token-2022, authority = pool authority, created by the crank; the cranker pays its rent and is recorded in `Ticket.escrow_payer`). The ticket becomes `Escrowed`, leaves the open list, and the entry leaves the queue — such an entry can no longer block the queue or force newer claims to wait (the v0.2 behaviour of skipping it forever let ~256 cheap entries fill the queue for good). The owner calls `withdraw_escrow` to move the tokens to any token account they own for the mint; the escrow is closed, its rent refunded to `escrow_payer`, and the ticket becomes `Claimed` (then closable). `Escrowed` tickets can't be closed. Keepers should create missing ATAs (idempotent) before cranking to save owners the extra step.
+If the owner's canonical ATA can't receive a plain transfer when the crank pays the entry — incoming-transfer **memo required**, frozen, or **missing/closed** — the payout goes into the ticket's escrow token account, PDA `["escrow", ticket]` (Token-2022, authority = pool authority, created by the crank — or by a `claim_for` keeper whose instant payout hits such an ATA; the cranker/keeper pays its rent and is recorded in `Ticket.escrow_payer`). The ticket becomes `Escrowed`, leaves the open list, and the entry leaves the queue — such an entry can no longer block the queue or force newer claims to wait (the v0.2 behaviour of skipping it forever let ~256 cheap entries fill the queue for good). The owner calls `withdraw_escrow` to move the tokens to any token account they own for the mint; the escrow is closed, its rent refunded to `escrow_payer`, and the ticket becomes `Claimed` (then closable). `Escrowed` tickets can't be closed. Keepers should create missing ATAs (idempotent) before cranking to save owners the extra step.
 
 ### 5.4 Oracle (10x check)
 
@@ -165,14 +183,15 @@ If the owner's canonical ATA can't receive a plain transfer when the crank pays 
   - full rate (every 15 s) for coins whose spot is ≥50% of their lowest open trigger (claims need 84 keeper samples spread over ≥5 of the six 5-minute buckets of the last 30 min, i.e. start full rate ≥ ~25 min before a claim is expected);
   - a **heartbeat sample every <10 min for EVERY graduated coin** (batched, ≤10 coins per `record_samples`, v0 transaction + lookup table for 6–10), not only coins with open tickets: it keeps the permissionless fallback closed and gives the D10 reference honest touch points on every coin before a ticket exists;
   - full rate for every graduated coin whose `buyback_lamports` exceeds a small threshold (e.g. 0.05 SOL) — `execute_buyback` needs a median — and **crank `execute_buyback`** for those coins (in ≤0.5%-of-depth slices), otherwise the pool's 50% fee share sits unspent;
-  - before `process_queue`, create missing owner ATAs (idempotent) so payouts land directly instead of in escrow.
+  - before `process_queue` / `claim_for`, create missing owner ATAs (idempotent, keeper-paid) so payouts land directly instead of in escrow;
+  - **auto-claim (D17):** `claim_for` every `Open` ticket whose trigger holds with coverage, unless the position opted out.
 - **Liveness fallback:** if a coin has no keeper sample for >10 min, `record_samples` becomes permissionless for that coin. Fallback samples are flagged (`SampleRecorded.fallback`, `Observation.fallback`) and never decide a median (above).
 
 ## 6. Admin & safety
 - `Global.admin` = Squads multisig. Program upgrade authority = the same multisig.
 - `fumpad_lp_locker`: **no** upgrade authority (removed right after deploy, `solana program set-upgrade-authority <id> --final`), no admin, no instruction besides `lock`/`skim`. Upgrading `fumpad` can't touch locked LP: the locker only ever pays FUMPAD-derived accounts and only fee growth.
 - 48h timelock on every `Params` change (§6.1). No direct `update_params`.
-- Pause flags: `pause_launch`, `pause_trade`, `pause_claims` — immediate (`set_pause`). Pausing never blocks sells on graduated coins via PumpSwap directly. `pause_claims` also pauses `process_queue` and `withdraw_escrow`.
+- Pause flags: `pause_launch`, `pause_trade`, `pause_claims` — immediate (`set_pause`). Pausing never blocks sells on graduated coins via PumpSwap directly. `pause_claims` pauses `claim`, `claim_for`, `process_queue` and `withdraw_escrow`.
 
 ### 6.1 Params timelock (D15)
 - `queue_params(params)` (admin): validates (`Params::is_valid`, incl. the D14 caps), stores `Global.pending_params` and `Global.pending_eta = now + 48h`; queuing again replaces the pending change and restarts the clock. Event `ParamsQueued { params, eta }`.
@@ -183,7 +202,7 @@ If the owner's canonical ATA can't receive a plain transfer when the crank pays 
 - Every state change emits an Anchor event (`emit_cpi!`) — the indexer's sole source of truth.
 
 ## 7. Off-chain
-- **Keeper (TS):** observation sampling (heartbeat every graduated coin <10 min, §5.4), `process_queue` (create missing ATAs first), `execute_buyback`, `graduate` cranks, `execute_params` once a queued change's 48h elapsed, and per graduated coin a periodic **create-ATA + `skim` + `settle_lp_fees`** in one transaction (936 bytes; skip when `NothingToSkim`). Runs on Railway, health alarms to Telegram.
+- **Keeper (TS):** observation sampling (heartbeat every graduated coin <10 min, §5.4), auto-claim (`claim_for`, D17), `process_queue` (create missing ATAs first), `init_claim_queue` ×9 after `graduate`, `execute_buyback`, `graduate` cranks, `execute_params` once a queued change's 48h elapsed, and per graduated coin a periodic **create-ATA + `skim` + `settle_lp_fees`** in one transaction (936 bytes; skip when `NothingToSkim`). Runs on Railway, health alarms to Telegram.
 - **Indexer/API (TS, Postgres):** Helius stream → events → tables (coins, trades, tickets, claims, queue, samples, users). REST + WebSocket feed.
   - Off-chain flagging: rebuys made elsewhere, linked-wallet clusters (funding-graph heuristics). Flagged wallets are shown publicly and excluded from leaderboards; their claims are not blocked.
   - Game layer: levels, achievements, leaderboards (off-chain, derived from events).
@@ -200,12 +219,13 @@ If the owner's canonical ATA can't receive a plain transfer when the crank pays 
 - LiteSVM end-to-end on one real coin (`tests/src/e2e_tests.rs`): launch → curve trades → graduate (LP locked) → post-grad trades → sampling → claim / queue / buyback / crank → outside (non-FUMPAD) PumpSwap volume → skim → settle → fees → expiry. D10/D12 exploit scenarios: `tests/src/d10_tests.rs`. LP locker (third-party deposits/withdrawals/burns, big swaps both ways, donations, repeated skims, account substitution, lock gating, tx sizes): `tests/src/locker_tests.rs`; √k accounting property tests in the locker crate.
 - Devnet end-to-end: the same flow against live PumpSwap and Pyth.
 - An independent red-team agent reviews each module before it's marked done.
-- **Simulation (Python):** agent-based model of pool solvency across volume and price paths and attacker mixes. Outputs: % of claims paid, time in queue, pool depletion, sensitivity to the 10x / 10% / 5% / fee parameters. No revenue projections.
+- **Simulation (Python):** agent-based model of pool solvency across volume and price paths and attacker mixes. Outputs: % of claims paid, time in queue, pool depletion, sensitivity to the trigger / claim size / pool size / fee parameters. No revenue projections. Results and the D17 recommendation: `sim/REPORT.md`.
 
 ## 9. Open questions
 None open. Sells through other venues (Jupiter, etc.) never create tickets, as intended by the concept.
 
 ## 10. Changelog
+- **v0.4** (2026-10-11) — D17 implemented: reward pool 8% of supply with the curve re-derived (T₀ 987,180,527,383,367 · curve 729,655,172,413,793 · LP 190,344,827,586,207; ratio still ≈14.7x, §3); `CLAIM_QUEUE_CAPACITY` 1024 (81,976-byte PDA, 9 `init_claim_queue` calls; CU re-measured on a full queue); keeper auto-claim `claim_for` (payout only to the owner's canonical ATA or escrow, keeper pays any rent) with per-coin opt-out `set_auto_claim` (`Position.auto_claim_opt_out`); `triggered_by` on claim events (§5.3).
 - **v0.3** (2026-10-11) — pre-audit fixes; D13–D16 implemented: escape hatch after 7 days `Complete` (§3.2); per-coin fee snapshot + caps (1 SOL graduation fee, 200 bps) and 48h params timelock (`queue_params` / `execute_params` / `cancel_params`, §6.1); per-ticket escrow for refusing destinations (`withdraw_escrow`) and max 2 queue entries per wallet per coin (§5.3.1); rebuys update queue entries in place; `Position.last_balance` (unseen arrivals sold first, residual documented §5.3); router sells require the canonical ATA; graduation uses its own WSOL PDA; locker fails closed on unknown Pool layouts; oracle: keeper-only median with 5-of-6-bucket time coverage, raise-only fallback samples, keeper spacing vs keeper samples only, uncapped upward keeper folds; keeper heartbeats every graduated coin.
 - **v0.2** — contracts merged (curve, router, rewards, oracle, D10–D12 reference floor, D11 LP locker).
 - **v0.1** — initial spec.
