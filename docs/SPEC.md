@@ -10,7 +10,9 @@ Status: draft for review · 2026-10-11 · Source concept: `concept-overview.pdf`
 | D2 | 10x is measured **in SOL** against the seller's execution price. The $50 minimum is in **USD** (Pyth SOL/USD at sell time). |
 | D3 | Claims that can't be paid in full **wait in the queue** (no partial payouts). |
 | D4 | Queue is **skip-ahead**: processed in sell-time order, but an entry that doesn't fit is skipped so smaller ones behind it can pay. |
-| D5 | Queued claims **do not expire** (the 90-day clock stops at queue entry). *(assumed — confirm)* |
+| D5 | Queued claims **do not expire** (the 90-day clock stops at queue entry). |
+| D8 | Graduation fee = **0 SOL** during beta (covers nothing but rent; param stays tunable). |
+| D9 | Creator exclusion is **wallet-based**; suspected creator alt wallets are flagged publicly and excluded from leaderboards, not blocked from claiming. |
 | D6 | 10x check = **own on-chain sampler** (Option A): keeper-signed price samples, median over 30 min. |
 | D7 | **Own bonding curve**; graduation creates a **PumpSwap** pool (permissionless, verified). |
 
@@ -134,7 +136,4 @@ Amount = 10% × ticket tokens. If amount ≤ 10% of the pool balance **and** no 
 - **Simulation (Python):** agent-based model of pool solvency across volume and price paths and attacker mixes. Outputs: % of claims paid, time in queue, pool depletion, sensitivity to the 10x / 10% / 5% / fee parameters. No revenue projections.
 
 ## 9. Open questions
-1. D5 confirm: queued claims don't expire.
-2. Graduation fee (platform) amount — default 0 for beta?
-3. Creator exclusion is wallet-based only; alt wallets are handled by flagging. OK?
-4. Sells through other venues (Jupiter, etc.) never create tickets — intended, per concept.
+None open. Sells through other venues (Jupiter, etc.) never create tickets, as intended by the concept.
