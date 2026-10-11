@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   peak_multiple   DOUBLE PRECISION NOT NULL DEFAULT 0,
   last_multiple   DOUBLE PRECISION NOT NULL DEFAULT 0,
   crossed_at      BIGINT,
+  crossed_multiple DOUBLE PRECISION,
   closed_at       BIGINT,
   created_sig     TEXT NOT NULL,
   created_slot    BIGINT NOT NULL

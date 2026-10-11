@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.11.10",
-    "@types/ws": "^8.5.13"
+    "@types/ws": "^8.5.13",
+    "ts-json-schema-generator": "^2.9.0"
   }
 }

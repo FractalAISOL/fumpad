@@ -19,7 +19,8 @@
     "sync-idl": "node scripts/sync-idl.mjs",
     "vectors": "node scripts/gen-vectors.mjs",
     "local": "tsx scripts/local-e2e.ts",
-    "validator": "bash scripts/local-validator.sh"
+    "validator": "bash scripts/local-validator.sh",
+    "api-types": "node scripts/gen-api-types.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

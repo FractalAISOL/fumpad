@@ -107,7 +107,8 @@ async function trackMultiples(ctx: TxCtx, mint: string, priceQ64v: bigint, ts: b
     const m = multipleOf(priceQ64v, BigInt(t.sell_price_q64));
     const crossNow = crossable && t.crossed_at === null && priceQ64v * BPS_DENOM >= BigInt(t.sell_price_q64) * BigInt(p.triggerMultipleBps);
     await ctx.c.query(
-      `UPDATE tickets SET last_multiple = $2, peak_multiple = GREATEST(peak_multiple, $2), crossed_at = CASE WHEN $3 THEN $4::bigint ELSE crossed_at END WHERE ticket = $1`,
+      `UPDATE tickets SET last_multiple = $2, peak_multiple = GREATEST(peak_multiple, $2), crossed_at = CASE WHEN $3 THEN $4::bigint ELSE crossed_at END,
+         crossed_multiple = CASE WHEN $3 THEN $2 ELSE crossed_multiple END WHERE ticket = $1`,
       [t.ticket, m, crossNow, s(ts)],
     );
     if (crossNow) {
