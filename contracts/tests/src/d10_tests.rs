@@ -296,9 +296,9 @@ fn sale_after_manipulation(mode: u8) -> (u128, u128, u128) {
 #[test]
 fn d12_moving_pre_trade_spot_never_lowers_the_ticket() {
     let (honest, pre, honest_exec) = sale_after_manipulation(0);
-    // Honest: ticket = execution ≈ pre × ¾ (own slippage x/(x+S) = 4/5, minus fees).
-    assert!(close(honest, honest_exec, 1_000));
-    assert!(honest * 100 >= pre * 78 && honest * 100 <= pre * 81, "{honest} vs {pre}");
+    // Honest: own slippage ≈ 20% (> the 10% cap) → ticket floored at ≈ 90% of reference.
+    assert!(honest >= honest_exec && honest_exec * 100 <= pre * 81);
+    assert!(honest * 100 >= pre * 89 && honest * 100 <= pre * 91, "{honest} vs {pre}");
     let (crashed, pre_c, exec_c) = sale_after_manipulation(1);
     assert_eq!(pre_c, pre, "identical worlds");
     assert!(exec_c * 15 < pre, "the sale executed at the crashed price");
@@ -310,16 +310,15 @@ fn d12_moving_pre_trade_spot_never_lowers_the_ticket() {
     println!("D12 same sale: honest {honest}, after crash {crashed}, after pump {pumped} (pre {pre})");
 }
 
-/// Residual vector (SPEC §5.3): an attacker holding inventory sells a LARGE amount through
-/// FUMPAD and buys it back directly on PumpSwap in the same bundle. The ticket is priced
-/// exactly like an honest exit of the same size — reference × own slippage, here ≈ ½ for
-/// a sale of the pool's whole base reserve — while the price is restored. The two are
-/// indistinguishable at sell time. Bounds: the discount is only the sale's own slippage
-/// x/(x+S) (deeper discounts need ever larger inventory), the inventory must be held
+/// Self-impact round trip (SPEC §5.3): an attacker holding inventory sells a LARGE amount
+/// through FUMPAD and buys it back directly on PumpSwap in the same bundle. Uncapped D12
+/// would price the ticket like an honest exit (≈ ½ the reference here); the 10% cap
+/// limits the discount to 10%, at the cost of honest exits with > 10% own impact. Further
+/// bounds: the inventory must be held
 /// (matured ≥ 10 min for the ticket's part), and the round trip costs FUMPAD's 1% (half
 /// of it funds the reward pool) + PumpSwap's 2 × 0.25% on the whole sale.
 #[test]
-fn d12_residual_self_impact_round_trip_is_priced_like_an_honest_exit() {
+fn d12_self_impact_round_trip_discount_is_capped() {
     let (mut f, whale) = flat_graduated();
     let wk = kp_pk(&whale);
     let pre = f.spot_q64();
@@ -332,8 +331,8 @@ fn d12_residual_self_impact_round_trip_is_priced_like_an_honest_exit() {
     let fee = tr.fee_pool + tr.fee_platform + tr.fee_creator;
     let tp = f.ticket(&ticket).sell_price_q64;
     assert_eq!(tp, d12_price(&f, tr.price_q64, pre));
-    assert!(close(tp, tr.price_q64, 1_000), "priced like an honest exit");
-    assert!(tp * 100 >= pre * 49 && tp * 100 <= pre * 50, "discount = own slippage ≈ ½: {tp} vs {pre}");
+    assert!(tr.price_q64 * 100 <= pre * 50, "the sale's own slippage ≈ ½");
+    assert!(tp * 100 >= pre * 89 && tp * 100 <= pre * 91, "discount capped at 10% (D12 cap): {tp} vs {pre}");
 
     // Buy the same amount back directly on PumpSwap (outside FUMPAD: no rebuy debit).
     let (_, b1) = pool_reserves(&f);
@@ -362,7 +361,8 @@ fn d12_residual_self_impact_round_trip_is_priced_like_an_honest_exit() {
 
 /// Normal sells. Rising market (the reference lags below spot): ticket = execution price
 /// exactly. Flat market: the reference equals the pre-sale spot, so (D12) the ticket is
-/// the execution price too — including for a big sell with a large own price impact.
+/// the execution price too — until the sell's own impact exceeds 10%, where the floor is
+/// capped at 90% of the reference.
 #[test]
 fn honest_sells_ticket_at_execution_price() {
     let mut f = Flow::new();
@@ -400,7 +400,9 @@ fn honest_sells_ticket_at_execution_price() {
     let m = ok(f.sell(&big, f.tokens(&bk)));
     let exec = events::<Trade>(&m)[0].price_q64;
     assert!(exec * 100 < pre * 80, "a big sell: exec {exec} vs pre {pre}");
-    assert_eq!(f.ticket(&t_big).sell_price_q64, exec);
+    // Own impact > 10%: floor capped at 90% of the reference (= pre-sale spot, flat market).
+    let tb = f.ticket(&t_big).sell_price_q64;
+    assert!(tb > exec && close(tb, pre * 9 / 10, 1_000), "big curve sell: ticket {tb} vs 0.9 × pre {}", pre * 9 / 10);
     assert_eq!(f.coin_state().tickets_created, 3);
 
     // Same on PumpSwap after graduation.
@@ -424,10 +426,16 @@ fn honest_sells_ticket_at_execution_price() {
     let w = _whale.insecure_clone();
     let t4 = f.next_ticket(&kp_pk(&w));
     let pre = f.spot_q64();
+    let ref_before = f.coin_state().reference.avg_q64;
     let m = ok(f.swap_sell(&w, (base / 2) as u64));
     let exec = events::<Trade>(&m)[0].price_q64;
     assert!(exec * 100 < pre * 70);
-    assert!(close(f.ticket(&t4).sell_price_q64, exec, 1_000), "big router sell: ticket ≈ execution");
+    let t4p = f.ticket(&t4).sell_price_q64;
+    // Own impact > 10% → floor = 90% of the reference. The keeper-sampled reference lags
+    // spot slightly after the earlier sale, so compare against the reference itself (the
+    // hook folds the interval since the last sample first: allow 1%).
+    assert!(t4p > exec, "ticket above execution");
+    assert!(close(t4p, ref_before * 9 / 10, 10_000), "big router sell: ticket {t4p} vs 0.9 × ref {}", ref_before * 9 / 10);
     f.assert_invariant();
 }
 

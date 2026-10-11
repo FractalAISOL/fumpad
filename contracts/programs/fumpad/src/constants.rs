@@ -63,6 +63,9 @@ pub const DEFAULT_KEEPER_STALE_SECS: i64 = 600; // permissionless fallback after
 pub const DEFAULT_BUYBACK_MAX_DEVIATION_BPS: u16 = 300; // spot within ±3% of median
 pub const DEFAULT_BUYBACK_MAX_POOL_BPS: u16 = 50; // slice ≤ 0.5% of pool quote depth
 
+/// D12 cap: a seller's own slippage can lower the ticket floor by at most 10% of the reference.
+pub const MAX_SELF_IMPACT_DISCOUNT_BPS: u64 = 1_000;
+
 pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 60;
 pub const MAX_KEEPERS: usize = 3;
 

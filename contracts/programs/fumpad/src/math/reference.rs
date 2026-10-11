@@ -63,6 +63,7 @@
 use anchor_lang::prelude::*;
 
 use super::price::mul_div_ceil;
+use crate::constants::{BPS_DENOM, MAX_SELF_IMPACT_DISCOUNT_BPS};
 
 /// Time constant / window of the reference average.
 pub const REFERENCE_WINDOW_SECS: u64 = 600;
@@ -145,7 +146,18 @@ pub fn ticket_price_q64(execution_q64: u128, reference_q64: u128, pre_trade_spot
     let floor = if pre_trade_spot_q64 == 0 {
         reference_q64
     } else {
-        mul_div_ceil(reference_q64, execution_q64, pre_trade_spot_q64).unwrap_or(u128::MAX)
+        // The seller's own slippage may discount the floor by at most
+        // MAX_SELF_IMPACT_DISCOUNT_BPS: a self-impact round trip (big FUMPAD sell, direct
+        // rebuy in the same bundle) is indistinguishable from an honest big exit, so the
+        // discount it can buy is capped.
+        let fair = mul_div_ceil(reference_q64, execution_q64, pre_trade_spot_q64).unwrap_or(u128::MAX);
+        let capped = mul_div_ceil(
+            reference_q64,
+            (BPS_DENOM - MAX_SELF_IMPACT_DISCOUNT_BPS) as u128,
+            BPS_DENOM as u128,
+        )
+        .unwrap_or(u128::MAX);
+        fair.max(capped)
     };
     execution_q64.max(floor)
 }
@@ -159,6 +171,20 @@ mod tests {
 
     fn at(avg: u128, t: i64) -> ReferencePrice {
         ReferencePrice::new(avg, t)
+    }
+
+    #[test]
+    fn self_impact_discount_is_capped_at_10_percent() {
+        // Honest small sell, 3% own impact: floor = ref × 0.97 → ticket at execution.
+        assert_eq!(ticket_price_q64(P * 97 / 100, P, P), P * 97 / 100);
+        // Huge sell, 51% own impact (the self-impact round trip): floor capped at 90% of ref.
+        let t = ticket_price_q64(P * 49 / 100, P, P);
+        assert!(t >= P * 9 / 10 && t <= P * 9 / 10 + 1, "{t}");
+        // Exactly 10% impact: both bounds agree (cap rounds up by at most 1).
+        let t = ticket_price_q64(P * 9 / 10, P, P);
+        assert!(t >= P * 9 / 10 && t <= P * 9 / 10 + 1, "{t}");
+        // Staged crash (pre spot crashed, exec ≈ pre): floor ≈ ref.
+        assert!(ticket_price_q64(CRASH * 99 / 100, P, CRASH) >= P * 98 / 100);
     }
 
     #[test]
@@ -282,10 +308,13 @@ mod tests {
         // Unknown pre-trade spot → D10 rule.
         assert_eq!(ticket_price_q64(5, 7, 0), 7);
         assert_eq!(ticket_price_q64(9, 7, 0), 9);
-        // Flat market (reference == pre-trade spot): exactly the execution price, any size.
-        for exec in [P / 2, P * 9 / 10, P - 1, P] {
+        // Flat market (reference == pre-trade spot): exactly the execution price while the
+        // seller's own impact is < 10%; beyond that the floor is capped at 90% of reference.
+        for exec in [P * 91 / 100, P - 1, P] {
             assert_eq!(ticket_price_q64(exec, P, P), exec);
         }
+        let t = ticket_price_q64(P / 2, P, P);
+        assert!(t >= P * 9 / 10 && t <= P * 9 / 10 + 1, "{t}");
         // Rising market (reference below spot): execution price.
         assert_eq!(ticket_price_q64(P * 99 / 100, P / 2, P), P * 99 / 100);
         // Staged crash: pre-trade spot 20x below the reference, the sell fills 1% under it
@@ -295,15 +324,20 @@ mod tests {
         let t = ticket_price_q64(exec, P, pre);
         assert!(t + P / 1_000_000 >= P * 99 / 100 && t <= P, "{t}");
         assert!(t > exec * 19);
-        // Rounds up: 3 × 2 / 4 = 1.5 → 2.
-        assert_eq!(ticket_price_q64(2, 3, 4), 2);
-        assert_eq!(ticket_price_q64(1, 3, 2), 2);
+        // Rounds up, and the 10% self-impact cap binds: max(⌈3×2/4⌉ = 2, ⌈3×0.9⌉ = 3) = 3.
+        assert_eq!(ticket_price_q64(2, 3, 4), 3);
+        assert_eq!(ticket_price_q64(1, 3, 2), 3);
+        // Cap not binding: ⌈30×28/30⌉ = 28 ≥ ⌈27⌉.
+        assert_eq!(ticket_price_q64(28, 30, 30), 28);
         // A ratio > 1 only raises the floor; extremes saturate instead of overflowing.
         assert_eq!(ticket_price_q64(4, 10, 2), 20);
         assert_eq!(ticket_price_q64(u128::MAX, u128::MAX, 1), u128::MAX);
         // Wide intermediate (Q64 × Q64 overflows u128).
         let big = u128::MAX / 3;
-        assert_eq!(ticket_price_q64(big / 2, big, big), big / 2);
+        assert_eq!(ticket_price_q64(big / 20 * 19, big, big), big / 20 * 19);
+        // …and the 10% cap with a wide intermediate: 50% impact → 90% of reference.
+        let t = ticket_price_q64(big / 2, big, big);
+        assert!(t >= big / 10 * 9 && t <= big / 10 * 9 + 10, "{t}");
     }
 
     /// Crash-staging can't beat the floor: whatever the pre-trade spot, the ticket is ≥
