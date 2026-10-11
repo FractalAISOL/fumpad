@@ -5,14 +5,14 @@
 
 .grid { display: grid; gap: var(--s-4); grid-template-columns: minmax(0, 1fr); align-items: start; }
 @media (min-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr) 380px; gap: var(--s-5); } }
-.form { display: grid; gap: var(--s-4); min-width: 0; }
-.fields { padding: var(--s-4); display: grid; gap: var(--s-4); }
-.row2, .row3 { display: grid; gap: var(--s-4); }
-@media (min-width: 600px) { .row2 { grid-template-columns: 1.4fr 1fr; } }
+.form { display: grid; gap: var(--s-4); min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.fields { padding: var(--s-4); display: grid; gap: var(--s-4); grid-template-columns: minmax(0, 1fr); }
+.row2, .row3 { display: grid; gap: var(--s-4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 600px) { .row2 { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); } }
 @media (min-width: 760px) { .row3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 .label { font-size: var(--fs-sm); font-weight: var(--w-medium); }
-.imgField { display: grid; gap: 6px; }
+.imgField { display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr); }
 .drop {
   display: flex;
   align-items: center;

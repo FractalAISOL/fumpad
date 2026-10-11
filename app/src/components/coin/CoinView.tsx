@@ -208,7 +208,45 @@ export function CoinView({
     <div className="wrap">
       {head}
       <div className={s.grid}>
-        {chart}
+        <div className={s.leftCol}>
+          {chart}
+          {grad ? (
+              <Panel aria-labelledby="queue-h">
+                <PanelHead id="queue-h" title="Claim queue" aside="ordered by sell time, small claims skip ahead" />
+                <Table
+                  caption={`${coin.symbol} claim queue`}
+                  columns={queueCols}
+                  rows={queue.entries}
+                  rowKey={(q) => q.ticket}
+                  highlight={(q) => !!q.isYou || q.owner === address}
+                  empty={
+                    <EmptyState title="No one is waiting" compact>
+                      Every claim on ${coin.symbol} fits the pool right now, so claims pay in the same transaction.
+                    </EmptyState>
+                  }
+                />
+                <PanelNote>Queued claims don&apos;t expire while they wait. A claim can take at most 10% of the pool, so the pool grows into the big ones; smaller claims that fit pay first.</PanelNote>
+              </Panel>
+          ) : (
+              <Panel aria-labelledby="curve-h">
+                <PanelHead id="curve-h" title="Bonding curve" aside="graduates at 85 SOL, then moves to PumpSwap" />
+                <div className={s.curveBox}>
+                  <div className={s.curveStats}>
+                    <Stat label={`${f.fixed(85 - coin.curveSol, 2)} SOL to go. Claims on this coin open at graduation.`}>
+                      <span className={s.curveBig}>
+                        <Sol value={coin.curveSol} unit={false} size="xl" /> <span className="muted">of 85 SOL</span>
+                      </span>
+                    </Stat>
+                    <Stat label={`+${f.fixed(coin.curveSol1h, 1)} SOL in the last hour`} align="end">
+                      <span className="num">{f.fixed((coin.curveSol / 85) * 100, 1)}%</span>
+                    </Stat>
+                  </div>
+                  <CurveMeter raised={coin.curveSol} />
+                </div>
+                <PanelNote>Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the 30-min median holds there.</PanelNote>
+              </Panel>
+          )}
+        </div>
         <Panel className={s.tradePanel}>
           <PanelBody>
             <TradePanel coin={coin} myTicket={mine} />
@@ -247,43 +285,9 @@ export function CoinView({
               </PanelBody>
               <PanelNote>Liquidity is locked forever in an immutable locker. Its trading fees are skimmed: tokens go to this pool, SOL to FUMPAD and the creator.</PanelNote>
             </Panel>
-
-            <Panel className={s.span2} aria-labelledby="queue-h">
-              <PanelHead id="queue-h" title="Claim queue" aside="ordered by sell time, small claims skip ahead" />
-              <Table
-                caption={`${coin.symbol} claim queue`}
-                columns={queueCols}
-                rows={queue.entries}
-                rowKey={(q) => q.ticket}
-                highlight={(q) => !!q.isYou || q.owner === address}
-                empty={
-                  <EmptyState title="No one is waiting" compact>
-                    Every claim on ${coin.symbol} fits the pool right now, so claims pay in the same transaction.
-                  </EmptyState>
-                }
-              />
-              <PanelNote>Queued claims don&apos;t expire while they wait. A claim can take at most 10% of the pool, so the pool grows into the big ones; smaller claims that fit pay first.</PanelNote>
-            </Panel>
           </>
         ) : (
           <>
-            <Panel className={s.span2} aria-labelledby="curve-h">
-              <PanelHead id="curve-h" title="Bonding curve" aside="graduates at 85 SOL, then moves to PumpSwap" />
-              <div className={s.curveBox}>
-                <div className={s.curveStats}>
-                  <Stat label={`${f.fixed(85 - coin.curveSol, 2)} SOL to go. Claims on this coin open at graduation.`}>
-                    <span className={s.curveBig}>
-                      <Sol value={coin.curveSol} unit={false} size="xl" /> <span className="muted">of 85 SOL</span>
-                    </span>
-                  </Stat>
-                  <Stat label={`+${f.fixed(coin.curveSol1h, 1)} SOL in the last hour`} align="end">
-                    <span className="num">{f.fixed((coin.curveSol / 85) * 100, 1)}%</span>
-                  </Stat>
-                </div>
-                <CurveMeter raised={coin.curveSol} />
-              </div>
-              <PanelNote>Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the 30-min median holds there.</PanelNote>
-            </Panel>
             <Panel aria-labelledby="pool-h">
               <PanelHead id="pool-h" title="Reward pool" aside="filling" />
               <PanelBody>

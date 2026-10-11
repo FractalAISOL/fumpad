@@ -58,7 +58,7 @@ export function Gauge({
             {G.major.map((t, i) => (
               <span
                 key={t}
-                className={cx(s.lbl, t === G.trigger && s.lblTen, i === 0 && s.first, i === G.major.length - 1 && s.last)}
+                className={cx(s.lbl, t === G.trigger && s.lblTen, t === 20 && s.l20, i === 0 && s.first, i === G.major.length - 1 && s.last)}
                 style={{ left: `${gaugePos(t) * 100}%` }}
               >
                 {t}×

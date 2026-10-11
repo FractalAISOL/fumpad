@@ -50,7 +50,8 @@ export function TicketCard({ ticket: t, now, action, note, as: As = "article" }:
             ? `${days} ${days === 1 ? "day" : "days"} left`
             : undefined;
   return (
-    <As className={cx(s.tk, s[t.state], t.state === "claimable" && s.ready)} aria-label={`$${t.symbol} ticket, ${TICKET_LABEL[t.state].toLowerCase()}`}>
+    <As className={cx(s.cq, t.state === "claimable" && s.ready)} aria-label={`$${t.symbol} ticket, ${TICKET_LABEL[t.state].toLowerCase()}`}>
+      <div className={cx(s.tk, s[t.state])}>
       <div className={s.id}>
         <CoinTile symbol={t.symbol} variant={t.tile} />
         <div className={s.idText}>
@@ -99,6 +100,7 @@ export function TicketCard({ ticket: t, now, action, note, as: As = "article" }:
       </div>
 
       {note && <div className={s.note}>{note}</div>}
+      </div>
     </As>
   );
 }

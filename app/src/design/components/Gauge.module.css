@@ -1,5 +1,6 @@
 .gauge {
   position: relative;
+  container-type: inline-size;
   height: 34px;
   user-select: none;
   --fill-w: calc(min(var(--pos), var(--z10)) * 100%);
@@ -90,3 +91,6 @@
 .lg .needle { top: 4px; height: 26px; width: 3px; margin-left: -1.5px; }
 .lg .ticks { top: 24px; }
 .lg .lbl { top: 33px; font-size: 11px; }
+
+/* Narrow gauges: drop the 20× label so 20× and 30× never collide. */
+@container (max-width: 300px) { .l20 { display: none; } }

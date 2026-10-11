@@ -1,13 +1,13 @@
+/* Container query: the card lays itself out by its own width, not the viewport's. */
+.cq { container-type: inline-size; list-style: none; border-bottom: 1px solid var(--rule); }
+.cq:last-child { border-bottom: 0; }
 .tk {
   display: grid;
   gap: var(--s-3) var(--s-5);
   padding: var(--s-4);
-  border-bottom: 1px solid var(--rule);
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  list-style: none;
 }
-.tk:last-child { border-bottom: 0; }
 
 .id { display: flex; gap: var(--s-3); align-items: center; min-width: 0; grid-column: 1; grid-row: 1; }
 .idText { min-width: 0; }
@@ -41,7 +41,7 @@
 .expired, .voided { color: var(--ink-3); }
 .expired .sym, .voided .sym { text-decoration: line-through; text-decoration-color: var(--ink-3); }
 
-@media (min-width: 1000px) {
+@container (min-width: 900px) {
   .tk { grid-template-columns: 220px minmax(0, 1fr) 290px 170px; }
   .id { grid-column: 1; }
   .g { grid-column: 2; grid-row: 1; }

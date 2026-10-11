@@ -1,4 +1,4 @@
-.field { display: grid; gap: 6px; min-width: 0; }
+.field { display: grid; gap: 6px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .label {
   display: flex;
   align-items: baseline;
@@ -41,7 +41,7 @@
 .area { resize: vertical; min-height: 88px; line-height: 1.5; }
 
 /* Amount */
-.amount { display: grid; gap: 8px; }
+.amount { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
 .amountTop { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-3); }
 .balance { font-size: var(--fs-xs); color: var(--ink-3); }
 .amountBox { min-height: 56px; }

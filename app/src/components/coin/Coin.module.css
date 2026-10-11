@@ -39,7 +39,7 @@
 /* Trade */
 .tradePanel { min-width: 0; }
 @media (min-width: 1000px) { .tradePanel { position: sticky; top: calc(var(--header-h) + 16px); } }
-.trade { display: grid; gap: var(--s-3); }
+.trade { display: grid; gap: var(--s-3); grid-template-columns: minmax(0, 1fr); }
 .mine {
   display: flex;
   justify-content: space-between;
@@ -100,3 +100,5 @@
 
 .outOfRange { font-size: var(--fs-xs); color: var(--ink-3); padding: 0 var(--s-4) 10px; }
 .linkBtn { color: var(--ink); font-weight: var(--w-semibold); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--rule-2); }
+.leftCol { display: grid; gap: var(--s-4); min-width: 0; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1000px) { .leftCol { gap: var(--s-5); } }

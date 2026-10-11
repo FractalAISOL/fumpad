@@ -60,20 +60,22 @@
 .label { display: inline-block; }
 .loading .label,
 .loading .icon { visibility: hidden; }
+/* Three dots that pulse in sequence: reads as "working", not as a dash. */
 .spinner {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 28px;
-  height: 2px;
-  margin: -1px 0 0 -14px;
-  background: linear-gradient(90deg, transparent 0 30%, currentColor 30% 60%, transparent 60%);
-  background-size: 200% 100%;
-  animation: sweep 0.9s linear infinite;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: -9px 0 0 currentColor, 9px 0 0 currentColor;
+  animation: dots 0.9s var(--ease-inOut) infinite;
 }
-@keyframes sweep {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
+@keyframes dots {
+  0%, 100% { box-shadow: -9px 0 0 currentColor, 9px 0 0 color-mix(in srgb, currentColor 30%, transparent); opacity: 1; }
+  50% { box-shadow: -9px 0 0 color-mix(in srgb, currentColor 30%, transparent), 9px 0 0 currentColor; opacity: 0.6; }
 }
 
 .iconBtn {
