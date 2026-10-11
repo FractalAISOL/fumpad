@@ -9,6 +9,7 @@ use anchor_lang::{
 };
 use fumpad::{
     error::FumpadError,
+    math::reference::ReferencePrice,
     external::pumpswap::{SPL_TOKEN_2022_PROGRAM_ID as T22, SPL_TOKEN_PROGRAM_ID as TOKEN, WSOL_MINT},
     state::*,
     PUMPSWAP_GLOBAL_CONFIG, PUMPSWAP_PROGRAM_ID, PUMP_FEES_PROGRAM_ID,
@@ -237,7 +238,9 @@ fn put_coin(env: &mut Env, mint: Pubkey, pool: Pubkey, status: CoinStatus, buyba
         trade_count: 0,
         tickets_created: 0,
         tokens_paid_out: 0,
-        reserved: [0; 128],
+        // D10 reference initialized at the pool's opening spot (as graduation carries it).
+        reference: ReferencePrice::new(pool_spot_q64(env, &pool), START_TS - 30),
+        reserved: [0; 88],
     };
     let mut data = Vec::new();
     coin.try_serialize(&mut data).unwrap();
@@ -245,6 +248,16 @@ fn put_coin(env: &mut Env, mint: Pubkey, pool: Pubkey, status: CoinStatus, buyba
     let rent = env.svm.minimum_balance_for_rent_exemption(data.len());
     set(env, key, fumpad::ID, data, Some(rent + buyback_lamports));
     key
+}
+
+/// PumpSwap spot (quote vault + virtual quote reserves) / base vault, Q64. 0 if no pool.
+pub(crate) fn pool_spot_q64(env: &Env, pool: &Pubkey) -> u128 {
+    let Some(p) = env.account(pool).filter(|a| a.owner == addr(&PUMPSWAP_PROGRAM_ID)) else { return 0 };
+    let key = |o: usize| Pubkey::new_from_array(p.data[o..o + 32].try_into().unwrap());
+    let vqr = if p.data.len() >= 261 { i128::from_le_bytes(p.data[245..261].try_into().unwrap()) } else { 0 };
+    let base = token_balance(env, &key(139)) as u128;
+    let quote = (token_balance(env, &key(171)) as i128 + vqr) as u128;
+    if base == 0 { 0 } else { (quote << 64) / base }
 }
 
 fn fetch_coin(env: &Env, key: &Pubkey) -> Coin {
@@ -364,6 +377,13 @@ impl Fx {
         pda(&[fumpad::POSITION_SEED, self.mint.as_ref(), user.as_ref()], &fumpad::ID)
     }
 
+    fn next_seq(&self, user: &Pubkey) -> u64 {
+        match self.env.account(&self.position(user)) {
+            Some(a) if a.lamports > 0 => self.env.fetch::<Position>(&self.position(user)).next_ticket_seq,
+            _ => 0,
+        }
+    }
+
     fn buy_accounts(&self, user: Pubkey) -> fumpad::accounts::SwapBuy {
         fumpad::accounts::SwapBuy {
             user,
@@ -400,7 +420,7 @@ impl Fx {
             coin: self.coin,
             mint: self.mint,
             position: self.position(&user),
-            ticket: pda(&[fumpad::TICKET_SEED, self.mint.as_ref(), user.as_ref(), &0u64.to_le_bytes()], &fumpad::ID),
+            ticket: pda(&[fumpad::TICKET_SEED, self.mint.as_ref(), user.as_ref(), &self.next_seq(&user).to_le_bytes()], &fumpad::ID),
             sol_usd_price: Pubkey::new_from_array([7; 32]),
             user_token_account: ata(&user, &self.mint, &T22),
             user_wsol: ata(&user, &WSOL_MINT, &TOKEN),
@@ -422,6 +442,17 @@ impl Fx {
             fumpad::instruction::SwapSell { tokens_in, min_sol_out: min_out },
             &venue,
         )
+    }
+
+    /// Router sell with a fresh Pyth price ($150) and the position's next ticket PDA.
+    fn sell_priced(&mut self, user: &Keypair, tokens_in: u64, min_out: u64) -> TransactionResult {
+        self.env.set_sol_usd(150);
+        let u = kp_pk(user);
+        let mut accts = self.sell_accounts(u);
+        accts.sol_usd_price = PYTH_SOL_USD;
+        let venue = self.venue(u, ata(&u, &self.mint, &T22), ata(&u, &WSOL_MINT, &TOKEN));
+        let ix = ix_with_remaining(accts, fumpad::instruction::SwapSell { tokens_in, min_sol_out: min_out }, &venue);
+        self.env.send_as(user, &[cu_limit(1_400_000), ix], &[user])
     }
 
     fn buy(&mut self, user: &Keypair, sol_in: u64, min_out: u64) -> TransactionResult {
@@ -448,7 +479,7 @@ impl Fx {
     }
 
     fn group(&self) -> Vec<Meta> {
-        vec![r(self.coin), w(self.observations), r(self.pool), r(self.pool_base), r(self.pool_quote)]
+        vec![w(self.coin), w(self.observations), r(self.pool), r(self.pool_base), r(self.pool_quote)]
     }
 
     fn sample_ix(&self, sampler: Pubkey, groups: &[Meta]) -> Instruction {
@@ -897,14 +928,14 @@ fn record_samples_batches_several_coins_and_validates_groups() {
         fumpad::instruction::InitObservations {},
     );
     expect_ok(fx.env.send(&[i], &[]));
-    let g2 = vec![r(coin2), w(obs2), r(pool2), r(ata(&pool2, &mint2, &T22)), r(ata(&pool2, &WSOL_MINT, &TOKEN))];
+    let g2 = vec![w(coin2), w(obs2), r(pool2), r(ata(&pool2, &mint2, &T22)), r(ata(&pool2, &WSOL_MINT, &TOKEN))];
     let k = fx.env.keeper.insecure_clone();
 
     // Mismatched groups: coin 1 with coin 2's observations / pool / vaults.
     for bad in [
-        vec![r(fx.coin), w(obs2), r(fx.pool), r(fx.pool_base), r(fx.pool_quote)],
-        vec![r(fx.coin), w(fx.observations), r(pool2), r(fx.pool_base), r(fx.pool_quote)],
-        vec![r(fx.coin), w(fx.observations), r(fx.pool), r(g2[3].pubkey), r(fx.pool_quote)],
+        vec![w(fx.coin), w(obs2), r(fx.pool), r(fx.pool_base), r(fx.pool_quote)],
+        vec![w(fx.coin), w(fx.observations), r(pool2), r(fx.pool_base), r(fx.pool_quote)],
+        vec![w(fx.coin), w(fx.observations), r(fx.pool), r(g2[3].pubkey), r(fx.pool_quote)],
     ] {
         let ix = fx.sample_ix(kp_pk(&k), &bad);
         assert!(fx.env.send_as(&k, &[ix], &[&k]).is_err());
@@ -912,6 +943,11 @@ fn record_samples_batches_several_coins_and_validates_groups() {
     // Read-only observations account.
     let mut ro = fx.group();
     ro[1] = r(fx.observations);
+    let ix = fx.sample_ix(kp_pk(&k), &ro);
+    expect_err(fx.env.send_as(&k, &[ix], &[&k]), FumpadError::InvalidAccount);
+    // Read-only coin (the sample is a D10 reference touch point).
+    let mut ro = fx.group();
+    ro[0] = r(fx.coin);
     let ix = fx.sample_ix(kp_pk(&k), &ro);
     expect_err(fx.env.send_as(&k, &[ix], &[&k]), FumpadError::InvalidAccount);
     // Ragged group list.
@@ -926,6 +962,10 @@ fn record_samples_batches_several_coins_and_validates_groups() {
     let o2: Observations = fx.env.fetch_zc(&obs2);
     assert_eq!(o2.len, 1);
     assert_eq!(o2.samples[0].price_q64, ((40 * SOL as u128) << 64) / POOL_BASE_IN as u128);
+    // Each sample is a D10 touch point: recorded as the coin's last spot.
+    let c2 = fetch_coin(&fx.env, &coin2);
+    assert_eq!(c2.reference.last_spot_q64, o2.samples[0].price_q64);
+    assert_eq!(c2.reference.updated_at, fx.env.now());
 
     // Not graduated → rejected.
     fx.env.warp(10);
@@ -1139,31 +1179,30 @@ fn manipulation_pump_and_sample_in_same_tx_or_bundle() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// Buys must put exactly `position.open_count` open tickets in front of the venue slice.
+/// The ticket is a real one, created by a qualifying router sell.
 #[test]
 fn swap_buy_open_tickets_precede_venue_slice() {
     let mut fx = setup();
     let user = fx.env.new_user(10);
     let u = kp_pk(&user);
     expect_ok(fx.buy(&user, SOL, 1));
-    // Fabricate one open ticket on the position (rewards module's job in production).
-    let pos_key = fx.position(&u);
-    let mut acc = fx.env.account(&pos_key).unwrap();
-    let mut pos: Position = fx.env.fetch(&pos_key);
-    let ticket = Pubkey::new_unique();
-    pos.open_tickets[0] = ticket;
-    pos.open_count = 1;
-    let mut data = Vec::new();
-    pos.try_serialize(&mut data).unwrap();
-    acc.data[..data.len()].copy_from_slice(&data);
-    fx.env.svm.set_account(addr(&pos_key), acc).unwrap();
+    fx.env.warp(600);
+    let held = token_balance(&fx.env, &ata(&u, &fx.mint, &T22));
+    let ticket = fx.sell_accounts(u).ticket;
+    expect_ok(fx.sell_priced(&user, held / 2, 1));
+    let pos: Position = fx.env.fetch(&fx.position(&u));
+    assert_eq!((pos.open_count, pos.open_tickets[0]), (1, ticket));
+    assert_eq!(fetch_coin(&fx.env, &fx.coin).tickets_created, 1);
 
     // Without the ticket the venue slice is shifted by one → rejected.
     expect_err(fx.buy(&user, SOL, 1), FumpadError::WrongVenue);
-    // With it, the buy goes through.
-    let mut remaining = vec![r(ticket)];
+    // With it, the buy goes through (and the rebuy rule debits the ticket).
+    let before: Ticket = fx.env.fetch(&ticket);
+    let mut remaining = vec![w(ticket)];
     remaining.extend(fx.venue(u, ata(&u, &fx.mint, &T22), ata(&u, &WSOL_MINT, &TOKEN)));
-    let ix = fx.buy_ix_with(fx.buy_accounts(u), remaining, SOL, 1);
+    let ix = fx.buy_ix_with(fx.buy_accounts(u), remaining, SOL / 1_000, 1);
     expect_ok(fx.env.send_as(&user, &[cu_limit(1_400_000), ix], &[&user]));
+    assert!(fx.env.fetch::<Ticket>(&ticket).tokens < before.tokens);
 }
 
 #[test]
@@ -1233,7 +1272,7 @@ fn compute_units_and_batch_size() {
             fumpad::instruction::InitObservations {},
         );
         expect_ok(fx.env.send(&[i], &[]));
-        groups.extend([r(c), w(o), r(p), r(ata(&p, &m, &T22)), r(ata(&p, &WSOL_MINT, &TOKEN))]);
+        groups.extend([w(c), w(o), r(p), r(ata(&p, &m, &T22)), r(ata(&p, &WSOL_MINT, &TOKEN))]);
     }
     let one = fx.sample_ix(kp_pk(&k), &fx.group());
     let single = cu(&fx.env.send_as(&k, &[one], &[&k]));

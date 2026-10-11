@@ -100,7 +100,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     let user_info = a.user.to_account_info();
     let token_acc_info = a.user_token_account.to_account_info();
     let wsol_info = a.user_wsol.to_account_info();
-    let (pool, _) = pumpswap::validate_venue(
+    let (pool, before) = pumpswap::validate_venue(
         venue,
         &VenueExpect {
             pool: a.coin.amm_pool,
@@ -130,11 +130,20 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     accrue_fee(&mut a.coin, &fee)?;
     record_volume(&mut a.coin, gross);
 
+    // D10: PumpSwap touch point (pre-trade effective spot, post-trade spot); the ticket
+    // (if any) is floored at the updated average.
+    let after = pumpswap::venue_reserves(venue, &pool)?;
+    // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
+    if let (Ok(pre), Ok(post)) = (before.spot_price_q64(), after.spot_price_q64()) {
+        a.coin.touch_reference(now, pre, post, false);
+    }
+    let reference_price_q64 = a.coin.reference.avg_q64;
+
     let position_bump = ctx.bumps.position;
     a.position.init_if_new(user_info.key(), a.mint.key(), position_bump);
     let ticket_info = a.ticket.to_account_info();
     let price_info = a.sol_usd_price.to_account_info();
-    hooks::on_sell(
+    let ticket = hooks::on_sell(
         SellHookAccounts {
             global: &a.global,
             coin: &a.coin,
@@ -146,10 +155,11 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
             program_id,
             event_authority: &a.event_authority,
         },
-        SellInfo { tokens_sold, gross_lamports_out: gross, balance_before, now },
+        SellInfo { tokens_sold, gross_lamports_out: gross, balance_before, reference_price_q64, now },
     )?;
-
-    let after = pumpswap::venue_reserves(venue, &pool)?;
+    if ticket.is_some() {
+        a.coin.tickets_created = a.coin.tickets_created.saturating_add(1);
+    }
     let ev = Trade {
         mint: a.mint.key(),
         user: user_info.key(),

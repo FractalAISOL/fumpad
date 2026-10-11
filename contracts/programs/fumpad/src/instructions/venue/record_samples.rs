@@ -1,7 +1,11 @@
 //! Record PumpSwap spot-price samples for the 10x claim check. OWNER: venue/oracle module.
 //!
 //! remaining_accounts = N groups (1 ≤ N ≤ MAX_SAMPLE_COINS) of
-//!   [coin, observations (mut), pool, pool_base_vault, pool_quote_vault]
+//!   [coin (mut), observations (mut), pool, pool_base_vault, pool_quote_vault]
+//!
+//! Each sample is also a D10 touch point for the coin's reference price (ticket
+//! sell-price floor, `math/reference.rs`), which is why the coin is writable: keeper
+//! heartbeat samples close any interval an attacker opened with a staged spot.
 //!
 //! Rules (SPEC §5.4):
 //! * Signer must be a registered keeper — or anyone, per coin, once that coin has had no
@@ -76,9 +80,10 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
     for g in rem.chunks_exact(SAMPLE_GROUP_LEN) {
         let (coin_info, obs_info, pool_info, base_vault, quote_vault) = (&g[0], &g[1], &g[2], &g[3], &g[4]);
 
-        // Coin: ours, canonical PDA, graduated.
+        // Coin: ours, canonical PDA, graduated, writable (reference update).
         require_keys_eq!(*coin_info.owner, crate::ID, FumpadError::InvalidAccount);
-        let coin = Coin::try_deserialize(&mut &coin_info.try_borrow_data()?[..])?;
+        require!(coin_info.is_writable, FumpadError::InvalidAccount);
+        let mut coin = Coin::try_deserialize(&mut &coin_info.try_borrow_data()?[..])?;
         let coin_pda = Pubkey::create_program_address(&[COIN_SEED, coin.mint.as_ref(), &[coin.bump]], &crate::ID)
             .map_err(|_| error!(FumpadError::InvalidAccount))?;
         require_keys_eq!(coin_info.key(), coin_pda, FumpadError::InvalidAccount);
@@ -122,6 +127,11 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
         if !fallback {
             obs.last_keeper_sample_ts = now;
         }
+        drop(data);
+
+        // D10 touch point (a sample observes spot without moving it: pre = post).
+        coin.touch_reference(now, price, price, false);
+        coin.try_serialize(&mut &mut coin_info.try_borrow_mut_data()?[..])?;
         events.push(SampleRecorded { mint: coin.mint, price_q64: price, fallback, ts: now });
     }
 

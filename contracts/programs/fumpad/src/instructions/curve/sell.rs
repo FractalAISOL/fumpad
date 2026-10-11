@@ -85,6 +85,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
 
     // ── Quote ──
     let mut r = reserves_of(&a.coin);
+    let pre_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
     let gross = quote_sell(&r, tokens_in).ok_or(FumpadError::InsufficientReserves)?;
     require!(gross > 0, FumpadError::ZeroAmount);
     let fee = compute_fee(gross, &p).ok_or(FumpadError::MathOverflow)?;
@@ -114,6 +115,10 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     let bb = inline_buyback(coin, &mut r, fee.pool)?;
     store_reserves(coin, &r);
     bump_stats(coin, gross);
+    // D10: exact curve touch point; the ticket (if any) is floored at the updated average.
+    let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
+    coin.touch_reference(now, pre_spot, post_spot, true);
+    let reference_price_q64 = coin.reference.avg_q64;
     // A sell's buyback can only finish the curve in pathological dust states; handle it anyway.
     let completed = r.real_token == 0;
     if completed {
@@ -145,7 +150,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     let system_info = a.system_program.to_account_info();
     let ticket_info = a.ticket.to_account_info();
     let price_info = a.sol_usd_price.to_account_info();
-    hooks::on_sell(
+    let ticket = hooks::on_sell(
         SellHookAccounts {
             global: &a.global,
             coin: &a.coin,
@@ -157,8 +162,11 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
             program_id: ctx.program_id,
             event_authority: &a.event_authority,
         },
-        SellInfo { tokens_sold: tokens_in, gross_lamports_out: gross, balance_before, now },
+        SellInfo { tokens_sold: tokens_in, gross_lamports_out: gross, balance_before, reference_price_q64, now },
     )?;
+    if ticket.is_some() {
+        a.coin.tickets_created = a.coin.tickets_created.saturating_add(1);
+    }
 
     let mint = a.mint.key();
     let user = a.user.key();

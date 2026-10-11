@@ -30,7 +30,7 @@ use crate::{
     error::FumpadError,
     events::{TicketCreated, TicketDebited},
     external::pyth,
-    math::price::price_q64,
+    math::{price::price_q64, reference::ticket_price_q64},
     state::{Coin, Global, Params, Position, Ticket, TicketStatus},
 };
 
@@ -50,12 +50,17 @@ pub struct SellHookAccounts<'a, 'info> {
     pub event_authority: &'a AccountInfo<'info>,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct SellInfo {
     pub tokens_sold: u64,
     /// SOL received for the tokens before FUMPAD's fee (execution value).
     pub gross_lamports_out: u64,
     /// Seller's token balance immediately BEFORE the sell (caps eligibility).
     pub balance_before: u64,
+    /// D10: the coin's reference average AFTER this sell's touch point
+    /// (`coin.reference.avg_q64`, see `math/reference.rs`). The ticket's price is
+    /// max(execution price, this). Callers must update the reference before the hook.
+    pub reference_price_q64: u128,
     pub now: i64,
 }
 
@@ -150,7 +155,10 @@ pub struct TicketPlan {
 ///
 /// The minimum-USD rule is applied to the *ticket's* tokens (the matured part of the
 /// sell), not the whole sell — stricter than "sell ≥ $50", so a big sell of mostly
-/// unmatured tokens can't mint a dust ticket.
+/// unmatured tokens can't mint a dust ticket. It uses the execution value.
+///
+/// Ticket price (D10) = max(execution price, `info.reference_price_q64`), so a crash
+/// staged inside one bundle can't lower the price the 10x is measured against.
 pub fn evaluate_sell(
     pos: &mut Position,
     p: &Params,
@@ -159,9 +167,10 @@ pub fn evaluate_sell(
     sol_usd: impl FnOnce() -> core::result::Result<pyth::UsdPrice, pyth::OracleIssue>,
 ) -> core::result::Result<TicketPlan, NoTicket> {
     let tokens = logic::plan_sell(pos, p, is_creator, info.tokens_sold, info.balance_before, info.now)?;
-    let sell_price_q64 = price_q64(info.gross_lamports_out, info.tokens_sold)
+    let execution_q64 = price_q64(info.gross_lamports_out, info.tokens_sold)
         .filter(|&x| x > 0)
         .ok_or(NoTicket::ZeroPrice)?;
+    let sell_price_q64 = ticket_price_q64(execution_q64, info.reference_price_q64);
     let usd = sol_usd().map_err(|_| NoTicket::OracleUnavailable)?;
     // Pro-rata share of the proceeds (exact floor; avoids double Q64 rounding).
     let ticket_lamports = (info.gross_lamports_out as u128) * (tokens as u128) / (info.tokens_sold as u128);
@@ -352,7 +361,39 @@ mod tests {
     }
 
     fn sell(tokens: u64, lamports: u64) -> SellInfo {
-        SellInfo { tokens_sold: tokens, gross_lamports_out: lamports, balance_before: tokens, now: 10_000 }
+        SellInfo {
+            tokens_sold: tokens,
+            gross_lamports_out: lamports,
+            balance_before: tokens,
+            reference_price_q64: 0,
+            now: 10_000,
+        }
+    }
+
+    #[test]
+    fn ticket_price_floored_at_reference() {
+        let p = Params::default();
+        let exec = price_q64(1_000_000_000, 1_000_000).unwrap();
+        // Reference below execution (rising market / no crash): execution price.
+        let mut i = sell(1_000_000, 1_000_000_000);
+        i.reference_price_q64 = exec / 2;
+        let t = evaluate_sell(&mut matured_position(1_000_000), &p, false, &i, || Ok(USD_150)).unwrap();
+        assert_eq!(t.sell_price_q64, exec);
+        // Staged crash: execution 20x below the reference → ticket at the reference.
+        let crashed = sell(1_000_000, 50_000_000);
+        let mut i = crashed;
+        i.reference_price_q64 = exec;
+        let usd_hi = UsdPrice { price: 3_000_00000000, exponent: -8 }; // keep ≥ $50 at crash
+        let t = evaluate_sell(&mut matured_position(1_000_000), &p, false, &i, || Ok(usd_hi)).unwrap();
+        assert_eq!(t.sell_price_q64, exec);
+        // The $50 minimum still uses the execution value, not the floored price.
+        assert_eq!(t.sell_usd_cents, 15_000);
+        let mut i = crashed;
+        i.reference_price_q64 = exec;
+        assert_eq!(
+            evaluate_sell(&mut matured_position(1_000_000), &p, false, &i, || Ok(USD_150)),
+            Err(NoTicket::BelowMinimumUsd)
+        );
     }
 
     #[test]

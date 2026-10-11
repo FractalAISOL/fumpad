@@ -78,6 +78,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
 
     // ── Quote ──
     let mut r = reserves_of(&a.coin);
+    let pre_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
     let q = quote_buy(&r, sol_in).ok_or(FumpadError::MathOverflow)?;
     require!(q.tokens_out > 0, FumpadError::ZeroAmount);
     require!(q.tokens_out >= min_tokens_out, FumpadError::SlippageExceeded);
@@ -104,6 +105,9 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     let bb = inline_buyback(coin, &mut r, fee.pool)?;
     store_reserves(coin, &r);
     bump_stats(coin, q.sol_used);
+    // D10: exact curve touch point (post-trade spot includes the inline buyback).
+    let post_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
+    coin.touch_reference(now, pre_spot, post_spot, true);
     let completed = r.real_token == 0;
     if completed {
         coin.status = CoinStatus::Complete;

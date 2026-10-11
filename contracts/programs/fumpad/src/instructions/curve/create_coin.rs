@@ -12,6 +12,7 @@ use crate::{
     constants::*,
     error::FumpadError,
     events::CoinCreated,
+    math::{price::price_q64, reference::ReferencePrice},
     state::{Coin, CoinStatus, Global, PAUSE_LAUNCH},
 };
 
@@ -199,6 +200,11 @@ pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String
     coin.trade_count = 0;
     coin.tickets_created = 0;
     coin.tokens_paid_out = 0;
+    // D10: the reference starts at the initial curve price.
+    let initial_spot =
+        price_q64(p.initial_virtual_sol, p.initial_virtual_token).ok_or(FumpadError::MathOverflow)?;
+    coin.reference = ReferencePrice::new(initial_spot, now);
+    coin.reserved = [0; 88];
 
     emit_cpi!(CoinCreated { mint: mint_key, creator, name, symbol, uri, ts: now });
     Ok(())

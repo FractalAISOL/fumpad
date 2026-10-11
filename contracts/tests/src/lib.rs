@@ -186,6 +186,40 @@ impl Env {
     }
 }
 
+/// Address used for the Pyth SOL/USD PriceUpdateV2 account in tests (the mainnet
+/// sponsored feed account the fixture was dumped from).
+pub const PYTH_SOL_USD: Pubkey = anchor_lang::pubkey!("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE");
+
+impl Env {
+    /// (Re)write the Pyth SOL/USD account from the mainnet fixture with
+    /// `price = usd × 10^8` (exponent −8), conf = 0.05% of price and
+    /// publish_time = now, so sells in the next 60 s see a fresh, valid price.
+    pub fn set_sol_usd(&mut self, usd: u64) {
+        use base64::Engine;
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(fixtures_dir().join("pyth_sol_usd_mainnet.json")).unwrap())
+                .unwrap();
+        let mut data =
+            base64::engine::general_purpose::STANDARD.decode(v["account"]["data"][0].as_str().unwrap()).unwrap();
+        // Full verification → price message at 41: feed 32 | price i64 | conf u64 | expo i32 | publish i64 | prev i64.
+        let m = 41;
+        let price = (usd * 100_000_000) as i64;
+        let now = self.now();
+        data[m + 32..m + 40].copy_from_slice(&price.to_le_bytes());
+        data[m + 40..m + 48].copy_from_slice(&((price / 2_000) as u64).to_le_bytes());
+        data[m + 48..m + 52].copy_from_slice(&(-8i32).to_le_bytes());
+        data[m + 52..m + 60].copy_from_slice(&now.to_le_bytes());
+        data[m + 60..m + 68].copy_from_slice(&(now - 1).to_le_bytes());
+        let lamports = self.svm.minimum_balance_for_rent_exemption(data.len());
+        self.svm
+            .set_account(
+                addr(&PYTH_SOL_USD),
+                Account { lamports, data, owner: addr(&fumpad::PYTH_RECEIVER_PROGRAM_ID), executable: false, rent_epoch: 0 },
+            )
+            .unwrap();
+    }
+}
+
 /// The Clock sysvar type LiteSVM expects (pinned to LiteSVM's solana-clock).
 pub mod litesvm_clock {
     pub use solana_clock::Clock;

@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+use crate::math::reference::ReferencePrice;
+
 /// One per launched coin. PDA ["coin", mint].
 ///
 /// Lamport accounting: this account's lamports always equal
@@ -39,7 +41,20 @@ pub struct Coin {
     pub tickets_created: u64,
     pub tokens_paid_out: u64,
 
-    pub reserved: [u8; 128],
+    /// D10 reference price (ticket sell-price floor), see `math/reference.rs`.
+    /// Initialized at `create_coin` to the initial curve price; updated by every curve
+    /// buy/sell, router swap and `record_samples`; carried unchanged through graduation.
+    /// Occupies 40 bytes of the former 128-byte `reserved` (account size unchanged).
+    pub reference: ReferencePrice,
+
+    pub reserved: [u8; 88],
+}
+
+impl Coin {
+    /// Apply a touch point to the reference price (`exact` = curve trade).
+    pub fn touch_reference(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, exact: bool) {
+        self.reference.update(now, pre_spot_q64, post_spot_q64, exact);
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -50,4 +65,16 @@ pub enum CoinStatus {
     Complete,
     /// Liquidity on PumpSwap; trades via the router; claims enabled.
     Graduated,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D10 carved `reference` out of `reserved`: the account size must not change.
+    #[test]
+    fn account_size_unchanged() {
+        assert_eq!(Coin::INIT_SPACE, 338);
+        assert_eq!(ReferencePrice::INIT_SPACE + 88, 128);
+    }
 }

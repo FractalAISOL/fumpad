@@ -100,7 +100,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     let user_info = a.user.to_account_info();
     let token_acc_info = a.user_token_account.to_account_info();
     let wsol_info = a.user_wsol.to_account_info();
-    let (pool, _) = pumpswap::validate_venue(
+    let (pool, before) = pumpswap::validate_venue(
         venue,
         &VenueExpect {
             pool: a.coin.amm_pool,
@@ -149,7 +149,13 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
         now,
     )?;
 
+    // D10: PumpSwap touch point (pre-trade effective spot, post-trade spot).
     let after = pumpswap::venue_reserves(venue, &pool)?;
+    // A degenerate (empty-sided) pool has no spot: skip the update rather than fail the trade.
+    if let (Ok(pre), Ok(post)) = (before.spot_price_q64(), after.spot_price_q64()) {
+        a.coin.touch_reference(now, pre, post, false);
+    }
+
     let ev = Trade {
         mint: a.mint.key(),
         user: user_info.key(),

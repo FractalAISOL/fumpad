@@ -183,7 +183,8 @@ impl World {
             trade_count: 0,
             tickets_created: 0,
             tokens_paid_out: 0,
-            reserved: [0; 128],
+            reference: Default::default(),
+            reserved: [0; 88],
         };
         w.write_coin(&c);
         w

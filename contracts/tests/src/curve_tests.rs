@@ -226,6 +226,15 @@ fn sell(env: &mut Env, user: &Keypair, mint: &Pubkey, tokens_in: u64, min_out: u
     env.send(&[i], &[user])
 }
 
+/// Sell with a fresh Pyth SOL/USD price ($150) so a qualifying sell creates a ticket.
+fn sell_priced(env: &mut Env, user: &Keypair, mint: &Pubkey, tokens_in: u64) -> TransactionResult {
+    env.set_sol_usd(150);
+    let mut a = sell_accounts(env, &kp_pk(user), mint);
+    a.sol_usd_price = PYTH_SOL_USD;
+    let i = ix(a, fumpad::instruction::Sell { tokens_in, min_sol_out: 0 });
+    env.send(&[i], &[user])
+}
+
 fn graduate_accounts(env: &Env, payer: &Pubkey, mint: &Pubkey) -> fumpad::accounts::Graduate {
     let pa = pool_authority();
     let pool = pool_pda(0, &pa, mint, &WSOL_MINT);
@@ -698,32 +707,46 @@ fn trade_rejects_bad_accounts() {
     assert_lamport_invariant(&env, &other);
 }
 
-/// Buys must pass the position's open tickets in remaining_accounts.
+/// Buys must pass the position's open tickets in remaining_accounts. The ticket is a
+/// real one, created by a qualifying curve sell (matured tokens, ≥ $50, fresh Pyth).
 #[test]
 fn buy_requires_open_tickets() {
     let mut env = env();
     let creator = env.new_user(10);
     let mint = create_coin(&mut env, &creator);
     let u = env.new_user(100);
+    let uk = kp_pk(&u);
     ok(buy(&mut env, &u, &mint, SOL, 1));
-    // Simulate a position with one open ticket (rewards module not wired yet).
-    let pos = position_pda(&mint, &kp_pk(&u));
-    let mut acc = env.account(&pos).unwrap();
-    let mut p: Position = env.fetch(&pos);
-    p.open_count = 1;
-    p.open_tickets[0] = Pubkey::new_unique();
-    let mut data = Position::DISCRIMINATOR.to_vec();
-    anchor_lang::AnchorSerialize::serialize(&p, &mut data).unwrap();
-    acc.data[..data.len()].copy_from_slice(&data);
-    env.svm.set_account(addr(&pos), acc).unwrap();
+    env.warp(600);
+    let held = token_amount(&env, &ata(&uk, &mint, &TOKEN_2022));
+    let ticket = sell_accounts(&env, &uk, &mint).ticket;
+    let m = ok(sell_priced(&mut env, &u, &mint, held / 2));
+    assert_eq!(events::<fumpad::events::TicketCreated>(&m).len(), 1);
+    let p: Position = env.fetch(&position_pda(&mint, &uk));
+    assert_eq!((p.open_count, p.open_tickets[0]), (1, ticket));
+    assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).tickets_created, 1);
+
+    // Missing the open ticket.
     assert_fumpad_err(buy(&mut env, &u, &mint, SOL, 1), FumpadError::OpenTicketsMismatch);
-    // Passing it satisfies the count check (the hook validates contents).
+    // Passing some other account in its place.
     let i = ix_with_remaining(
-        buy_accounts(&env, &kp_pk(&u), &mint),
+        buy_accounts(&env, &uk, &mint),
         fumpad::instruction::Buy { sol_in: SOL, min_tokens_out: 1 },
-        &[anchor_lang::prelude::AccountMeta::new(p.open_tickets[0], false)],
+        &[anchor_lang::prelude::AccountMeta::new(Pubkey::new_unique(), false)],
     );
-    ok(env.send(&[i], &[&u]));
+    assert_fumpad_err(env.send(&[i], &[&u]), FumpadError::OpenTicketsMismatch);
+    // Passing it: the buy goes through and the rebuy rule debits the ticket.
+    let before: fumpad::state::Ticket = env.fetch(&ticket);
+    let i = ix_with_remaining(
+        buy_accounts(&env, &uk, &mint),
+        fumpad::instruction::Buy { sol_in: SOL / 1_000, min_tokens_out: 1 },
+        &[anchor_lang::prelude::AccountMeta::new(ticket, false)],
+    );
+    let m = ok(env.send(&[i], &[&u]));
+    let bought = events::<Trade>(&m)[0].token_amount;
+    let after: fumpad::state::Ticket = env.fetch(&ticket);
+    assert_eq!(after.tokens, before.tokens - bought.min(before.tokens));
+    assert_lamport_invariant(&env, &mint);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
