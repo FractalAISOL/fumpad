@@ -255,3 +255,4 @@ mod smoke {
 }
 
 #[cfg(test)] mod curve_tests;
+#[cfg(test)] mod venue_tests;

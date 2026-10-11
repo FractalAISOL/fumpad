@@ -1,14 +1,43 @@
+//! Create a graduated coin's price-observation ring. OWNER: venue/oracle module.
+//!
+//! Permissionless (the payer funds ~0.058 SOL rent). The account is the canonical PDA
+//! ["observations", mint] — created here with `init` (8,280 bytes fits the 10 KiB CPI
+//! allocation limit) rather than as a client-pre-allocated `#[account(zero)]` keypair
+//! account: a keypair account would let anyone create extra rings for the same coin, and
+//! every consumer (claim, buyback) would have to be trusted to pick the right one. With
+//! the PDA, uniqueness is enforced by the seeds.
+
 use anchor_lang::prelude::*;
 
-use crate::error::FumpadError;
+use crate::{constants::*, error::FumpadError, state::*};
 
-// STUB — OWNER: venue/oracle module. Replace the Accounts struct and handler.
 #[derive(Accounts)]
 pub struct InitObservations<'info> {
-    pub user: Signer<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [COIN_SEED, coin.mint.as_ref()], bump = coin.bump)]
+    pub coin: Box<Account<'info, Coin>>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + std::mem::size_of::<Observations>(),
+        seeds = [OBSERVATIONS_SEED, coin.mint.as_ref()],
+        bump,
+    )]
+    pub observations: AccountLoader<'info, Observations>,
+    pub system_program: Program<'info, System>,
 }
 
 pub fn handle_init_observations(ctx: Context<InitObservations>) -> Result<()> {
-    let _ = &ctx;
-    err!(FumpadError::NotImplemented)
+    let coin = &ctx.accounts.coin;
+    require!(coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
+    require_keys_neq!(coin.amm_pool, Pubkey::default(), FumpadError::WrongCoinStatus);
+    let mut obs = ctx.accounts.observations.load_init()?;
+    obs.mint = coin.mint;
+    obs.pool = coin.amm_pool;
+    obs.bump = ctx.bumps.observations;
+    // The keeper gets a full `keeper_stale_secs` grace period before sampling for this
+    // coin becomes permissionless (otherwise a brand-new ring would start in fallback mode).
+    obs.last_keeper_sample_ts = Clock::get()?.unix_timestamp;
+    Ok(())
 }
