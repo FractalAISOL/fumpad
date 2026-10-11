@@ -1,6 +1,12 @@
-.curve { position: relative; }
-.md { height: 58px; }
-.sm { height: 12px; }
+.curve {
+  position: relative;
+}
+.md {
+  height: 58px;
+}
+.sm {
+  height: 12px;
+}
 .cTrack {
   position: absolute;
   left: 0;
@@ -21,18 +27,74 @@
   transition: width var(--dur-curve) var(--ease-out);
   animation: grow var(--dur-curve) var(--ease-out) both;
 }
-@keyframes grow { from { width: 0; } }
-.cEnd { position: absolute; right: 0; top: 2px; width: 2px; height: 38px; background: var(--flare); }
-.cLbl { position: absolute; top: 42px; font-family: var(--f-num); font-size: 10px; color: var(--ink-3); }
-.sm .cTrack, .sm .cFill { top: 3px; height: 6px; }
-.sm .cTrack { background-image: none; }
-.sm .cEnd { top: 0; height: 12px; }
+@keyframes grow {
+  from {
+    width: 0;
+  }
+}
+.cEnd {
+  position: absolute;
+  right: 0;
+  top: 2px;
+  width: 2px;
+  height: 38px;
+  background: var(--flare);
+}
+.cLbl {
+  position: absolute;
+  top: 42px;
+  font-family: var(--f-num);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+.sm .cTrack,
+.sm .cFill {
+  top: 3px;
+  height: 6px;
+}
+.sm .cTrack {
+  background-image: none;
+}
+.sm .cEnd {
+  top: 0;
+  height: 12px;
+}
 
-.pool { position: relative; height: 56px; margin: 10px 0 4px; }
-.pBar { position: absolute; left: 0; right: 0; top: 14px; height: 16px; background: var(--sunken); box-shadow: inset 0 0 0 1px var(--rule); }
-.pHave { position: absolute; left: 0; top: 14px; height: 16px; background: var(--ink); animation: grow var(--dur-curve) var(--ease-out) both; }
-.pGap { position: absolute; top: 14px; height: 16px; background: repeating-linear-gradient(-45deg, transparent 0 3px, color-mix(in srgb, var(--flare) 45%, transparent) 3px 4px); }
-.pMark { position: absolute; top: 6px; width: 1px; height: 32px; background: var(--ink-3); }
+.pool {
+  position: relative;
+  height: 56px;
+  margin: 10px 0 4px;
+}
+.pBar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 14px;
+  height: 16px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.pHave {
+  position: absolute;
+  left: 0;
+  top: 14px;
+  height: 16px;
+  background: var(--ink);
+  animation: grow var(--dur-curve) var(--ease-out) both;
+}
+.pGap {
+  position: absolute;
+  top: 14px;
+  height: 16px;
+  background: repeating-linear-gradient(-45deg, transparent 0 3px, color-mix(in srgb, var(--flare) 45%, transparent) 3px 4px);
+}
+.pMark {
+  position: absolute;
+  top: 6px;
+  width: 1px;
+  height: 32px;
+  background: var(--ink-3);
+}
 .pMark span {
   position: absolute;
   top: 34px;
@@ -44,5 +106,17 @@
   white-space: nowrap;
 }
 
-.lvl { position: relative; height: 6px; background: var(--sunken); box-shadow: inset 0 0 0 1px var(--rule); }
-.lvl i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ink); animation: grow var(--dur-curve) var(--ease-out) both; }
+.lvl {
+  position: relative;
+  height: 6px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.lvl i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--ink);
+  animation: grow var(--dur-curve) var(--ease-out) both;
+}

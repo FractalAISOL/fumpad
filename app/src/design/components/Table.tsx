@@ -62,8 +62,7 @@ export function Table<R>({
     });
   }, [rows, columns, sort]);
 
-  const toggle = (key: string) =>
-    setSort((cur) => (cur?.key === key ? { key, dir: cur.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
+  const toggle = (key: string) => setSort((cur) => (cur?.key === key ? { key, dir: cur.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
 
   if (!rows.length && empty) return <>{empty}</>;
 

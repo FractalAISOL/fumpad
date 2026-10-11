@@ -131,7 +131,19 @@ export function Segmented<T extends string>({
 }
 
 /** Pill filters for feeds: independent toggles that act like a single choice. */
-export function Chips<T extends string>({ items, value, onChange, label, className }: { items: ChoiceItem<T>[]; value: T; onChange: (v: T) => void; label: string; className?: string }) {
+export function Chips<T extends string>({
+  items,
+  value,
+  onChange,
+  label,
+  className,
+}: {
+  items: ChoiceItem<T>[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+  className?: string;
+}) {
   const { refs, onKeyDown } = useRoving(items, value, onChange);
   return (
     <div role="radiogroup" aria-label={label} className={cx(s.chips, className)} onKeyDown={onKeyDown}>

@@ -3,7 +3,25 @@
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
 import { PARAMS, cpOut } from "@/data/chain";
-import { AmountInput, Button, CoinTile, CurveMeter, Dialog, EmptyState, IconUpload, KV, Panel, PanelHead, SplitBar, TextArea, TextInput, Tokens, cx, parseAmount, useToast } from "@/design";
+import {
+  AmountInput,
+  Button,
+  CoinTile,
+  CurveMeter,
+  Dialog,
+  EmptyState,
+  IconUpload,
+  KV,
+  Panel,
+  PanelHead,
+  SplitBar,
+  TextArea,
+  TextInput,
+  Tokens,
+  cx,
+  parseAmount,
+  useToast,
+} from "@/design";
 import * as f from "@/design/format";
 import { useViewer } from "../shell/Providers";
 import s from "./Launch.module.css";
@@ -125,7 +143,9 @@ export function LaunchView() {
     <div className="wrap">
       <div className={s.head}>
         <h1 className={s.h1}>Launch a coin</h1>
-        <p className={s.lede}>Every coin on FUMPAD starts with 5% of its supply in a reward pool, so people who sell too early get paid back. Takes about a minute.</p>
+        <p className={s.lede}>
+          Every coin on FUMPAD starts with 5% of its supply in a reward pool, so people who sell too early get paid back. Takes about a minute.
+        </p>
       </div>
 
       <div className={s.grid}>
@@ -134,19 +154,36 @@ export function LaunchView() {
           noValidate
           onSubmit={(e) => {
             e.preventDefault();
+            const form = e.currentTarget;
             setTried(true);
             if (valid) setReview(true);
+            else requestAnimationFrame(() => (form.querySelector("[aria-invalid=true]") as HTMLElement | null)?.focus());
           }}
         >
           <Panel>
             <PanelHead title="The coin" />
             <div className={s.fields}>
               <div className={s.row2}>
-                <TextInput label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Sad Pigeon" maxLength={40} error={shown.name} autoComplete="off" />
+                <TextInput
+                  label="Name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Sad Pigeon"
+                  maxLength={40}
+                  error={shown.name}
+                  autoComplete="off"
+                />
                 <TextInput
                   label="Ticker"
                   value={symbol}
-                  onChange={(e) => setSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10))}
+                  onChange={(e) =>
+                    setSymbol(
+                      e.target.value
+                        .toUpperCase()
+                        .replace(/[^A-Z0-9]/g, "")
+                        .slice(0, 10),
+                    )
+                  }
                   placeholder="PIGN"
                   prefix="$"
                   error={shown.symbol}
@@ -216,8 +253,23 @@ export function LaunchView() {
             <div className={s.fields}>
               <div className={s.row3}>
                 <TextInput label="X" value={x} onChange={(e) => setX(e.target.value)} placeholder="@sadpigeon" error={shown.x} autoComplete="off" />
-                <TextInput label="Telegram" value={telegram} onChange={(e) => setTelegram(e.target.value)} placeholder="t.me/sadpigeon" error={shown.telegram} autoComplete="off" />
-                <TextInput label="Website" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://" error={shown.website} inputMode="url" autoComplete="off" />
+                <TextInput
+                  label="Telegram"
+                  value={telegram}
+                  onChange={(e) => setTelegram(e.target.value)}
+                  placeholder="t.me/sadpigeon"
+                  error={shown.telegram}
+                  autoComplete="off"
+                />
+                <TextInput
+                  label="Website"
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                  placeholder="https://"
+                  error={shown.website}
+                  inputMode="url"
+                  autoComplete="off"
+                />
               </div>
             </div>
           </Panel>
@@ -229,7 +281,8 @@ export function LaunchView() {
               <p className={s.hint}>
                 {firstBuy > 0 ? (
                   <>
-                    You get about <Tokens value={firstTokens} symbol={tick} /> at the opening price. As the creator you can&apos;t file fumble tickets on this coin; you earn 20% of every trade fee instead.
+                    You get about <Tokens value={firstTokens} symbol={tick} /> at the opening price. As the creator you can&apos;t file fumble tickets on this
+                    coin; you earn 20% of every trade fee instead.
                   </>
                 ) : (
                   <>Buying first in the launch transaction means nobody can buy ahead of you. As the creator you earn 20% of every trade fee.</>

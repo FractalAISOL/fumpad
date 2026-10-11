@@ -13,7 +13,19 @@ import s from "./Identity.module.css";
  * Monogram tile in Archivo at its narrowest width. Three styles, assigned per coin,
  * so a feed of black squares still reads as different coins.
  */
-export function CoinTile({ symbol, variant = 0, size = "md", imageUrl, className }: { symbol: string; variant?: 0 | 1 | 2; size?: "sm" | "md" | "lg" | "xl"; imageUrl?: string; className?: string }) {
+export function CoinTile({
+  symbol,
+  variant = 0,
+  size = "md",
+  imageUrl,
+  className,
+}: {
+  symbol: string;
+  variant?: 0 | 1 | 2;
+  size?: "sm" | "md" | "lg" | "xl";
+  imageUrl?: string;
+  className?: string;
+}) {
   return (
     <span className={cx(s.tile, s[`t${variant}`], s[size], className)} aria-hidden="true">
       {imageUrl ? (

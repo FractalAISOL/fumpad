@@ -56,7 +56,14 @@ export function TextInput({
   className,
   id: idProp,
   ...rest
-}: Omit<ComponentPropsWithoutRef<"input">, "prefix"> & { label: ReactNode; hint?: ReactNode; error?: ReactNode; optional?: boolean; prefix?: ReactNode; suffix?: ReactNode }) {
+}: Omit<ComponentPropsWithoutRef<"input">, "prefix"> & {
+  label: ReactNode;
+  hint?: ReactNode;
+  error?: ReactNode;
+  optional?: boolean;
+  prefix?: ReactNode;
+  suffix?: ReactNode;
+}) {
   const auto = useId();
   const id = idProp ?? auto;
   return (
@@ -70,13 +77,27 @@ export function TextInput({
   );
 }
 
-export function TextArea({ label, hint, error, optional, className, id: idProp, ...rest }: ComponentPropsWithoutRef<"textarea"> & { label: ReactNode; hint?: ReactNode; error?: ReactNode; optional?: boolean }) {
+export function TextArea({
+  label,
+  hint,
+  error,
+  optional,
+  className,
+  id: idProp,
+  ...rest
+}: ComponentPropsWithoutRef<"textarea"> & { label: ReactNode; hint?: ReactNode; error?: ReactNode; optional?: boolean }) {
   const auto = useId();
   const id = idProp ?? auto;
   return (
     <Field label={label} hint={hint} error={error} optional={optional} id={id} className={className}>
       <div className={cx(s.box, s.areaBox)}>
-        <textarea id={id} className={cx(s.input, s.area)} aria-invalid={error ? true : undefined} aria-describedby={hint || error ? `${id}-msg` : undefined} {...rest} />
+        <textarea
+          id={id}
+          className={cx(s.input, s.area)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={hint || error ? `${id}-msg` : undefined}
+          {...rest}
+        />
       </div>
     </Field>
   );

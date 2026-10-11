@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useState } from "react";
-import type { LeaderRow, PricePoint, Ticket } from "@/data";
+import type { PricePoint, Ticket } from "@/data";
 import {
   Address,
   AmountInput,
@@ -105,7 +105,7 @@ const SAMPLE: SampleRow[] = [
   { id: "d", who: "paperhandpete", sol: 103.4, x: 3.4 },
 ];
 
-export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; series: PricePoint[]; leaders: LeaderRow[] }) {
+export function DesignView({ tickets, series }: { tickets: Ticket[]; series: PricePoint[] }) {
   const [mode, setMode] = useState<Mode>("both");
   const [tab, setTab] = useState("one");
   const [seg, setSeg] = useState("7d");
@@ -128,12 +128,14 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
   return (
     <div className="wrap">
       <header className={s.head}>
+        <h1 className="sr-only">Design system</h1>
         <div className={s.brand}>
           <Mark size={56} />
           <Wordmark size="xl" />
         </div>
         <p className={s.lede}>
-          The FUMPAD design system: every component in every state. Tokens live in <code>src/design/tokens.ts</code>; this page renders them through scoped light and dark themes.
+          The FUMPAD design system: every component in every state. Tokens live in <code>src/design/tokens.ts</code>; this page renders them through scoped
+          light and dark themes.
         </p>
         <Segmented
           label="Theme"
@@ -287,7 +289,15 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
                 { value: "sell", label: "Sell" },
               ]}
             />
-            <Chips label="Filter" value={chip} onChange={setChip} items={["all", "cross", "claim", "fumble"].map((v) => ({ value: v, label: v === "all" ? "Everything" : v === "cross" ? "10× crossings" : v === "claim" ? "Claims" : "Fumbles" }))} />
+            <Chips
+              label="Filter"
+              value={chip}
+              onChange={setChip}
+              items={["all", "cross", "claim", "fumble"].map((v) => ({
+                value: v,
+                label: v === "all" ? "Everything" : v === "cross" ? "10× crossings" : v === "claim" ? "Claims" : "Fumbles",
+              }))}
+            />
           </div>
         )}
       </Spec>
@@ -370,7 +380,14 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
             <div className={s.cap}>Level</div>
             <LevelBar value={7420} max={9000} label="Level progress" />
             <div className={s.cap}>Fee split</div>
-            <SplitBar label="Fee split" parts={[{ label: "pool", share: 50 }, { label: "FUMPAD", share: 30 }, { label: "creator", share: 20 }]} />
+            <SplitBar
+              label="Fee split"
+              parts={[
+                { label: "pool", share: 50 },
+                { label: "FUMPAD", share: 30 },
+                { label: "creator", share: 20 },
+              ]}
+            />
           </div>
         )}
       </Spec>
@@ -378,7 +395,15 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
       <Spec title="Chart" note="Log price axis. Ring: your sell. Dashed orange: 10× of it. Arrow keys read values." mode={mode}>
         {() => (
           <Panel>
-            <PriceChart points={series} sell={sell ? { t: sell.t, p: sell.p } : undefined} trigger={sell ? sell.p * 10 : undefined} others={series.filter((_, i) => i % 37 === 5)} rangeLabel="since launch" symbol="MIDC" height={260} />
+            <PriceChart
+              points={series}
+              sell={sell ? { t: sell.t, p: sell.p } : undefined}
+              trigger={sell ? sell.p * 10 : undefined}
+              others={series.filter((_, i) => i % 37 === 5)}
+              rangeLabel="since launch"
+              symbol="MIDC"
+              height={260}
+            />
             <PanelBody>
               <Row label="sparkline">
                 <Sparkline values={[1, 1.2, 1.1, 1.5, 1.4, 1.9, 2.2]} />
@@ -398,7 +423,17 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
             </Panel>
             <Panel>
               <PanelHead title="Claim queue" aside="empty state" />
-              <Table caption="Empty" columns={cols} rows={[]} rowKey={(r) => r.id} empty={<EmptyState title="No one is waiting" compact>Every claim fits the pool right now, so claims pay in the same transaction.</EmptyState>} />
+              <Table
+                caption="Empty"
+                columns={cols}
+                rows={[]}
+                rowKey={(r) => r.id}
+                empty={
+                  <EmptyState title="No one is waiting" compact>
+                    Every claim fits the pool right now, so claims pay in the same transaction.
+                  </EmptyState>
+                }
+              />
             </Panel>
           </div>
         )}
@@ -414,7 +449,13 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
                   as="li"
                   ticket={t}
                   now={now}
-                  note={t.state === "queued" ? "Queued at position 4. Pays when the pool reaches 2.6M. Queued claims don't expire." : t.rebuyDebited > 0 ? "You rebought within 7 days, so the claim shrank." : undefined}
+                  note={
+                    t.state === "queued"
+                      ? "Queued at position 4. Pays when the pool reaches 2.6M. Queued claims don't expire."
+                      : t.rebuyDebited > 0
+                        ? "You rebought within 7 days, so the claim shrank."
+                        : undefined
+                  }
                   action={t.state === "claimable" ? <Button variant="flare">Claim {f.int(t.claimAmount)}</Button> : undefined}
                 />
               ))}
@@ -479,7 +520,14 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
               </div>
             </div>
             <Panel>
-              <EmptyState title="No flags" action={<Button variant="line" size="sm">Show all tickets</Button>}>
+              <EmptyState
+                title="No flags"
+                action={
+                  <Button variant="line" size="sm">
+                    Show all tickets
+                  </Button>
+                }
+              >
                 Your wallet is clean, which is rarer than a 10×.
               </EmptyState>
             </Panel>
@@ -501,7 +549,12 @@ export function DesignView({ tickets, series, leaders }: { tickets: Ticket[]; se
           </>
         }
       >
-        <KV rows={[{ k: "First buy", v: <Sol value={1.5} /> }, { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> }]} />
+        <KV
+          rows={[
+            { k: "First buy", v: <Sol value={1.5} /> },
+            { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> },
+          ]}
+        />
       </Dialog>
       {moment && claimable && (
         <ClaimMoment

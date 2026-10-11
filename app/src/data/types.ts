@@ -104,14 +104,7 @@ export type TicketChainStatus = "open" | "queued" | "claimed" | "expired" | "voi
  *  - claimed / expired / voided: closed
  * `rebuyReduced` is orthogonal: tokens < originalTokens after a rebuy inside 7 days.
  */
-export type TicketState =
-  | "claimable"
-  | "queued"
-  | "tracking"
-  | "awaiting-graduation"
-  | "claimed"
-  | "expired"
-  | "voided";
+export type TicketState = "claimable" | "queued" | "tracking" | "awaiting-graduation" | "claimed" | "expired" | "voided";
 
 export interface Ticket {
   id: Address; // ticket PDA

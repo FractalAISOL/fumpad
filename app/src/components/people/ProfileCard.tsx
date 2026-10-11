@@ -95,7 +95,9 @@ export function ProfileCard({ p, you, headingLevel = 2 }: { p: Profile; you?: bo
           </li>
         ))}
       </ul>
-      {p.flagged && <p className={s.flag}>This wallet is linked to a coin creator by funding history. It can still claim, but it doesn&apos;t appear on leaderboards.</p>}
+      {p.flagged && (
+        <p className={s.flag}>This wallet is linked to a coin creator by funding history. It can still claim, but it doesn&apos;t appear on leaderboards.</p>
+      )}
     </div>
   );
 }

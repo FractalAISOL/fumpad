@@ -145,9 +145,11 @@ export function PriceChart({
 
         {geo.cross !== null && <line x1={X(points[geo.cross].t)} x2={X(points[geo.cross].t)} y1={pad.t} y2={H - pad.b} className={s.crossLine} />}
 
-        {others.filter((o) => o.t >= geo.t0 && o.t <= geo.t1).map((o) => (
-          <rect key={o.t} x={X(o.t) - 3} y={Y(o.p) - 3} width={6} height={6} className={s.other} />
-        ))}
+        {others
+          .filter((o) => o.t >= geo.t0 && o.t <= geo.t1)
+          .map((o) => (
+            <rect key={o.t} x={X(o.t) - 3} y={Y(o.p) - 3} width={6} height={6} className={s.other} />
+          ))}
 
         {sellVisible && <circle cx={X(sell!.t)} cy={Y(sell!.p)} r={6.5} className={s.ring} />}
         <circle cx={X(last.t)} cy={Y(last.p)} r={4.5} className={hitNow ? s.nowHit : s.now} />
@@ -221,7 +223,9 @@ export function Sparkline({ values, width = 72, height = 22, className }: { valu
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const span = hi - lo || 1;
-  const pts = values.map((v, i) => `${((i / (values.length - 1)) * (width - 2) + 1).toFixed(1)},${(height - 2 - ((v - lo) / span) * (height - 4)).toFixed(1)}`).join(" ");
+  const pts = values
+    .map((v, i) => `${((i / (values.length - 1)) * (width - 2) + 1).toFixed(1)},${(height - 2 - ((v - lo) / span) * (height - 4)).toFixed(1)}`)
+    .join(" ");
   const up = values[values.length - 1] >= values[0];
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={cx(s.spark, !up && s.sparkDown, className)} aria-hidden="true">

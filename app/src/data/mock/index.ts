@@ -96,7 +96,7 @@ function summary(c: CoinSpec): CoinSummary {
     volume24hSol: c.volume24hUsd / SOL_USD,
     marketCapSol: price * SUPPLY,
     holders: c.holders,
-    curveSol: c.status === "curve" ? c.raised ?? 0 : PARAMS.graduationSol,
+    curveSol: c.status === "curve" ? (c.raised ?? 0) : PARAMS.graduationSol,
     poolTokens: c.poolTokens,
     ticketsOpen: ticketsOpenOn(c),
     spark: spark(c.symbol),
@@ -196,7 +196,7 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
     expiresAt: queued || t.state === "claimed" ? undefined : t.sellTs + PARAMS.claimWindowSecs * 1000,
     chainStatus,
     state: t.state,
-    multiple: t.state === "claimed" ? t.claimedMultiple ?? t.multiple : median / sellPrice,
+    multiple: t.state === "claimed" ? (t.claimedMultiple ?? t.multiple) : median / sellPrice,
     peakMultiple: t.peak,
     claimAmount,
     claimValueSol: claimAmount * median,
@@ -271,7 +271,12 @@ function holdersFor(c: CoinSpec, viewer?: Address): { total: number; top: Holder
     const d = detail(c);
     top.push({ address: d.ammPool!, label: "PumpSwap pool", kind: "amm", share: ((d.ammTokens ?? 0) / SUPPLY) * 100 });
   } else {
-    top.push({ address: address("curve:" + c.symbol), label: "Bonding curve", kind: "amm", share: ((PARAMS.curveSupply - (c.raised ?? 0) * 6e6) / SUPPLY) * 100 });
+    top.push({
+      address: address("curve:" + c.symbol),
+      label: "Bonding curve",
+      kind: "amm",
+      share: ((PARAMS.curveSupply - (c.raised ?? 0) * 6e6) / SUPPLY) * 100,
+    });
   }
   top.push({ address: address("pool:" + c.symbol), label: "Reward pool", kind: "pool", share: (c.poolTokens / SUPPLY) * 100 });
   top.push({ address: creatorOf(c), label: "Creator", kind: "creator", share: between(r, 1.2, 4.6) });
@@ -305,7 +310,16 @@ function fumblesFor(c: CoinSpec, viewer?: Address): FumbleRow[] {
   }
   for (const tk of ticketsFor(DEMO_WALLET)) {
     if (tk.symbol === c.symbol && tk.state !== "expired") {
-      rows.push({ ticket: tk.id, owner: DEMO_WALLET, ownerName: DEMO_NAME, tokens: tk.originalTokens, sol: tk.sellSol, ts: tk.sellTs, multiple: tk.multiple, isYou: viewer === DEMO_WALLET });
+      rows.push({
+        ticket: tk.id,
+        owner: DEMO_WALLET,
+        ownerName: DEMO_NAME,
+        tokens: tk.originalTokens,
+        sol: tk.sellSol,
+        ts: tk.sellTs,
+        multiple: tk.multiple,
+        isYou: viewer === DEMO_WALLET,
+      });
     }
   }
   return rows.sort((a, b) => b.ts - a.ts);
@@ -335,7 +349,12 @@ function makeEvent(kind: FeedKind, seed: string, ts: number, coin?: CoinSpec): F
       return { ...base, ...coinBits(c), kind, raisedSol: PARAMS.graduationSol, ticketsUnlocked: Math.floor(between(r, 80, 420)) };
     }
     case "fumble": {
-      const c = coin ?? pick(r, COIN_SPECS.filter((x) => x.status === "curve" || x.mcapUsd! > 50_000));
+      const c =
+        coin ??
+        pick(
+          r,
+          COIN_SPECS.filter((x) => x.status === "curve" || x.mcapUsd! > 50_000),
+        );
       const p = priceAt(c.symbol, Math.min(ts, EPOCH));
       const sol = Math.exp(between(r, Math.log(0.5), Math.log(120)));
       return { ...base, ...coinBits(c), kind, sol, tokens: sol / p, ticketPrice: p };
@@ -574,11 +593,21 @@ export class MockFumpadData implements FumpadData {
     const rows: CloseCall[] = [];
     for (const c of GRADUATED.slice(0, 6)) {
       const who = r() < 0.5 ? pick(r, USERS) : { address: anon("cl" + c.symbol), name: undefined };
-      rows.push({ ticket: address("cl:" + c.symbol), symbol: c.symbol, mint: mintAddress(c.symbol), owner: who.address, ownerName: who.name, multiple: between(r, 7.2, 9.85) });
+      rows.push({
+        ticket: address("cl:" + c.symbol),
+        symbol: c.symbol,
+        mint: mintAddress(c.symbol),
+        owner: who.address,
+        ownerName: who.name,
+        multiple: between(r, 7.2, 9.85),
+      });
     }
     if (viewer) {
-      const mine = ticketsFor(viewer).filter((t) => t.state === "tracking").sort((a, b) => b.multiple - a.multiple)[0];
-      if (mine) rows.push({ ticket: mine.id, symbol: mine.symbol, mint: mine.mint, owner: viewer, ownerName: nameOf(viewer), multiple: mine.multiple, isYou: true });
+      const mine = ticketsFor(viewer)
+        .filter((t) => t.state === "tracking")
+        .sort((a, b) => b.multiple - a.multiple)[0];
+      if (mine)
+        rows.push({ ticket: mine.id, symbol: mine.symbol, mint: mine.mint, owner: viewer, ownerName: nameOf(viewer), multiple: mine.multiple, isYou: true });
     }
     return rows.sort((a, b) => b.multiple - a.multiple).slice(0, limit);
   }

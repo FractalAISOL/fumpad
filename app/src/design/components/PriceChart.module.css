@@ -5,27 +5,73 @@
   touch-action: pan-y;
   cursor: crosshair;
 }
-.wrap:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.svg { position: absolute; inset: 0; display: block; }
+.wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
 
-.grid { stroke: var(--rule); stroke-width: 1; }
+.grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
 .axis {
   font-family: var(--f-num);
   font-variation-settings: "wdth" var(--wdth-numTight);
   font-size: 10px;
   fill: var(--ink-3);
 }
-.zone { fill: var(--flare); opacity: 0.06; }
-.ten { stroke: var(--flare); stroke-width: 1.5; stroke-dasharray: 5 4; }
-.area { fill: var(--ink); opacity: 0.045; }
-.line { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
-.crossLine { stroke: var(--flare); stroke-width: 1; }
-.other { fill: var(--ink-3); }
-.ring { fill: var(--surface); stroke: var(--ink); stroke-width: 2.5; }
-.now { fill: var(--ink); }
-.nowHit { fill: var(--flare); }
-.xhair { stroke: var(--ink-3); stroke-width: 1; }
-.xdot { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; }
+.zone {
+  fill: var(--flare);
+  opacity: 0.06;
+}
+.ten {
+  stroke: var(--flare);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.area {
+  fill: var(--ink);
+  opacity: 0.045;
+}
+.line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.crossLine {
+  stroke: var(--flare);
+  stroke-width: 1;
+}
+.other {
+  fill: var(--ink-3);
+}
+.ring {
+  fill: var(--surface);
+  stroke: var(--ink);
+  stroke-width: 2.5;
+}
+.now {
+  fill: var(--ink);
+}
+.nowHit {
+  fill: var(--flare);
+}
+.xhair {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+.xdot {
+  fill: var(--surface);
+  stroke: var(--ink);
+  stroke-width: 1.5;
+}
 
 .lbl {
   position: absolute;
@@ -37,8 +83,14 @@
   background: var(--surface);
   border-radius: 2px;
 }
-.lblTen { color: var(--flare-text); font-weight: 600; }
-.lblMe { color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.lblTen {
+  color: var(--flare-text);
+  font-weight: 600;
+}
+.lblMe {
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
 
 .tip {
   position: absolute;
@@ -54,8 +106,22 @@
   text-align: center;
   line-height: 1.35;
 }
-.tipT { display: block; opacity: 0.7; font-size: 10px; font-family: var(--f-num); }
+.tipT {
+  display: block;
+  opacity: 0.7;
+  font-size: 10px;
+  font-family: var(--f-num);
+}
 
-.spark { flex: none; }
-.spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.3; stroke-linejoin: round; }
-.sparkDown polyline { stroke: var(--ink-3); }
+.spark {
+  flex: none;
+}
+.spark polyline {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.sparkDown polyline {
+  stroke: var(--ink-3);
+}

@@ -37,7 +37,13 @@ function body(e: FeedEvent): ReactNode {
       return (
         <>
           Sold {f.tokens(e.tokens)} <Tick e={e} /> for {f.sol(e.sol)} SOL.{" "}
-          {pickLine(e.id, ["Ticket filed. See you at 10×, or never.", "Calling the top. Logging the ticket in case I'm wrong.", "Rent is due.", "Taking profit. Keeping the receipt.", "I'll be fine. The ticket says otherwise."])}
+          {pickLine(e.id, [
+            "Ticket filed. See you at 10×, or never.",
+            "Calling the top. Logging the ticket in case I'm wrong.",
+            "Rent is due.",
+            "Taking profit. Keeping the receipt.",
+            "I'll be fine. The ticket says otherwise.",
+          ])}
         </>
       );
     case "cross":
@@ -47,7 +53,12 @@ function body(e: FeedEvent): ReactNode {
         </>
       ) : (
         <>
-          <Tick e={e} /> held {f.multiple(e.multiple)} of my sell for thirty minutes. {pickLine(e.id, ["My ticket is live. My dignity is not.", "Not a spike, the median held. Claim open.", "Claim open. Should I wait? It might go higher."])}
+          <Tick e={e} /> held {f.multiple(e.multiple)} of my sell for thirty minutes.{" "}
+          {pickLine(e.id, [
+            "My ticket is live. My dignity is not.",
+            "Not a spike, the median held. Claim open.",
+            "Claim open. Should I wait? It might go higher.",
+          ])}
         </>
       );
     case "claim":
@@ -61,13 +72,15 @@ function body(e: FeedEvent): ReactNode {
         </>
       ) : (
         <>
-          Claimed {f.tokens(e.tokens)} <Tick e={e} />. Paid in the same transaction. {pickLine(e.id, ["I'm a holder again, God help me.", "Same tokens, more SOL.", "Congratulations to me, sort of."])}
+          Claimed {f.tokens(e.tokens)} <Tick e={e} />. Paid in the same transaction.{" "}
+          {pickLine(e.id, ["I'm a holder again, God help me.", "Same tokens, more SOL.", "Congratulations to me, sort of."])}
         </>
       );
     case "graduation":
       return (
         <>
-          <Tick e={e} /> graduated. 85 SOL on the curve, liquidity now on PumpSwap and locked for good. {f.int(e.ticketsUnlocked)} fumble tickets can claim at 10×.
+          <Tick e={e} /> graduated. 85 SOL on the curve, liquidity now on PumpSwap and locked for good. {f.int(e.ticketsUnlocked)} fumble tickets can claim at
+          10×.
         </>
       );
     case "launch":

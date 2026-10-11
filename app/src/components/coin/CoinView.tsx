@@ -130,7 +130,14 @@ export function CoinView({
             <Skeleton h="100%" />
           </div>
         ) : (
-          <PriceChart points={series.points} sell={mine ? { t: mine.sellTs, p: mine.sellPrice } : undefined} trigger={mine ? mine.sellPrice * 10 : undefined} others={others} rangeLabel={RANGE_LABEL[range]} symbol={coin.symbol} />
+          <PriceChart
+            points={series.points}
+            sell={mine ? { t: mine.sellTs, p: mine.sellPrice } : undefined}
+            trigger={mine ? mine.sellPrice * 10 : undefined}
+            others={others}
+            rangeLabel={RANGE_LABEL[range]}
+            symbol={coin.symbol}
+          />
         )}
       </div>
       <div className={s.legend}>
@@ -211,40 +218,46 @@ export function CoinView({
         <div className={s.leftCol}>
           {chart}
           {grad ? (
-              <Panel aria-labelledby="queue-h">
-                <PanelHead id="queue-h" title="Claim queue" aside="ordered by sell time, small claims skip ahead" />
-                <Table
-                  caption={`${coin.symbol} claim queue`}
-                  columns={queueCols}
-                  rows={queue.entries}
-                  rowKey={(q) => q.ticket}
-                  highlight={(q) => !!q.isYou || q.owner === address}
-                  empty={
-                    <EmptyState title="No one is waiting" compact>
-                      Every claim on ${coin.symbol} fits the pool right now, so claims pay in the same transaction.
-                    </EmptyState>
-                  }
-                />
-                <PanelNote>Queued claims don&apos;t expire while they wait. A claim can take at most 10% of the pool, so the pool grows into the big ones; smaller claims that fit pay first.</PanelNote>
-              </Panel>
+            <Panel aria-labelledby="queue-h">
+              <PanelHead id="queue-h" title="Claim queue" aside="ordered by sell time, small claims skip ahead" />
+              <Table
+                caption={`${coin.symbol} claim queue`}
+                columns={queueCols}
+                rows={queue.entries}
+                rowKey={(q) => q.ticket}
+                highlight={(q) => !!q.isYou || q.owner === address}
+                empty={
+                  <EmptyState title="No one is waiting" compact>
+                    Every claim on ${coin.symbol} fits the pool right now, so claims pay in the same transaction.
+                  </EmptyState>
+                }
+              />
+              <PanelNote>
+                Queued claims don&apos;t expire while they wait. A claim can take at most 10% of the pool, so the pool grows into the big ones; smaller claims
+                that fit pay first.
+              </PanelNote>
+            </Panel>
           ) : (
-              <Panel aria-labelledby="curve-h">
-                <PanelHead id="curve-h" title="Bonding curve" aside="graduates at 85 SOL, then moves to PumpSwap" />
-                <div className={s.curveBox}>
-                  <div className={s.curveStats}>
-                    <Stat label={`${f.fixed(85 - coin.curveSol, 2)} SOL to go. Claims on this coin open at graduation.`}>
-                      <span className={s.curveBig}>
-                        <Sol value={coin.curveSol} unit={false} size="xl" /> <span className="muted">of 85 SOL</span>
-                      </span>
-                    </Stat>
-                    <Stat label={`+${f.fixed(coin.curveSol1h, 1)} SOL in the last hour`} align="end">
-                      <span className="num">{f.fixed((coin.curveSol / 85) * 100, 1)}%</span>
-                    </Stat>
-                  </div>
-                  <CurveMeter raised={coin.curveSol} />
+            <Panel aria-labelledby="curve-h">
+              <PanelHead id="curve-h" title="Bonding curve" aside="graduates at 85 SOL, then moves to PumpSwap" />
+              <div className={s.curveBox}>
+                <div className={s.curveStats}>
+                  <Stat label={`${f.fixed(85 - coin.curveSol, 2)} SOL to go. Claims on this coin open at graduation.`}>
+                    <span className={s.curveBig}>
+                      <Sol value={coin.curveSol} unit={false} size="xl" /> <span className="muted">of 85 SOL</span>
+                    </span>
+                  </Stat>
+                  <Stat label={`+${f.fixed(coin.curveSol1h, 1)} SOL in the last hour`} align="end">
+                    <span className="num">{f.fixed((coin.curveSol / 85) * 100, 1)}%</span>
+                  </Stat>
                 </div>
-                <PanelNote>Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the 30-min median holds there.</PanelNote>
-              </Panel>
+                <CurveMeter raised={coin.curveSol} />
+              </div>
+              <PanelNote>
+                Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the 30-min median holds
+                there.
+              </PanelNote>
+            </Panel>
           )}
         </div>
         <Panel className={s.tradePanel}>
@@ -263,7 +276,9 @@ export function CoinView({
                 <Stat label={`≈ ${f.sol(coin.poolTokens * (coin.median ?? coin.price))} SOL at the median price`}>
                   <Tokens value={coin.poolTokens} size="xl" symbol={coin.symbol} />
                 </Stat>
-                {queue.entries.length > 0 && <PoolMeter pool={coin.poolTokens} needed={Math.max(...queue.entries.map((q) => q.needsPool))} symbol={coin.symbol} />}
+                {queue.entries.length > 0 && (
+                  <PoolMeter pool={coin.poolTokens} needed={Math.max(...queue.entries.map((q) => q.needsPool))} symbol={coin.symbol} />
+                )}
                 <KV
                   className={s.kvGap}
                   rows={[
@@ -283,7 +298,9 @@ export function CoinView({
                   ]}
                 />
               </PanelBody>
-              <PanelNote>Liquidity is locked forever in an immutable locker. Its trading fees are skimmed: tokens go to this pool, SOL to FUMPAD and the creator.</PanelNote>
+              <PanelNote>
+                Liquidity is locked forever in an immutable locker. Its trading fees are skimmed: tokens go to this pool, SOL to FUMPAD and the creator.
+              </PanelNote>
             </Panel>
           </>
         ) : (
@@ -327,7 +344,12 @@ export function CoinView({
           <ul className={s.holders}>
             {holders.top.map((h) => (
               <li key={h.address + h.kind}>
-                <Address address={h.address} name={h.label} you={h.kind === "you" || h.address === address} link={h.kind === "holder" || h.kind === "you" || h.kind === "creator"} />
+                <Address
+                  address={h.address}
+                  name={h.label}
+                  you={h.kind === "you" || h.address === address}
+                  link={h.kind === "holder" || h.kind === "you" || h.kind === "creator"}
+                />
                 <span className="num">{f.fixed(h.share, 2)}%</span>
               </li>
             ))}

@@ -51,22 +51,69 @@
   background: var(--ink);
   transition: left var(--dur-gauge) var(--ease-out);
 }
-.hit .needle { background: var(--flare); }
-.dead .fill, .dead .needle { background: var(--rule-2); }
-.dead .zone { opacity: 0.4; }
+.hit .needle {
+  background: var(--flare);
+}
+.dead .fill,
+.dead .needle {
+  background: var(--rule-2);
+}
+.dead .zone {
+  opacity: 0.4;
+}
 
 /* Sweep in on mount. The orange segment waits for the needle to reach 10×. */
-.animate .fill { animation: fill var(--dur-gauge) var(--ease-out) both; }
-.animate .fillX { animation: fillx var(--dur-gauge) var(--ease-out) both; }
-.animate .needle { animation: needle var(--dur-gauge) var(--ease-out) both; }
-@keyframes fill { from { width: 0; } }
-@keyframes fillx { 0%, 55% { width: 0; } }
-@keyframes needle { from { left: 0; } }
+.animate .fill {
+  animation: fill var(--dur-gauge) var(--ease-out) both;
+}
+.animate .fillX {
+  animation: fillx var(--dur-gauge) var(--ease-out) both;
+}
+.animate .needle {
+  animation: needle var(--dur-gauge) var(--ease-out) both;
+}
+@keyframes fill {
+  from {
+    width: 0;
+  }
+}
+@keyframes fillx {
+  0%,
+  55% {
+    width: 0;
+  }
+}
+@keyframes needle {
+  from {
+    left: 0;
+  }
+}
 
-.ticks { position: absolute; left: 0; right: 0; top: 17px; height: 6px; }
-.ticks i { position: absolute; top: 0; width: 1px; height: 4px; background: var(--rule-2); }
-.ticks i.maj { height: 6px; background: var(--ink-3); }
-.ticks i.ten { height: 8px; top: -1px; width: 2px; margin-left: -0.5px; background: var(--flare); }
+.ticks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 17px;
+  height: 6px;
+}
+.ticks i {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 4px;
+  background: var(--rule-2);
+}
+.ticks i.maj {
+  height: 6px;
+  background: var(--ink-3);
+}
+.ticks i.ten {
+  height: 8px;
+  top: -1px;
+  width: 2px;
+  margin-left: -0.5px;
+  background: var(--flare);
+}
 .lbl {
   position: absolute;
   top: 23px;
@@ -77,20 +124,54 @@
   transform: translateX(-50%);
   line-height: 1;
 }
-.first { transform: none; }
-.last { transform: translateX(-100%); }
-.lblTen { color: var(--flare-text); font-weight: 600; }
+.first {
+  transform: none;
+}
+.last {
+  transform: translateX(-100%);
+}
+.lblTen {
+  color: var(--flare-text);
+  font-weight: 600;
+}
 
 /* Sizes */
-.mini { height: 14px; }
-.mini .track { top: 4px; height: 5px; }
-.mini .needle { top: 0; height: 13px; }
+.mini {
+  height: 14px;
+}
+.mini .track {
+  top: 4px;
+  height: 5px;
+}
+.mini .needle {
+  top: 0;
+  height: 13px;
+}
 
-.lg { height: 46px; }
-.lg .track { top: 12px; height: 10px; }
-.lg .needle { top: 4px; height: 26px; width: 3px; margin-left: -1.5px; }
-.lg .ticks { top: 24px; }
-.lg .lbl { top: 33px; font-size: 11px; }
+.lg {
+  height: 46px;
+}
+.lg .track {
+  top: 12px;
+  height: 10px;
+}
+.lg .needle {
+  top: 4px;
+  height: 26px;
+  width: 3px;
+  margin-left: -1.5px;
+}
+.lg .ticks {
+  top: 24px;
+}
+.lg .lbl {
+  top: 33px;
+  font-size: 11px;
+}
 
 /* Narrow gauges: drop the 20× label so 20× and 30× never collide. */
-@container (max-width: 300px) { .l20 { display: none; } }
+@container (max-width: 300px) {
+  .l20 {
+    display: none;
+  }
+}

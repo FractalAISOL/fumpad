@@ -51,7 +51,11 @@ export function Gauge({
         <>
           <div className={s.ticks} aria-hidden="true">
             {G.ticks.map((t) => (
-              <i key={t} className={cx(t === G.trigger ? s.ten : (G.major as readonly number[]).includes(t) && s.maj)} style={{ left: `${gaugePos(t) * 100}%` }} />
+              <i
+                key={t}
+                className={cx(t === G.trigger ? s.ten : (G.major as readonly number[]).includes(t) && s.maj)}
+                style={{ left: `${gaugePos(t) * 100}%` }}
+              />
             ))}
           </div>
           <div aria-hidden="true">

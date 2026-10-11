@@ -6,8 +6,7 @@
 
 import { gauge } from "./tokens";
 
-const nf = (min: number, max: number) =>
-  new Intl.NumberFormat("en-US", { minimumFractionDigits: min, maximumFractionDigits: max });
+const nf = (min: number, max: number) => new Intl.NumberFormat("en-US", { minimumFractionDigits: min, maximumFractionDigits: max });
 const cache = new Map<string, Intl.NumberFormat>();
 function fmt(n: number, min: number, max = min): string {
   const k = `${min}:${max}`;
@@ -105,7 +104,14 @@ const SUB = "₀₁₂₃₄₅₆₇₈₉";
 export function priceText(p: number, sigDigits = 4): string {
   const { lead, zeros, sig } = priceParts(p, sigDigits);
   if (!zeros) return lead;
-  return lead + String(zeros).split("").map((d) => SUB[+d]).join("") + sig;
+  return (
+    lead +
+    String(zeros)
+      .split("")
+      .map((d) => SUB[+d])
+      .join("") +
+    sig
+  );
 }
 /** Long-form price for screen readers: "0.00000094". */
 export function priceSpoken(p: number): string {

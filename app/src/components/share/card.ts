@@ -23,12 +23,18 @@ export function cardCopy(t: Ticket) {
     return { head: "Sold too early. Officially.", body: `${sold} It held ${f.multiple(t.multiple)}. FUMPAD paid me back ${f.int(t.claimAmount)} ${t.symbol}.` };
   if (t.state === "claimable" || t.state === "queued")
     return { head: "Sold too early. Officially.", body: `${sold} It's holding ${f.multiple(t.multiple)}. FUMPAD owes me ${f.int(t.claimAmount)} ${t.symbol}.` };
-  if (t.state === "expired") return { head: "Sold at the right time.", body: `${sold} It peaked at ${f.multiple(t.peakMultiple)}. Sometimes selling was right.` };
-  return { head: "Sold. Watching.", body: `${sold} It's at ${f.multiple(t.multiple)}. If it holds 10×, FUMPAD pays me back ${f.int(t.claimAmount)} ${t.symbol}.` };
+  if (t.state === "expired")
+    return { head: "Sold at the right time.", body: `${sold} It peaked at ${f.multiple(t.peakMultiple)}. Sometimes selling was right.` };
+  return {
+    head: "Sold. Watching.",
+    body: `${sold} It's at ${f.multiple(t.multiple)}. If it holds 10×, FUMPAD pays me back ${f.int(t.claimAmount)} ${t.symbol}.`,
+  };
 }
 
 export function postText(t: Ticket, url: string) {
-  if (t.state === "claimed") return `Sold $${t.symbol} too early. It ran ${f.multiple(t.multiple)} and @fumpad paid me back ${f.int(t.claimAmount)} ${t.symbol} from the coin's own pool. ${url}`;
-  if (t.state === "claimable" || t.state === "queued") return `Sold $${t.symbol} too early. It's holding ${f.multiple(t.multiple)}, so @fumpad owes me ${f.int(t.claimAmount)} ${t.symbol}. ${url}`;
+  if (t.state === "claimed")
+    return `Sold $${t.symbol} too early. It ran ${f.multiple(t.multiple)} and @fumpad paid me back ${f.int(t.claimAmount)} ${t.symbol} from the coin's own pool. ${url}`;
+  if (t.state === "claimable" || t.state === "queued")
+    return `Sold $${t.symbol} too early. It's holding ${f.multiple(t.multiple)}, so @fumpad owes me ${f.int(t.claimAmount)} ${t.symbol}. ${url}`;
   return `Sold $${t.symbol}. It's at ${f.multiple(t.multiple)} of my price. At 10×, @fumpad pays me back. ${url}`;
 }

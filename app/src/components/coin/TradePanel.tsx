@@ -74,7 +74,17 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
         <Link href="/fumbles" className={cx(s.mine, myTicket.multiple >= 10 && s.mineHit)}>
           <span>
             Your ticket, sold {f.date(myTicket.sellTs)}
-            <small>{myTicket.state === "claimable" ? "Claimable now" : myTicket.state === "queued" ? `Queued, #${myTicket.queuePosition}` : myTicket.state === "awaiting-graduation" ? "Claims open at graduation" : myTicket.expiresAt ? `${f.daysLeft(myTicket.expiresAt, now)} days left` : ""}</small>
+            <small>
+              {myTicket.state === "claimable"
+                ? "Claimable now"
+                : myTicket.state === "queued"
+                  ? `Queued, #${myTicket.queuePosition}`
+                  : myTicket.state === "awaiting-graduation"
+                    ? "Claims open at graduation"
+                    : myTicket.expiresAt
+                      ? `${f.daysLeft(myTicket.expiresAt, now)} days left`
+                      : ""}
+            </small>
           </span>
           <Multiple x={myTicket.multiple} size="lg" />
         </Link>
@@ -130,7 +140,8 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
                   <dt>
                     Ticket price{" "}
                     <InfoTip label="How the ticket price is set">
-                      FUMPAD prices your ticket at the higher of your fill and a 10-minute average of the price, scaled by your own slippage. Honest sells get their real fill; a crash staged in the same block can&apos;t make a sell look cheaper than it was.
+                      FUMPAD prices your ticket at the higher of your fill and a 10-minute average of the price, scaled by your own slippage. Honest sells get
+                      their real fill; a crash staged in the same block can&apos;t make a sell look cheaper than it was.
                     </InfoTip>
                   </dt>
                   <dd>
@@ -153,12 +164,15 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
               <p className={s.pvNote}>
                 {t.floorApplied ? (
                   <>
-                    Your fill is <Price value={t.execPrice} />. The price dropped in the last 10 minutes, so the ticket uses the recent-average floor instead. It errs higher, never lower.
+                    Your fill is <Price value={t.execPrice} />. The price dropped in the last 10 minutes, so the ticket uses the recent-average floor instead.
+                    It errs higher, never lower.
                   </>
                 ) : (
                   <>Priced at your fill. The recent-average floor is below it, so it doesn&apos;t apply.</>
                 )}{" "}
-                {coin.status === "graduated" ? "Claimable when the 30-min median holds 10× within 90 days." : `Counts toward 10× now; claims on $${coin.symbol} open when it graduates.`}{" "}
+                {coin.status === "graduated"
+                  ? "Claimable when the 30-min median holds 10× within 90 days."
+                  : `Counts toward 10× now; claims on $${coin.symbol} open when it graduates.`}{" "}
                 {t.tokens < amount && <>Only {f.tokens(t.tokens)} of these tokens have been held 10 minutes; the ticket counts those. </>}
                 You&apos;ll have {t.openTickets + 1} of {t.maxOpenTickets} open tickets on this coin.
               </p>
@@ -183,10 +197,14 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
         <div className={s.preview} aria-live="polite">
           {quote.rebuyWarning && quote.rebuyWarning.totalDebit > 0 ? (
             <p className={s.pvNote}>
-              <b>Heads up.</b> You sold ${coin.symbol} {f.ago(now - quote.rebuyWarning.tickets[0].soldAgo, now)} ago. Buying back within 7 days shrinks that ticket by what you buy: −<span className="num">{f.tokens(quote.rebuyWarning.totalDebit)}</span> tokens.
+              <b>Heads up.</b> You sold ${coin.symbol} {f.ago(now - quote.rebuyWarning.tickets[0].soldAgo, now)} ago. Buying back within 7 days shrinks that
+              ticket by what you buy: −<span className="num">{f.tokens(quote.rebuyWarning.totalDebit)}</span> tokens.
             </p>
           ) : (
-            <p className={s.pvNote}>No ${coin.symbol} sells of yours in the last 7 days, so buying doesn&apos;t shrink any ticket. Tokens you buy count toward future tickets after 10 minutes.</p>
+            <p className={s.pvNote}>
+              No ${coin.symbol} sells of yours in the last 7 days, so buying doesn&apos;t shrink any ticket. Tokens you buy count toward future tickets after 10
+              minutes.
+            </p>
           )}
           {quote.partialFill && <p className={s.pvNote}>This buy completes the curve. You&apos;re charged only for the tokens left.</p>}
         </div>
@@ -199,4 +217,3 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
     </section>
   );
 }
-

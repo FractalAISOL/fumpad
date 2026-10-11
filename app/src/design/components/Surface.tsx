@@ -9,7 +9,19 @@ export function Panel({ className, as: As = "section", ...rest }: ComponentProps
 }
 
 /** Panel title row: h2 on the left, a quiet aside or control on the right. */
-export function PanelHead({ title, aside, id, level = 2, children }: { title: ReactNode; aside?: ReactNode; id?: string; level?: 2 | 3; children?: ReactNode }) {
+export function PanelHead({
+  title,
+  aside,
+  id,
+  level = 2,
+  children,
+}: {
+  title: ReactNode;
+  aside?: ReactNode;
+  id?: string;
+  level?: 2 | 3;
+  children?: ReactNode;
+}) {
   const H = level === 2 ? "h2" : "h3";
   return (
     <div className={s.head}>
@@ -32,7 +44,19 @@ export function PanelNote({ className, ...rest }: ComponentPropsWithoutRef<"p">)
 
 /* ── Stat & key–value ─────────────────────────────────────────────────────── */
 
-export function Stat({ label, children, hint, align, className }: { label: ReactNode; children: ReactNode; hint?: ReactNode; align?: "end"; className?: string }) {
+export function Stat({
+  label,
+  children,
+  hint,
+  align,
+  className,
+}: {
+  label: ReactNode;
+  children: ReactNode;
+  hint?: ReactNode;
+  align?: "end";
+  className?: string;
+}) {
   return (
     <div className={cx(s.stat, align === "end" && s.end, className)}>
       <div className={s.statK}>{label}</div>
@@ -91,7 +115,19 @@ export function Loading({ label = "Loading", children }: { label?: string; child
 /* ── Empty state ──────────────────────────────────────────────────────────── */
 
 /** Empty screens are invitations: say what's missing and what to do next. */
-export function EmptyState({ title, children, action, glyph = "mark", compact }: { title: string; children?: ReactNode; action?: ReactNode; glyph?: "mark" | "none"; compact?: boolean }) {
+export function EmptyState({
+  title,
+  children,
+  action,
+  glyph = "mark",
+  compact,
+}: {
+  title: string;
+  children?: ReactNode;
+  action?: ReactNode;
+  glyph?: "mark" | "none";
+  compact?: boolean;
+}) {
   return (
     <div className={cx(s.empty, compact && s.emptyCompact)}>
       {glyph === "mark" && (

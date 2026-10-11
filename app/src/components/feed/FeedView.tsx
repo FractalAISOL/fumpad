@@ -27,7 +27,17 @@ const FILTERS: { value: Filter; label: React.ReactNode }[] = [
   { value: "launch", label: "Launches" },
 ];
 
-export function FeedView({ initial, stats: initialStats, closest: initialClosest, trending }: { initial: FeedEvent[]; stats: PlatformStats; closest: CloseCall[]; trending: CoinSummary[] }) {
+export function FeedView({
+  initial,
+  stats: initialStats,
+  closest: initialClosest,
+  trending,
+}: {
+  initial: FeedEvent[];
+  stats: PlatformStats;
+  closest: CloseCall[];
+  trending: CoinSummary[];
+}) {
   const data = getFumpadData();
   const { address } = useViewer();
   const [filter, setFilter] = useState<Filter>("all");
@@ -175,7 +185,9 @@ export function FeedView({ initial, stats: initialStats, closest: initialClosest
                     <Link href={`/coin/${c.symbol}`} className="ticker">
                       ${c.symbol}
                     </Link>{" "}
-                    <span className="muted">{c.isYou ? <b className={s.yours}>your ticket</b> : c.ownerName ?? <span className="num">{f.shortAddr(c.owner)}</span>}</span>
+                    <span className="muted">
+                      {c.isYou ? <b className={s.yours}>your ticket</b> : (c.ownerName ?? <span className="num">{f.shortAddr(c.owner)}</span>)}
+                    </span>
                   </span>
                   <Multiple x={c.multiple} size="sm" />
                 </div>

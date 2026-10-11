@@ -27,9 +27,17 @@ export function Button(props: ButtonProps | LinkProps) {
   const cls = cx(s.btn, s[variant], s[size], block && s.block, loading && s.loading, className);
   const inner = (
     <>
-      {icon && <span className={s.icon} aria-hidden="true">{icon}</span>}
+      {icon && (
+        <span className={s.icon} aria-hidden="true">
+          {icon}
+        </span>
+      )}
       <span className={s.label}>{children}</span>
-      {iconEnd && <span className={s.icon} aria-hidden="true">{iconEnd}</span>}
+      {iconEnd && (
+        <span className={s.icon} aria-hidden="true">
+          {iconEnd}
+        </span>
+      )}
       {loading && <span className={s.spinner} aria-hidden="true" />}
     </>
   );

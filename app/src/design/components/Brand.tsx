@@ -7,7 +7,14 @@ import s from "./Brand.module.css";
  */
 export function Mark({ size = 28, className, title }: { size?: number; className?: string; title?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" className={cx(s.mark, className)} role={title ? "img" : undefined} aria-hidden={title ? undefined : true}>
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      className={cx(s.mark, className)}
+      role={title ? "img" : undefined}
+      aria-hidden={title ? undefined : true}
+    >
       {title && <title>{title}</title>}
       <rect width="32" height="32" rx="5" fill="var(--mark-fg, var(--ink))" />
       <circle cx="9" cy="22.5" r="3.6" fill="none" stroke="var(--mark-bg, var(--canvas))" strokeWidth="2.4" />

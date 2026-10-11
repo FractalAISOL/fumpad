@@ -61,7 +61,13 @@ export function Usd({ value, ...c }: Common & { value: number; tone?: "money" | 
   return <Wrap {...c}>{f.usd(value)}</Wrap>;
 }
 
-export function Tokens({ value, symbol, compact, signed, ...c }: Common & { value: number; symbol?: string; compact?: boolean; signed?: boolean; tone?: "money" | "muted" }) {
+export function Tokens({
+  value,
+  symbol,
+  compact,
+  signed,
+  ...c
+}: Common & { value: number; symbol?: string; compact?: boolean; signed?: boolean; tone?: "money" | "muted" }) {
   const v = compact ? f.compact(value) : f.tokens(value);
   return (
     <Wrap {...c}>

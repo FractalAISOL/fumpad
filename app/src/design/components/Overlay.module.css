@@ -13,8 +13,14 @@
   pointer-events: none;
   animation: tipIn var(--dur-fast) var(--ease-out);
 }
-.below { transform: translate(-50%, 0); }
-@keyframes tipIn { from { opacity: 0; } }
+.below {
+  transform: translate(-50%, 0);
+}
+@keyframes tipIn {
+  from {
+    opacity: 0;
+  }
+}
 
 .info {
   display: inline-grid;
@@ -25,8 +31,13 @@
   border-radius: 50%;
   color: var(--ink-3);
 }
-.info:hover { color: var(--ink); }
-.info svg { width: 15px; height: 15px; }
+.info:hover {
+  color: var(--ink);
+}
+.info svg {
+  width: 15px;
+  height: 15px;
+}
 
 /* Dialog */
 .dialog {
@@ -38,13 +49,19 @@
   width: 100%;
   overflow: visible;
 }
-.sm { max-width: min(400px, calc(100vw - 32px)); }
-.md { max-width: min(520px, calc(100vw - 32px)); }
+.sm {
+  max-width: min(400px, calc(100vw - 32px));
+}
+.md {
+  max-width: min(520px, calc(100vw - 32px));
+}
 .dialog::backdrop {
   background: var(--scrim);
   animation: fade var(--dur-base) var(--ease-out);
 }
-.dialog[open] .sheet { animation: rise var(--dur-slow) var(--ease-out); }
+.dialog[open] .sheet {
+  animation: rise var(--dur-slow) var(--ease-out);
+}
 .sheet {
   position: relative;
   background: var(--surface);
@@ -54,7 +71,9 @@
   max-height: calc(100dvh - 48px);
   overflow: auto;
 }
-.grip { display: none; }
+.grip {
+  display: none;
+}
 .dHead {
   display: flex;
   align-items: center;
@@ -76,18 +95,39 @@
   border-radius: var(--r-2);
   color: var(--ink-3);
 }
-.dClose:hover { color: var(--ink); background: var(--sunken); }
-.dClose svg { width: 18px; height: 18px; }
-.dDesc { padding: 6px var(--s-5) 0; color: var(--ink-2); font-size: var(--fs-md); }
-.dBody { padding: var(--s-4) var(--s-5); }
+.dClose:hover {
+  color: var(--ink);
+  background: var(--sunken);
+}
+.dClose svg {
+  width: 18px;
+  height: 18px;
+}
+.dDesc {
+  padding: 6px var(--s-5) 0;
+  color: var(--ink-2);
+  font-size: var(--fs-md);
+}
+.dBody {
+  padding: var(--s-4) var(--s-5);
+}
 .dFoot {
   display: flex;
   gap: var(--s-2);
   justify-content: flex-end;
   padding: var(--s-3) var(--s-5) var(--s-5);
 }
-@keyframes fade { from { opacity: 0; } }
-@keyframes rise { from { opacity: 0; transform: translateY(8px) scale(0.99); } }
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
 
 /* Bottom sheet below 600px */
 @media (max-width: 599.98px) {
@@ -104,7 +144,9 @@
     max-height: 88dvh;
     padding-bottom: env(safe-area-inset-bottom);
   }
-  .dialog[open] .sheet { animation: sheetUp var(--dur-slow) var(--ease-out); }
+  .dialog[open] .sheet {
+    animation: sheetUp var(--dur-slow) var(--ease-out);
+  }
   .grip {
     display: block;
     width: 36px;
@@ -113,10 +155,18 @@
     background: var(--rule-2);
     margin: 8px auto 0;
   }
-  .dFoot { flex-direction: column-reverse; }
-  .dFoot > * { width: 100%; }
+  .dFoot {
+    flex-direction: column-reverse;
+  }
+  .dFoot > * {
+    width: 100%;
+  }
 }
-@keyframes sheetUp { from { transform: translateY(100%); } }
+@keyframes sheetUp {
+  from {
+    transform: translateY(100%);
+  }
+}
 
 /* Toast */
 .toast {
@@ -133,12 +183,26 @@
   font-size: 13.5px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-out);
+  transition:
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
 }
-.toastOn { opacity: 1; transform: translate(-50%, 0); }
-.toastMoney { background: var(--flare); color: var(--on-flare); font-weight: var(--w-semibold); }
+.toastOn {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.toastMoney {
+  background: var(--flare);
+  color: var(--on-flare);
+  font-weight: var(--w-semibold);
+}
 @media (min-width: 900px) {
-  .toast { bottom: 28px; }
+  .toast {
+    bottom: 28px;
+  }
 }
 
-.anchor { display: inline-flex; vertical-align: middle; }
+.anchor {
+  display: inline-flex;
+  vertical-align: middle;
+}

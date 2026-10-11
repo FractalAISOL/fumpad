@@ -9,14 +9,25 @@ import { colorDark, colorLight, gauge as G } from "@/design/tokens";
 import { useNow } from "../shell/Providers";
 import s from "./ClaimMoment.module.css";
 
-export type ClaimResult = { status: "paid"; signature: string; at: number } | { status: "queued"; position: number; needsPool: number } | { status: "error"; message: string };
+export type ClaimResult =
+  { status: "paid"; signature: string; at: number } | { status: "queued"; position: number; needsPool: number } | { status: "error"; message: string };
 
 /**
  * The signature moment. Letterbox bars on a black stage; the needle sweeps the log ruler;
  * at 10× the screen cuts hard to orange; the title wipes in; the amount counts up; on
  * claim a PAID stamp lands. No confetti. Reduced motion jumps straight to the end state.
  */
-export function ClaimMoment({ ticket, onClose, onClaim, walletLabel }: { ticket: Ticket; onClose: () => void; onClaim: () => Promise<ClaimResult>; walletLabel: string }) {
+export function ClaimMoment({
+  ticket,
+  onClose,
+  onClaim,
+  walletLabel,
+}: {
+  ticket: Ticket;
+  onClose: () => void;
+  onClaim: () => Promise<ClaimResult>;
+  walletLabel: string;
+}) {
   const [phase, setPhase] = useState(0); // 0 idle, 1 rule, 2 title, 3 paid
   const [x, setX] = useState(1);
   const [flash, setFlash] = useState(false);
@@ -149,7 +160,11 @@ export function ClaimMoment({ ticket, onClose, onClaim, walletLabel }: { ticket:
         <div className={s.rule} aria-hidden="true">
           <div className={s.ln} />
           {G.ticks.map((v) => (
-            <i key={v} className={cx(v === G.trigger ? s.ten : (G.major as readonly number[]).includes(v) && s.maj)} style={{ left: `${f.gaugePos(v) * 100}%` }} />
+            <i
+              key={v}
+              className={cx(v === G.trigger ? s.ten : (G.major as readonly number[]).includes(v) && s.maj)}
+              style={{ left: `${f.gaugePos(v) * 100}%` }}
+            />
           ))}
           {G.major.map((v) => (
             <span key={v} className={s.l} style={{ left: `${Math.min(97, Math.max(2, f.gaugePos(v) * 100))}%` }}>
@@ -185,7 +200,8 @@ export function ClaimMoment({ ticket, onClose, onClaim, walletLabel }: { ticket:
               )}
             </h2>
             <p id="moment-sub" className={s.sub}>
-              You sold {f.tokens(ticket.originalTokens)} {ticket.symbol} on {f.date(ticket.sellTs)}. It held above 10× your price for thirty minutes straight. Officially, you fumbled. Here&apos;s 10% back.
+              You sold {f.tokens(ticket.originalTokens)} {ticket.symbol} on {f.date(ticket.sellTs)}. It held above 10× your price for thirty minutes straight.
+              Officially, you fumbled. Here&apos;s 10% back.
             </p>
           </div>
           <div className={s.box}>
@@ -201,11 +217,13 @@ export function ClaimMoment({ ticket, onClose, onClaim, walletLabel }: { ticket:
             <div className={s.amtSub} aria-live="polite">
               {paid ? (
                 <>
-                  Sent to {walletLabel}. tx <span className="num">{f.shortAddr(result.signature)}</span>. You hold {ticket.symbol} again. Congratulations, sort of.
+                  Sent to {walletLabel}. tx <span className="num">{f.shortAddr(result.signature)}</span>. You hold {ticket.symbol} again. Congratulations, sort
+                  of.
                 </>
               ) : queued ? (
                 <>
-                  The pool is short for now. You&apos;re #{result.position} in line and pay when it reaches {f.compact(result.needsPool)}. Queued claims don&apos;t expire.
+                  The pool is short for now. You&apos;re #{result.position} in line and pay when it reaches {f.compact(result.needsPool)}. Queued claims
+                  don&apos;t expire.
                 </>
               ) : result?.status === "error" ? (
                 <>{result.message}</>

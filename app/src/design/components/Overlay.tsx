@@ -155,24 +155,24 @@ export function Dialog({
       }}
     >
       {open && (
-      <div className={s.sheet}>
-        <span className={s.grip} aria-hidden="true" />
-        <div className={s.dHead}>
-          <h2 id={titleId} className={s.dTitle}>
-            {title}
-          </h2>
-          <button type="button" className={s.dClose} onClick={onClose} aria-label="Close">
-            <IconClose />
-          </button>
+        <div className={s.sheet}>
+          <span className={s.grip} aria-hidden="true" />
+          <div className={s.dHead}>
+            <h2 id={titleId} className={s.dTitle}>
+              {title}
+            </h2>
+            <button type="button" className={s.dClose} onClick={onClose} aria-label="Close">
+              <IconClose />
+            </button>
+          </div>
+          {description && (
+            <p id={descId} className={s.dDesc}>
+              {description}
+            </p>
+          )}
+          {children && <div className={s.dBody}>{children}</div>}
+          {footer && <div className={s.dFoot}>{footer}</div>}
         </div>
-        {description && (
-          <p id={descId} className={s.dDesc}>
-            {description}
-          </p>
-        )}
-        {children && <div className={s.dBody}>{children}</div>}
-        {footer && <div className={s.dFoot}>{footer}</div>}
-      </div>
       )}
     </dialog>
   );

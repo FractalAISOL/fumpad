@@ -29,7 +29,8 @@ function note(t: Ticket): React.ReactNode {
   if (t.state === "queued" && t.queueNeedsPool) {
     parts.push(
       <>
-        Queued at position {t.queuePosition}. A claim can take at most 10% of the pool, so your {f.int(t.claimAmount)} pays when the ${t.symbol} pool reaches {f.compact(t.queueNeedsPool)}
+        Queued at position {t.queuePosition}. A claim can take at most 10% of the pool, so your {f.int(t.claimAmount)} pays when the ${t.symbol} pool reaches{" "}
+        {f.compact(t.queueNeedsPool)}
         {t.queueEta ? `, ${f.eta(t.queueEta)} at current volume` : ""}. Queued claims don&apos;t expire.
       </>,
     );
@@ -46,7 +47,8 @@ function note(t: Ticket): React.ReactNode {
   if (t.rebuyDebited > 0 && t.state !== "expired") {
     parts.push(
       <>
-        You rebought {f.int(t.rebuyDebited)} {t.symbol} within 7 days of this sell, so the claim shrank from {f.int(t.originalTokens * 0.1)} to {f.int(t.claimAmount)}.
+        You rebought {f.int(t.rebuyDebited)} {t.symbol} within 7 days of this sell, so the claim shrank from {f.int(t.originalTokens * 0.1)} to{" "}
+        {f.int(t.claimAmount)}.
       </>,
     );
   }
@@ -104,7 +106,9 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
   const claimableSol = tickets?.filter((t) => t.state === "claimable").reduce((a, t) => a + t.claimValueSol, 0) ?? 0;
   const open = tickets?.filter((t) => ["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)) ?? [];
   const queued = tickets?.filter((t) => t.state === "queued") ?? [];
-  const closest = tickets?.filter((t) => (t.state === "tracking" || t.state === "awaiting-graduation") && t.multiple < 10).sort((a, b) => b.multiple - a.multiple)[0];
+  const closest = tickets
+    ?.filter((t) => (t.state === "tracking" || t.state === "awaiting-graduation") && t.multiple < 10)
+    .sort((a, b) => b.multiple - a.multiple)[0];
 
   const onClaim = useCallback(async (): Promise<ClaimResult> => {
     if (!moment) return { status: "error", message: "No ticket selected." };
@@ -115,11 +119,23 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
     if (!fits) {
       const q = await data.getClaimQueue(moment.mint, address);
       const position = q.entries.length + 1;
-      setTickets((ts) => ts?.map((t) => (t.id === moment.id ? { ...t, state: "queued", chainStatus: "queued", queuePosition: position, queueNeedsPool: t.claimAmount * 10, expiresAt: undefined } : t)) ?? ts);
+      setTickets(
+        (ts) =>
+          ts?.map((t) =>
+            t.id === moment.id
+              ? { ...t, state: "queued", chainStatus: "queued", queuePosition: position, queueNeedsPool: t.claimAmount * 10, expiresAt: undefined }
+              : t,
+          ) ?? ts,
+      );
       return { status: "queued", position, needsPool: moment.claimAmount * 10 };
     }
     const at = data.now();
-    setTickets((ts) => ts?.map((t) => (t.id === moment.id ? { ...t, state: "claimed", chainStatus: "claimed", claimedAt: at, claimTx: res.signature, expiresAt: undefined } : t)) ?? ts);
+    setTickets(
+      (ts) =>
+        ts?.map((t) =>
+          t.id === moment.id ? { ...t, state: "claimed", chainStatus: "claimed", claimedAt: at, claimTx: res.signature, expiresAt: undefined } : t,
+        ) ?? ts,
+    );
     setClaimable(Math.max(0, (tickets?.filter((t) => t.state === "claimable").length ?? 1) - 1));
     toast(`Claimed ${f.int(moment.claimAmount)} ${moment.symbol}.`, "money");
     return { status: "paid", signature: res.signature, at };
@@ -139,7 +155,9 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
     <div className="wrap">
       <div className={s.pageHead}>
         <h1 className={s.h1}>My fumbles</h1>
-        <p className={s.lede}>Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the 30-minute median holds there.</p>
+        <p className={s.lede}>
+          Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the 30-minute median holds there.
+        </p>
         {isDemo && <p className={s.demo}>Showing a demo wallet. Connect yours to see your own tickets.</p>}
       </div>
 
@@ -216,7 +234,14 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
             ))}
           </ul>
         ) : filter === "flagged" ? (
-          <EmptyState title="No flags" action={<Button variant="line" size="sm" onClick={() => setFilter("all")}>Show all tickets</Button>}>
+          <EmptyState
+            title="No flags"
+            action={
+              <Button variant="line" size="sm" onClick={() => setFilter("all")}>
+                Show all tickets
+              </Button>
+            }
+          >
             Your wallet is clean, which is rarer than a 10×. Rebuys elsewhere within 7 days or linked wallets would show up here.
           </EmptyState>
         ) : tickets.length === 0 ? (
@@ -224,7 +249,14 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
             Sell $50 or more of any coin through FUMPAD and the ticket shows up here, measured against 10× of your price.
           </EmptyState>
         ) : (
-          <EmptyState title="Nothing here" action={<Button variant="line" size="sm" onClick={() => setFilter("all")}>Show all tickets</Button>}>
+          <EmptyState
+            title="Nothing here"
+            action={
+              <Button variant="line" size="sm" onClick={() => setFilter("all")}>
+                Show all tickets
+              </Button>
+            }
+          >
             No tickets in this state right now.
           </EmptyState>
         )}

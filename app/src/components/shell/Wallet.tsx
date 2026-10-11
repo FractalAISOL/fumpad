@@ -135,7 +135,11 @@ export function WalletButton({ compact }: { compact?: boolean }) {
           </p>
         )}
         <p className={s.fine}>
-          New to Solana wallets? <Link href="https://phantom.com/learn" target="_blank" rel="noreferrer">Start with Phantom</Link>.
+          New to Solana wallets?{" "}
+          <Link href="https://phantom.com/learn" target="_blank" rel="noreferrer">
+            Start with Phantom
+          </Link>
+          .
         </p>
       </Dialog>
     </>

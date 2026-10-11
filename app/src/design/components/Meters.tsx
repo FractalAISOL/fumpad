@@ -26,9 +26,15 @@ export function CurveMeter({ raised, target = 85, size = "md", className }: { ra
       <div className={s.cEnd} aria-hidden="true" />
       {size === "md" && (
         <div aria-hidden="true">
-          <span className={s.cLbl} style={{ left: 0 }}>0</span>
-          <span className={s.cLbl} style={{ left: "50%", transform: "translateX(-50%)" }}>{target / 2}</span>
-          <span className={s.cLbl} style={{ right: 0 }}>{target} SOL</span>
+          <span className={s.cLbl} style={{ left: 0 }}>
+            0
+          </span>
+          <span className={s.cLbl} style={{ left: "50%", transform: "translateX(-50%)" }}>
+            {target / 2}
+          </span>
+          <span className={s.cLbl} style={{ right: 0 }}>
+            {target} SOL
+          </span>
         </div>
       )}
     </div>

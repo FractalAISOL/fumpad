@@ -59,7 +59,14 @@ function columns(board: Board, address: string): Column<LeaderRow>[] {
     rankCol,
     who(address),
     coin,
-    { key: "unl", header: "Unlocked at", align: "end", hideBelow: "sm", render: (r) => <Multiple x={r.unlockedAt!} size="sm" />, sortValue: (r) => r.unlockedAt! },
+    {
+      key: "unl",
+      header: "Unlocked at",
+      align: "end",
+      hideBelow: "sm",
+      render: (r) => <Multiple x={r.unlockedAt!} size="sm" />,
+      sortValue: (r) => r.unlockedAt!,
+    },
     { key: "cl", header: "Claimed at", align: "end", render: (r) => <Multiple x={r.claimedAtMultiple!} size="sm" />, sortValue: (r) => r.claimedAtMultiple! },
     { key: "w", header: "Waited", align: "end", render: (r) => <span className="num">{r.waitedDays} days</span>, sortValue: (r) => r.waitedDays! },
   ];
@@ -95,7 +102,14 @@ export function LeaderboardView({ initial, profile: initialProfile }: { initial:
           </div>
           <div role="tabpanel" id={tabPanelId("lb", board)} aria-labelledby={tabId("lb", board)}>
             <PanelHead title={meta.label} level={3} aside={meta.aside} />
-            <Table key={board} caption={meta.label} columns={columns(board, address)} rows={initial[board]} rowKey={(r) => r.address + r.rank} highlight={(r) => r.address === address} />
+            <Table
+              key={board}
+              caption={meta.label}
+              columns={columns(board, address)}
+              rows={initial[board]}
+              rowKey={(r) => r.address + r.rank}
+              highlight={(r) => r.address === address}
+            />
           </div>
           <PanelNote>Wallets linked to a coin&apos;s creator by funding history are flagged publicly and left off every board. They can still claim.</PanelNote>
         </Panel>
