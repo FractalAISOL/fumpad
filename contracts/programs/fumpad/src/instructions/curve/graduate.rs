@@ -6,14 +6,14 @@ use anchor_spl::{
         spl_token_2022::{extension::StateWithExtensions, state::Account as SplTokenAccount},
         Token2022,
     },
-    token_interface::{self, Burn, CloseAccount, Mint, SyncNative, TokenAccount},
+    token_interface::{self, CloseAccount, Mint, SyncNative, TokenAccount},
 };
 
 use crate::{
     constants::*,
     error::FumpadError,
     events::Graduated,
-    external::pumpswap::{self, lp_mint_pda, pool_pda, CreatePoolAccounts, CreatePoolArgs, WSOL_MINT},
+    external::pumpswap::{self, lp_mint_pda, pool_pda, token_amount, CreatePoolAccounts, CreatePoolArgs, WSOL_MINT},
     state::{Coin, CoinStatus, Global},
 };
 
@@ -25,8 +25,9 @@ pub const POOL_INDEX: u16 = 0;
 pub const GRADUATION_RENT_BUDGET: u64 = 50_000_000;
 
 /// Permissionless: move a completed curve's liquidity into a new PumpSwap pool
-/// (index 0, creator = pool authority PDA, quote = WSOL, no coin creator) and burn
-/// every LP token received.
+/// (index 0, creator = pool authority PDA, quote = WSOL, no coin creator) and lock every
+/// LP token received in the immutable `fumpad_lp_locker` (D11: principal locked forever,
+/// only fee growth can be skimmed — see that program's docs).
 ///
 /// Liquidity: base = the curve vault's whole balance (= lp_supply minted at launch,
 /// since the curve is empty), quote = real_sol_reserves − graduation_fee_lamports.
@@ -83,7 +84,7 @@ pub struct Graduate<'info> {
     pub lp_mint: UncheckedAccount<'info>,
 
     /// CHECK: pool authority's Token-2022 ATA for `lp_mint`, verified in the handler;
-    /// created by PumpSwap, emptied (burn) and closed here.
+    /// created by PumpSwap, emptied into the locker and closed here.
     #[account(mut)]
     pub pool_authority_lp: UncheckedAccount<'info>,
 
@@ -101,6 +102,17 @@ pub struct Graduate<'info> {
     /// CHECK: the PumpSwap program.
     #[account(address = PUMPSWAP_PROGRAM_ID @ FumpadError::WrongVenue)]
     pub amm_program: UncheckedAccount<'info>,
+
+    /// CHECK: locker Lock PDA ["lock", amm_pool]; created (init) and checked by the locker.
+    #[account(mut)]
+    pub lp_lock: UncheckedAccount<'info>,
+    /// CHECK: locker authority PDA ["authority"]; checked by the locker.
+    pub lp_locker_authority: UncheckedAccount<'info>,
+    /// CHECK: locker LP vault = ATA(lp_locker_authority, lp_mint); created by the locker,
+    /// balance verified here.
+    #[account(mut)]
+    pub lp_vault: UncheckedAccount<'info>,
+    pub lp_locker_program: Program<'info, fumpad_lp_locker::program::FumpadLpLocker>,
 
     pub token_program: Program<'info, Token2022>,
     pub quote_token_program: Program<'info, Token>,
@@ -212,7 +224,7 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     );
     require_keys_eq!(*a.amm_pool.owner, PUMPSWAP_PROGRAM_ID, FumpadError::WrongVenue);
 
-    // ── 6. Burn every LP token, close the LP account ──
+    // ── 6. Lock every LP token in the immutable locker, close the LP account ──
     let lp_amount = {
         let info = a.pool_authority_lp.to_account_info();
         require_keys_eq!(*info.owner, a.token_program.key(), FumpadError::InvalidAccount);
@@ -223,18 +235,27 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
         acct.base.amount
     };
     require!(lp_amount > 0, FumpadError::GraduationMismatch);
-    token_interface::burn(
-        CpiContext::new_with_signer(
-            a.token_program.key(),
-            Burn {
-                mint: a.lp_mint.to_account_info(),
-                from: a.pool_authority_lp.to_account_info(),
-                authority: a.pool_authority.to_account_info(),
-            },
-            signer,
-        ),
-        lp_amount,
-    )?;
+    fumpad_lp_locker::cpi::lock(CpiContext::new_with_signer(
+        a.lp_locker_program.key(),
+        fumpad_lp_locker::cpi::accounts::LockLp {
+            payer: a.payer.to_account_info(),
+            fumpad_authority: a.pool_authority.to_account_info(),
+            pool: a.amm_pool.to_account_info(),
+            lp_mint: a.lp_mint.to_account_info(),
+            source_lp: a.pool_authority_lp.to_account_info(),
+            lock: a.lp_lock.to_account_info(),
+            authority: a.lp_locker_authority.to_account_info(),
+            lp_vault: a.lp_vault.to_account_info(),
+            pool_base_vault: a.pool_base_vault.to_account_info(),
+            pool_quote_vault: a.pool_quote_vault.to_account_info(),
+            token_program: a.token_program.to_account_info(),
+            associated_token_program: a.associated_token_program.to_account_info(),
+            system_program: a.system_program.to_account_info(),
+        },
+        signer,
+    ))?;
+    require_keys_eq!(*a.lp_vault.owner, a.token_program.key(), FumpadError::GraduationMismatch);
+    require!(token_amount(&a.lp_vault.to_account_info())? == lp_amount, FumpadError::GraduationMismatch);
     token_interface::close_account(CpiContext::new_with_signer(
         a.token_program.key(),
         CloseAccount {
@@ -274,6 +295,7 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
         pool,
         sol_deposited: quote_amount,
         tokens_deposited: base_amount,
+        lp_locked: lp_amount,
         ts: now,
     });
     Ok(())

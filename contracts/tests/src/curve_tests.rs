@@ -256,6 +256,10 @@ fn graduate_accounts(env: &Env, payer: &Pubkey, mint: &Pubkey) -> fumpad::accoun
         pool_quote_vault: ata(&pool, &WSOL_MINT, &SPL_TOKEN),
         amm_event_authority: event_authority_pda(),
         amm_program: fumpad::PUMPSWAP_PROGRAM_ID,
+        lp_lock: crate::flow::locker_accounts(&pool).0,
+        lp_locker_authority: crate::flow::locker_accounts(&pool).1,
+        lp_vault: crate::flow::locker_accounts(&pool).2,
+        lp_locker_program: fumpad_lp_locker::ID,
         token_program: TOKEN_2022,
         quote_token_program: SPL_TOKEN,
         associated_token_program: ATA_PROGRAM,
@@ -808,13 +812,31 @@ fn graduate_flow(params: Params) {
     assert_eq!(token_amount(&env, &info.base_vault), p.lp_supply);
     assert_eq!(token_amount(&env, &info.quote_vault), sol_deposited);
 
-    // All LP burned; our temporary accounts are closed; the rent loan was returned.
-    assert_eq!(mint_supply(&env, &info.lp_mint), 0, "every LP token must be burned");
+    // D11: every LP token sits in the locker's vault (nothing burned, nothing elsewhere);
+    // our temporary accounts are closed; the rent loan was returned.
+    let (lock_key, locker_auth, lp_vault) = crate::flow::locker_accounts(&pool);
+    let lp_locked = token_amount(&env, &lp_vault);
+    assert!(lp_locked > 0);
+    assert_eq!(mint_supply(&env, &info.lp_mint), lp_locked, "LP mint supply == locker balance");
+    let vault = env.account(&lp_vault).unwrap();
+    assert_eq!(Pubkey::new_from_array(vault.data[32..64].try_into().unwrap()), locker_auth);
+    let lock: fumpad_lp_locker::Lock = env.fetch(&lock_key);
+    assert_eq!((lock.pool, lock.mint, lock.lp_mint, lock.lp_vault), (pool, mint, info.lp_mint, lp_vault));
+    assert_eq!(lock.lp_locked, lp_locked);
+    let reward_vault = Pubkey::find_program_address(&[fumpad::REWARD_VAULT_SEED, mint.as_ref()], &fumpad::ID).0;
+    assert_eq!(lock.base_dest, reward_vault);
+    assert_eq!(lock.quote_dest, ata(&coin_pda(&mint), &WSOL_MINT, &SPL_TOKEN));
+    // PumpSwap's lp_supply counts every minted LP; the creator (→ locker) got all but the
+    // pool's permanently locked minimum.
+    let lp_supply = u64::from_le_bytes(env.account(&pool).unwrap().data[203..211].try_into().unwrap());
+    assert_eq!(lock.lp_supply_at_lock, lp_supply);
+    assert!(lp_locked <= lp_supply && lp_supply - lp_locked < 1_000_000, "locked {lp_locked} of {lp_supply}");
     assert!(!exists(&env, &ata(&pa, &info.lp_mint, &TOKEN_2022)));
     assert!(!exists(&env, &ata(&pa, &WSOL_MINT, &SPL_TOKEN)));
     assert_eq!(env.lamports(&pa), 0);
     let rent_paid = payer_before - env.lamports(&payer);
     assert!(rent_paid < GRADUATION_RENT_BUDGET / 2, "caller paid {rent_paid}");
+    println!("graduate: caller paid {rent_paid} lamports net (rent incl. Lock + LP vault, tx fee)");
 
     // Price continuity: PumpSwap opens at the curve's final price.
     let pool_price = price_q64(sol_deposited, p.lp_supply).unwrap();
@@ -837,6 +859,7 @@ fn graduate_flow(params: Params) {
     assert_eq!(ev.len(), 1);
     assert_eq!((ev[0].mint, ev[0].pool), (mint, pool));
     assert_eq!((ev[0].sol_deposited, ev[0].tokens_deposited), (sol_deposited, p.lp_supply));
+    assert_eq!(ev[0].lp_locked, lp_locked);
 
     // Terminal: no second graduation, no curve trading.
     assert_fumpad_err(graduate(&mut env, &mint), FumpadError::WrongCoinStatus);
@@ -845,7 +868,7 @@ fn graduate_flow(params: Params) {
 }
 
 #[test]
-fn graduate_creates_pumpswap_pool_and_burns_lp() {
+fn graduate_creates_pumpswap_pool_and_locks_lp() {
     graduate_flow(Params::default());
 }
 
@@ -897,6 +920,19 @@ fn graduate_rejections() {
     assert_custom(send(&mut env, a), anchor_lang::error::ErrorCode::ConstraintSeeds as u32);
     // Graduate the uncompleted other coin.
     assert_fumpad_err(graduate(&mut env, &other), FumpadError::WrongCoinStatus);
+    // D11 locker: fake locker program / wrong Lock PDA / LP vault not the locker's ATA.
+    let mut a = graduate_accounts(&env, &payer, &mint);
+    a.lp_locker_program = Pubkey::new_unique();
+    assert!(send(&mut env, a).is_err());
+    let mut a = graduate_accounts(&env, &payer, &mint);
+    a.lp_lock = crate::flow::locker_accounts(&Pubkey::new_unique()).0;
+    assert_custom(send(&mut env, a), anchor_lang::error::ErrorCode::ConstraintSeeds as u32);
+    let mut a = graduate_accounts(&env, &payer, &mint);
+    a.lp_vault = ata(&payer, &a.lp_mint, &TOKEN_2022);
+    assert!(send(&mut env, a).is_err());
+    let mut a = graduate_accounts(&env, &payer, &mint);
+    a.lp_locker_authority = payer;
+    assert!(send(&mut env, a).is_err());
 
     // Nothing above changed state; the real call still works.
     assert_lamport_invariant(&env, &mint);

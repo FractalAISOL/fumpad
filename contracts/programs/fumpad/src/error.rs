@@ -69,4 +69,6 @@ pub enum FumpadError {
     PriceDeviation,
     #[msg("Nothing to buy back")]
     NothingToBuyBack,
+    #[msg("No skimmed LP fees to settle")]
+    NothingToSettle,
 }

@@ -4,7 +4,7 @@
 
 use anchor_lang::{
     prelude::{AccountMeta as Meta, Pubkey},
-    pubkey, AnchorDeserialize, Discriminator,
+    pubkey, AnchorDeserialize, Discriminator, InstructionData, ToAccountMetas,
 };
 use fumpad::{
     error::FumpadError,
@@ -46,6 +46,12 @@ pub fn event_authority() -> Pubkey {
 }
 pub fn pool_authority() -> Pubkey {
     fpda(&[fumpad::POOL_AUTHORITY_SEED])
+}
+/// D11 locker accounts of a pool: (Lock PDA, locker authority PDA, LP vault ATA).
+pub fn locker_accounts(pool: &Pubkey) -> (Pubkey, Pubkey, Pubkey) {
+    let lock = pda(&[fumpad_lp_locker::LOCK_SEED, pool.as_ref()], &fumpad_lp_locker::ID);
+    let authority = pda(&[fumpad_lp_locker::AUTHORITY_SEED], &fumpad_lp_locker::ID);
+    (lock, authority, ata(&authority, &lp_mint_pda(pool), &T22))
 }
 pub fn uva(user: &Pubkey) -> Pubkey {
     pda(&[b"user_volume_accumulator", user.as_ref()], &PUMPSWAP_PROGRAM_ID)
@@ -357,6 +363,10 @@ impl Flow {
                 pool_quote_vault: self.pool_quote,
                 amm_event_authority: event_authority_pda(),
                 amm_program: PUMPSWAP_PROGRAM_ID,
+                lp_lock: locker_accounts(&self.pool).0,
+                lp_locker_authority: locker_accounts(&self.pool).1,
+                lp_vault: locker_accounts(&self.pool).2,
+                lp_locker_program: fumpad_lp_locker::ID,
                 token_program: T22,
                 quote_token_program: TOKEN,
                 associated_token_program: ATA_PROGRAM,
@@ -695,5 +705,144 @@ impl Flow {
             fumpad::instruction::WithdrawPlatformFees {},
         );
         self.env.send(&[i], &[])
+    }
+
+    // ── D11 locker ──────────────────────────────────────────────────────────
+
+    pub fn lp_mint(&self) -> Pubkey {
+        lp_mint_pda(&self.pool)
+    }
+    /// The locker's fixed WSOL destination: ATA(coin PDA, WSOL).
+    pub fn lp_fee_wsol(&self) -> Pubkey {
+        ata(&self.coin, &WSOL_MINT, &TOKEN)
+    }
+    pub fn lock_state(&self) -> fumpad_lp_locker::Lock {
+        self.env.fetch(&locker_accounts(&self.pool).0)
+    }
+    pub fn locked_lp(&self) -> u64 {
+        token_balance(&self.env, &locker_accounts(&self.pool).2)
+    }
+    pub fn lp_supply(&self) -> u64 {
+        u64::from_le_bytes(self.env.account(&self.pool).unwrap().data[203..211].try_into().unwrap())
+    }
+    /// (⌊√(base · quote_value)⌋, lp_supply) exactly as the locker measures them.
+    pub fn sqrt_k(&self) -> (u128, u64) {
+        let p = fumpad_lp_locker::parse_pool(&self.env.account(&self.pool).unwrap().data).unwrap();
+        let base = token_balance(&self.env, &self.pool_base) as u128;
+        let q = fumpad_lp_locker::quote_value(token_balance(&self.env, &self.pool_quote), p.virtual_quote, p.waiting_fees);
+        (fumpad_lp_locker::isqrt(base * q as u128), p.lp_supply)
+    }
+    /// Principal in √k units fixed at lock time (f64).
+    pub fn lp_principal(&self) -> f64 {
+        let l = self.lock_state();
+        l.principal_num as f64 / l.lp_supply_at_lock as f64
+    }
+    /// Value of the locked LP in √k units (f64, independent of the locker's own check).
+    pub fn locked_value(&self) -> f64 {
+        let (s, l) = self.sqrt_k();
+        self.locked_lp() as f64 * s as f64 / l as f64
+    }
+
+    /// PumpSwap deposit/withdraw account list (15).
+    pub fn liquidity_metas(&self, user: Pubkey, user_base: Pubkey, user_quote: Pubkey, user_lp: Pubkey) -> Vec<Meta> {
+        vec![
+            w(self.pool),
+            r(PUMPSWAP_GLOBAL_CONFIG),
+            r(user),
+            r(self.mint),
+            r(WSOL_MINT),
+            w(self.lp_mint()),
+            w(user_base),
+            w(user_quote),
+            w(user_lp),
+            w(self.pool_base),
+            w(self.pool_quote),
+            r(TOKEN),
+            r(T22),
+            r(event_authority_pda()),
+            r(PUMPSWAP_PROGRAM_ID),
+        ]
+    }
+
+    /// [create ATA(coin, WSOL) idempotent (payer), locker `skim`].
+    pub fn skim_ixs(&self, payer: &Pubkey) -> Vec<Instruction> {
+        let (lock, authority, lp_vault) = locker_accounts(&self.pool);
+        let venue = self.liquidity_metas(authority, self.reward_vault, self.lp_fee_wsol(), lp_vault);
+        vec![create_ata_ix(payer, &self.coin, &WSOL_MINT, &TOKEN), locker_ix(
+            fumpad_lp_locker::accounts::Skim { lock, authority, pumpswap_program: PUMPSWAP_PROGRAM_ID },
+            fumpad_lp_locker::instruction::Skim {},
+            &venue,
+        )]
+    }
+
+    pub fn skim(&mut self) -> TransactionResult {
+        let mut ixs = vec![cu_limit(400_000)];
+        ixs.extend(self.skim_ixs(&kp_pk(&self.env.payer)));
+        self.env.send(&ixs, &[])
+    }
+
+    pub fn settle_ix(&self, cranker: &Pubkey) -> Instruction {
+        ix(
+            fumpad::accounts::SettleLpFees {
+                cranker: *cranker,
+                coin: self.coin,
+                wsol_mint: WSOL_MINT,
+                lp_fee_wsol: self.lp_fee_wsol(),
+                token_program: TOKEN,
+                system_program: SYSTEM,
+                event_authority: event_authority(),
+                program: fumpad::ID,
+            },
+            fumpad::instruction::SettleLpFees {},
+        )
+    }
+
+    pub fn settle_lp_fees(&mut self) -> TransactionResult {
+        let i = self.settle_ix(&kp_pk(&self.env.payer));
+        self.env.send(&[i], &[])
+    }
+}
+
+/// Instruction for the locker program from Anchor's generated types.
+pub fn locker_ix(accounts: impl ToAccountMetas, data: impl InstructionData, remaining: &[Meta]) -> Instruction {
+    let mut i = ix_with_remaining(accounts, data, remaining);
+    i.program_id = addr(&fumpad_lp_locker::ID);
+    i
+}
+
+/// Associated Token Account `create_idempotent`.
+pub fn create_ata_ix(payer: &Pubkey, owner: &Pubkey, mint: &Pubkey, program: &Pubkey) -> Instruction {
+    raw_ix(
+        ATA_PROGRAM,
+        vec![Meta::new(*payer, true), w(ata(owner, mint, program)), r(*owner), r(*mint), r(SYSTEM), r(*program)],
+        vec![1],
+    )
+}
+
+/// Locker `emit!` events (logged as "Program data: <base64>").
+pub fn locker_events<T: AnchorDeserialize + Discriminator>(m: &TransactionMetadata) -> Vec<T> {
+    use base64::Engine;
+    m.logs
+        .iter()
+        .filter_map(|l| l.strip_prefix("Program data: "))
+        .filter_map(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+        .filter(|d| d.starts_with(T::DISCRIMINATOR))
+        .map(|d| T::deserialize(&mut &d[T::DISCRIMINATOR.len()..]).unwrap())
+        .collect()
+}
+
+/// Locker custom error code.
+pub fn locker_code(e: fumpad_lp_locker::LockerError) -> u32 {
+    anchor_lang::error::ERROR_CODE_OFFSET + e as u32
+}
+
+#[track_caller]
+pub fn expect_custom(res: TransactionResult, code: u32) {
+    match res {
+        Ok(_) => panic!("expected Custom({code}), but the transaction succeeded"),
+        Err(f) => {
+            let s = format!("{:?}", f.err);
+            assert!(s.contains(&format!("Custom({code})")), "expected Custom({code}), got {s}\nlogs: {:#?}", f.meta.logs);
+        }
     }
 }

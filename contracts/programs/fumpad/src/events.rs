@@ -46,6 +46,20 @@ pub struct Graduated {
     pub pool: Pubkey,
     pub sol_deposited: u64,
     pub tokens_deposited: u64,
+    /// LP tokens moved into the immutable `fumpad_lp_locker` (D11).
+    pub lp_locked: u64,
+    pub ts: i64,
+}
+
+/// D11: skimmed LP-fee SOL unwrapped from ATA(coin, WSOL) and credited to the Coin.
+/// (The skim itself — LP withdrawn, base tokens sent to the reward vault — is logged by
+/// the locker's own `Skimmed` event.)
+#[event]
+pub struct LpFeesSettled {
+    pub mint: Pubkey,
+    pub lamports: u64,
+    pub platform: u64,
+    pub creator: u64,
     pub ts: i64,
 }
 

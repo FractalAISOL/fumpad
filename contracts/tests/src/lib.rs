@@ -1,4 +1,4 @@
-//! Shared LiteSVM harness for FUMPAD integration tests.
+//! Shared LiteSVM harness for FUMPAD integration tests (fumpad + fumpad_lp_locker).
 //!
 //! Type bridge: Anchor 1.2 speaks solana v3 types (`anchor_lang::prelude::Pubkey`),
 //! LiteSVM 0.18 speaks v4 (`solana_address::Address`). Convert ONLY through `addr()` /
@@ -86,6 +86,8 @@ impl Env {
         let fumpad_so = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/fumpad.so");
         svm.add_program_from_file(addr(&fumpad::ID), &fumpad_so).expect("run `anchor build` first");
         set_upgrade_authority(&mut svm, &fumpad::ID, &kp_pk(&payer));
+        let locker_so = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/fumpad_lp_locker.so");
+        svm.add_program_from_file(addr(&fumpad_lp_locker::ID), &locker_so).expect("run `anchor build` first");
 
         svm.add_program_from_file(addr(&fumpad::PUMPSWAP_PROGRAM_ID), fixtures_dir().join("pump_amm.so")).unwrap();
         svm.add_program_from_file(addr(&fumpad::PUMP_FEES_PROGRAM_ID), fixtures_dir().join("pump_fees.so")).unwrap();
@@ -296,3 +298,4 @@ mod smoke {
 #[cfg(test)] mod flow;
 #[cfg(test)] mod d10_tests;
 #[cfg(test)] mod e2e_tests;
+#[cfg(test)] mod locker_tests;

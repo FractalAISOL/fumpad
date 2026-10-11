@@ -14,7 +14,7 @@ default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-log-ix-name = []
-idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build", "fumpad_lp_locker/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
@@ -24,6 +24,7 @@ custom-panic = []
 anchor-lang = { version = "1.2.1", features = ["init-if-needed", "event-cpi"] }
 anchor-spl = { version = "1.2.1", default-features = false, features = ["token", "token_2022", "token_2022_extensions", "associated_token", "solana-v3"] }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+fumpad_lp_locker = { path = "../fumpad_lp_locker", features = ["cpi"] }
 
 
 [lints.rust]

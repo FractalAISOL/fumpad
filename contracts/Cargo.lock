@@ -1354,6 +1354,15 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "bytemuck",
+ "fumpad_lp_locker",
+]
+
+[[package]]
+name = "fumpad_lp_locker"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
 ]
 
 [[package]]
@@ -4357,6 +4366,7 @@ dependencies = [
  "anchor-lang",
  "base64 0.22.1",
  "fumpad",
+ "fumpad_lp_locker",
  "litesvm",
  "serde_json",
  "solana-account",

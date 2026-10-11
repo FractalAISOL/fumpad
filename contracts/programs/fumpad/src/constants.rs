@@ -80,5 +80,11 @@ pub const PYTH_SOL_USD_FEED_ID: [u8; 32] = [
     0x2a, 0x0d, 0x2f, 0x8e, 0xd0, 0xc6, 0xc7, 0xbc, 0x0f, 0x4c, 0xfa, 0xc8, 0xc2, 0x80, 0xb5, 0x6d,
 ];
 
+/// D11: the immutable LP locker that holds every FUMPAD pool's LP tokens.
+pub const LP_LOCKER_PROGRAM_ID: Pubkey = fumpad_lp_locker::ID;
+/// D11: share of skimmed LP-fee SOL credited to the platform (the rest → creator).
+/// Skimmed base tokens go 100% to the reward pool, so by value ≈ 50/30/20.
+pub const LP_FEE_PLATFORM_SHARE_BPS: u64 = 6_000;
+
 // PumpSwap instruction discriminators (from idl/pump_amm.json).
 pub const PUMPSWAP_IX_CREATE_POOL: [u8; 8] = [233, 146, 209, 142, 207, 104, 64, 188];

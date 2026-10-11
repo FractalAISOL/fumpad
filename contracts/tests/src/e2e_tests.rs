@@ -6,8 +6,9 @@
 //!   → graduate → init_observations + init_claim_queue → router trades → router buys push
 //!   the price ≥10x the tickets → keeper samples every 15 s for 31 min → instant claims,
 //!   over-cap claims queued, skip-ahead → execute_buyback grows the pool → process_queue
-//!   pays → fee withdrawals → 90-day expiry + close. The Coin lamport invariant is checked
-//!   after every stage.
+//!   pays → D11: non-FUMPAD traders trade straight on PumpSwap (as Jupiter would) → the LP
+//!   locker skims the fee growth → settle_lp_fees → fee withdrawals → 90-day expiry + close.
+//!   The Coin lamport invariant is checked after every stage.
 
 use anchor_lang::prelude::{AccountMeta as Meta, Pubkey};
 use fumpad::{
@@ -251,6 +252,43 @@ fn full_lifecycle() {
     ok(f.close_ticket(&bob, tk("bob")));
     f.assert_invariant();
 
+    // ── 7b. D11: outside volume earns LP fees for the coin ──────────────────────
+    // Traders that never touch FUMPAD (Jupiter routing straight to PumpSwap) round-trip
+    // 5 × 40 SOL. The locker's LP earns PumpSwap's 0.20% LP fee on it; a skim withdraws
+    // exactly the growth (base → reward pool, WSOL → ATA(coin, WSOL)); settle credits the
+    // SOL 60/40 to platform/creator. The principal stays locked.
+    let p_locked = f.lp_principal();
+    let lp_before = f.locked_lp();
+    assert_eq!((f.lock_state().lp_skimmed, lp_before), (0, f.lock_state().lp_locked), "nothing skimmed yet");
+    let jup = f.env.new_user(10);
+    let jk = kp_pk(&jup);
+    ok(f.env.send_as(&jup, &[create_ata_ix(&jk, &jk, &f.mint, &T22)], &[&jup]));
+    for _ in 0..5 {
+        let before = f.tokens(&jk);
+        let i = f.direct_buy_ix(&jk, 40 * SOL, true);
+        ok(f.env.send_as(&jup, &[cu_limit(400_000), i], &[&jup]));
+        let got = f.tokens(&jk) - before;
+        let i = f.direct_sell_ix(&jk, got);
+        ok(f.env.send_as(&jup, &[cu_limit(400_000), i], &[&jup]));
+    }
+    assert!(f.position(&jk).is_none(), "never touched FUMPAD");
+    assert!(f.locked_value() > p_locked * 1.001);
+    let (pool_before_skim, c_before) = (f.pool_tokens(), f.coin_state());
+    let m = ok(f.skim());
+    let cu_skim = m.compute_units_consumed;
+    let sk = &locker_events::<fumpad_lp_locker::Skimmed>(&m)[0];
+    assert!(sk.lp_withdrawn > 0 && sk.base_out > 0 && sk.quote_out > 0);
+    assert_eq!(f.pool_tokens(), pool_before_skim + sk.base_out, "reward pool grew");
+    assert_eq!(f.locked_lp(), lp_before - sk.lp_withdrawn);
+    assert!(f.locked_value() >= p_locked, "principal intact");
+    let m = ok(f.settle_lp_fees());
+    let cu_settle = m.compute_units_consumed;
+    let c = f.coin_state();
+    let platform = sk.quote_out * 6 / 10;
+    assert_eq!(c.platform_fees_unclaimed, c_before.platform_fees_unclaimed + platform);
+    assert_eq!(c.creator_fees_unclaimed, c_before.creator_fees_unclaimed + sk.quote_out - platform);
+    f.assert_invariant();
+
     // ── 8. Fee withdrawals ──────────────────────────────────────────────────────
     let c = f.coin_state();
     assert!(c.creator_fees_unclaimed > 0 && c.platform_fees_unclaimed > 0);
@@ -282,7 +320,7 @@ fn full_lifecycle() {
     let c = f.coin_state();
     assert_eq!(c.tokens_paid_out, 2_000_000 * M + 1_000_000 * M + bob_amount);
     println!(
-        "CU: curve buy ≤ {cu_buy}, curve sell (ticket) ≤ {cu_sell}, swap_sell ≤ {cu_swap_sell}, claim {cu_claim}; \
-         buyback rounds {rounds}"
+        "CU: curve buy ≤ {cu_buy}, curve sell (ticket) ≤ {cu_sell}, swap_sell ≤ {cu_swap_sell}, claim {cu_claim}, \
+         skim {cu_skim}, settle_lp_fees {cu_settle}; buyback rounds {rounds}"
     );
 }

@@ -110,4 +110,9 @@ pub mod fumpad {
     pub fn record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -> Result<()> {
         instructions::handle_record_samples(ctx)
     }
+
+    /// D11: unwrap LP fees skimmed by `fumpad_lp_locker` into the Coin's fee counters.
+    pub fn settle_lp_fees(ctx: Context<SettleLpFees>) -> Result<()> {
+        instructions::handle_settle_lp_fees(ctx)
+    }
 }
