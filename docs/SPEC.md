@@ -11,11 +11,13 @@ Status: v0.2 — matches the merged contracts · 2026-10-11 · Source concept: `
 | D3 | Claims that can't be paid in full **wait in the queue** (no partial payouts). |
 | D4 | Queue is **skip-ahead**: processed in sell-time order, but an entry that doesn't fit is skipped so smaller ones behind it can pay. |
 | D5 | Queued claims **do not expire** (the 90-day clock stops at queue entry). |
-| D8 | Graduation fee = **0 SOL** during beta (covers nothing but rent; param stays tunable). |
-| D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). Rule and analysis: §5.3. |
-| D9 | Creator exclusion is **wallet-based**; suspected creator alt wallets are flagged publicly and excluded from leaderboards, not blocked from claiming. |
 | D6 | 10x check = **own on-chain sampler** (Option A): keeper-signed price samples, median over 30 min. |
 | D7 | **Own bonding curve**; graduation creates a **PumpSwap** pool (permissionless, verified). |
+| D8 | Graduation fee = **0 SOL** during beta (covers nothing but rent; param stays tunable). |
+| D9 | Creator exclusion is **wallet-based**; suspected creator alt wallets are flagged publicly and excluded from leaderboards, not blocked from claiming. |
+| D10 | **Ticket price = max(execution price, coin's 10-min reference average)**. FUMPAD keeps a per-coin time-weighted average updated on every FUMPAD trade and keeper sample, so a crash staged inside a bundle can't fake a low sell price (fix for the bundle dump→sell→rebuy exploit). Rule and analysis: §5.3. |
+| D11 | **LP locked forever, fees skimmed.** At graduation the LP tokens go to a separate, **immutable** `fumpad_lp_locker` program (upgrade authority removed at deploy) instead of being burned. It can only skim fee growth (principal measured in √k per LP stays constant); skimmed base tokens go to the coin's reward pool and skimmed SOL is split 60/40 platform/creator, ≈50/30/20 by value. Earns PumpSwap's 0.20% LP fee on all post-graduation volume, including trades routed by other apps. |
+| D12 | **Slippage-fair floor.** Refines D10: ticket price = max(execution price, reference × execution ÷ pre-trade spot). Honest sellers get their real fill; a staged crash makes the ratio ≈ 1 so the floor stays at the reference. |
 
 ## 1. Verified facts (Phase 0 check)
 
