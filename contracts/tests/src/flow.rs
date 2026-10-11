@@ -391,7 +391,7 @@ impl Flow {
         self.env.send(&[cu_limit(400_000), i], &[])
     }
 
-    /// init_observations + 3× init_claim_queue + PumpSwap volume accumulator for the
+    /// init_observations + `CLAIM_QUEUE_INIT_CALLS` (9) × init_claim_queue + PumpSwap volume accumulator for the
     /// pool authority (one-time buyback setup).
     pub fn post_graduation_setup(&mut self) {
         let payer = kp_pk(&self.env.payer);
@@ -409,7 +409,7 @@ impl Flow {
             fumpad::accounts::InitClaimQueue { payer, coin: self.coin, claim_queue: self.queue, system_program: SYSTEM },
             fumpad::instruction::InitClaimQueue {},
         );
-        ok(self.env.send(&[q.clone(), q.clone(), q], &[]));
+        ok(self.env.send(&vec![q; fumpad::CLAIM_QUEUE_INIT_CALLS], &[]));
         let pa = pool_authority();
         let init_uva = raw_ix(
             PUMPSWAP_PROGRAM_ID,

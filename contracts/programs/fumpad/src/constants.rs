@@ -35,15 +35,18 @@ pub const BPS_DENOM: u64 = 10_000;
 pub const TOKEN_DECIMALS: u8 = 6;
 
 // ── Defaults (all live in Global and are admin-tunable) ──────────────────────
-// Curve re-derived from pump.fun's so that, with 5% of supply set aside for the
-// reward pool, the curve's final price equals the PumpSwap LP opening price.
-// See docs/SPEC.md §3.
+// Curve re-derived from pump.fun's so that, with 8% of supply set aside for the
+// reward pool (D17), the curve's final price equals the PumpSwap LP opening price:
+// with N = 920M non-pool tokens, 30 SOL initial virtual and 85 SOL raised,
+// T1 = N·3450/12325 (virtual tokens left at completion), virtual tokens = T1·115/30,
+// curve = T1·85/30, LP = T1·85/115 — each rounded to the nearest base unit (curve + LP
+// == N exactly). See docs/SPEC.md §3.
 pub const DEFAULT_TOTAL_SUPPLY: u64 = 1_000_000_000_000_000; // 1B * 10^6
-pub const DEFAULT_REWARD_POOL_SUPPLY: u64 = 50_000_000_000_000; // 5%
-pub const DEFAULT_CURVE_SUPPLY: u64 = 753_448_275_862_069; // real tokens sold on the curve
-pub const DEFAULT_LP_SUPPLY: u64 = 196_551_724_137_931; // tokens deposited into PumpSwap at graduation
+pub const DEFAULT_REWARD_POOL_SUPPLY: u64 = 80_000_000_000_000; // 8% (D17)
+pub const DEFAULT_CURVE_SUPPLY: u64 = 729_655_172_413_793; // real tokens sold on the curve
+pub const DEFAULT_LP_SUPPLY: u64 = 190_344_827_586_207; // tokens deposited into PumpSwap at graduation
 pub const DEFAULT_INITIAL_VIRTUAL_SOL: u64 = 30_000_000_000; // 30 SOL
-pub const DEFAULT_INITIAL_VIRTUAL_TOKEN: u64 = 1_019_371_196_754_564;
+pub const DEFAULT_INITIAL_VIRTUAL_TOKEN: u64 = 987_180_527_383_367;
 pub const DEFAULT_GRADUATION_LAMPORTS: u64 = 85_000_000_000; // 85 SOL real
 
 pub const DEFAULT_FEE_BPS: u16 = 100; // 1% of the SOL side
@@ -84,7 +87,9 @@ pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 60;
 pub const MAX_KEEPERS: usize = 3;
 
 pub const OBSERVATION_CAPACITY: usize = 256;
-pub const CLAIM_QUEUE_CAPACITY: usize = 256;
+/// D17: 1024 entries (was 256). The queue PDA is 8 + 48 + 80 × 1024 = 81,976 bytes,
+/// built by 9 `init_claim_queue` calls (≤ 10 KiB growth each).
+pub const CLAIM_QUEUE_CAPACITY: usize = 1024;
 
 // ── External programs ────────────────────────────────────────────────────────
 pub const PUMPSWAP_PROGRAM_ID: Pubkey = pubkey!("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA");

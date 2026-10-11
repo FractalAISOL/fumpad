@@ -29,7 +29,7 @@ const COMPUTE_BUDGET: Pubkey = pubkey!("ComputeBudget111111111111111111111111111
 const FEE_CONFIG: Pubkey = pubkey!("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx");
 const START_TS: i64 = 1_760_000_000;
 
-const POOL_BASE_IN: u64 = 196_551_724_137_931; // DEFAULT_LP_SUPPLY
+const POOL_BASE_IN: u64 = 190_344_827_586_207; // DEFAULT_LP_SUPPLY
 const POOL_QUOTE_IN: u64 = 85 * SOL;
 const USER_TOKENS: u64 = 100_000_000_000_000; // tokens minted to the LP creator besides the pool
 

@@ -79,7 +79,7 @@ fn full_lifecycle() {
 
     // ── 1. Curve: buys (cheapest first), then the 10-minute hold ──────────────────
     let mut cu_buy = 0;
-    for (who, sol) in [(&gina, 12), (&bob, 6), (&alice, 2), (&frank, 1), (&carol, 1), (&dave, 2), (&erin, 2), (&creator, 1)] {
+    for (who, sol) in [(&gina, 12), (&bob, 8), (&alice, 2), (&frank, 1), (&carol, 1), (&dave, 2), (&erin, 2), (&creator, 1)] {
         let m = ok(f.buy(who, sol * SOL));
         cu_buy = cu_buy.max(m.compute_units_consumed);
     }
@@ -94,7 +94,7 @@ fn full_lifecycle() {
     let mut cu_sell = 0;
     for (name, who, tokens) in [
         ("gina", &gina, 150_000_000 * M), // claim ≫ 10% of pool: queued forever
-        ("bob", &bob, 80_000_000 * M),    // tuned to just over the cap later
+        ("bob", &bob, 100_000_000 * M),   // tuned to just over the cap later
         ("alice", &alice, 20_000_000 * M),
         ("frank", &frank, 10_000_000 * M),
         ("erin", &erin, 10_000_000 * M), // will expire

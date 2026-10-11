@@ -11,17 +11,21 @@ use super::hooks::create_pda_account;
 /// Max growth of an account's data per instruction (CPI-created accounts and `resize`).
 pub const MAX_DATA_INCREASE: usize = 10_240;
 
-/// Total account size of the ClaimQueue PDA.
+/// Total account size of the ClaimQueue PDA (81,976 bytes at capacity 1024).
 pub const CLAIM_QUEUE_SPACE: usize = 8 + core::mem::size_of::<ClaimQueue>();
+/// `init_claim_queue` calls needed to build the queue: ⌈CLAIM_QUEUE_SPACE / 10 KiB⌉ = 9 at
+/// capacity 1024. They fit one transaction (each is 4 accounts, no args, ~5k CU).
+pub const CLAIM_QUEUE_INIT_CALLS: usize = CLAIM_QUEUE_SPACE.div_ceil(MAX_DATA_INCREASE);
 
 /// Creates the per-coin ClaimQueue PDA ["claim_queue", mint] for a graduated coin.
 /// Permissionless; the payer funds rent.
 ///
-/// The queue (~20 KB) is larger than the 10 KiB a program may allocate per instruction,
+/// The queue (~80 KB) is larger than the 10 KiB a program may allocate per instruction,
 /// and a PDA can't be pre-allocated by the client (create_account needs the address to
 /// sign), so `#[account(zero)]` can't be used with a PDA. Instead this instruction is
 /// idempotent and *grows* the account by ≤10 KiB per call; call it until it reports
-/// complete (3 calls for the default capacity — they fit in one transaction). The
+/// complete (`CLAIM_QUEUE_INIT_CALLS` = 9 calls for the default capacity — they fit in one
+/// transaction). The
 /// discriminator + header are written only once the account has its full size, so a
 /// half-built queue can never be loaded by `claim`/`process_queue`.
 #[derive(Accounts)]

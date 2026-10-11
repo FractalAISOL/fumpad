@@ -64,7 +64,7 @@ fn fill_queue(w: &mut World, len: usize, from: i64) {
     let mut q = w.queue_state();
     let mut i = 0;
     while (q.len as usize) < len {
-        let e = QueueEntry { ticket: Pubkey::new_unique(), owner: Pubkey::new_unique(), amount: u64::MAX / 512, sell_ts: from + i };
+        let e = QueueEntry { ticket: Pubkey::new_unique(), owner: Pubkey::new_unique(), amount: u64::MAX / 4_096, sell_ts: from + i };
         let k = q.len as usize;
         q.entries[k] = e;
         q.len += 1;

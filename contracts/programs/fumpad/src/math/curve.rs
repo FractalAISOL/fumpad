@@ -352,6 +352,31 @@ mod tests {
         }
     }
 
+    /// D17 defaults are exactly the SPEC §3 derivation (8% pool, 920M non-pool supply,
+    /// 30 SOL initial virtual, 85 SOL raised), each rounded to the nearest base unit, and
+    /// the three allocations sum to the total supply exactly.
+    #[test]
+    fn default_curve_constants_match_spec_derivation() {
+        let p = Params::default();
+        assert_eq!(p.reward_pool_supply, p.total_supply / 100 * 8);
+        let n = (p.total_supply - p.reward_pool_supply) as u128; // 920M × 10^6
+        let (v0, raised) = (p.initial_virtual_sol as u128, p.graduation_lamports as u128);
+        let v1 = v0 + raised;
+        // Completion: T1 virtual tokens left, price v1/T1 == LP price raised/L, and
+        // curve C = T0 − T1 = T1·raised/v0, L = T1·raised/v1, C + L = n
+        // ⇒ T1 = n·v0·v1 / (raised·(v0 + v1)).
+        let den = raised * (v0 + v1);
+        let nearest = |num: u128| ((2 * num + den) / (2 * den)) as u64;
+        assert_eq!(p.initial_virtual_token, nearest(n * v1 * v1)); // T0 = T1·v1/v0
+        assert_eq!(p.curve_supply, nearest(n * v1 * raised));
+        assert_eq!(p.lp_supply, nearest(n * v0 * raised));
+        assert_eq!(p.initial_virtual_token, 987_180_527_383_367);
+        assert_eq!(p.curve_supply, 729_655_172_413_793);
+        assert_eq!(p.lp_supply, 190_344_827_586_207);
+        assert_eq!(p.reward_pool_supply + p.curve_supply + p.lp_supply, p.total_supply);
+        assert!(p.is_valid());
+    }
+
     /// The curve's final spot price must equal the PumpSwap opening price
     /// (raised SOL / LP tokens) with default params: no price jump at graduation.
     #[test]
@@ -376,7 +401,8 @@ mod tests {
         assert!(diff * 1_000_000 <= curve_price, "curve {curve_price} vs lp {lp_price}");
         // And the raised SOL is ~85 SOL.
         assert!(r.real_sol.abs_diff(p.graduation_lamports) < 1_000, "raised {}", r.real_sol);
-        // Start → graduation price ratio ≈ 14.7x (SPEC §3).
+        // Start → graduation price ratio ≈ 14.7x (SPEC §3): (115/30)² — independent of the
+        // pool share, so D17's 8% pool leaves it unchanged.
         let start = fresh().spot_price_q64().unwrap();
         let ratio_x100 = curve_price * 100 / start;
         assert!((1460..=1480).contains(&ratio_x100), "ratio {ratio_x100}");

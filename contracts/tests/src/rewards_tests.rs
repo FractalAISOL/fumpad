@@ -272,7 +272,7 @@ impl World {
     pub fn init_queue(&mut self) -> TransactionResult {
         let payer = kp_pk(&self.env.payer);
         let i = self.init_queue_ix(&payer);
-        self.env.send(&[i.clone(), i.clone(), i], &[])
+        self.env.send(&vec![i; fumpad::CLAIM_QUEUE_INIT_CALLS], &[])
     }
 
     pub fn queue_state(&self) -> Box<ClaimQueue> {
@@ -571,8 +571,15 @@ fn init_claim_queue_grows_then_initializes_once() {
     let acc = w.env.account(&w.queue).unwrap();
     assert_eq!(acc.data.len(), 10_240);
     assert_eq!(&acc.data[..8], &[0u8; 8], "not initialized until full size");
-    ok(w.env.send(&[i.clone(), i.clone()], &[]));
+    // 7 more calls: one short of full size, still uninitialized.
+    ok(w.env.send(&vec![i.clone(); fumpad::CLAIM_QUEUE_INIT_CALLS - 2], &[]));
     let acc = w.env.account(&w.queue).unwrap();
+    assert_eq!(acc.data.len(), 10_240 * (fumpad::CLAIM_QUEUE_INIT_CALLS - 1));
+    assert_eq!(&acc.data[..8], &[0u8; 8], "not initialized until full size");
+    ok(w.env.send(&[i.clone()], &[]));
+    let acc = w.env.account(&w.queue).unwrap();
+    assert_eq!(fumpad::CLAIM_QUEUE_INIT_CALLS, 9);
+    assert_eq!(acc.data.len(), 81_976);
     assert_eq!(acc.data.len(), 8 + std::mem::size_of::<ClaimQueue>());
     assert_eq!(&acc.data[..8], ClaimQueue::DISCRIMINATOR);
     assert_eq!(acc.lamports, w.env.svm.minimum_balance_for_rent_exemption(acc.data.len()));
@@ -862,12 +869,12 @@ fn queue_full_reverts_and_ticket_stays_open() {
         q.entries[i] = QueueEntry {
             ticket: Pubkey::new_unique(),
             owner: Pubkey::new_unique(),
-            amount: u64::MAX / 1_000,
+            amount: u64::MAX / 2_048,
             sell_ts: i as i64,
         };
     }
     q.len = fumpad::CLAIM_QUEUE_CAPACITY as u16;
-    q.total_owed = (u64::MAX / 1_000) * 256;
+    q.total_owed = (u64::MAX / 2_048) * fumpad::CLAIM_QUEUE_CAPACITY as u64;
     w.write_queue(&q);
     w.set_pool(1);
     let (u, t) = user_with_ticket(&mut w, 1_000 * M, DAY);
