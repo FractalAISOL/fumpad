@@ -301,3 +301,4 @@ mod smoke {
 #[cfg(test)] mod locker_tests;
 #[cfg(test)] mod review_rewards;
 #[cfg(test)] mod redteam_custody;
+#[cfg(test)] mod review_venue;
