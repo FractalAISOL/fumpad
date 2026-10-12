@@ -63,7 +63,7 @@ fn regression_admin_cannot_retroactively_take_raised_sol() {
     );
     expect_err(f.env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
     // The maximum allowed fee, queued: not executable before 48h; cancellable.
-    let max = Params { graduation_fee_lamports: SOL, fee_bps: 200, ..Params::default() };
+    let max = Params { fee_bps: 200, ..crate::curve_tests::params_for_graduation_fee(SOL) };
     ok(f.env.queue_params(max));
     f.env.warp(fumpad::PARAMS_TIMELOCK_SECS - 1);
     expect_err(f.env.execute_params(), FumpadError::TimelockNotElapsed);

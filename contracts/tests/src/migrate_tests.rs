@@ -71,10 +71,9 @@ fn ser(g: &Global) -> Vec<u8> {
 /// into the v0.4 672-byte layout.
 fn legacy_env() -> (Env, Global) {
     let mut env = Env::new();
-    let mut p = Params::default();
+    // A small (devnet-style) curve: 0.3 SOL virtual, 0.85 SOL raise, no graduation fee.
+    let mut p = crate::curve_tests::curve_params(300_000_000, 850_000_000, 0);
     p.fee_bps = 150;
-    p.graduation_lamports = 850_000_000;
-    p.initial_virtual_sol = 300_000_000;
     env.set_params_timelocked(p);
     let mut queued = p;
     queued.fee_bps = 120;
@@ -225,8 +224,13 @@ fn migrates_real_devnet_global_dump() {
     // Every old byte is still there, at its old position shifted past the inserted tails.
     assert_eq!(downgrade(&data)[GLOBAL_ADMIN_OFFSET + 32..], original[GLOBAL_ADMIN_OFFSET + 32..]);
     let g: Global = env.fetch(&gk);
-    assert!(g.params.is_valid());
+    // Devnet runs test windows (30 s hold, 5-min oracle window, 15 samples) that the v0.6
+    // bounds (M-1 / L-2) no longer accept for NEW changes; migration keeps them as they are
+    // (it only validates the fields it fills), and the next queued change must be in bounds.
+    assert!(!g.params.is_valid());
+    assert_eq!((g.params.min_hold_secs, g.params.oracle_window_secs, g.params.oracle_min_samples), (30, 300, 15));
     assert_eq!((g.params.snipe_window_slots, g.params.snipe_start_bps), (4, 9_900));
+    expect_err(env.queue_params(g.params), FumpadError::InvalidParams);
 }
 
 /// After an upgrade every instruction that loads `Account<Global>` fails on the old layout

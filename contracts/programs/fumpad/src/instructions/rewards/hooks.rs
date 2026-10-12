@@ -77,7 +77,7 @@ pub struct SellInfo {
 /// account) mean "no ticket", never a failed sell: the sell path must not depend on Pyth
 /// liveness.
 pub fn on_sell(a: SellHookAccounts, info: SellInfo) -> Result<Option<Pubkey>> {
-    let p = &a.global.params;
+    let p = &a.coin.reward_params(&a.global.params); // M-1: the coin's snapshotted terms
     let mint = a.coin.mint;
     let seller = a.seller.key();
     {
@@ -207,7 +207,7 @@ pub struct BuyHookAccounts<'a, 'info> {
 /// becomes the position's last observed balance.
 pub fn on_buy(a: BuyHookAccounts, tokens_bought: u64, balance_before: u64, now: i64) -> Result<()> {
     require_keys_eq!(a.position.mint, a.coin.mint, FumpadError::InvalidAccount);
-    let p = &a.global.params;
+    let p = &a.coin.reward_params(&a.global.params); // M-1: the coin's snapshotted terms
     apply_rebuy(p, a.position, &a.rebuy, tokens_bought, now, a.event_authority)?;
     logic::observe_buy(a.position, p, tokens_bought, balance_before, now);
     Ok(())

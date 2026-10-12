@@ -51,7 +51,7 @@ pub struct RegisterHoldings<'info> {
 
 pub fn handle_register_holdings(ctx: Context<RegisterHoldings>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    let p = ctx.accounts.global.params;
+    let p = ctx.accounts.coin.reward_params(&ctx.accounts.global.params); // M-1
     let user = ctx.accounts.user.key();
     let mint = ctx.accounts.mint.key();
     let balance = ctx.accounts.user_token_account.amount;

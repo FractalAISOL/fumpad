@@ -92,7 +92,7 @@ pub(crate) fn decide_claim(
     pool: u64,
     now: i64,
 ) -> Result<Decision> {
-    let p = global.params;
+    let p = coin.reward_params(&global.params); // M-1
     require!(!global.is_paused(PAUSE_CLAIMS), FumpadError::Paused);
     require!(coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
     require!(t.status == TicketStatus::Open, FumpadError::TicketNotOpen);

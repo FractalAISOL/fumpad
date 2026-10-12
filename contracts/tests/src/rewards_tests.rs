@@ -186,7 +186,8 @@ impl World {
             reference: Default::default(),
             fees: fumpad::state::Params::default().coin_fees(),
             snipe: Default::default(),
-            reserved: [0; 60],
+            rewards: fumpad::state::Params::default().reward_terms(),
+            reserved: [0; 19],
         };
         w.write_coin(&c);
         w
@@ -534,6 +535,7 @@ impl World {
             fumpad::accounts::CloseTicket {
                 caller: *caller,
                 global: self.env.global_pda(),
+                coin: self.coin,
                 ticket,
                 owner: t.owner,
                 position: self.position_key(&t.owner),

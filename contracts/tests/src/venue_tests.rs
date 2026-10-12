@@ -242,7 +242,8 @@ fn put_coin(env: &mut Env, mint: Pubkey, pool: Pubkey, status: CoinStatus, buyba
         reference: ReferencePrice::new(pool_spot_q64(env, &pool), START_TS - 30),
         fees: env.fetch::<fumpad::state::Global>(&env.global_pda()).params.coin_fees(),
         snipe: Default::default(),
-        reserved: [0; 60],
+        rewards: env.fetch::<fumpad::state::Global>(&env.global_pda()).params.reward_terms(),
+        reserved: [0; 19],
     };
     let mut data = Vec::new();
     coin.try_serialize(&mut data).unwrap();

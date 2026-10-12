@@ -684,6 +684,7 @@ impl Flow {
             fumpad::accounts::CloseTicket {
                 caller: kp_pk(caller),
                 global: self.env.global_pda(),
+                coin: self.coin,
                 ticket,
                 owner: t.owner,
                 position: self.position_key(&t.owner),

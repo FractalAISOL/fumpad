@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::math::reference::{ReferencePrice, Touch};
+use crate::state::{Params, RewardTerms};
 
 /// One per launched coin. PDA ["coin", mint].
 ///
@@ -55,7 +56,13 @@ pub struct Coin {
     /// of the former 72-byte `reserved` (coins created before v0.5 read zeros = no tax).
     pub snipe: SnipeConfig,
 
-    pub reserved: [u8; 60],
+    /// M-1 (v0.6): reward terms (trigger, claim size, per-claim cap, $ minimum, hold, rebuy and
+    /// claim windows, open-ticket limit) snapshotted at `create_coin`, so a params change never
+    /// re-prices this coin's tickets. Occupies 41 bytes of the former 60-byte `reserved`;
+    /// coins created before v0.6 read zeros and use `Global.params` (`reward_params`).
+    pub rewards: RewardTerms,
+
+    pub reserved: [u8; 19],
 }
 
 /// D14: per-coin snapshot of the fee parameters, taken from `Global.params` at
@@ -83,6 +90,12 @@ pub struct SnipeConfig {
 }
 
 impl Coin {
+    /// The params that govern this coin's rewards: `global` with the coin's snapshotted reward
+    /// terms (M-1) applied. Use this — not `Global.params` — for every reward rule.
+    pub fn reward_params(&self, global: &Params) -> Params {
+        self.rewards.apply(global)
+    }
+
     /// Apply a D10 touch point to the reference price.
     pub fn touch_reference(&mut self, now: i64, pre_spot_q64: u128, post_spot_q64: u128, kind: Touch) {
         self.reference.touch(now, pre_spot_q64, post_spot_q64, kind);
@@ -108,6 +121,9 @@ mod tests {
     #[test]
     fn account_size_unchanged() {
         assert_eq!(Coin::INIT_SPACE, 338);
-        assert_eq!(ReferencePrice::INIT_SPACE + CoinFees::INIT_SPACE + SnipeConfig::INIT_SPACE + 60, 128);
+        assert_eq!(
+            ReferencePrice::INIT_SPACE + CoinFees::INIT_SPACE + SnipeConfig::INIT_SPACE + RewardTerms::INIT_SPACE + 19,
+            128
+        );
     }
 }

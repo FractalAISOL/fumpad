@@ -101,7 +101,61 @@ pub const ESCAPE_HATCH_SECS: i64 = 7 * 86_400;
 /// D12 cap: a seller's own slippage can lower the ticket floor by at most 10% of the reference.
 pub const MAX_SELF_IMPACT_DISCOUNT_BPS: u64 = 1_000;
 
-pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 60;
+/// M-4 (v0.6): 150 s (was 60 s = the sponsored SOL/USD feed's own heartbeat, so one late
+/// update silently cost honest sellers their ticket). The price only gates the $50 minimum,
+/// valued at price − conf.
+pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 150;
+
+// ── `Params::is_valid` bounds (M-1 / L-2, v0.6) ──────────────────────────────
+// Every param has a sane range, so a typo or a compromised admin can't queue a degenerate
+// or draining change; reward terms are also snapshotted per coin (`Coin.rewards`), so even a
+// valid change never re-prices live tickets. Ranges are inclusive. SPEC §6.2.
+/// Claim trigger: 5x–50x the ticket's sell price.
+pub const MIN_TRIGGER_MULTIPLE_BPS: u32 = 50_000;
+pub const MAX_TRIGGER_MULTIPLE_BPS: u32 = 500_000;
+/// Claim size: 1–25% of the ticket's tokens.
+pub const MIN_CLAIM_BPS: u16 = 100;
+pub const MAX_CLAIM_BPS: u16 = 2_500;
+/// Per-claim cap: 1–25% of the reward pool.
+pub const MIN_MAX_CLAIM_POOL_BPS: u16 = 100;
+pub const MAX_MAX_CLAIM_POOL_BPS: u16 = 2_500;
+/// Ticket minimum: $5–$1,000.
+pub const MIN_MIN_SELL_USD_CENTS: u64 = 500;
+pub const MAX_MIN_SELL_USD_CENTS: u64 = 100_000;
+/// Hold period: 1 min – 1 day.
+pub const MIN_MIN_HOLD_SECS: i64 = 60;
+pub const MAX_MIN_HOLD_SECS: i64 = 86_400;
+/// Rebuy window: 1–30 days.
+pub const MIN_REBUY_WINDOW_SECS: i64 = 86_400;
+pub const MAX_REBUY_WINDOW_SECS: i64 = 30 * 86_400;
+/// Claim window: 7–365 days.
+pub const MIN_CLAIM_WINDOW_SECS: i64 = 7 * 86_400;
+pub const MAX_CLAIM_WINDOW_SECS: i64 = 365 * 86_400;
+/// Oracle median window: 10 min – 2 h.
+pub const MIN_ORACLE_WINDOW_SECS: i64 = 600;
+pub const MAX_ORACLE_WINDOW_SECS: i64 = 7_200;
+/// Minimum keeper-sample spacing: 5–60 s.
+pub const MIN_ORACLE_MIN_SPACING_SECS: i64 = 5;
+pub const MAX_ORACLE_MIN_SPACING_SECS: i64 = 60;
+/// Coverage: at least one keeper sample per this many seconds of the window on average
+/// (`oracle_min_samples ≥ ⌈window / 60⌉`), and never more than the window can hold at the
+/// minimum spacing (`≤ window / spacing`, else claims could never pass) or the ring holds.
+pub const ORACLE_MIN_SAMPLE_EVERY_SECS: i64 = 60;
+/// Permissionless-fallback threshold: 1 min – 1 h, and more than the sample spacing.
+pub const MIN_KEEPER_STALE_SECS: i64 = 60;
+pub const MAX_KEEPER_STALE_SECS: i64 = 3_600;
+/// Buyback band: ±0.1–10% of the median; slice: 0.01–2% of the pool's quote depth.
+pub const MIN_BUYBACK_MAX_DEVIATION_BPS: u16 = 10;
+pub const MAX_BUYBACK_MAX_DEVIATION_BPS: u16 = 1_000;
+pub const MIN_BUYBACK_MAX_POOL_BPS: u16 = 1;
+pub const MAX_BUYBACK_MAX_POOL_BPS: u16 = 200;
+/// Pyth max age: 30–300 s.
+pub const MIN_MAX_PRICE_AGE_SECS: u64 = 30;
+pub const MAX_MAX_PRICE_AGE_SECS: u64 = 300;
+/// D20 continuity: the PumpSwap LP's opening price ((raise − graduation fee) / lp_supply) must
+/// be within this many bps of the curve's final price, and `graduation_lamports` within this
+/// many bps of the raise the curve constants imply.
+pub const CURVE_CONSISTENCY_TOLERANCE_BPS: u64 = 10;
 pub const MAX_KEEPERS: usize = 3;
 
 pub const OBSERVATION_CAPACITY: usize = 256;

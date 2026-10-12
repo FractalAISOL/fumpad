@@ -50,6 +50,11 @@ pub struct MigrateGlobalArgs {
 }
 
 impl MigrateGlobalArgs {
+    /// The D19 caps of `Params::is_valid` for the fields these args fill.
+    pub fn within_caps(&self) -> bool {
+        self.snipe_window_slots <= MAX_SNIPE_WINDOW_SLOTS && self.snipe_start_bps <= MAX_SNIPE_START_BPS
+    }
+
     /// Serialized `Params` whose appended fields hold these values (older fields are defaults
     /// and get overwritten by the account's own bytes).
     fn params_bytes(&self) -> Result<Vec<u8>> {
@@ -135,9 +140,12 @@ pub fn handle_migrate_global(ctx: Context<MigrateGlobal>, args: MigrateGlobalArg
         return Ok(()); // already current: idempotent no-op
     };
 
-    // The result must be a valid current Global with valid live params.
+    // The result must be a valid current Global, and the fields it fills must be within their
+    // caps. Existing params are NOT re-validated: they were valid when set, and v0.6 tightened
+    // `Params::is_valid` (M-1 / L-2) — a Global with older, looser params (e.g. devnet's test
+    // windows) must still migrate. New bounds apply to the next `queue_params`.
     let g = Global::try_deserialize(&mut new.as_slice())?;
-    require!(g.params.is_valid(), FumpadError::InvalidParams);
+    require!(args.within_caps(), FumpadError::InvalidParams);
 
     let rent = Rent::get()?.minimum_balance(new.len());
     let short = rent.saturating_sub(info.lamports());

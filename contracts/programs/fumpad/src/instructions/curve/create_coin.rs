@@ -209,7 +209,9 @@ pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String
     coin.fees = p.coin_fees();
     // D19: launch slot + snipe schedule, likewise fixed at launch.
     coin.snipe = p.snipe_config(clock.slot);
-    coin.reserved = [0; 60];
+    // M-1: reward terms, likewise fixed at launch (params changes apply to new coins only).
+    coin.rewards = p.reward_terms();
+    coin.reserved = [0; 19];
 
     emit_event!(ctx, CoinCreated { mint: mint_key, creator, name, symbol, uri, ts: now });
     Ok(())
