@@ -35,6 +35,7 @@ import { airdrop, directPumpBuy, initGlobal, LOCAL_PARAMS, tokenBalance } from "
 import bs58 from "bs58";
 
 import { createPool, migrate } from "@fumpad/indexer";
+import { signLaunchAuth } from "@fumpad/api";
 
 import { buildGrinder, keypair, keypairPath, type Postgres, type Service, sleep, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
 
@@ -67,8 +68,9 @@ export async function runE2E(
     checks.push({ name, ok, detail });
     log(`${ok ? "  ✔" : "  ✘"} ${name}${detail ? ` — ${detail}` : ""}`);
   };
+  const ssrSecret = randomBytes(24).toString("hex");
   const get = async <T>(path: string): Promise<T> => {
-    const r = await fetch(api + path);
+    const r = await fetch(api + path, { headers: { "x-fumpad-ssr": ssrSecret } });
     if (!r.ok) throw new Error(`${path} → ${r.status} ${await r.text()}`);
     return (await r.json()) as T;
   };
@@ -123,7 +125,7 @@ export async function runE2E(
     services.push(startService("indexer", "indexer/src/main.ts", { ...common, WS_URL: v.wsUrl, PORT: String(indexerPort), POLL_INTERVAL_MS: "1000", FINALIZE_INTERVAL_MS: "5000", DERIVE_INTERVAL_MS: "2000", RECONCILE_INTERVAL_MS: "15000", FETCH_METADATA: "false" }));
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${indexerPort}/health`)).ok, 60_000);
     services.push(
-      startService("api", "api/src/main.ts", { ...common, LOG_LEVEL: "info", PORT: String(apiPort), SOL_USD_FALLBACK: "150", RATE_LIMIT_ALLOW: "127.0.0.1", MINT_POOL_KEY: mintPoolKey, LAUNCH_SWEEP_SECS: "5" }),
+      startService("api", "api/src/main.ts", { ...common, LOG_LEVEL: "info", PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SWEEP_SECS: "5" }),
     );
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
@@ -169,7 +171,15 @@ export async function runE2E(
     const prep = await fetch(`${api}/v1/launch/prepare`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ creator: creator.publicKey.toBase58(), name: "Fumble", symbol: "FUMB", uri: "https://fumpad.fun/m/fumb.json", initialBuyLamports: String(SOL / 2n) }),
+      body: JSON.stringify({
+        creator: creator.publicKey.toBase58(),
+        name: "Fumble",
+        symbol: "FUMB",
+        uri: "https://fumpad.fun/m/fumb.json",
+        initialBuyLamports: String(SOL / 2n),
+        // M-2: proof of wallet control (the app signs this with the wallet's signMessage).
+        auth: signLaunchAuth(creator.secretKey, { creator: creator.publicKey.toBase58(), symbol: "FUMB" }),
+      }),
     });
     if (!prep.ok) throw new Error(`prepare → ${prep.status} ${await prep.text()}`);
     const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number };
@@ -360,7 +370,7 @@ export async function runE2E(
     }, 30_000);
     check("profile: level/xp/achievements derived", prof.ticketsFiled === 1 && prof.achievements.find((a) => a.id === "tenbagger")?.earned === true, `xp ${prof.xp}`);
     for (const path of [`/v1/stats`, `/v1/sol-usd`, `/v1/coins/${M}/prices?range=all`, `/v1/coins/${M}/holders`, `/v1/coins/${M}/fumbles`, `/v1/closest`, `/v1/leaderboards/fumbles`, `/v1/leaderboards/diamond`, `/v1/wallets/${bob.publicKey.toBase58()}/balances/${M}`, `/openapi.json`]) {
-      const r = await fetch(api + path);
+      const r = await fetch(api + path, { headers: { "x-fumpad-ssr": ssrSecret } });
       check(`GET ${path.split("?")[0].replace(M, ":mint").replace(bob.publicKey.toBase58(), ":wallet")} → 200`, r.ok);
     }
 
@@ -384,7 +394,7 @@ export async function runE2E(
     for (const t of ["vanity_mints", "transactions", "events", "coins", "trades", "tickets", "claims", "queue_entries", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) counts[t] = await countRows(pg.url, t);
     const keeperHealth = await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json();
     const indexerHealth = await (await fetch(`http://127.0.0.1:${indexerPort}/health`)).json();
-    const apiHealth = await (await fetch(`${api}/health`)).json();
+    const apiHealth = await get("/health");
     return { ok: checks.every((x) => x.ok), mint: M, checks, counts, wsEvents, keeperHealth, indexerHealth, apiHealth, durationSec: Math.round((Date.now() - t0) / 1000) };
   } catch (e) {
     for (const s of services) {

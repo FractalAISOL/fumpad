@@ -19,7 +19,7 @@ describe("API ↔ app data contract", () => {
   });
   it("OpenAPI documents one route per FumpadData method + ws + health", () => {
     const methods = ["getStats", "getSolUsd", "getParams", "getRecentTrades", "subscribeLive", "listCoins", "getCoin", "getPriceSeries", "getHolders", "getRecentFumbles", "getClaimQueue", "getFeed", "subscribeFeed", "getClosestTo10x", "getTickets", "getTicket", "getLeaderboard", "getProfile", "quoteTrade", "getBalances", "getPositions", "getClosedPositions", "getCreatedCoins"];
-    const summaries = Object.values(OPENAPI.paths).map((p) => (p as { get: { summary: string } }).get.summary).join(" ");
+    const summaries = Object.values(OPENAPI.paths).map((p) => ((p as { get?: { summary: string } }).get ?? (p as { post: { summary: string } }).post).summary).join(" ");
     for (const m of methods) if (m !== "subscribeFeed" && m !== "subscribeLive") expect(summaries).toContain(`(${m})`);
     expect(summaries).toContain("(subscribeFeed, subscribeLive)");
     expect(Object.keys(OPENAPI.components.schemas)).toEqual(expect.arrayContaining(["CoinDetail", "Ticket", "TradeQuote", "FeedEvent", "Profile"]));

@@ -52,12 +52,9 @@ describe("POST /v1/waitlist body", () => {
 });
 
 describe("client IP + hashing", () => {
-  const req = (xff?: string | string[], remote = "10.0.0.9") => ({ headers: xff === undefined ? {} : { "x-forwarded-for": xff }, socket: { remoteAddress: remote } }) as never;
-  it("takes the proxy-appended (right-most) X-Forwarded-For entry", () => {
-    expect(clientIp(req("1.1.1.1, 2.2.2.2"))).toBe("2.2.2.2");
-    expect(clientIp(req("3.3.3.3"))).toBe("3.3.3.3");
-    expect(clientIp(req(["1.1.1.1", "4.4.4.4"]))).toBe("4.4.4.4");
-    expect(clientIp(req())).toBe("10.0.0.9");
+  it("uses req.ip (the API's one TRUST_PROXY_HOPS-based derivation, tested in security.test.ts)", () => {
+    expect(clientIp({ ip: "2.2.2.2" } as never)).toBe("2.2.2.2");
+    expect(clientIp({ ip: "" } as never)).toBe("unknown");
   });
   it("hashes deterministically under the salt, never the raw IP", () => {
     const h = ipHasher("salt");

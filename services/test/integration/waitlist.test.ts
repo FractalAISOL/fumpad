@@ -23,7 +23,7 @@ beforeAll(async () => {
   pg = await startPostgres(54333);
   db = createPool(pg.url);
   await migrate(db);
-  const cfg = loadApiConfig({ DATABASE_URL: pg.url, WAITLIST_PER_IP_PER_DAY: "3", WAITLIST_RATE_LIMIT_PER_MIN: "100", WAITLIST_IP_SALT: "test-salt", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
+  const cfg = loadApiConfig({ DATABASE_URL: pg.url, TRUST_PROXY_HOPS: "1", WAITLIST_PER_IP_PER_DAY: "3", WAITLIST_RATE_LIMIT_PER_MIN: "100", WAITLIST_IP_SALT: "test-salt", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
   app = (await buildServer(cfg, { db, conn: {} as Connection })).app;
 }, 120_000);
 
@@ -73,7 +73,7 @@ describe("POST /v1/waitlist", () => {
   });
 
   it("rate-limits per client IP", async () => {
-    const cfg = loadApiConfig({ DATABASE_URL: pg.url, WAITLIST_RATE_LIMIT_PER_MIN: "2", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
+    const cfg = loadApiConfig({ DATABASE_URL: pg.url, TRUST_PROXY_HOPS: "1", WAITLIST_RATE_LIMIT_PER_MIN: "2", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
     const { app: tight } = await buildServer(cfg, { db, conn: {} as Connection });
     const codes = [];
     for (let i = 0; i < 3; i++) codes.push((await post({ contact: `@rl${i}` }, "192.0.2.50", tight)).statusCode);

@@ -16,8 +16,11 @@ import type { FastifyInstance } from "fastify";
 
 import { type FumpadClient, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
 
+import type { Db } from "@fumpad/indexer";
+
 import type { ApiConfig } from "../config.js";
-import { LaunchError, type MintPool } from "./pool.js";
+import { launchAuthError } from "./auth.js";
+import { LaunchError, type MintPool, withTimeout } from "./pool.js";
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -30,6 +33,8 @@ export interface PrepareBody {
   initialBuyLamports?: string | number;
   slippageBps?: number;
   priorityMicroLamports?: number;
+  /** M-2: `{ message, signature }`, see launch/auth.ts (required unless LAUNCH_REQUIRE_SIGNATURE=false). */
+  auth?: { message: string; signature: string };
 }
 
 export interface PrepareResponse {
@@ -70,7 +75,7 @@ export function parsePrepareBody(body: unknown, cfg: Pick<ApiConfig, "launchMaxI
   if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 5_000) throw bad("invalid slippageBps");
   const priority = b.priorityMicroLamports === undefined ? 0 : Number(b.priorityMicroLamports);
   if (!Number.isInteger(priority) || priority < 0 || priority > cfg.launchMaxPriorityMicroLamports) throw bad("invalid priorityMicroLamports");
-  return { creator, name: b.name as string, symbol: b.symbol as string, uri: b.uri as string, initialBuyLamports, slippageBps, priority };
+  return { creator, name: b.name as string, symbol: b.symbol as string, uri: b.uri as string, initialBuyLamports, slippageBps, priority, auth: b.auth };
 }
 
 /** Sliding one-minute window per key (per API instance; the DB caps hold across instances). */
@@ -90,8 +95,9 @@ export class WindowLimiter {
   }
 }
 
-export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; client: FumpadClient; pool: MintPool | null }) {
+export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; client: FumpadClient; pool: MintPool | null; db: Db }) {
   const perWallet = new WindowLimiter(cfg.launchWalletLimitPerMin);
+  const t = cfg.launchRpcTimeoutMs;
 
   app.post(
     "/v1/launch/prepare",
@@ -101,7 +107,18 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
       const pool = deps.pool;
       const p = parsePrepareBody(req.body, cfg);
       const creator = p.creator.toBase58();
+      // M-2: proof of wallet control before anything is reserved.
+      if (cfg.launchRequireSignature) {
+        const err = launchAuthError(p.auth, { creator: p.creator, symbol: p.symbol }, { maxAgeSecs: cfg.launchSignatureMaxAgeSecs });
+        if (err) throw new LaunchError(401, err);
+      }
       if (!perWallet.take(creator)) throw new LaunchError(429, "too many launch attempts for this wallet, wait a minute", 60);
+      // Funded wallets only (RPC outside any DB transaction, bounded).
+      if (cfg.launchMinBalanceLamports > 0n) {
+        const bal = BigInt(await withTimeout(deps.conn.getBalance(p.creator, "confirmed"), t, "balance lookup"));
+        if (bal < cfg.launchMinBalanceLamports) throw new LaunchError(400, `wallet needs at least ${Number(cfg.launchMinBalanceLamports) / 1e9} SOL to launch`);
+      }
+      const established = (await deps.db.query("SELECT 1 FROM users WHERE address = $1", [creator])).rowCount! > 0;
       let firstBuy: PrepareResponse["firstBuy"];
       const prepared = await pool.prepare(creator, req.ip, async (mint) => {
         if (!isFumpadVanityMint(mint, pool.cfg.suffix)) throw new Error("pooled mint has the wrong suffix");
@@ -125,7 +142,7 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
         const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions: built.instructions }).compileToV0Message();
         return { tx: new VersionedTransaction(msg), lastValidBlockHeight };
-      });
+      }, { established });
       req.log.info({ creator, mint: prepared.mint, reused: prepared.reusedReservation }, "launch prepared");
       reply.header("cache-control", "no-store");
       return {

@@ -91,18 +91,11 @@ export function parseWaitlistBody(body: unknown): WaitlistEntry & { bot: boolean
 }
 
 /**
- * The client IP as the platform's edge proxy saw it: the right-most X-Forwarded-For entry
- * (the one the proxy appended, which the client can't forge), else the socket address.
+ * The client IP: `req.ip`, i.e. the API's single client-IP derivation (TRUST_PROXY_HOPS,
+ * net.ts / H-2) — the same address every rate limit and the WebSocket cap use.
  */
-export function clientIp(req: Pick<FastifyRequest, "headers" | "socket">): string {
-  const xff = req.headers["x-forwarded-for"];
-  const raw = Array.isArray(xff) ? xff.join(",") : xff;
-  const last = raw
-    ?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .pop();
-  return last || req.socket?.remoteAddress || "unknown";
+export function clientIp(req: Pick<FastifyRequest, "ip">): string {
+  return req.ip || "unknown";
 }
 
 export function ipHasher(salt: string): (ip: string) => string {

@@ -14,8 +14,15 @@ export interface IndexerConfig {
   /** Max signatures per getSignaturesForAddress page. */
   pageSize: number;
   webhookPort?: number;
-  /** Shared secret Helius sends in the Authorization header. */
+  /**
+   * `POST /helius` is served only when enabled (HELIUS_WEBHOOK_ENABLED=true or a secret is
+   * set). Enabled without a secret = boot failure (the route must never be open).
+   */
+  webhookEnabled: boolean;
+  /** Shared secret Helius sends in the Authorization header (≥ 24 chars). */
   webhookSecret?: string;
+  /** Max webhook request body (bytes). */
+  webhookMaxBodyBytes: number;
   /** Re-scan this many recent signatures per address to detect gaps (missed webhooks/polls). */
   reconcileDepth: number;
   reconcileIntervalMs: number;
@@ -25,39 +32,65 @@ export interface IndexerConfig {
   fundingLookupsPerCycle: number;
   /** Fetch coin metadata JSON from `uri` (off by default in tests). */
   fetchMetadata: boolean;
+  /** ipfs:// URIs are fetched through this https gateway (path appended). */
+  ipfsGateway: string;
+  /** Finalizer: consecutive "unknown to the cluster" checks before a row is rolled back. */
+  finalizeDropMisses: number;
+  finalizeDropAfterSecs: number;
   healthPort?: number;
   logLevel: string;
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
 
-/** RPC URL: explicit RPC_URL, else Helius mainnet from HELIUS_API_KEY. */
+/** NODE_ENV=production (set by the Dockerfile): required env is enforced, no dev defaults. */
+export const isProduction = (env: NodeJS.ProcessEnv = process.env) => env.NODE_ENV === "production";
+
+/** Throw one error naming every missing variable (fail fast at boot, not on first use). */
+export function requireEnv(env: NodeJS.ProcessEnv, service: string, names: string[]): void {
+  const missing = names.filter((n) => !env[n] || !env[n]!.trim());
+  if (missing.length) throw new Error(`${service}: missing required env ${missing.join(", ")}`);
+}
+
+/**
+ * RPC URL: always explicit `RPC_URL`. The cluster is never inferred (no mainnet default from
+ * HELIUS_API_KEY); outside production an unset value means the local validator.
+ */
 export function rpcUrlFromEnv(env = process.env): string {
   if (env.RPC_URL) return env.RPC_URL;
-  if (env.HELIUS_API_KEY) return `https://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}`;
+  if (isProduction(env)) throw new Error("RPC_URL is required in production");
   return "http://127.0.0.1:8899";
 }
 
 export function loadIndexerConfig(env = process.env): IndexerConfig {
-  if (!env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+  requireEnv(env, "indexer", isProduction(env) ? ["DATABASE_URL", "RPC_URL"] : ["DATABASE_URL"]);
   const rpcUrl = rpcUrlFromEnv(env);
+  const webhookSecret = env.HELIUS_WEBHOOK_SECRET?.trim() || undefined;
+  const webhookEnabled = env.HELIUS_WEBHOOK_ENABLED === "true" || !!webhookSecret;
+  if (webhookEnabled && !webhookSecret) throw new Error("indexer: HELIUS_WEBHOOK_ENABLED=true requires HELIUS_WEBHOOK_SECRET");
+  if (webhookSecret && webhookSecret.length < 24) throw new Error("indexer: HELIUS_WEBHOOK_SECRET must be at least 24 characters");
   return {
-    databaseUrl: env.DATABASE_URL,
+    databaseUrl: env.DATABASE_URL!,
     rpcUrl,
-    wsUrl: env.WS_URL || (env.HELIUS_API_KEY && !env.RPC_URL ? `wss://mainnet.helius-rpc.com/?api-key=${env.HELIUS_API_KEY}` : undefined),
+    wsUrl: env.WS_URL || undefined,
     heliusApiKey: env.HELIUS_API_KEY || undefined,
     commitment: env.INDEXER_COMMITMENT === "finalized" ? "finalized" : "confirmed",
     pollIntervalMs: num(env.POLL_INTERVAL_MS, 2_000),
     backfillFromSlot: num(env.BACKFILL_FROM_SLOT, 0),
     pageSize: num(env.PAGE_SIZE, 1_000),
     webhookPort: env.WEBHOOK_PORT ? Number(env.WEBHOOK_PORT) : undefined,
-    webhookSecret: env.HELIUS_WEBHOOK_SECRET || undefined,
+    webhookEnabled,
+    webhookSecret,
+    webhookMaxBodyBytes: num(env.WEBHOOK_MAX_BODY_BYTES, 1024 * 1024),
     reconcileDepth: num(env.RECONCILE_DEPTH, 200),
     reconcileIntervalMs: num(env.RECONCILE_INTERVAL_MS, 60_000),
     finalizeIntervalMs: num(env.FINALIZE_INTERVAL_MS, 15_000),
     deriveIntervalMs: num(env.DERIVE_INTERVAL_MS, 10_000),
     fundingLookupsPerCycle: num(env.FUNDING_LOOKUPS_PER_CYCLE, 10),
     fetchMetadata: env.FETCH_METADATA !== "false",
+    ipfsGateway: env.IPFS_GATEWAY || "https://ipfs.io/ipfs/",
+    finalizeDropMisses: num(env.FINALIZE_DROP_MISSES, 3),
+    finalizeDropAfterSecs: num(env.FINALIZE_DROP_AFTER_SECS, 180),
     healthPort: env.PORT ? Number(env.PORT) : env.HEALTH_PORT ? Number(env.HEALTH_PORT) : undefined,
     logLevel: env.LOG_LEVEL ?? "info",
   };

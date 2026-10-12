@@ -17,7 +17,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createPool, type Db, migrate } from "@fumpad/indexer";
-import { buildServer, keyFingerprint, loadApiConfig, type MintPool, parsePoolKey } from "@fumpad/api";
+import { buildServer, keyFingerprint, loadApiConfig, type MintPool, parsePoolKey, signLaunchAuth } from "@fumpad/api";
 import { FUMPAD_PROGRAM_ID, inspectLaunchTx } from "@fumpad/sdk";
 
 import { buildGrinder, type Postgres, runBinary, startPostgres } from "../../scripts/local/harness.js";
@@ -36,9 +36,22 @@ const grinderOut: string[] = [];
 const secrets = new Map<string, Buffer>(); // pubkey → seed (decrypted by the test only)
 let height = 1_000;
 const landed = new Set<string>();
+let blockhashDelayMs = 0;
+let balance = 1_000_000_000;
+/** Creator wallets by pubkey (prepare signs the M-2 launch message with them). */
+const wallets = new Map<string, Keypair>();
+const wallet = () => {
+  const k = Keypair.generate();
+  wallets.set(k.publicKey.toBase58(), k);
+  return k.publicKey.toBase58();
+};
 
 const fakeConn = {
-  getLatestBlockhash: async () => ({ blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: height + 150 }),
+  getLatestBlockhash: async () => {
+    if (blockhashDelayMs) await new Promise((r) => setTimeout(r, blockhashDelayMs));
+    return { blockhash: wallet(), lastValidBlockHeight: height + 150 };
+  },
+  getBalance: async () => balance,
   getMultipleAccountsInfo: async (keys: PublicKey[]) => keys.map((k) => (landed.has(k.toBase58()) ? { lamports: 1, data: Buffer.alloc(0), owner: PublicKey.default, executable: false } : null)),
   getBlockHeight: async () => height,
   getAccountInfo: async () => null,
@@ -53,7 +66,10 @@ function decryptSeed(keyHex: string, pubkey: string, blob: Buffer): Buffer {
 const spki = (pk: PublicKey) => ({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), pk.toBuffer()]), format: "der" as const, type: "spki" as const });
 
 async function prepare(creator: string, ip = "10.0.0.1", extra: Record<string, unknown> = {}, server = app) {
-  const r = await server.inject({ method: "POST", url: "/v1/launch/prepare", remoteAddress: ip, payload: { creator, name: "Sad Pigeon", symbol: "PIGN", uri: "ipfs://bafy", ...extra } });
+  const kp = wallets.get(creator);
+  const symbol = (extra.symbol as string | undefined) ?? "PIGN";
+  const auth = kp ? signLaunchAuth(kp.secretKey, { creator, symbol }) : undefined;
+  const r = await server.inject({ method: "POST", url: "/v1/launch/prepare", remoteAddress: ip, payload: { creator, name: "Sad Pigeon", symbol: "PIGN", uri: "ipfs://bafy", auth, ...extra } });
   bodies.push(r.body);
   return r;
 }
@@ -79,6 +95,7 @@ beforeAll(async () => {
     LAUNCH_MAX_ACTIVE_PER_IP: "100",
     LAUNCH_WALLET_LIMIT_PER_MIN: "100",
     LAUNCH_RATE_LIMIT_PER_MIN: "1000",
+    LAUNCH_POOL_RESERVE: "0",
     LOG_LEVEL: "trace",
   } as NodeJS.ProcessEnv);
   const sink = new Writable({ write: (c, _e, cb) => (logs.push(String(c)), cb()) });
@@ -103,7 +120,7 @@ describe("vanity mint pool (D18)", () => {
   });
 
   it("prepare: a FUMPAD create_coin(+buy) for a pooled mint, creator pays, mint signed (validly) and nothing else", async () => {
-    const creator = Keypair.generate().publicKey;
+    const creator = new PublicKey(wallet());
     const r = await prepare(creator.toBase58(), "10.0.0.1", { initialBuyLamports: "0" });
     expect(r.statusCode).toBe(200);
     expect(r.headers["cache-control"]).toBe("no-store");
@@ -122,7 +139,7 @@ describe("vanity mint pool (D18)", () => {
   });
 
   it("one wallet holds one mint: preparing again returns the same mint with a fresh signature", async () => {
-    const creator = Keypair.generate().publicKey.toBase58();
+    const creator = wallet();
     const a = (await prepare(creator)).json() as { mint: string; transaction: string };
     const b = (await prepare(creator)).json() as { mint: string; transaction: string };
     expect(b.mint).toBe(a.mint);
@@ -133,7 +150,7 @@ describe("vanity mint pool (D18)", () => {
 
   it("validation failures consume nothing", async () => {
     const before = (await pool.stats()).available;
-    const creator = Keypair.generate().publicKey.toBase58();
+    const creator = wallet();
     expect((await prepare(creator, "10.0.0.1", { symbol: "WAY_TOO_LONG_TICKER" })).statusCode).toBe(400);
     expect((await prepare("notakey")).statusCode).toBe(400);
     expect((await prepare(creator, "10.0.0.1", { uri: "javascript:alert(1)" })).statusCode).toBe(400);
@@ -142,7 +159,7 @@ describe("vanity mint pool (D18)", () => {
 
   it("concurrent prepares never get the same mint; an empty pool answers 503 + Retry-After", async () => {
     const avail = (await pool.stats()).available;
-    const wallets = Array.from({ length: avail + 3 }, () => Keypair.generate().publicKey.toBase58());
+    const wallets = Array.from({ length: avail + 3 }, () => wallet());
     const rs = await Promise.all(wallets.map((w, i) => prepare(w, `10.1.0.${i}`)));
     const ok = rs.filter((r) => r.statusCode === 200).map((r) => (r.json() as { mint: string }).mint);
     expect(ok).toHaveLength(avail);
@@ -169,16 +186,16 @@ describe("vanity mint pool (D18)", () => {
     expect((await db.query("SELECT secret_enc FROM vanity_mints WHERE pubkey = $1", [reserved[0]])).rows[0].secret_enc).toBeNull();
     expect(await status(reserved[1])).toBe("available");
     // Released mints are handed out again.
-    const again = await prepare(Keypair.generate().publicKey.toBase58());
+    const again = await prepare(wallet());
     expect(again.statusCode).toBe(200);
   });
 
   it("caps active reservations per IP", async () => {
-    const cfg = loadApiConfig({ DATABASE_URL: pg.url, MINT_POOL_KEY: KEY, VANITY_SUFFIX: SUFFIX, LAUNCH_SWEEP_SECS: "0", LAUNCH_MAX_ACTIVE_PER_IP: "2", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
+    const cfg = loadApiConfig({ DATABASE_URL: pg.url, MINT_POOL_KEY: KEY, VANITY_SUFFIX: SUFFIX, LAUNCH_SWEEP_SECS: "0", LAUNCH_MAX_ACTIVE_PER_IP: "2", LAUNCH_POOL_RESERVE: "0", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
     const { app: capped } = await buildServer(cfg, { db, conn: fakeConn });
     try {
       const codes = [];
-      for (let i = 0; i < 3; i++) codes.push((await prepare(Keypair.generate().publicKey.toBase58(), "9.9.9.9", {}, capped)).statusCode);
+      for (let i = 0; i < 3; i++) codes.push((await prepare(wallet(), "9.9.9.9", {}, capped)).statusCode);
       expect(codes).toEqual([200, 200, 429]);
     } finally {
       await capped.close();
@@ -189,10 +206,78 @@ describe("vanity mint pool (D18)", () => {
     const cfg = loadApiConfig({ DATABASE_URL: pg.url, LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
     const { app: off } = await buildServer(cfg, { db, conn: fakeConn });
     try {
-      const r = await prepare(Keypair.generate().publicKey.toBase58(), "10.0.0.1", {}, off);
+      const r = await prepare(wallet(), "10.0.0.1", {}, off);
       expect(r.statusCode).toBe(503);
     } finally {
       await off.close();
+    }
+  });
+
+  it("M-2: no wallet signature (or someone else's) → 401, nothing reserved", async () => {
+    const before = (await pool.stats()).available;
+    const victim = wallet();
+    const noAuth = await app.inject({ method: "POST", url: "/v1/launch/prepare", payload: { creator: victim, name: "X", symbol: "PIGN", uri: "ipfs://bafy" } });
+    expect(noAuth.statusCode).toBe(401);
+    const attacker = Keypair.generate();
+    const forged = await app.inject({
+      method: "POST",
+      url: "/v1/launch/prepare",
+      payload: { creator: victim, name: "X", symbol: "PIGN", uri: "ipfs://bafy", auth: signLaunchAuth(attacker.secretKey, { creator: victim, symbol: "PIGN" }) },
+    });
+    expect(forged.statusCode).toBe(401);
+    expect((await pool.stats()).available).toBe(before);
+  });
+
+  it("M-2: unfunded wallets can't reserve", async () => {
+    const before = (await pool.stats()).available;
+    balance = 0;
+    try {
+      expect((await prepare(wallet())).statusCode).toBe(400);
+    } finally {
+      balance = 1_000_000_000;
+    }
+    expect((await pool.stats()).available).toBe(before);
+  });
+
+  it("M-2: RPC runs outside the DB transaction (slow RPC doesn't pin pool connections) and times out cleanly", async () => {
+    const small = createPool(pg.url, 2);
+    const cfg = loadApiConfig({ DATABASE_URL: pg.url, MINT_POOL_KEY: KEY, VANITY_SUFFIX: SUFFIX, LAUNCH_SWEEP_SECS: "0", LAUNCH_POOL_RESERVE: "0", LAUNCH_MAX_ACTIVE_PER_IP: "100", LAUNCH_WALLET_LIMIT_PER_MIN: "100", LAUNCH_RATE_LIMIT_PER_MIN: "1000", LAUNCH_RPC_TIMEOUT_MS: "300", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
+    const { app: slow } = await buildServer(cfg, { db: small, conn: fakeConn });
+    try {
+      // Free up mints for this test.
+      await db.query(`UPDATE vanity_mints SET status = 'available', reserved_at = NULL, reserved_by = NULL, reserved_ip = NULL, last_valid_block_height = NULL WHERE status = 'reserved'`);
+      blockhashDelayMs = 200;
+      const t0 = Date.now();
+      const rs = await Promise.all(Array.from({ length: 4 }, (_, i) => prepare(wallet(), `10.7.0.${i}`, {}, slow)));
+      const ms = Date.now() - t0;
+      expect(rs.map((r) => r.statusCode)).toEqual([200, 200, 200, 200]);
+      // With the RPC inside the transaction a 2-connection pool serialises these: ≥ 2 × 200 ms.
+      expect(ms).toBeLessThan(380);
+      // An RPC that hangs: 503 after the timeout and the fresh reservation goes straight back.
+      const before = (await pool.stats()).available;
+      blockhashDelayMs = 5_000;
+      const r = await prepare(wallet(), "10.7.1.1", {}, slow);
+      expect(r.statusCode).toBe(503);
+      expect((await pool.stats()).available).toBe(before);
+    } finally {
+      blockhashDelayMs = 0;
+      await slow.close();
+      await small.end();
+    }
+  });
+
+  it("M-2: the last LAUNCH_POOL_RESERVE mints only go to wallets with FUMPAD history", async () => {
+    const avail = (await pool.stats()).available;
+    expect(avail).toBeGreaterThan(1);
+    const cfg = loadApiConfig({ DATABASE_URL: pg.url, MINT_POOL_KEY: KEY, VANITY_SUFFIX: SUFFIX, LAUNCH_SWEEP_SECS: "0", LAUNCH_POOL_RESERVE: String(avail), LAUNCH_MAX_ACTIVE_PER_IP: "100", LOG_LEVEL: "silent" } as NodeJS.ProcessEnv);
+    const { app: reserved } = await buildServer(cfg, { db, conn: fakeConn });
+    try {
+      expect((await prepare(wallet(), "10.8.0.1", {}, reserved)).statusCode).toBe(503);
+      const known = wallet();
+      await db.query("INSERT INTO users (address) VALUES ($1) ON CONFLICT DO NOTHING", [known]);
+      expect((await prepare(known, "10.8.0.2", {}, reserved)).statusCode).toBe(200);
+    } finally {
+      await reserved.close();
     }
   });
 

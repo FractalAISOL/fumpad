@@ -153,6 +153,16 @@ const SPARK_PROBE_CHUNK = 40;
 /** The trending order (24 h volume of every coin) is recomputed at most this often per instance. */
 const TRENDING_RANK_MS = 5_000;
 
+/** A symbol shared by several coins: the caller must choose by mint. */
+export class AmbiguousSymbolError extends Error {
+  constructor(
+    readonly symbol: string,
+    readonly mints: string[],
+  ) {
+    super(`ambiguous symbol ${symbol}`);
+  }
+}
+
 export class Repo {
   private paramsCache?: { at: number; p: Params };
   private trendRank?: { at: number; rows: Promise<{ mint: string; status: CoinRow["status"] }[]> };
@@ -374,28 +384,64 @@ export class Repo {
     return this.trendRank.rows;
   }
 
-  /** The coin's own columns only (no derived subqueries): for endpoints that need a few fields. */
-  private async coinBase(symbolOrMint: string): Promise<CoinBase | null> {
+  /** The coin's own columns only (no derived subqueries), by exact mint (H-3: never by symbol). */
+  private async coinBase(mint: string): Promise<CoinBase | null> {
     const r = await this.db.query<CoinBase>(
       `SELECT mint, creator, created_at, status, amm_pool, amm_base, real_tokens, price_q64, median_q64, pool_tokens, queue_owed
-         FROM coins c WHERE c.mint = $1 OR upper(c.symbol) = upper($1) ORDER BY (c.mint = $1) DESC, c.created_at ASC LIMIT 1`,
-      [symbolOrMint.replace(/^\$/, "")],
+         FROM coins c WHERE c.mint = $1`,
+      [mint],
     );
     return r.rows[0] ?? null;
   }
 
-  async coinRow(symbolOrMint: string): Promise<CoinRow | null> {
-    const trig = (await this.params()).triggerMultipleBps;
-    const r = await this.db.query<CoinRow>(
-      `${coinSelect(trig)} WHERE c.mint = $2 OR upper(c.symbol) = upper($2) ORDER BY (c.mint = $2) DESC, c.created_at ASC LIMIT 1`,
-      [nowSecs(), symbolOrMint.replace(/^\$/, "")],
-    );
-    return r.rows[0] ?? null;
+  /** Full row by exact mint. */
+  async coinRow(mint: string): Promise<CoinRow | null> {
+    return (await this.coinRows([mint]))[0] ?? null;
   }
 
+  /**
+   * Every coin whose symbol matches case-insensitively (a leading `$` is ignored), NEWEST
+   * first (H-3: symbols are not unique; callers must not silently pick one).
+   */
+  async symbolMints(symbol: string, limit = 20): Promise<string[]> {
+    const r = await this.db.query<{ mint: string }>(
+      "SELECT mint FROM coins WHERE upper(symbol) = upper($1) ORDER BY created_at DESC, mint LIMIT $2",
+      [symbol.replace(/^\$/, ""), Math.min(Math.max(limit, 1), 50)],
+    );
+    return r.rows.map((x) => x.mint);
+  }
+
+  /** `GET /v1/coins/by-symbol/:symbol`: all matches, newest first. */
+  async coinsBySymbol(symbol: string, limit = 20): Promise<CoinSummary[]> {
+    return this.summaries(await this.coinRows(await this.symbolMints(symbol, limit)));
+  }
+
+  /**
+   * Legacy `GET /v1/coins/:id` resolution: an exact mint wins; otherwise a symbol that
+   * matches exactly ONE coin. Several matches throw `AmbiguousSymbolError` (with the
+   * candidates, newest first) instead of picking one.
+   */
+  async resolveCoinId(symbolOrMint: string): Promise<string | null> {
+    // A mint-shaped id is answered only by that exact mint (symbols are ≤ 10 bytes, never 32+ base58).
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(symbolOrMint)) return (await this.coinBase(symbolOrMint)) ? symbolOrMint : null;
+    const mints = await this.symbolMints(symbolOrMint, 20);
+    if (mints.length > 1) throw new AmbiguousSymbolError(symbolOrMint.replace(/^\$/, ""), mints);
+    return mints[0] ?? null;
+  }
+
+  /** Detail by exact mint (`GET /v1/coins/by-mint/:mint`, and everything internal). */
+  async getCoinByMint(mint: string): Promise<CoinDetail | null> {
+    const c = await this.coinRow(mint);
+    return c ? this.detail(c) : null;
+  }
+
+  /** FumpadData.getCoin: exact mint, else a unique symbol (see resolveCoinId). */
   async getCoin(symbolOrMint: string): Promise<CoinDetail | null> {
-    const c = await this.coinRow(symbolOrMint);
-    if (!c) return null;
+    const mint = await this.resolveCoinId(symbolOrMint);
+    return mint ? this.getCoinByMint(mint) : null;
+  }
+
+  private async detail(c: CoinRow): Promise<CoinDetail> {
     const p = await this.params();
     const now = nowSecs();
     const [s, extra] = await Promise.all([
@@ -533,7 +579,7 @@ export class Repo {
   async liveCoin(mint: string, sig?: string | string[]): Promise<{ coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] } | null> {
     const sigs = sig === undefined ? [] : Array.isArray(sig) ? sig : [sig];
     const [coin, tr, sm] = await Promise.all([
-      this.getCoin(mint),
+      this.getCoinByMint(mint),
       sigs.length
         ? this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
             `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
@@ -783,43 +829,44 @@ export class Repo {
     if (board === "fumbles") {
       // Rank every ticket by a float8 estimate of its worth (cheap), keep a margin, then rank
       // the survivors exactly in numeric and join names only for them.
-      const r = await this.db.query<{ address: string; name: string | null; symbol: string; sold: string; worth: string; m: number }>(
+      const r = await this.db.query<{ address: string; name: string | null; symbol: string; mint: string; sold: string; worth: string; m: number }>(
         `WITH cur AS (SELECT mint, symbol, COALESCE(median_q64, price_q64) AS q FROM coins),
          top AS (
-           SELECT t.owner AS address, t.original_tokens, t.sell_lamports, t.sell_price_q64, cur.symbol, cur.q
+           SELECT t.owner AS address, t.original_tokens, t.sell_lamports, t.sell_price_q64, cur.symbol, cur.mint, cur.q
              FROM tickets t JOIN cur USING (mint)
             WHERE NOT EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = t.owner)
             ORDER BY t.original_tokens::float8 * cur.q::float8 DESC LIMIT 80)
-         SELECT x.address, u.name, x.symbol, x.sell_lamports AS sold,
+         SELECT x.address, u.name, x.symbol, x.mint, x.sell_lamports AS sold,
                 (x.original_tokens * x.q / 18446744073709551616)::numeric(40,0) AS worth,
                 CASE WHEN x.sell_price_q64 > 0 THEN (x.q / x.sell_price_q64)::float8 ELSE 0 END AS m
            FROM top x LEFT JOIN users u ON u.address = x.address
           ORDER BY worth DESC LIMIT 50`,
       );
-      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, soldForSol: lam(x.sold), worthNowSol: lam(x.worth), multiple: x.m }));
+      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, mint: x.mint, soldForSol: lam(x.sold), worthNowSol: lam(x.worth), multiple: x.m }));
     } else if (board === "claimers") {
-      const r = await this.db.query<{ address: string; name: string | null; claims: string; claimed: string; symbol: string; m: number }>(
+      const r = await this.db.query<{ address: string; name: string | null; claims: string; claimed: string; symbol: string; mint: string; m: number }>(
         `SELECT * FROM (
            SELECT cl.owner AS address, u.name, count(*) AS claims,
                   sum(cl.amount * cl.median_q64 / 18446744073709551616)::numeric(40,0) AS claimed,
                   (array_agg(c.symbol ORDER BY cl.amount * cl.median_q64 DESC))[1] AS symbol,
+                  (array_agg(c.mint ORDER BY cl.amount * cl.median_q64 DESC))[1] AS mint,
                   max(CASE WHEN cl.sell_price_q64 > 0 THEN (cl.median_q64 / cl.sell_price_q64)::float8 ELSE 0 END) AS m
              FROM claims cl JOIN coins c USING (mint) LEFT JOIN users u ON u.address = cl.owner
             WHERE NOT cl.escrowed GROUP BY cl.owner, u.name) x
          WHERE ${notFlagged} ORDER BY claimed DESC LIMIT 50`,
       );
-      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, claims: Number(x.claims), symbol: x.symbol, claimedSol: lam(x.claimed), multiple: x.m }));
+      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, claims: Number(x.claims), symbol: x.symbol, mint: x.mint, claimedSol: lam(x.claimed), multiple: x.m }));
     } else {
-      const r = await this.db.query<{ address: string; name: string | null; symbol: string; unlocked: number | null; at: number; waited: number }>(
+      const r = await this.db.query<{ address: string; name: string | null; symbol: string; mint: string; unlocked: number | null; at: number; waited: number }>(
         `SELECT * FROM (
-           SELECT cl.owner AS address, u.name, c.symbol, t.crossed_multiple AS unlocked,
+           SELECT cl.owner AS address, u.name, c.symbol, c.mint, t.crossed_multiple AS unlocked,
                   CASE WHEN cl.sell_price_q64 > 0 THEN (cl.median_q64 / cl.sell_price_q64)::float8 ELSE 0 END AS at,
                   GREATEST(cl.ts - COALESCE(t.crossed_at, cl.ts), 0) / 86400.0 AS waited
              FROM claims cl JOIN tickets t USING (ticket) JOIN coins c ON c.mint = cl.mint LEFT JOIN users u ON u.address = cl.owner
             WHERE NOT cl.escrowed) x
          WHERE ${notFlagged} ORDER BY at DESC, waited DESC LIMIT 50`,
       );
-      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, unlockedAt: x.unlocked ?? undefined, claimedAtMultiple: x.at, waitedDays: Math.round(Number(x.waited)) }));
+      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, mint: x.mint, unlockedAt: x.unlocked ?? undefined, claimedAtMultiple: x.at, waitedDays: Math.round(Number(x.waited)) }));
     }
     return rows.map((row, i) => ({ ...row, rank: i + 1, isYou: viewer ? row.address === viewer : false }));
   }

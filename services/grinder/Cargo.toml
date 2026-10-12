@@ -19,6 +19,8 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 postgres = "0.19"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
 zeroize = "1"
 
 [profile.release]
