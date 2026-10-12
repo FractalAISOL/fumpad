@@ -14,7 +14,7 @@ import { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import { normalize } from "./borsh.js";
-import { fumpadCoder, lockerCoder } from "./coder.js";
+import { FUMPAD_IDL, fumpadCoder, lockerCoder } from "./coder.js";
 import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID } from "./constants.js";
 import { eventAuthorityPda } from "./pda.js";
 
@@ -56,6 +56,9 @@ export interface ClaimEscrowedEvent { mint: PublicKey; ticket: PublicKey; owner:
 // v0.4
 export interface AutoClaimSetEvent { mint: PublicKey; wallet: PublicKey; enabled: boolean; ts: bigint }
 export interface EscrowWithdrawnEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; destination: PublicKey; amount: bigint; ts: bigint }
+// v0.5
+/** `migrate_global` grew a legacy Global (old → new length; the appended params it set). */
+export interface GlobalMigratedEvent { oldLen: number; newLen: number; snipeWindowSlots: number; snipeStartBps: number; rentPaid: bigint; ts: bigint }
 // locker
 export interface LockedEvent { pool: PublicKey; mint: PublicKey; lpLocked: bigint; lpSupply: bigint; sqrtK: bigint }
 export interface SkimmedEvent { pool: PublicKey; mint: PublicKey; lpWithdrawn: bigint; baseOut: bigint; quoteOut: bigint; lpHeld: bigint }
@@ -82,6 +85,7 @@ export interface EventMap {
   ClaimEscrowed: ClaimEscrowedEvent;
   EscrowWithdrawn: EscrowWithdrawnEvent;
   AutoClaimSet: AutoClaimSetEvent;
+  GlobalMigrated: GlobalMigratedEvent;
   Locked: LockedEvent;
   Skimmed: SkimmedEvent;
 }
@@ -91,7 +95,11 @@ export type EventName = keyof EventMap;
  * takes), so an indexer can store it and re-decode on replay.
  */
 export type FumpadEvent = {
-  [K in EventName]: { name: K; data: EventMap[K]; program: "fumpad" | "locker"; index: number; topIx: number; raw: string };
+  [K in EventName]: {
+    name: K; data: EventMap[K]; program: "fumpad" | "locker"; index: number; topIx: number; raw: string;
+    /** Emitted by an older program in a shorter layout; fields added since decode as 0 (see LEGACY_EVENT_PADS). */
+    legacy?: true;
+  };
 }[EventName];
 
 /** `TicketClosed.final_status` / TicketStatus enum order. */
@@ -180,15 +188,87 @@ function startsWith(d: Uint8Array, prefix: Uint8Array) {
 }
 const b64 = (d: Uint8Array) => Buffer.from(d).toString("base64");
 
-/** Decode one emit_cpi payload (bytes after EVENT_IX_TAG). */
-export function decodeCpiEvent(payload: Uint8Array): { name: string; data: unknown } | null {
-  const ev = fumpadCoder().events.decode(b64(payload));
-  return ev ? { name: ev.name, data: normalize(ev.data) } : null;
+// ── Older event layouts ─────────────────────────────────────────────────────
+// Fields are only ever appended to an event (or to `Params`, which ParamsQueued/ParamsUpdated
+// embed first). A payload from an older program (the live devnet program until it's upgraded,
+// and all history before an upgrade) is too short for the current IDL; it decodes after zero
+// bytes are inserted where the fields were added. Zero = "absent": no snipe tax (pre-v0.5 had
+// none), Graduated split fields 0 (unknown), snipe params 0.
+
+/** Per event: where bytes were inserted in the body (after the discriminator), oldest change first. */
+export const LEGACY_EVENT_PADS: Partial<Record<EventName, { at: number | "end"; bytes: number }[]>> = {
+  Trade: [{ at: "end", bytes: 10 }], // v0.5: snipe_tax u64, snipe_tax_bps u16
+  Graduated: [{ at: "end", bytes: 24 }], // v0.5: caller_refund, setup_prefunded, platform_fee
+  ParamsQueued: [{ at: 183, bytes: 4 }], // v0.5: Params + snipe_window_slots, snipe_start_bps
+  ParamsUpdated: [{ at: 183, bytes: 4 }],
+};
+
+let discNames: { name: EventName; disc: Uint8Array }[] | undefined;
+function eventNameOf(payload: Uint8Array): EventName | undefined {
+  discNames ??= ((FUMPAD_IDL as unknown as { events?: { name: string; discriminator: number[] }[] }).events ?? []).map((e) => ({
+    name: e.name as EventName,
+    disc: Uint8Array.from(e.discriminator),
+  }));
+  return discNames.find((e) => startsWith(payload, e.disc))?.name;
 }
 
-/** Re-decode a stored `FumpadEvent.raw`. */
-export function decodeEventRaw(program: "fumpad" | "locker", raw: string): { name: EventName; data: EventMap[EventName] } | null {
-  const ev = (program === "fumpad" ? fumpadCoder() : lockerCoder()).events.decode(raw);
+/** Bytes of a legacy payload in the current layout (zero-filled), or null if no known upgrade applies. */
+export function upgradeLegacyEventPayload(payload: Uint8Array): Uint8Array | null {
+  const name = eventNameOf(payload);
+  const pads = name && LEGACY_EVENT_PADS[name];
+  if (!pads) return null;
+  let body = payload.subarray(8);
+  for (const p of pads) {
+    const at = p.at === "end" ? body.length : p.at;
+    if (at > body.length) return null;
+    const next = new Uint8Array(body.length + p.bytes);
+    next.set(body.subarray(0, at), 0);
+    next.set(body.subarray(at), at + p.bytes);
+    body = next;
+  }
+  const out = new Uint8Array(8 + body.length);
+  out.set(payload.subarray(0, 8), 0);
+  out.set(body, 8);
+  return out;
+}
+
+/**
+ * Strict decode: the body must be exactly one event in the current layout. (Anchor's decoder
+ * doesn't check: a u64 read past the end of a short buffer silently yields a truncated number,
+ * so a short legacy payload can "decode" to garbage. Re-encoding pins the length.)
+ */
+function decodeExact(payload: Uint8Array): { ok: true; ev: { name: string; data: unknown } | null } | { ok: false; err: unknown } {
+  try {
+    const ev = fumpadCoder().events.decode(b64(payload));
+    if (!ev) return { ok: true, ev: null };
+    const len = fumpadCoder().types.encode(ev.name, ev.data).length;
+    if (len !== payload.length - 8) return { ok: false, err: new Error(`${ev.name}: body is ${payload.length - 8} bytes, layout needs ${len}`) };
+    return { ok: true, ev };
+  } catch (err) {
+    return { ok: false, err };
+  }
+}
+
+/** Decode fumpad event bytes (discriminator ‖ borsh body), current or legacy layout. */
+function decodeFumpadBytes(payload: Uint8Array): { name: string; data: unknown; legacy?: true } | null {
+  const cur = decodeExact(payload);
+  if (cur.ok) return cur.ev ? { name: cur.ev.name, data: normalize(cur.ev.data) } : null;
+  const up = upgradeLegacyEventPayload(payload);
+  if (!up) throw cur.err;
+  const old = decodeExact(up);
+  if (!old.ok) throw cur.err;
+  return old.ev ? { name: old.ev.name, data: normalize(old.ev.data), legacy: true } : null;
+}
+
+/** Decode one emit_cpi payload (bytes after EVENT_IX_TAG). Tolerates older (shorter) layouts. */
+export function decodeCpiEvent(payload: Uint8Array): { name: string; data: unknown; legacy?: true } | null {
+  return decodeFumpadBytes(payload);
+}
+
+/** Re-decode a stored `FumpadEvent.raw` (legacy layouts too). */
+export function decodeEventRaw(program: "fumpad" | "locker", raw: string): { name: EventName; data: EventMap[EventName]; legacy?: true } | null {
+  if (program === "fumpad") return decodeFumpadBytes(Buffer.from(raw, "base64")) as { name: EventName; data: EventMap[EventName]; legacy?: true } | null;
+  const ev = lockerCoder().events.decode(raw);
   return ev ? { name: ev.name as EventName, data: normalize(ev.data) as EventMap[EventName] } : null;
 }
 
@@ -216,7 +296,7 @@ export function decodeTransactionEvents(tx: TxLike): FumpadEvent[] {
       const ev = decodeCpiEvent(payload);
       if (!ev) continue;
       const list = byTop.get(group.index) ?? [];
-      list.push({ name: ev.name, data: ev.data, program: "fumpad", index: 0, topIx: group.index, raw: b64(payload) } as FumpadEvent);
+      list.push({ name: ev.name, data: ev.data, program: "fumpad", index: 0, topIx: group.index, raw: b64(payload), ...(ev.legacy ? { legacy: true } : {}) } as FumpadEvent);
       byTop.set(group.index, list);
     }
   }

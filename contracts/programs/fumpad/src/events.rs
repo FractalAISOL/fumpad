@@ -224,3 +224,18 @@ pub struct AutoClaimSet {
     pub enabled: bool,
     pub ts: i64,
 }
+
+// ── v0.5 ────────────────────────────────────────────────────────────────────
+
+/// `migrate_global` grew a legacy Global to the current layout (existing bytes kept; the
+/// appended `Params` fields set from its args, in both `params` and `pending_params`).
+#[event]
+pub struct GlobalMigrated {
+    pub old_len: u32,
+    pub new_len: u32,
+    pub snipe_window_slots: u16,
+    pub snipe_start_bps: u16,
+    /// Lamports the admin added to keep the larger account rent-exempt.
+    pub rent_paid: u64,
+    pub ts: i64,
+}

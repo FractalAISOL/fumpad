@@ -28,6 +28,7 @@ const built: Record<string, [TransactionInstruction, number]> = {
   set_pause: [I.setPauseIx(user, 3), 0],
   set_keepers: [I.setKeepersIx(user, [user]), 0],
   set_admin: [I.setAdminIx(user, user, user), 0],
+  migrate_global: [I.migrateGlobalIx({ admin: user, snipeWindowSlots: 4, snipeStartBps: 9_900 }), 0],
   create_coin: [I.createCoinIx({ creator: user, mint, name: "Fumble", symbol: "FUMB", uri: "https://x" }), 0],
   buy: [I.buyIx({ user, mint, solIn: 5n, minTokensOut: 1n, openTickets: [t1, t2], anyQueued: true }), 3],
   sell: [I.sellIx({ user, mint, tokensIn: 5n, minSolOut: 0n, nextTicketSeq: 3n }), 0],

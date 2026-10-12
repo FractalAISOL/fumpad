@@ -87,4 +87,8 @@ pub enum FumpadError {
     // ── v0.4 (appended) ─────────────────────────────────────────────────────
     #[msg("The ticket owner opted out of auto-claim for this coin")]
     AutoClaimDisabled,
+
+    // ── v0.5 (appended) ─────────────────────────────────────────────────────
+    #[msg("Global account layout is unknown or newer than this program (migrate_global never shrinks)")]
+    UnsupportedGlobalLayout,
 }

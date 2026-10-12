@@ -2031,6 +2031,75 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "migrateGlobal",
+      "docs": [
+        "Grow a Global written by an older program version to the current layout (admin; pays",
+        "the extra rent). Fills only newly appended params from `args`; no-op when current."
+      ],
+      "discriminator": [
+        255,
+        63,
+        114,
+        173,
+        218,
+        4,
+        220,
+        32
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Must equal the admin stored in the Global; pays the extra rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "global",
+          "docs": [
+            "Seeds + owner checked here; discriminator and admin checked in the handler."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "systemProgram",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "migrateGlobalArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "processQueue",
       "discriminator": [
         178,
@@ -4107,6 +4176,19 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "globalMigrated",
+      "discriminator": [
+        75,
+        171,
+        161,
+        231,
+        153,
+        238,
+        136,
+        61
+      ]
+    },
+    {
       "name": "graduated",
       "discriminator": [
         51,
@@ -4430,6 +4512,11 @@ export type Fumpad = {
       "code": 6035,
       "name": "autoClaimDisabled",
       "msg": "The ticket owner opted out of auto-claim for this coin"
+    },
+    {
+      "code": 6036,
+      "name": "unsupportedGlobalLayout",
+      "msg": "Global account layout is unknown or newer than this program (migrate_global never shrinks)"
     }
   ],
   "types": [
@@ -5088,6 +5175,45 @@ export type Fumpad = {
       }
     },
     {
+      "name": "globalMigrated",
+      "docs": [
+        "`migrate_global` grew a legacy Global to the current layout (existing bytes kept; the",
+        "appended `Params` fields set from its args, in both `params` and `pending_params`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "oldLen",
+            "type": "u32"
+          },
+          {
+            "name": "newLen",
+            "type": "u32"
+          },
+          {
+            "name": "snipeWindowSlots",
+            "type": "u16"
+          },
+          {
+            "name": "snipeStartBps",
+            "type": "u16"
+          },
+          {
+            "name": "rentPaid",
+            "docs": [
+              "Lamports the admin added to keep the larger account rent-exempt."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "graduated",
       "type": {
         "kind": "struct",
@@ -5192,6 +5318,26 @@ export type Fumpad = {
           {
             "name": "ts",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "migrateGlobalArgs",
+      "docs": [
+        "Values for the `Params` fields appended since the oldest supported layout. Fields a given",
+        "Global already has are ignored (its bytes are kept). v0.5 (D19): the snipe schedule."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "snipeWindowSlots",
+            "type": "u16"
+          },
+          {
+            "name": "snipeStartBps",
+            "type": "u16"
           }
         ]
       }

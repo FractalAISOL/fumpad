@@ -116,6 +116,16 @@ export function setAdminIx(admin: PublicKey, newAdmin: PublicKey, platformTreasu
   return ix("set_admin", { admin, global: globalPda() }, { newAdmin, platformTreasury });
 }
 
+/**
+ * v0.5: grow a Global written by an older program (672 bytes, v0.3/v0.4) to the current layout
+ * in place, right after the program upgrade. `admin` = `Global.admin` (signs, pays the extra
+ * rent). Only the newly appended params are set (in `params` and `pending_params`); no-op on a
+ * current Global. Check with `globalNeedsMigration(data)` first.
+ */
+export function migrateGlobalIx(a: { admin: PublicKey; snipeWindowSlots: number; snipeStartBps: number }): TransactionInstruction {
+  return ix("migrate_global", { admin: a.admin, global: globalPda() }, { args: { snipeWindowSlots: a.snipeWindowSlots, snipeStartBps: a.snipeStartBps } });
+}
+
 // ── curve ───────────────────────────────────────────────────────────────────
 
 /** `create_coin` — `mint` is a fresh keypair that must also sign. */

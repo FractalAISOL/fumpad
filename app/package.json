@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "sdk": "tsc -b ../services/sdk && rm -f vendor/fumpad-sdk-*.tgz && npm pack ../services/sdk --pack-destination vendor && npm install --no-audit --no-fund",
+    "sdk": "tsc -b ../services/sdk && rm -f vendor/fumpad-sdk-*.tgz && npm pack ../services/sdk --pack-destination vendor && npm install --no-audit --no-fund ./vendor/fumpad-sdk-*.tgz",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

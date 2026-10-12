@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import { normalize } from "./borsh.js";
 import { fumpadCoder, lockerCoder } from "./coder.js";
-import { CLAIM_QUEUE_CAPACITY, OBSERVATION_CAPACITY, PUMPSWAP_POOL_DISCRIMINATOR } from "./constants.js";
+import { CLAIM_QUEUE_CAPACITY, MAX_KEEPERS, OBSERVATION_CAPACITY, PUMPSWAP_POOL_DISCRIMINATOR } from "./constants.js";
 import { paramsFromIdl } from "./instructions/fumpad.js";
 import type { Params } from "./params.js";
 import type { SnipeConfig } from "./math/fees.js";
@@ -58,6 +58,12 @@ export interface GlobalAccount {
   /** D15: queued params change (valid when pendingEta ≠ 0). */
   pendingParams: Params;
   pendingEta: bigint;
+  /**
+   * v0.5: the account still has a pre-v0.5 layout (672 bytes) — the program was upgraded (or
+   * not yet) without `migrate_global`. Appended params decode as 0 (snipe tax off, which is what
+   * a pre-v0.5 program does).
+   */
+  legacyLayout?: boolean;
 }
 
 export interface PositionAccount {
@@ -120,10 +126,50 @@ const strip = <T>(o: unknown, drop: string[] = ["reserved"]): T => {
 export function decodeCoin(data: Uint8Array): CoinAccount {
   return strip<CoinAccount>(fumpadCoder().accounts.decode("Coin", Buffer.from(data)));
 }
+// ── Global layout versions (mirrors contracts `instructions/admin/migrate_global.rs`) ──
+/** Bytes before `Global.params` (discriminator, bump, admin, treasury, keepers, paused). */
+const GLOBAL_PARAMS_OFFSET = 8 + 1 + 32 + 32 + 32 * MAX_KEEPERS + 1;
+const GLOBAL_RESERVED_LEN = 128;
+/** Serialized `Params` length, current (v0.5) and older layouts `migrate_global` upgrades. */
+export const PARAMS_LEN = 187;
+export const LEGACY_PARAMS_LENS = [183] as const;
+const globalLen = (paramsLen: number) => GLOBAL_PARAMS_OFFSET + 2 * paramsLen + GLOBAL_RESERVED_LEN + 8;
+/** Current Global account size (v0.5: 680 bytes). */
+export const GLOBAL_ACCOUNT_LEN = globalLen(PARAMS_LEN);
+
+/** True if `data` is an older Global layout that `migrate_global` must upgrade. */
+export function globalNeedsMigration(data: Uint8Array): boolean {
+  return data.length !== GLOBAL_ACCOUNT_LEN && LEGACY_PARAMS_LENS.some((p) => globalLen(p) === data.length);
+}
+
+/**
+ * The bytes of a legacy Global in the current layout, with the appended `Params` fields zeroed in
+ * both copies (read-side only; on chain `migrate_global` sets them from its args).
+ */
+export function upgradeLegacyGlobal(data: Uint8Array): Uint8Array {
+  const p = LEGACY_PARAMS_LENS.find((x) => globalLen(x) === data.length);
+  if (p === undefined) throw new Error(`unknown Global layout (${data.length} bytes)`);
+  const pad = new Uint8Array(PARAMS_LEN - p);
+  const o = GLOBAL_PARAMS_OFFSET;
+  const pend = o + p + GLOBAL_RESERVED_LEN;
+  const parts = [data.subarray(0, o + p), pad, data.subarray(o + p, pend + p), pad, data.subarray(pend + p)];
+  const out = new Uint8Array(GLOBAL_ACCOUNT_LEN);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}
+
+/** Decode Global; tolerates the pre-v0.5 672-byte layout (`legacyLayout: true`). */
 export function decodeGlobal(data: Uint8Array): GlobalAccount {
-  const g = strip<Record<string, unknown>>(fumpadCoder().accounts.decode("Global", Buffer.from(data)));
+  const legacy = globalNeedsMigration(data);
+  const bytes = legacy ? upgradeLegacyGlobal(data) : data;
+  const g = strip<Record<string, unknown>>(fumpadCoder().accounts.decode("Global", Buffer.from(bytes)));
   return {
     ...(g as unknown as GlobalAccount),
+    ...(legacy ? { legacyLayout: true } : {}),
     params: paramsFromIdl(g.params as Record<string, unknown>),
     pendingParams: paramsFromIdl(g.pendingParams as Record<string, unknown>),
   };

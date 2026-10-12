@@ -132,7 +132,7 @@ describe("event decoding", () => {
     expect(names).toEqual(
       [
         "AutoClaimSet", "BuybackExecuted", "ClaimEscrowed", "ClaimPaid", "ClaimQueued", "CoinCreated", "CurveCompleted", "CurveReopened", "EscrowWithdrawn",
-        "FeesWithdrawn", "Graduated", "HoldingsRegistered", "LpFeesSettled", "ParamsCancelled", "ParamsQueued", "ParamsUpdated",
+        "FeesWithdrawn", "GlobalMigrated", "Graduated", "HoldingsRegistered", "LpFeesSettled", "ParamsCancelled", "ParamsQueued", "ParamsUpdated",
         "SampleRecorded", "TicketClosed", "TicketCreated", "TicketDebited", "Trade",
       ].sort(),
     );

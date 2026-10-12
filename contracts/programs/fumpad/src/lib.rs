@@ -41,6 +41,12 @@ pub mod fumpad {
         instructions::handle_cancel_params(ctx)
     }
 
+    /// Grow a Global written by an older program version to the current layout (admin; pays
+    /// the extra rent). Fills only newly appended params from `args`; no-op when current.
+    pub fn migrate_global(ctx: Context<MigrateGlobal>, args: MigrateGlobalArgs) -> Result<()> {
+        instructions::handle_migrate_global(ctx, args)
+    }
+
     pub fn set_pause(ctx: Context<AdminOnly>, paused: u8) -> Result<()> {
         instructions::handle_set_pause(ctx, paused)
     }

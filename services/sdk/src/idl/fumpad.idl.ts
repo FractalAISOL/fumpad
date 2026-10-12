@@ -2029,6 +2029,75 @@ export const FUMPAD_IDL: Idl = {
       ]
     },
     {
+      "name": "migrate_global",
+      "docs": [
+        "Grow a Global written by an older program version to the current layout (admin; pays",
+        "the extra rent). Fills only newly appended params from `args`; no-op when current."
+      ],
+      "discriminator": [
+        255,
+        63,
+        114,
+        173,
+        218,
+        4,
+        220,
+        32
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "Must equal the admin stored in the Global; pays the extra rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "global",
+          "docs": [
+            "Seeds + owner checked here; discriminator and admin checked in the handler."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "MigrateGlobalArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "process_queue",
       "discriminator": [
         178,
@@ -4105,6 +4174,19 @@ export const FUMPAD_IDL: Idl = {
       ]
     },
     {
+      "name": "GlobalMigrated",
+      "discriminator": [
+        75,
+        171,
+        161,
+        231,
+        153,
+        238,
+        136,
+        61
+      ]
+    },
+    {
       "name": "Graduated",
       "discriminator": [
         51,
@@ -4428,6 +4510,11 @@ export const FUMPAD_IDL: Idl = {
       "code": 6035,
       "name": "AutoClaimDisabled",
       "msg": "The ticket owner opted out of auto-claim for this coin"
+    },
+    {
+      "code": 6036,
+      "name": "UnsupportedGlobalLayout",
+      "msg": "Global account layout is unknown or newer than this program (migrate_global never shrinks)"
     }
   ],
   "types": [
@@ -5086,6 +5173,45 @@ export const FUMPAD_IDL: Idl = {
       }
     },
     {
+      "name": "GlobalMigrated",
+      "docs": [
+        "`migrate_global` grew a legacy Global to the current layout (existing bytes kept; the",
+        "appended `Params` fields set from its args, in both `params` and `pending_params`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_len",
+            "type": "u32"
+          },
+          {
+            "name": "new_len",
+            "type": "u32"
+          },
+          {
+            "name": "snipe_window_slots",
+            "type": "u16"
+          },
+          {
+            "name": "snipe_start_bps",
+            "type": "u16"
+          },
+          {
+            "name": "rent_paid",
+            "docs": [
+              "Lamports the admin added to keep the larger account rent-exempt."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "Graduated",
       "type": {
         "kind": "struct",
@@ -5190,6 +5316,26 @@ export const FUMPAD_IDL: Idl = {
           {
             "name": "ts",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MigrateGlobalArgs",
+      "docs": [
+        "Values for the `Params` fields appended since the oldest supported layout. Fields a given",
+        "Global already has are ignored (its bytes are kept). v0.5 (D19): the snipe schedule."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "snipe_window_slots",
+            "type": "u16"
+          },
+          {
+            "name": "snipe_start_bps",
+            "type": "u16"
           }
         ]
       }

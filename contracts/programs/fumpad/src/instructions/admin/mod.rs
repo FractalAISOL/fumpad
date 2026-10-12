@@ -2,6 +2,9 @@
 
 use anchor_lang::prelude::*;
 
+pub mod migrate_global;
+pub use migrate_global::*;
+
 use crate::{
     constants::*,
     error::FumpadError,

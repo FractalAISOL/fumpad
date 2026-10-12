@@ -33,6 +33,12 @@ cargo test -p tests                    # LiteSVM integration tests (needs `ancho
    are (principal stays locked; skims may stop) — re-run the locker test suite against the exact `.so` first.
 3. `graduate` fails cleanly (whole instruction reverts, coin stays `Complete`) while the locker isn't deployed, so finish step 2 before opening launches.
 
+**Upgrading `fumpad` over an existing Global** (e.g. devnet v0.4 → v0.5): `solana program extend` if the new `.so` is
+larger than the program-data account, `solana program deploy target/deploy/fumpad.so --program-id <id>` (upgrade
+authority signs), then immediately `migrate_global` signed by `Global.admin` (SDK `migrateGlobalIx`; devnet:
+`npx tsx scripts/devnet/migrate-global.ts` in `services/`). Every instruction that loads Global fails until it runs. The
+locker is immutable and unaffected.
+
 `tests/src/flow.rs` drives a real coin through the whole lifecycle (used by `d10_tests.rs`
 and `e2e_tests.rs`); `Env::set_sol_usd` writes a fresh Pyth SOL/USD account.
 `tests/src/lib.rs` is the shared harness (`Env::new()` = fumpad + real PumpSwap + pump fees
@@ -43,7 +49,7 @@ in `tests/fixtures/` (`solana account -u d <addr> --output json -o <file>`;
 ## v0.5 interface changes (D19 snipe tax, D20 graduation fee — SDK / keeper / indexer / app)
 Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-idl`, `npm run vectors`). SPEC §3 (D20) and §4.1 (D19) have the rationale.
 
-**Params / Global** (`Params` fields appended at the end → `Params` +4 bytes, `Global` 672 → **680 bytes**: re-init Global on devnet)
+**Params / Global** (`Params` fields appended at the end → `Params` +4 bytes, `Global` 672 → **680 bytes**: upgrade an existing Global in place with `migrate_global`, below)
 - `snipe_window_slots: u16` (default 4, cap 50; 0 = off), `snipe_start_bps: u16` (default 9,900, cap 9,900). `Params::is_valid` enforces both caps.
 - `graduation_fee_lamports` default **0 → 650,000,000** (0.65 SOL; cap 1 SOL unchanged).
 - Curve defaults re-derived for continuity with the fee kept out of the LP: `initial_virtual_token` **988,744,870,180,001**, `curve_supply` **730,811,425,785,218**, `lp_supply` **189,188,574,214,782** (reward pool 80M, 30 SOL virtual, 85 SOL raise unchanged). Read them from chain; anything hard-coding the v0.4 values (e.g. `app/src/data/chain.ts` `initialVirtualTokens`) must update.
@@ -59,12 +65,13 @@ Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-i
 | `graduate` | **Two accounts appended** after `system_program` (before the event-CPI pair): `observations` (mut, PDA `["observations", mint]`), `claim_queue` (mut, PDA `["claim_queue", mint]`). Tx ≈1077 bytes. Spends the coin's snapshotted fee: caller refund (its measured net rent) → observations rent → claim-queue rent (pre-funded into the PDAs) → remainder to `platform_fees_unclaimed`. |
 | `init_observations`, `init_claim_queue` | Unchanged interface; with a pre-funded PDA the payer pays nothing (only a shortfall). |
 | `register_holdings` | Unchanged interface (`global`, `coin` boxed: the 680-byte Global overflowed the 4 KB stack frame). |
+| `migrate_global(args: MigrateGlobalArgs { snipe_window_slots: u16, snipe_start_bps: u16 })` (admin, **new**) | `admin` (signer, mut — pays the extra rent; must equal `Global.admin`), `global` (mut, PDA `["global"]`, raw — may be the legacy layout), `system_program`, `event_authority`, `program`. Grows a 672-byte (v0.3/v0.4) Global to 680 in place: every existing byte kept, the appended `Params` fields (in `params` **and** `pending_params`) set from `args`. No-op on a current Global (idempotent — can't re-set them later; existing params still go through queue → 48h → execute). Errors: `Unauthorized` (not the stored admin), `InvalidAccount` (wrong discriminator), `UnsupportedGlobalLayout` (larger than current = never shrinks, or an unknown size), `InvalidParams` (args over the caps). Event `GlobalMigrated { old_len: u32, new_len: u32, snipe_window_slots, snipe_start_bps, rent_paid: u64, ts }`. Every other instruction fails with `AccountDidNotDeserialize` (3003) until it runs — call it right after the upgrade. Future `Params` appends: add the old length to `LEGACY_PARAMS_LENS` and the new fields to `MigrateGlobalArgs`. |
 
 **Events (layout changes — update decoders)**
 - `Trade` + trailing `snipe_tax: u64`, `snipe_tax_bps: u16` (0 for sells / router swaps / outside the window). Total charged on a buy = `sol_amount + fee_pool + fee_platform + fee_creator + snipe_tax`; `pool_tokens_bought` includes the tax's buyback. Indexer/UI: show "snipe tax" when `snipe_tax > 0`; count it as reward-pool inflow, not platform/creator fees.
 - `Graduated` + trailing `caller_refund: u64`, `setup_prefunded: u64`, `platform_fee: u64` (sum = the coin's graduation fee).
 
-**Errors:** none added.
+**Errors (appended):** 6036 `UnsupportedGlobalLayout` (`migrate_global`). **Events (new):** `GlobalMigrated`.
 
 **Keeper behaviour:** unchanged sequence (`graduate`, then `init_observations` + 9× `init_claim_queue`); it now costs the keeper only tx fees for coins with the 0.65 SOL fee (it still advances graduate's 0.05 SOL rent loan, returned in-instruction).
 
