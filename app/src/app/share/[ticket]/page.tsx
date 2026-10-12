@@ -3,19 +3,21 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { cardCopy } from "@/components/share/card";
 import { ShareView } from "@/components/share/ShareView";
-import { DEMO_WALLET, getFumpadData } from "@/data";
+import { DEMO_WALLET } from "@/data";
+import { cachedTicket, cachedTickets } from "@/data/server";
 import { Loading, Skeleton } from "@/design";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://fumpad.app";
 
 export async function generateStaticParams() {
-  const ts = await getFumpadData().getTickets(DEMO_WALLET);
-  return ts.map((t) => ({ ticket: t.id }));
+  const ts = await cachedTickets(DEMO_WALLET);
+  // Cache Components needs at least one param; "_" resolves to "not found" like any unknown id.
+  return ts.length ? ts.map((t) => ({ ticket: t.id })) : [{ ticket: "_" }];
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ ticket: string }> }): Promise<Metadata> {
   const { ticket } = await params;
-  const t = await getFumpadData().getTicket(ticket);
+  const t = await cachedTicket(ticket);
   if (!t) return { title: "Ticket not found" };
   const { head, body } = cardCopy(t);
   const image = { url: `/og/${t.id}`, width: 1200, height: 630, alt: `${head} ${body}` };
@@ -47,7 +49,7 @@ export default function SharePage({ params }: { params: Promise<{ ticket: string
 
 async function Share({ params }: { params: Promise<{ ticket: string }> }) {
   const { ticket } = await params;
-  const t = await getFumpadData().getTicket(ticket);
+  const t = await cachedTicket(ticket);
   if (!t) notFound();
   return <ShareView ticket={t} siteUrl={SITE} />;
 }

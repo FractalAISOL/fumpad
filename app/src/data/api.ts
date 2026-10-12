@@ -74,12 +74,12 @@ export class ApiFumpadData implements FumpadData {
     return (await res.json()) as T;
   }
 
-  /** GET that maps 404 to null. */
+  /** GET that maps 404 (and 400, a malformed id from a hand-edited link) to null. */
   private async maybe<T>(path: string, query: Query = {}): Promise<T | null> {
     try {
       return await this.get<T>(path, query);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) return null;
+      if (e instanceof ApiError && (e.status === 404 || e.status === 400)) return null;
       throw e;
     }
   }

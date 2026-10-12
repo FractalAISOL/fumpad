@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
 import { CoinsView } from "@/components/coin/CoinsView";
-import { getFumpadData } from "@/data";
+import { cachedCoins, cachedSolUsd } from "@/data/server";
 
 export const metadata: Metadata = { title: "Coins" };
 
 export default async function CoinsPage() {
-  const data = getFumpadData();
-  const [coins, solUsd] = await Promise.all([data.listCoins({ sort: "mcap" }), data.getSolUsd()]);
+  const [coins, solUsd] = await Promise.all([cachedCoins({ sort: "mcap" }), cachedSolUsd()]);
   return <CoinsView coins={coins} solUsd={solUsd} />;
 }

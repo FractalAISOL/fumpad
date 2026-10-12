@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
-import { type CoinDetail, type Side, type Ticket, type TradeQuote, getFumpadData } from "@/data";
+import { keepSnapshot, type CoinDetail, type Side, type Ticket, type TradeQuote, getFumpadData } from "@/data";
 import { AmountInput, Button, InfoTip, KV, Multiple, Price, Segmented, Sol, Tokens, cx, parseAmount, useToast } from "@/design";
 import * as f from "@/design/format";
 import { useNow, useViewer } from "../shell/Providers";
@@ -27,7 +27,7 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
 
   useEffect(() => {
     let live = true;
-    data.getBalances(address, coin.mint).then((b) => live && setBal(b));
+    data.getBalances(address, coin.mint).then((b) => live && setBal(b)).catch(keepSnapshot);
     return () => {
       live = false;
     };
@@ -35,7 +35,7 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
 
   useEffect(() => {
     let live = true;
-    data.quoteTrade({ mint: coin.mint, side, amount, wallet: address }).then((q) => live && setQuote(q));
+    data.quoteTrade({ mint: coin.mint, side, amount, wallet: address }).then((q) => live && setQuote(q)).catch(keepSnapshot);
     return () => {
       live = false;
     };

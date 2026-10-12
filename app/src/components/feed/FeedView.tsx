@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type CloseCall, type CoinSummary, type FeedEvent, type FeedKind, type PlatformStats, getFumpadData } from "@/data";
+import { keepSnapshot, type CloseCall, type CoinSummary, type FeedEvent, type FeedKind, type PlatformStats, getFumpadData } from "@/data";
 import { Avatar, Button, Change, Chips, CoinTile, EmptyState, Gauge, Multiple, Panel, PanelHead, Sparkline, cx } from "@/design";
 import * as f from "@/design/format";
 import { useViewer } from "../shell/Providers";
@@ -62,11 +62,32 @@ export function FeedView({
 
   useEffect(() => {
     let live = true;
-    data.getClosestTo10x(5, address).then((c) => live && setClosest(c));
+    data.getClosestTo10x(5, address).then((c) => live && setClosest(c)).catch(keepSnapshot);
     return () => {
       live = false;
     };
   }, [data, address]);
+
+  // The server snapshot is cached for up to a few minutes: catch up on what happened since,
+  // then the socket below carries everything newer.
+  useEffect(() => {
+    let live = true;
+    Promise.all([data.getFeed({ limit: 24 }), data.getStats()])
+      .then(([latest, st]) => {
+        if (!live) return;
+        setStats(st);
+        setEvents((xs) => {
+          const have = new Set(xs.map((x) => x.id));
+          const missed = latest.filter((e) => !have.has(e.id));
+          return missed.length ? [...missed, ...xs].sort((a, b) => b.ts - a.ts) : xs;
+        });
+      })
+      // Keep the snapshot; the socket still delivers new events.
+      .catch(keepSnapshot);
+    return () => {
+      live = false;
+    };
+  }, [data]);
 
   // Live events. Prepend while the reader is at the top; otherwise hold them behind a
   // "new posts" button so the page never jumps under someone's thumb.
@@ -99,11 +120,16 @@ export function FeedView({
 
   const more = async () => {
     setLoadingMore(true);
-    const last = events[events.length - 1];
-    const next = await data.getFeed({ before: last?.ts ?? Infinity, limit: 20 });
-    setEvents((xs) => [...xs, ...next.filter((n) => !xs.some((x) => x.id === n.id))]);
-    if (next.length < 20) setExhausted(true);
-    setLoadingMore(false);
+    try {
+      const last = events[events.length - 1];
+      const next = await data.getFeed({ before: last?.ts ?? Infinity, limit: 20 });
+      setEvents((xs) => [...xs, ...next.filter((n) => !xs.some((x) => x.id === n.id))]);
+      if (next.length < 20) setExhausted(true);
+    } catch {
+      /* the button stays; the reader can try again */
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   return (

@@ -4,7 +4,8 @@ import { Suspense } from "react";
 import { ProfileTickets } from "@/components/people/ProfileTickets";
 import { ProfileCard } from "@/components/people/ProfileCard";
 import s from "@/components/people/People.module.css";
-import { DEMO_WALLET, getFumpadData } from "@/data";
+import { DEMO_WALLET } from "@/data";
+import { cachedProfile, cachedTickets } from "@/data/server";
 import { Loading, Panel, PanelHead, Skeleton } from "@/design";
 import * as f from "@/design/format";
 
@@ -14,7 +15,7 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ address: string }> }): Promise<Metadata> {
   const { address } = await params;
-  const p = await getFumpadData().getProfile(address);
+  const p = await cachedProfile(decodeURIComponent(address));
   return { title: p ? (p.name ?? f.shortAddr(p.address)) : "Wallet not found" };
 }
 
@@ -49,10 +50,9 @@ export default function ProfilePage({ params }: { params: Promise<{ address: str
 
 async function ProfileBody({ params }: { params: Promise<{ address: string }> }) {
   const { address } = await params;
-  const data = getFumpadData();
-  const p = await data.getProfile(decodeURIComponent(address));
+  const p = await cachedProfile(decodeURIComponent(address));
   if (!p) notFound();
-  const tickets = await data.getTickets(p.address);
+  const tickets = await cachedTickets(p.address);
   return (
     <div className="wrap">
       <div className={s.profileGrid}>

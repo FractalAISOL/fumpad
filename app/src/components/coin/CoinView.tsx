@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { type ChartRange, type CoinDetail, type FumbleRow, type Holder, type PricePoint, type QueueEntry, type Ticket, getFumpadData } from "@/data";
+import { keepSnapshot, type ChartRange, type CoinDetail, type FumbleRow, type Holder, type PricePoint, type QueueEntry, type Ticket, getFumpadData } from "@/data";
 import {
   Address,
   Badge,
@@ -69,7 +69,7 @@ export function CoinView({
   useEffect(() => {
     if (series.range === range) return;
     let live = true;
-    data.getPriceSeries(coin.mint, range).then((points) => live && setSeries({ range, points }));
+    data.getPriceSeries(coin.mint, range).then((points) => live && setSeries({ range, points })).catch(keepSnapshot);
     return () => {
       live = false;
     };
@@ -77,7 +77,7 @@ export function CoinView({
 
   useEffect(() => {
     let live = true;
-    data.getTickets(address).then((ts) => live && setTickets(ts.filter((t) => t.mint === coin.mint)));
+    data.getTickets(address).then((ts) => live && setTickets(ts.filter((t) => t.mint === coin.mint))).catch(keepSnapshot);
     return () => {
       live = false;
     };

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { type Board, type LeaderRow, type Profile, getFumpadData } from "@/data";
+import { keepSnapshot, type Board, type LeaderRow, type Profile, getFumpadData } from "@/data";
 import { Address, type Column, Multiple, Panel, PanelHead, PanelNote, Sol, Table, Tabs, cx, tabPanelId, tabId } from "@/design";
 import { useViewer } from "../shell/Providers";
 import s from "./People.module.css";
@@ -80,7 +80,7 @@ export function LeaderboardView({ initial, profile: initialProfile }: { initial:
 
   useEffect(() => {
     let live = true;
-    data.getProfile(address).then((p) => live && setProfile(p));
+    data.getProfile(address).then((p) => live && setProfile(p)).catch(keepSnapshot);
     return () => {
       live = false;
     };

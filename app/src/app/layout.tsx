@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Providers } from "@/components/shell/Providers";
 import { Header, TabBar, THEME_SCRIPT } from "@/components/shell/Shell";
-import { getFumpadData } from "@/data";
+import { shellSnapshot } from "@/data/server";
 import { archivo, martian } from "@/design/fonts";
 import { colorDark, colorLight, tokensToCss } from "@/design/tokens";
 import "./globals.css";
@@ -28,7 +28,8 @@ export const viewport: Viewport = {
 const TOKENS_CSS = tokensToCss();
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const solUsd = await getFumpadData().getSolUsd();
+  // Cached (data/server.ts) so the shell stays prerenderable against the live API.
+  const { solUsd, now } = await shellSnapshot();
   return (
     <html lang="en" className={`${archivo.variable} ${martian.variable}`} suppressHydrationWarning>
       <head>
@@ -38,7 +39,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <style dangerouslySetInnerHTML={{ __html: TOKENS_CSS }} />
       </head>
       <body>
-        <Providers>
+        <Providers now={now}>
           <Header solUsd={solUsd} />
           <main id="main" className={s.main}>
             {children}

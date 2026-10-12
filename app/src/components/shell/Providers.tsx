@@ -1,8 +1,8 @@
 "use client";
 
 import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
-import { type ReactNode, createContext, useContext, useEffect, useMemo, useState } from "react";
-import { DEMO_WALLET, getFumpadData } from "@/data";
+import { type ReactNode, createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { keepSnapshot, DEMO_WALLET, getFumpadData } from "@/data";
 import { ToastProvider } from "@/design";
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.mainnet-beta.solana.com";
@@ -10,21 +10,38 @@ const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.mainnet-beta.sola
 /* ── Clock ────────────────────────────────────────────────────────────────── */
 
 /**
- * The data source's clock. Starts at the server-rendered value so hydration matches,
- * then ticks every 15 s for relative times ("4m").
+ * The data source's clock, for relative times ("4m"). The server renders (and prerenders)
+ * with `initial`, a minute-floored snapshot the root layout reads from the cache, and
+ * hydration reuses it, so nothing reads the time during a render on the server. On the
+ * client the store ticks every 15 s from `getFumpadData().now()`.
  */
 const NowCtx = createContext<number>(0);
 export function useNow() {
   return useContext(NowCtx);
 }
-function NowProvider({ children }: { children: ReactNode }) {
-  const data = getFumpadData();
-  // Floor to the minute so the server render and hydration agree.
-  const [now, setNow] = useState(() => Math.floor(data.now() / 60_000) * 60_000);
-  useEffect(() => {
-    const id = setInterval(() => setNow(data.now()), 15_000);
-    return () => clearInterval(id);
-  }, [data]);
+
+let clock: number | null = null;
+const clockListeners = new Set<() => void>();
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+function subscribeClock(onChange: () => void) {
+  clockListeners.add(onChange);
+  clockTimer ??= setInterval(() => {
+    clock = getFumpadData().now();
+    clockListeners.forEach((l) => l());
+  }, 15_000);
+  return () => {
+    clockListeners.delete(onChange);
+    if (!clockListeners.size && clockTimer) {
+      clearInterval(clockTimer);
+      clockTimer = undefined;
+      clock = null;
+    }
+  };
+}
+const clientClock = () => (clock ??= getFumpadData().now());
+
+function NowProvider({ initial, children }: { initial: number; children: ReactNode }) {
+  const now = useSyncExternalStore(subscribeClock, clientClock, () => initial);
   return <NowCtx.Provider value={now}>{children}</NowCtx.Provider>;
 }
 
@@ -52,7 +69,7 @@ function ViewerProvider({ children }: { children: ReactNode }) {
     let live = true;
     getFumpadData()
       .getTickets(address)
-      .then((ts) => live && setClaimable(ts.filter((t) => t.state === "claimable").length));
+      .then((ts) => live && setClaimable(ts.filter((t) => t.state === "claimable").length)).catch(keepSnapshot);
     return () => {
       live = false;
     };
@@ -63,14 +80,14 @@ function ViewerProvider({ children }: { children: ReactNode }) {
 
 /* ── Root ─────────────────────────────────────────────────────────────────── */
 
-export function Providers({ children }: { children: ReactNode }) {
+export function Providers({ now, children }: { now: number; children: ReactNode }) {
   // Wallet Standard auto-detects Phantom, Solflare and Backpack; no adapter bundles needed.
   const wallets = useMemo(() => [], []);
   return (
     <ConnectionProvider endpoint={RPC}>
       <WalletProvider wallets={wallets} autoConnect localStorageKey="fumpad-wallet">
         <ViewerProvider>
-          <NowProvider>
+          <NowProvider initial={now}>
             <ToastProvider>{children}</ToastProvider>
           </NowProvider>
         </ViewerProvider>

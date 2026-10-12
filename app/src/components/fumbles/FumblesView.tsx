@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
-import { DEMO_WALLET, type Ticket, getFumpadData } from "@/data";
+import { keepSnapshot, DEMO_WALLET, type Ticket, getFumpadData } from "@/data";
 import { Button, EmptyState, Loading, Multiple, Panel, PanelHead, Segmented, Skeleton, TicketCard, cx, useToast } from "@/design";
 import * as f from "@/design/format";
 import { ClaimMoment, type ClaimResult } from "../moment/ClaimMoment";
@@ -83,11 +83,14 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
   useEffect(() => {
     if (loadedFor === address) return;
     let live = true;
-    data.getTickets(address).then((ts) => {
-      if (!live) return;
-      setTickets(ts);
-      setLoadedFor(address);
-    });
+    data
+      .getTickets(address)
+      .then((ts) => {
+        if (!live) return;
+        setTickets(ts);
+        setLoadedFor(address);
+      })
+      .catch(keepSnapshot);
     return () => {
       live = false;
     };

@@ -14,3 +14,12 @@ export { DEMO_WALLET, DEMO_NAME } from "./mock";
 export function getFumpadData(): FumpadData {
   return apiDataFromEnv() ?? mockData;
 }
+
+/**
+ * `.catch` for client refreshes on top of server-rendered data: when the API is briefly
+ * unreachable (or blocks this origin), keep showing the snapshot instead of throwing an
+ * unhandled rejection. Logged so it isn't silent in development.
+ */
+export function keepSnapshot(err: unknown): void {
+  console.warn("[fumpad] refresh failed, keeping the last data:", err instanceof Error ? err.message : err);
+}
