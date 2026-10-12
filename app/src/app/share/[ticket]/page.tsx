@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { cardCopy, multipleText, ogSrc } from "@/components/share/card";
+import { cardCopy, ogSrc } from "@/components/share/card";
 import { ShareView } from "@/components/share/ShareView";
 import { DEMO_WALLET } from "@/data";
 import { cachedParams, cachedTicket, cachedTickets } from "@/data/server";
@@ -27,7 +27,7 @@ export async function generateMetadata({ params }: { params: Promise<{ ticket: s
   const title = `${head} ${kicker}`;
   const image = { url: ogSrc(t), width: 1200, height: 630, alt: `${title} ${body}` };
   return {
-    title: `$${t.symbol} ticket at ${multipleText(t.multiple)}`,
+    title: `$${t.symbol} ticket: ${head.replace(/\.$/, "")}`,
     description: body,
     openGraph: { type: "website", title, description: body, url: `/share/${t.id}`, images: [image] },
     twitter: { card: "summary_large_image", title, description: body, images: [image] },

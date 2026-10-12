@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Ticket } from "@/data";
 import { Button, IconArrowLeft, IconCopy, IconDownload, IconX, Segmented, cx, useToast } from "@/design";
 import { useViewer } from "../shell/Providers";
@@ -12,6 +12,12 @@ export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string
   const [style, setStyle] = useState<CardStyle>("flare");
   const [loaded, setLoaded] = useState<Record<string, boolean>>({});
   const toast = useToast();
+  // The PNG can finish before hydration attaches onLoad; catch that case on mount.
+  const img = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const el = img.current;
+    if (el?.complete && el.naturalWidth) setLoaded((l) => (l[style] ? l : { ...l, [style]: true }));
+  }, [style]);
   const { address } = useViewer();
   const own = ticket.owner === address;
   const copy = cardCopy(ticket);
@@ -66,6 +72,7 @@ export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string
           {/* eslint-disable-next-line @next/next/no-img-element -- generated PNG from our own /og route */}
           <img
             key={style}
+            ref={img}
             src={src}
             width={1200}
             height={630}
