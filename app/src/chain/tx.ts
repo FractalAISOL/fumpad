@@ -21,11 +21,13 @@ import { DEMO_WALLET } from "@/data";
 import { solToLamports } from "@/data/chain";
 import { mockRecordTrade, mockSetAutoClaim, mockWithdrawCreatorFees } from "@/data/mock";
 import { announceOwnTx, type OwnTxKind } from "@/components/shell/live";
-import { requestConfirm, useInstantSettings, useWallet, walletActions } from "@/components/wallet/store";
+import { addInstantSpent, getInstantSpent, requestConfirm, useInstantSettings, useWallet, walletActions } from "@/components/wallet/store";
 import type { SilentPolicy } from "./allowlist";
 import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, fumpadClient } from "./build";
 import { getConnection } from "./connection";
-import { checkPreparedLaunch, VANITY_SUFFIX } from "./program";
+import { checkLaunchBinding, LAUNCH_SLIPPAGE_BPS } from "./launch";
+import { instantDecision, lamportsSol, simulateSpend, worstCaseSpend } from "./limits";
+import { VANITY_SUFFIX } from "./program";
 import { type FumpadSigner, signFumpadTx } from "./signer";
 
 export interface TxOk {
@@ -38,8 +40,9 @@ export type TxStatus = "idle" | "building" | "signing" | "confirming" | "done" |
 
 export interface BuyArgs {
   mint: string;
+  /** SOL budget, the 1% fee included. */
   solIn: number;
-  /** Minimum tokens after slippage. */
+  /** Minimum tokens after slippage: the quote the user saw × (1 − SLIPPAGE_BPS), see `./build`. */
   minTokensOut: number;
   /** Every open ticket on this coin (≤5): the program applies the rebuy rule to them. */
   openTickets: string[];
@@ -49,6 +52,7 @@ export interface BuyArgs {
 export interface SellArgs {
   mint: string;
   tokensIn: number;
+  /** Minimum SOL after slippage, from the quote the user saw. */
   minSolOut: number;
   /** Quoted SOL out (mock mode applies it to the simulated balance). */
   expectedOut?: number;
@@ -198,20 +202,50 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   const instant = wallet.active?.kind === "embedded" && settings.enabled;
 
   /**
-   * Above the per-trade limit, instant signing asks on screen first. Prompting wallets
-   * (external, or Instant off) already ask, so they skip this.
+   * Instant signing asks on screen first when the transaction's real outflow (`spend`: amount,
+   * 1% fee, account rent, network fees; see `./limits`) is above the per-trade limit, when a
+   * sell's proceeds are, or once this session's instant spending reached the session cap (L-8).
+   * Prompting wallets (external, or Instant off) already ask, so they skip this.
    */
-  const guardSpend = useCallback(
-    async (sol: number, verb: string) => {
-      if (!instant || !(sol > settings.maxSol)) return;
-      const ok = await requestConfirm({
-        title: `${verb} ${fmtSol(sol)} SOL?`,
-        body: `That's above your instant limit of ${fmtSol(settings.maxSol)} SOL, so FUMPAD asks first. Change the limit in the wallet menu.`,
-        confirmLabel: `${verb} ${fmtSol(sol)} SOL`,
-      });
+  const guardInstant = useCallback(
+    async (spend: bigint, verb: string, sellValueSol?: number) => {
+      if (!instant) return;
+      const spentSoFar = getInstantSpent();
+      let d = instantDecision(spend, spentSoFar, { maxSol: settings.maxSol, sessionCapSol: settings.sessionCapSol });
+      if (!d.ask && sellValueSol !== undefined && sellValueSol > settings.maxSol) d = { ask: true, reason: "trade-limit" };
+      if (!d.ask) return;
+      const out = lamportsSol(spend > BigInt(0) ? spend : BigInt(0));
+      const ok = await requestConfirm(
+        d.reason === "session-cap"
+          ? {
+              title: "Confirm this transaction",
+              body: `Instant trades have spent ${fmtSol(lamportsSol(spentSoFar))} SOL this session and your session cap is ${fmtSol(settings.sessionCapSol)} SOL, so every transaction asks first now${out > 0 ? ` (this one: up to ${fmtSol(out)} SOL)` : ""}. Change the cap in the wallet menu.`,
+              confirmLabel: "Confirm",
+            }
+          : sellValueSol !== undefined
+            ? {
+                title: `${verb} ${fmtSol(sellValueSol)} SOL?`,
+                body: `That's above your instant limit of ${fmtSol(settings.maxSol)} SOL, so FUMPAD asks first. Change the limit in the wallet menu.`,
+                confirmLabel: `${verb} ${fmtSol(sellValueSol)} SOL`,
+              }
+            : {
+                title: `${verb} up to ${fmtSol(out)} SOL?`,
+                body: `With the 1% fee, network fees and first-time account rent, that's above your instant limit of ${fmtSol(settings.maxSol)} SOL, so FUMPAD asks first. Change the limit in the wallet menu.`,
+                confirmLabel: `${verb} ${fmtSol(out)} SOL`,
+              },
+      );
       if (!ok) throw new Error("Cancelled. Nothing was sent.");
     },
-    [instant, settings.maxSol],
+    [instant, settings.maxSol, settings.sessionCapSol],
+  );
+
+  /** Instant outflow of a built transaction: simulated, else the worst case for the action. */
+  const instantSpend = useCallback(
+    async (tx: VersionedTransaction | null, wallet: PublicKey | null, kind: "buy" | "launch" | "other", amountSol: number): Promise<bigint> => {
+      const sim = tx && wallet ? await simulateSpend(connection, tx, wallet) : null;
+      return sim ?? worstCaseSpend(kind, amountSol > 0 ? solToLamports(amountSol) : BigInt(0));
+    },
+    [connection],
   );
 
   const run = useCallback(
@@ -240,66 +274,95 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
 
   /** Build → vet + sign (silently when allowed) → send → confirm. Program errors surface from preflight. */
   const sendBuilt = useCallback(
-    async (build: () => Promise<BuiltTx> | BuiltTx, failed: string, policy: SilentPolicy): Promise<TxOk> => {
+    async (
+      build: () => Promise<BuiltTx> | BuiltTx,
+      failed: string,
+      policy: SilentPolicy,
+      guard: { verb: string; kind: "buy" | "other"; amountSol?: number; sellValueSol?: number },
+    ): Promise<TxOk> => {
       const s = signer!;
       setStatus("building");
       const built = await build();
       const { tx, blockhash, lastValidBlockHeight } = await client.toTransaction(s.publicKey, built);
       if (built.signers?.length) tx.sign(built.signers);
+      // M-9 / L-8: what this exact transaction costs the wallet, before anything is signed.
+      const spend = instant ? await instantSpend(tx, s.publicKey, guard.kind, guard.amountSol ?? 0) : BigInt(0);
+      await guardInstant(spend, guard.verb, guard.sellValueSol);
       setStatus("signing");
       const signed = await signFumpadTx(s, tx, policy, instant);
       setStatus("confirming");
       const signature = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3 });
+      if (instant) addInstantSpent(spend);
       const res = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
       if (res.value.err) throw new Error(failed);
       setStatus("done");
       return { signature, simulated: false };
     },
-    [client, signer, connection, instant],
+    [client, signer, connection, instant, instantSpend, guardInstant],
+  );
+
+  /** Mock / demo wallet: same on-screen rules, against the worst case (nothing to simulate). */
+  const guardSimulated = useCallback(
+    async (kind: "buy" | "launch" | "other", amountSol: number, verb: string, sellValueSol?: number) => {
+      const spend = instant ? worstCaseSpend(kind, kind === "other" ? BigInt(0) : solToLamports(amountSol)) : BigInt(0);
+      await guardInstant(spend, verb, sellValueSol);
+      return () => instant && addInstantSpent(spend);
+    },
+    [instant, guardInstant],
   );
 
   const buy = useCallback(
     (args: BuyArgs) =>
       run(
         async () => {
-          await guardSpend(args.solIn, "Buy");
           if (!live) {
+            const counted = await guardSimulated("buy", args.solIn, "Buy");
             const ok = await simulate(setStatus);
+            counted();
             mockRecordTrade(owner, args.mint, "buy", args.solIn, args.expectedOut ?? args.minTokensOut);
             return ok;
           }
           // Curve → buy; graduated → swap_buy (WSOL wrap/unwrap inside the program). Open
           // tickets for the rebuy rule are read from the wallet's Position on chain. The
-          // signed sol_in may not exceed what the user entered.
-          return sendBuilt(() => buildBuyTx(client, signer!.publicKey, args), "The buy failed on chain. Nothing but the network fee was spent.", {
-            action: "buy",
-            maxSolInLamports: solToLamports(args.solIn),
-          });
+          // signed sol_in may not exceed what the user entered; min_tokens_out is the shown quote's (M-9).
+          return sendBuilt(
+            () => buildBuyTx(client, signer!.publicKey, args),
+            "The buy failed on chain. Nothing but the network fee was spent.",
+            { action: "buy", maxSolInLamports: solToLamports(args.solIn) },
+            { verb: "Buy for", kind: "buy", amountSol: args.solIn },
+          );
         },
         "buy",
         args.mint,
       ),
-    [run, guardSpend, live, sendBuilt, client, signer, owner],
+    [run, guardSimulated, live, sendBuilt, client, signer, owner],
   );
 
   const sell = useCallback(
     (args: SellArgs) =>
       run(
         async () => {
-          await guardSpend(args.expectedOut ?? args.minSolOut, "Sell for");
+          const value = args.expectedOut ?? args.minSolOut;
           if (!live) {
+            const counted = await guardSimulated("other", 0, "Sell for", value);
             const ok = await simulate(setStatus);
+            counted();
             mockRecordTrade(owner, args.mint, "sell", args.tokensIn, args.expectedOut ?? args.minSolOut);
             return ok;
           }
           // Curve → sell; graduated → swap_sell. Carries the Pyth SOL/USD account for the
           // minimum-USD ticket check (a stale price never blocks the sell, it just files no ticket).
-          return sendBuilt(() => buildSellTx(client, signer!.publicKey, args), "The sell failed on chain. Nothing but the network fee was spent.", { action: "sell" });
+          return sendBuilt(
+            () => buildSellTx(client, signer!.publicKey, args),
+            "The sell failed on chain. Nothing but the network fee was spent.",
+            { action: "sell" },
+            { verb: "Sell for", kind: "other", sellValueSol: value },
+          );
         },
         "sell",
         args.mint,
       ),
-    [run, guardSpend, live, sendBuilt, client, signer, owner],
+    [run, guardSimulated, live, sendBuilt, client, signer, owner],
   );
 
   const claim = useCallback(
@@ -308,7 +371,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         async () => {
           if (!live) return simulate(setStatus, 650);
           // Pays in the same tx (ClaimPaid) or joins the queue (ClaimQueued); the UI re-reads.
-          return sendBuilt(() => buildClaimTx(client, signer!.publicKey, args), "The claim failed on chain. Nothing but the network fee was spent.", { action: "claim" });
+          return sendBuilt(() => buildClaimTx(client, signer!.publicKey, args), "The claim failed on chain. Nothing but the network fee was spent.", { action: "claim" }, { verb: "Claim", kind: "other" });
         },
         "claim",
         args.mint,
@@ -337,6 +400,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           symbol: args.symbol,
           uri: args.uri,
           initialBuyLamports: args.initialBuySol > 0 ? solToLamports(args.initialBuySol).toString() : undefined,
+          slippageBps: LAUNCH_SLIPPAGE_BPS,
         });
         setStatus("idle");
         return { mint: r.mint, suffix: r.suffix, simulated: false, args, preparedAt: Date.now(), transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight };
@@ -351,14 +415,20 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
 
   /**
    * D18 step 2 (confirm): the wallet signs as creator/fee payer and the launch is sent. The
-   * API's transaction is checked twice before signing: `checkPreparedLaunch` (shape, mint,
-   * creator) and the silent-signing allow-list (programs, signers, first-buy amount).
+   * API's transaction is checked twice before signing: `checkLaunchBinding` (M-1: the reserved
+   * mint, the form's name/symbol/uri, the first buy on that mint for exactly the amount typed
+   * with a real slippage bound, the mint's signature) and the silent-signing allow-list
+   * (programs, signers, first-buy amount).
    */
   const launch = useCallback(
     (prepared: PreparedLaunch) =>
       run(async () => {
-        await guardSpend(prepared.args.initialBuySol, "Launch with a first buy of");
-        if (prepared.simulated || !live) return simulate(setStatus, 1400);
+        if (prepared.simulated || !live) {
+          const counted = await guardSimulated("launch", prepared.args.initialBuySol, "Launch for");
+          const ok = await simulate(setStatus, 1400);
+          counted();
+          return ok;
+        }
         const s = signer!;
         setStatus("building");
         let p = prepared;
@@ -370,23 +440,30 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
             symbol: p.args.symbol,
             uri: p.args.uri,
             initialBuyLamports: p.args.initialBuySol > 0 ? solToLamports(p.args.initialBuySol).toString() : undefined,
+            slippageBps: LAUNCH_SLIPPAGE_BPS,
           });
           if (r.mint !== p.mint) throw new Error("The launch address changed. Review it again before launching.");
           p = { ...p, transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, preparedAt: Date.now() };
         }
         const tx = VersionedTransaction.deserialize(Uint8Array.from(atob(p.transaction!), (ch) => ch.charCodeAt(0)));
-        checkPreparedLaunch(tx, s.publicKey, p.mint, p.suffix);
+        const initialBuyLamports = p.args.initialBuySol > 0 ? solToLamports(p.args.initialBuySol) : BigInt(0);
+        // The first buy's expected size comes from Global.params on chain, not from the API.
+        const params = initialBuyLamports > BigInt(0) ? (await client.global()).params : undefined;
+        checkLaunchBinding(tx, { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: p.args.name, symbol: p.args.symbol, uri: p.args.uri, initialBuyLamports, params });
+        const spend = instant ? await instantSpend(tx, s.publicKey, "launch", p.args.initialBuySol) : BigInt(0);
+        await guardInstant(spend, "Launch for");
         setStatus("signing");
         // A wallet that rewrites the message would void the mint's signature: signFumpadTx refuses it.
-        const signed = await signFumpadTx(s, tx, { action: "launch", coSigner: p.mint, maxSolInLamports: solToLamports(p.args.initialBuySol) }, instant);
+        const signed = await signFumpadTx(s, tx, { action: "launch", coSigner: p.mint, maxSolInLamports: initialBuyLamports }, instant);
         setStatus("confirming");
         const signature = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3 });
+        if (instant) addInstantSpent(spend);
         const res = await connection.confirmTransaction({ signature, blockhash: tx.message.recentBlockhash, lastValidBlockHeight: p.lastValidBlockHeight! }, "confirmed");
         if (res.value.err) throw new Error("The launch transaction failed on chain. Nothing but the network fee was spent.");
         setStatus("done");
         return { signature, simulated: false };
       }, "launch", prepared.mint),
-    [run, guardSpend, live, signer, instant, connection],
+    [run, guardSimulated, guardInstant, instantSpend, live, signer, instant, connection, client],
   );
 
   /** D17: let (or stop) the keeper claim this coin's tickets for you. */
@@ -399,7 +476,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
             if (o) mockSetAutoClaim(o, args.mint, args.enabled);
             return simulate(setStatus, 600);
           }
-          return sendBuilt(() => buildSetAutoClaimTx(client, signer!.publicKey, args), "The change didn't go through.", { action: "auto-claim" });
+          return sendBuilt(() => buildSetAutoClaimTx(client, signer!.publicKey, args), "The change didn't go through.", { action: "auto-claim" }, { verb: "Change", kind: "other" });
         },
         "auto-claim",
         args.mint,
@@ -416,9 +493,12 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
             mockWithdrawCreatorFees(args.mint);
             return simulate(setStatus, 700);
           }
-          return sendBuilt(() => buildWithdrawCreatorFeesTx(client, signer!.publicKey, args), "The withdrawal failed on chain. Nothing but the network fee was spent.", {
-            action: "withdraw",
-          });
+          return sendBuilt(
+            () => buildWithdrawCreatorFeesTx(client, signer!.publicKey, args),
+            "The withdrawal failed on chain. Nothing but the network fee was spent.",
+            { action: "withdraw" },
+            { verb: "Withdraw", kind: "other" },
+          );
         },
         "withdraw",
         args.mint,

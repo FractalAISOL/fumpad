@@ -32,8 +32,12 @@ export interface SecurityEnv {
 /** Same default as `chain/cluster.ts`. */
 const DEFAULT_RPC = "https://api.mainnet-beta.solana.com";
 
-/** Privy: auth + embedded wallet iframe (auth.privy.io), its websockets, its hosted Solana RPCs. */
-export const PRIVY_CONNECT = ["https://auth.privy.io", "wss://*.privy.io", "https://*.rpc.privy.systems"];
+/**
+ * Privy: auth + embedded wallet iframe (auth.privy.io), its websockets, its hosted Solana RPCs,
+ * and the WalletConnect registry it reads wallet names/icons from for "Continue with a wallet"
+ * (seen as a connect-src violation in the browser check; WalletConnect itself is disabled).
+ */
+export const PRIVY_CONNECT = ["https://auth.privy.io", "wss://*.privy.io", "https://*.rpc.privy.systems", "https://explorer-api.walletconnect.com"];
 export const PRIVY_FRAMES = ["https://auth.privy.io"];
 /** Cloudflare Turnstile, Privy's bot check on login (script + iframe). */
 export const TURNSTILE = "https://challenges.cloudflare.com";

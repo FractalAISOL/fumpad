@@ -43,6 +43,7 @@ describe("security headers", () => {
       "https://auth.privy.io",
       "wss://*.privy.io",
       "https://*.rpc.privy.systems",
+      "https://explorer-api.walletconnect.com",
     ])
       assert.ok(connect.includes(o), o);
     // Origins only: the RPC key in the query string never lands in a header.

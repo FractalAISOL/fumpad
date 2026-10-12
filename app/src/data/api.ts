@@ -53,12 +53,15 @@ const seg = (v: string) => encodeURIComponent(String(v));
 export class ApiFumpadData implements FumpadData {
   private readonly base: string;
   private readonly wsUrl: string;
+  /** Extra request headers (server side only: the SSR secret, see `./ssr.ts`). */
+  private readonly headers: Record<string, string>;
   /** server clock − local clock, from the `x-server-time` header of every response. */
   private skew = 0;
 
-  constructor(baseUrl: string, opts: { wsUrl?: string } = {}) {
+  constructor(baseUrl: string, opts: { wsUrl?: string; headers?: Record<string, string> } = {}) {
     this.base = baseUrl.replace(/\/+$/, "");
     this.wsUrl = opts.wsUrl ?? this.base.replace(/^http/, "ws") + "/v1/ws";
+    this.headers = opts.headers ?? {};
   }
 
   now(): number {
@@ -70,7 +73,7 @@ export class ApiFumpadData implements FumpadData {
       .filter(([, v]) => v !== undefined && v !== "")
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
       .join("&");
-    const res = await fetch(`${this.base}${path}${qs ? `?${qs}` : ""}`, { headers: { accept: "application/json" } });
+    const res = await fetch(`${this.base}${path}${qs ? `?${qs}` : ""}`, { headers: { ...this.headers, accept: "application/json" } });
     const st = Number(res.headers.get("x-server-time"));
     if (st) this.skew = st - Date.now();
     if (!res.ok) {

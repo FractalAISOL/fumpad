@@ -1,5 +1,9 @@
 import type { NextConfig } from "next";
 import { securityHeaders } from "./src/security/headers";
+import { rpcWarnings } from "./src/security/rpc";
+
+// M-8: NEXT_PUBLIC_SOLANA_RPC ships to every browser (LAUNCH.md → "Frontend RPC key").
+for (const w of rpcWarnings(process.env)) console.warn(`[fumpad] warning: ${w}`);
 
 const nextConfig: NextConfig = {
   cacheComponents: true,

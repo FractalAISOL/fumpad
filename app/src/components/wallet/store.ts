@@ -151,18 +151,25 @@ export function useWallet() {
 export interface InstantSettings {
   /** Sign FUMPAD transactions from the Trading wallet without a prompt. */
   enabled: boolean;
-  /** Above this many SOL a trade asks first, instant or not. */
+  /** Above this many SOL (fee and account rent included) a trade asks first, instant or not. */
   maxSol: number;
+  /** L-8: once instant trades have spent this much SOL in this browser session, every trade asks. */
+  sessionCapSol: number;
 }
-export const DEFAULT_INSTANT: InstantSettings = { enabled: true, maxSol: 1 };
+export const DEFAULT_INSTANT: InstantSettings = { enabled: true, maxSol: 1, sessionCapSol: 5 };
 const INSTANT_KEY = "fumpad.instant.v1";
+/** Settings inputs accept (0, 1000] SOL. */
+export const validLimit = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 1000;
 
 function readInstant(): InstantSettings {
   try {
     const v = JSON.parse(localStorage.getItem(INSTANT_KEY) ?? "null") as Partial<InstantSettings> | null;
     if (!v) return DEFAULT_INSTANT;
-    const maxSol = typeof v.maxSol === "number" && Number.isFinite(v.maxSol) && v.maxSol > 0 && v.maxSol <= 1000 ? v.maxSol : DEFAULT_INSTANT.maxSol;
-    return { enabled: v.enabled !== false, maxSol };
+    return {
+      enabled: v.enabled !== false,
+      maxSol: validLimit(v.maxSol) ? v.maxSol : DEFAULT_INSTANT.maxSol,
+      sessionCapSol: validLimit(v.sessionCapSol) ? v.sessionCapSol : DEFAULT_INSTANT.sessionCapSol,
+    };
   } catch {
     return DEFAULT_INSTANT;
   }
@@ -190,6 +197,51 @@ export function useInstantSettings(): InstantSettings {
   );
 }
 export { getInstant as getInstantSettings };
+
+/*
+ * L-8: SOL spent by instant (no-popup) transactions in this browser session, in lamports.
+ * sessionStorage: per tab, gone when the tab closes.
+ */
+const SPENT_KEY = "fumpad.instant.spent.v1";
+let spent: bigint | null = null;
+const spentListeners = new Set<() => void>();
+const readSpent = (): bigint => {
+  try {
+    const v = sessionStorage.getItem(SPENT_KEY);
+    return v && /^\d{1,20}$/.test(v) ? BigInt(v) : BigInt(0);
+  } catch {
+    return BigInt(0);
+  }
+};
+export function getInstantSpent(): bigint {
+  return (spent ??= readSpent());
+}
+function writeSpent(v: bigint) {
+  spent = v;
+  try {
+    sessionStorage.setItem(SPENT_KEY, v.toString());
+  } catch {
+    /* kept in memory for this visit */
+  }
+  spentListeners.forEach((l) => l());
+}
+export function addInstantSpent(lamports: bigint) {
+  if (lamports > BigInt(0)) writeSpent(getInstantSpent() + lamports);
+}
+export function resetInstantSpent() {
+  writeSpent(BigInt(0));
+}
+/** Instant spend this session, SOL. */
+export function useInstantSpentSol(): number {
+  return useSyncExternalStore(
+    (l) => {
+      spentListeners.add(l);
+      return () => spentListeners.delete(l);
+    },
+    () => Number(getInstantSpent()) / 1e9,
+    () => 0,
+  );
+}
 
 /* ── Confirm dialog (rendered by the wallet button) ──────────────────────── */
 
