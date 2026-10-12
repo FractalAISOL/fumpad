@@ -1,4 +1,4 @@
-# Coins page: live three-column board ("Pulse")
+# Launches page (formerly Coins): live three-column board ("Pulse")
 
 Decided with the user 2026-10-11. Start after the live-updates work lands (needs its per-coin WS stream).
 
