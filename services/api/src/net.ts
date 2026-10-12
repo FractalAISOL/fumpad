@@ -3,8 +3,8 @@
  *
  * Client IP: Fastify's `trustProxy` as a function of (address, hop index). Hop 0 is the TCP
  * peer, hop 1 the rightmost X-Forwarded-For entry, and so on; `req.ip` is the first
- * untrusted address walking right-to-left. We trust exactly `hops` hops (Railway's edge
- * proxy = 1: it replaces any client-sent X-Forwarded-For with the connecting address, verified
+ * untrusted address walking right-to-left. We trust exactly `hops` hops (Railway = 2: its
+ * edge replaces any client-sent X-Forwarded-For and forwards "<client>, <edge>", verified
  * live) plus optional CIDRs for extra private hops. Anything a client prepends to
  * X-Forwarded-For sits LEFT of the trusted hops and is never used. Contrast `trustProxy: true`,
  * which took the leftmost (client-controlled) entry.

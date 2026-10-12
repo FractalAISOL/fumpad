@@ -166,11 +166,12 @@ cache cleared by the indexer's NOTIFY (targeted: the touched mints/wallets and t
 Per-IP rate limits (quote stricter), WS connection caps per IP and global (`MAX_WS_TOTAL`); every query/path param
 is schema-validated (400, L-3).
 
-- **Client IP (H-2)**: `trustProxy` trusts exactly `TRUST_PROXY_HOPS` hops (default 1 in production = Railway's
-  edge; 0 locally) plus optional `TRUST_PROXY_CIDRS`; `req.ip` is the first untrusted address from the right, so a
-  client-prepended `X-Forwarded-For` entry is never used. Verified live on Railway (Oct 12 2026): the edge discards
-  client-sent `X-Forwarded-For` (spoofed values didn't change the rate-limit bucket) and request logs carry
-  `xffHops` to re-check the hop count after platform changes. One derivation for everything (rate limits, WS caps,
+- **Client IP (H-2)**: `trustProxy` trusts exactly `TRUST_PROXY_HOPS` hops (default 1 in production, **2 on
+  Railway**; 0 locally) plus optional `TRUST_PROXY_CIDRS`; `req.ip` is the first untrusted address from the right, so a
+  client-prepended `X-Forwarded-For` entry is never used. Verified live on Railway (Oct 12 2026): the edge replaces
+  any client-sent `X-Forwarded-For` and forwards `<client>, <edge 152.233.47.x>` (2 entries), so
+  `TRUST_PROXY_HOPS=2` yields the real client IP (checked against the caller's public IP; spoofed values ignored).
+  With a 1-entry path hops=2 still yields the client. Request logs carry `xffHops` to re-check after platform changes. One derivation for everything (rate limits, WS caps,
   launch per-IP caps, waitlist).
 - **SSR (replaces `RATE_LIMIT_ALLOW`)**: the app's server-side renderer sends `x-fumpad-ssr: <API_SSR_SECRET>`; such
   requests skip rate limits and get the detailed `/health`. IP allow-listing is gone (`RATE_LIMIT_ALLOW` is ignored).
@@ -231,7 +232,7 @@ local validator.
 | `INDEXER_COMMITMENT`, `BACKFILL_FROM_SLOT`, `POLL_INTERVAL_MS`, `RECONCILE_*`, `FINALIZE_INTERVAL_MS`, `DERIVE_INTERVAL_MS`, `FETCH_METADATA` | indexer | tuning |
 | `CORS_ORIGINS` | api | **required in production**, explicit comma-separated origins (`*` refused). Live: `https://fumpad.app,https://www.fumpad.app,https://fumpad.vercel.app,http://localhost:3100` |
 | `API_SSR_SECRET` | api (+ app server env) | **required in production**, ≥ 32 chars, sealed. Sent by the app's SSR as `x-fumpad-ssr`: no rate limit, detailed `/health` |
-| `TRUST_PROXY_HOPS` (prod 1, else 0) | api | reverse-proxy hops whose `X-Forwarded-For` entries are trusted (Railway edge = 1) |
+| `TRUST_PROXY_HOPS` (prod 1, else 0) | api | reverse-proxy hops whose `X-Forwarded-For` entries are trusted (**Railway: 2**, verified live) |
 | `TRUST_PROXY_CIDRS` | api | optional extra trusted proxy networks |
 | `RATE_LIMIT_PER_MIN` (600), `QUOTE_RATE_LIMIT_PER_MIN` (120), `MAX_WS_PER_IP` (5), `MAX_WS_TOTAL` (5000) | api | per client IP; WS global cap |
 | ~~`RATE_LIMIT_ALLOW`~~ | api | removed (ignored): use `API_SSR_SECRET` |
@@ -300,7 +301,7 @@ One project, one Postgres (`postgres-ssl`), four services. Deploy from `services
 | service | image | required env | notes |
 |---|---|---|---|
 | `indexer` | `Dockerfile`, `SERVICE_ENTRY=indexer/dist/main.js` | `DATABASE_URL`, `RPC_URL` (+ `WS_URL`, `HELIUS_WEBHOOK_SECRET` if the webhook is used) | 1 replica (cursors); private (only `/helius` would need a public domain) |
-| `api` | same, `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`, `CORS_ORIGINS`, `API_SSR_SECRET`, `TRUST_PROXY_HOPS=1`, `MINT_POOL_KEY` | public; horizontal OK |
+| `api` | same, `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`, `CORS_ORIGINS`, `API_SSR_SECRET`, `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY` | public; horizontal OK |
 | `keeper` | same, `keeper/dist/main.js` | `DATABASE_URL`, `RPC_URL`, `KEEPER_SECRET_KEY` | private; the advisory lock enforces one active instance |
 | `grinder` | `grinder/Dockerfile` | `DATABASE_URL`, `MINT_POOL_KEY` | worker, no port |
 

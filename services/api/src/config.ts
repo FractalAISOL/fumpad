@@ -14,7 +14,7 @@ export interface ApiConfig {
   maxWsTotal: number;
   /**
    * Client IP derivation (H-2): number of reverse-proxy hops in front of the API whose
-   * X-Forwarded-For entries are trusted (Railway: 1 — its edge overwrites XFF). 0 = the TCP
+   * X-Forwarded-For entries are trusted (Railway: 2, verified live). 0 = the TCP
    * peer is the client. Never "trust everything".
    */
   trustProxyHops: number;

@@ -422,7 +422,8 @@ export class Repo {
    * candidates, newest first) instead of picking one.
    */
   async resolveCoinId(symbolOrMint: string): Promise<string | null> {
-    if (await this.coinBase(symbolOrMint)) return symbolOrMint;
+    // A mint-shaped id is answered only by that exact mint (symbols are ≤ 10 bytes, never 32+ base58).
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(symbolOrMint)) return (await this.coinBase(symbolOrMint)) ? symbolOrMint : null;
     const mints = await this.symbolMints(symbolOrMint, 20);
     if (mints.length > 1) throw new AmbiguousSymbolError(symbolOrMint.replace(/^\$/, ""), mints);
     return mints[0] ?? null;
@@ -828,43 +829,44 @@ export class Repo {
     if (board === "fumbles") {
       // Rank every ticket by a float8 estimate of its worth (cheap), keep a margin, then rank
       // the survivors exactly in numeric and join names only for them.
-      const r = await this.db.query<{ address: string; name: string | null; symbol: string; sold: string; worth: string; m: number }>(
+      const r = await this.db.query<{ address: string; name: string | null; symbol: string; mint: string; sold: string; worth: string; m: number }>(
         `WITH cur AS (SELECT mint, symbol, COALESCE(median_q64, price_q64) AS q FROM coins),
          top AS (
-           SELECT t.owner AS address, t.original_tokens, t.sell_lamports, t.sell_price_q64, cur.symbol, cur.q
+           SELECT t.owner AS address, t.original_tokens, t.sell_lamports, t.sell_price_q64, cur.symbol, cur.mint, cur.q
              FROM tickets t JOIN cur USING (mint)
             WHERE NOT EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = t.owner)
             ORDER BY t.original_tokens::float8 * cur.q::float8 DESC LIMIT 80)
-         SELECT x.address, u.name, x.symbol, x.sell_lamports AS sold,
+         SELECT x.address, u.name, x.symbol, x.mint, x.sell_lamports AS sold,
                 (x.original_tokens * x.q / 18446744073709551616)::numeric(40,0) AS worth,
                 CASE WHEN x.sell_price_q64 > 0 THEN (x.q / x.sell_price_q64)::float8 ELSE 0 END AS m
            FROM top x LEFT JOIN users u ON u.address = x.address
           ORDER BY worth DESC LIMIT 50`,
       );
-      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, soldForSol: lam(x.sold), worthNowSol: lam(x.worth), multiple: x.m }));
+      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, mint: x.mint, soldForSol: lam(x.sold), worthNowSol: lam(x.worth), multiple: x.m }));
     } else if (board === "claimers") {
-      const r = await this.db.query<{ address: string; name: string | null; claims: string; claimed: string; symbol: string; m: number }>(
+      const r = await this.db.query<{ address: string; name: string | null; claims: string; claimed: string; symbol: string; mint: string; m: number }>(
         `SELECT * FROM (
            SELECT cl.owner AS address, u.name, count(*) AS claims,
                   sum(cl.amount * cl.median_q64 / 18446744073709551616)::numeric(40,0) AS claimed,
                   (array_agg(c.symbol ORDER BY cl.amount * cl.median_q64 DESC))[1] AS symbol,
+                  (array_agg(c.mint ORDER BY cl.amount * cl.median_q64 DESC))[1] AS mint,
                   max(CASE WHEN cl.sell_price_q64 > 0 THEN (cl.median_q64 / cl.sell_price_q64)::float8 ELSE 0 END) AS m
              FROM claims cl JOIN coins c USING (mint) LEFT JOIN users u ON u.address = cl.owner
             WHERE NOT cl.escrowed GROUP BY cl.owner, u.name) x
          WHERE ${notFlagged} ORDER BY claimed DESC LIMIT 50`,
       );
-      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, claims: Number(x.claims), symbol: x.symbol, claimedSol: lam(x.claimed), multiple: x.m }));
+      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, claims: Number(x.claims), symbol: x.symbol, mint: x.mint, claimedSol: lam(x.claimed), multiple: x.m }));
     } else {
-      const r = await this.db.query<{ address: string; name: string | null; symbol: string; unlocked: number | null; at: number; waited: number }>(
+      const r = await this.db.query<{ address: string; name: string | null; symbol: string; mint: string; unlocked: number | null; at: number; waited: number }>(
         `SELECT * FROM (
-           SELECT cl.owner AS address, u.name, c.symbol, t.crossed_multiple AS unlocked,
+           SELECT cl.owner AS address, u.name, c.symbol, c.mint, t.crossed_multiple AS unlocked,
                   CASE WHEN cl.sell_price_q64 > 0 THEN (cl.median_q64 / cl.sell_price_q64)::float8 ELSE 0 END AS at,
                   GREATEST(cl.ts - COALESCE(t.crossed_at, cl.ts), 0) / 86400.0 AS waited
              FROM claims cl JOIN tickets t USING (ticket) JOIN coins c ON c.mint = cl.mint LEFT JOIN users u ON u.address = cl.owner
             WHERE NOT cl.escrowed) x
          WHERE ${notFlagged} ORDER BY at DESC, waited DESC LIMIT 50`,
       );
-      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, unlockedAt: x.unlocked ?? undefined, claimedAtMultiple: x.at, waitedDays: Math.round(Number(x.waited)) }));
+      rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, mint: x.mint, unlockedAt: x.unlocked ?? undefined, claimedAtMultiple: x.at, waitedDays: Math.round(Number(x.waited)) }));
     }
     return rows.map((row, i) => ({ ...row, rank: i + 1, isYou: viewer ? row.address === viewer : false }));
   }

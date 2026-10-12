@@ -141,10 +141,11 @@ describe("L-5 health, L-3 validation, H-3 coin routing", () => {
 
 describe("H-3 Repo resolution", () => {
   it("exact mint first, then a unique symbol; several matches throw with all candidates newest first", async () => {
+    const [OLD, NEW, SOLO] = [0, 1, 2].map(() => Keypair.generate().publicKey.toBase58());
     const coins = [
-      { mint: "MintOld1111111111111111111111111111111111", symbol: "PEPE", created_at: 1 },
-      { mint: "MintNew1111111111111111111111111111111111", symbol: "pepe", created_at: 2 },
-      { mint: "MintSolo111111111111111111111111111111111", symbol: "SOLO", created_at: 3 },
+      { mint: OLD, symbol: "PEPE", created_at: 1 },
+      { mint: NEW, symbol: "pepe", created_at: 2 },
+      { mint: SOLO, symbol: "SOLO", created_at: 3 },
     ];
     const db = {
       query: async (sql: string, params: unknown[]) => {
@@ -155,12 +156,12 @@ describe("H-3 Repo resolution", () => {
       },
     };
     const repo = new Repo(db as never);
-    expect(await repo.resolveCoinId("MintOld1111111111111111111111111111111111")).toBe("MintOld1111111111111111111111111111111111");
-    expect(await repo.resolveCoinId("$solo")).toBe("MintSolo111111111111111111111111111111111");
+    expect(await repo.resolveCoinId(OLD)).toBe(OLD);
+    expect(await repo.resolveCoinId("$solo")).toBe(SOLO);
     expect(await repo.resolveCoinId("NONE")).toBeNull();
     const e = await repo.resolveCoinId("PEPE").catch((x) => x);
     expect(e).toBeInstanceOf(AmbiguousSymbolError);
-    expect((e as AmbiguousSymbolError).mints).toEqual(["MintNew1111111111111111111111111111111111", "MintOld1111111111111111111111111111111111"]);
+    expect((e as AmbiguousSymbolError).mints).toEqual([NEW, OLD]);
   });
 });
 
