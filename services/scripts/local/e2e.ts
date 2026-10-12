@@ -198,6 +198,8 @@ export async function runE2E(
       const tx = await conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
       return { sig, events: decodeTransactionEvents(tx as unknown as TxLike), ticket: b.ticket };
     };
+    // D19: wait out the snipe window (4 slots) so these buys pay the normal fee.
+    await sleep(2_500);
     // D17 (8% pool): eve buys enough that her claim stays > 10% of the pool (queued).
     await buy(alice, 1n);
     await buy(eve, 4n);
