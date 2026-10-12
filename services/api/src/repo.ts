@@ -153,6 +153,16 @@ const SPARK_PROBE_CHUNK = 40;
 /** The trending order (24 h volume of every coin) is recomputed at most this often per instance. */
 const TRENDING_RANK_MS = 5_000;
 
+/** A symbol shared by several coins: the caller must choose by mint. */
+export class AmbiguousSymbolError extends Error {
+  constructor(
+    readonly symbol: string,
+    readonly mints: string[],
+  ) {
+    super(`ambiguous symbol ${symbol}`);
+  }
+}
+
 export class Repo {
   private paramsCache?: { at: number; p: Params };
   private trendRank?: { at: number; rows: Promise<{ mint: string; status: CoinRow["status"] }[]> };
@@ -374,28 +384,63 @@ export class Repo {
     return this.trendRank.rows;
   }
 
-  /** The coin's own columns only (no derived subqueries): for endpoints that need a few fields. */
-  private async coinBase(symbolOrMint: string): Promise<CoinBase | null> {
+  /** The coin's own columns only (no derived subqueries), by exact mint (H-3: never by symbol). */
+  private async coinBase(mint: string): Promise<CoinBase | null> {
     const r = await this.db.query<CoinBase>(
       `SELECT mint, creator, created_at, status, amm_pool, amm_base, real_tokens, price_q64, median_q64, pool_tokens, queue_owed
-         FROM coins c WHERE c.mint = $1 OR upper(c.symbol) = upper($1) ORDER BY (c.mint = $1) DESC, c.created_at ASC LIMIT 1`,
-      [symbolOrMint.replace(/^\$/, "")],
+         FROM coins c WHERE c.mint = $1`,
+      [mint],
     );
     return r.rows[0] ?? null;
   }
 
-  async coinRow(symbolOrMint: string): Promise<CoinRow | null> {
-    const trig = (await this.params()).triggerMultipleBps;
-    const r = await this.db.query<CoinRow>(
-      `${coinSelect(trig)} WHERE c.mint = $2 OR upper(c.symbol) = upper($2) ORDER BY (c.mint = $2) DESC, c.created_at ASC LIMIT 1`,
-      [nowSecs(), symbolOrMint.replace(/^\$/, "")],
-    );
-    return r.rows[0] ?? null;
+  /** Full row by exact mint. */
+  async coinRow(mint: string): Promise<CoinRow | null> {
+    return (await this.coinRows([mint]))[0] ?? null;
   }
 
+  /**
+   * Every coin whose symbol matches case-insensitively (a leading `$` is ignored), NEWEST
+   * first (H-3: symbols are not unique; callers must not silently pick one).
+   */
+  async symbolMints(symbol: string, limit = 20): Promise<string[]> {
+    const r = await this.db.query<{ mint: string }>(
+      "SELECT mint FROM coins WHERE upper(symbol) = upper($1) ORDER BY created_at DESC, mint LIMIT $2",
+      [symbol.replace(/^\$/, ""), Math.min(Math.max(limit, 1), 50)],
+    );
+    return r.rows.map((x) => x.mint);
+  }
+
+  /** `GET /v1/coins/by-symbol/:symbol`: all matches, newest first. */
+  async coinsBySymbol(symbol: string, limit = 20): Promise<CoinSummary[]> {
+    return this.summaries(await this.coinRows(await this.symbolMints(symbol, limit)));
+  }
+
+  /**
+   * Legacy `GET /v1/coins/:id` resolution: an exact mint wins; otherwise a symbol that
+   * matches exactly ONE coin. Several matches throw `AmbiguousSymbolError` (with the
+   * candidates, newest first) instead of picking one.
+   */
+  async resolveCoinId(symbolOrMint: string): Promise<string | null> {
+    if (await this.coinBase(symbolOrMint)) return symbolOrMint;
+    const mints = await this.symbolMints(symbolOrMint, 20);
+    if (mints.length > 1) throw new AmbiguousSymbolError(symbolOrMint.replace(/^\$/, ""), mints);
+    return mints[0] ?? null;
+  }
+
+  /** Detail by exact mint (`GET /v1/coins/by-mint/:mint`, and everything internal). */
+  async getCoinByMint(mint: string): Promise<CoinDetail | null> {
+    const c = await this.coinRow(mint);
+    return c ? this.detail(c) : null;
+  }
+
+  /** FumpadData.getCoin: exact mint, else a unique symbol (see resolveCoinId). */
   async getCoin(symbolOrMint: string): Promise<CoinDetail | null> {
-    const c = await this.coinRow(symbolOrMint);
-    if (!c) return null;
+    const mint = await this.resolveCoinId(symbolOrMint);
+    return mint ? this.getCoinByMint(mint) : null;
+  }
+
+  private async detail(c: CoinRow): Promise<CoinDetail> {
     const p = await this.params();
     const now = nowSecs();
     const [s, extra] = await Promise.all([
@@ -533,7 +578,7 @@ export class Repo {
   async liveCoin(mint: string, sig?: string | string[]): Promise<{ coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] } | null> {
     const sigs = sig === undefined ? [] : Array.isArray(sig) ? sig : [sig];
     const [coin, tr, sm] = await Promise.all([
-      this.getCoin(mint),
+      this.getCoinByMint(mint),
       sigs.length
         ? this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
             `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades

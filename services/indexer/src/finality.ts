@@ -16,39 +16,88 @@ import { replayMint } from "./replay.js";
 export interface FinalizerOpts {
   /** Only check rows older than this (they need ~13 s to finalize). */
   minAgeSecs: number;
-  /** A row the cluster doesn't know after this long is treated as dropped. */
+  /** A row the cluster doesn't know is only rolled back once it is at least this old… */
   dropAfterSecs: number;
+  /** …AND after this many consecutive checks found it unknown (M-4), AND getTransaction agrees. */
+  dropMisses: number;
+  /** Rows per getSignatureStatuses call (≤ 256). */
   batch: number;
+  /** Batches per run: keyset pagination past the first page, so a stuck page can't hide newer rows. */
+  maxBatches: number;
 }
 
-export class Finalizer {
-  stats = { finalized: 0, rolledBack: 0, lastRunAt: 0 };
+export const DEFAULT_FINALIZER_OPTS: FinalizerOpts = { minAgeSecs: 15, dropAfterSecs: 180, dropMisses: 3, batch: 200, maxBatches: 10 };
 
-  constructor(private conn: Connection, private db: Db, private params: () => Params, private log: Logger, private opts: FinalizerOpts = { minAgeSecs: 15, dropAfterSecs: 180, batch: 200 }) {}
+export class Finalizer {
+  stats = { finalized: 0, rolledBack: 0, lastRunAt: 0, pendingMisses: 0, savedByCrossCheck: 0 };
+  private readonly opts: FinalizerOpts;
+  /** signature → consecutive runs it was unknown to the cluster (reset when seen again). */
+  private misses = new Map<string, number>();
+
+  constructor(private conn: Connection, private db: Db, private params: () => Params, private log: Logger, opts: Partial<FinalizerOpts> = {}) {
+    this.opts = { ...DEFAULT_FINALIZER_OPTS, ...opts };
+  }
 
   async runOnce(): Promise<{ finalized: number; rolledBack: number }> {
-    const rows = await this.db.query<{ signature: string; age: number }>(
-      `SELECT signature, EXTRACT(EPOCH FROM now() - processed_at)::int AS age FROM transactions
-        WHERE commitment <> 'finalized' AND processed_at < now() - make_interval(secs => $1)
-        ORDER BY slot LIMIT $2`,
-      [this.opts.minAgeSecs, this.opts.batch],
-    );
-    if (!rows.rows.length) return { finalized: 0, rolledBack: 0 };
-    const sigs = rows.rows.map((r) => r.signature);
-    const st = (await this.conn.getSignatureStatuses(sigs, { searchTransactionHistory: true })).value;
-    const fin: string[] = [];
-    const dropped: string[] = [];
-    rows.rows.forEach((r, i) => {
-      const s = st[i];
-      if (s?.confirmationStatus === "finalized" && !s.err) fin.push(r.signature);
-      else if ((!s || s.err) && r.age > this.opts.dropAfterSecs) dropped.push(r.signature);
-    });
-    if (fin.length) await this.db.query("UPDATE transactions SET commitment = 'finalized' WHERE signature = ANY($1)", [fin]);
-    if (dropped.length) await this.rollback(dropped);
-    this.stats.finalized += fin.length;
-    this.stats.rolledBack += dropped.length;
+    let finalized = 0;
+    let rolledBack = 0;
+    let after: { slot: string; signature: string } | null = null;
+    const seen = new Set<string>();
+    for (let b = 0; b < this.opts.maxBatches; b++) {
+      const rows: { signature: string; slot: string; age: number }[] = (
+        await this.db.query<{ signature: string; slot: string; age: number }>(
+          `SELECT signature, slot, EXTRACT(EPOCH FROM now() - processed_at)::int AS age FROM transactions
+            WHERE commitment <> 'finalized' AND processed_at < now() - make_interval(secs => $1)
+              AND ($3::bigint IS NULL OR (slot, signature) > ($3::bigint, $4::text))
+            ORDER BY slot, signature LIMIT $2`,
+          [this.opts.minAgeSecs, this.opts.batch, after?.slot ?? null, after?.signature ?? null],
+        )
+      ).rows;
+      if (!rows.length) break;
+      const st = (await this.conn.getSignatureStatuses(rows.map((r) => r.signature), { searchTransactionHistory: true })).value;
+      const fin: string[] = [];
+      const candidates: string[] = [];
+      rows.forEach((r, i) => {
+        seen.add(r.signature);
+        const s = st[i];
+        if (s && !s.err) {
+          this.misses.delete(r.signature);
+          if (s.confirmationStatus === "finalized") fin.push(r.signature);
+          return;
+        }
+        // Unknown (or now reported failed): count it; one null from one RPC node is not a fork.
+        const n = (this.misses.get(r.signature) ?? 0) + 1;
+        this.misses.set(r.signature, n);
+        if (n >= this.opts.dropMisses && r.age > this.opts.dropAfterSecs) candidates.push(r.signature);
+      });
+      if (fin.length) await this.db.query("UPDATE transactions SET commitment = 'finalized' WHERE signature = ANY($1)", [fin]);
+      const dropped: string[] = [];
+      for (const sig of candidates) {
+        // Cross-check with a different RPC method before deleting anything.
+        const tx = await this.conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }).catch(() => undefined);
+        if (tx === null) dropped.push(sig);
+        else if (tx) {
+          this.misses.delete(sig);
+          this.stats.savedByCrossCheck++;
+        }
+        // undefined = RPC error: decide on a later run.
+      }
+      if (dropped.length) {
+        await this.rollback(dropped);
+        for (const s of dropped) this.misses.delete(s);
+      }
+      finalized += fin.length;
+      rolledBack += dropped.length;
+      if (rows.length < this.opts.batch) break;
+      after = { slot: rows[rows.length - 1].slot, signature: rows[rows.length - 1].signature };
+    }
+    // Forget rows that are no longer pending (finalized/deleted elsewhere).
+    if (this.misses.size > 50_000) for (const k of this.misses.keys()) if (!seen.has(k)) this.misses.delete(k);
+    this.stats.finalized += finalized;
+    this.stats.rolledBack += rolledBack;
+    this.stats.pendingMisses = this.misses.size;
     this.stats.lastRunAt = Date.now();
-    return { finalized: fin.length, rolledBack: dropped.length };
+    return { finalized, rolledBack };
   }
 
   /** Delete transactions (cascades to events + event tables) and rebuild their mints. */
