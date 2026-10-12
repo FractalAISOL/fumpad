@@ -160,7 +160,22 @@ their simulation/execution logs.
    v0.6 bounds — any new `queue_params` must be in bounds (e.g. 60 s hold, 10-min window, ≥ 10 samples).
    Coins created before the upgrade follow `Global.params` for rewards (no snapshot); new coins snapshot.
 
-**Compute (v0.6 deltas, `cu_report` + locker/venue/curve CU tests, same machine):** CU_V06_PLACEHOLDER
+**Compute (v0.6 deltas, `cu_report` + locker/venue/curve CU tests; pre-fix tree 53f89b4 vs v0.6, same machine, 2–3 runs
+each — ranges are PDA-bump spread on random keys):**
+| Instruction | v0.5 | v0.6 | Why |
+|---|---|---|---|
+| locker `skim` | 76–85k | **92–115k** | H-1: `read_pool` (before and after the withdraw) cross-checks pool PDA + LP-mint PDA + 2 vault ATAs. Keeper/SDK `CU.skimSettle` 200k → **300k** (skim + settle + ATA ≈ 125–150k). |
+| `graduate` | 272–307k | 278–317k | L-1 vault/event-authority pinning + the locker's H-1 checks in `lock`; budget 400k unchanged |
+| `execute_buyback` | 144.7k | 133.4k | different PDA (`pumpswap_signer`) bump; exact-count check is free |
+| `close_ticket` (full-queue scan) | 23.8k | 26.5k | + `coin` account (M-1 claim window) |
+| `register_holdings` (rebuy, full queue) | 25.6k | 27.4–28.9k | `coin.reward_params` + 776-byte Global |
+| curve `sell` (creates ticket) | 49.6–54.1k | 56.3–57.8k | `coin.reward_params` (Params copy) + Global decode |
+| `claim` paid now / queued at end | 57.1k / 69.5k | 57.7k / 70.1k | +0.6–0.7k |
+| `process_queue` walk only / 13 voided | 95.2k / 115.4k | 95.9k / 116.0k | +0.7k |
+| `record_samples` 1 / 5 / 10 coins | 16.7k / 58.2k / 110.6k | 17.2k / 60.2k / 114.4k | larger Global (+3.4%) |
+| `init_claim_queue` × 9 | 71.9k | 72.7k | worst-case bumps **140k** (`cu_report::post_graduation_setup_worst_case_bumps`; the SDK's old 9 × 12k budget failed for such coins → `CU.initClaimQueue` 25k/call, bump-aware `initClaimQueueCu`) |
+| `swap_buy` / `swap_sell` / curve `buy` | within run-to-run spread | unchanged | — |
+All rows remain far below the 1.4M limit (`cu_report` asserts < 1M).
 
 ## v0.5 interface changes (D19 snipe tax, D20 graduation fee — SDK / keeper / indexer / app)
 Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-idl`, `npm run vectors`). SPEC §3 (D20) and §4.1 (D19) have the rationale.

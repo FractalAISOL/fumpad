@@ -154,7 +154,7 @@ export const CU = {
   buy: 200_000,
   sell: 200_000,
   createCoinAndBuy: 350_000,
-  graduate: 400_000, // ~276-279k measured (v0.5, incl. D20 setup pre-funding)
+  graduate: 400_000, // ~278–317k measured (v0.6: + L-1 vault pinning and the locker's H-1 cross-checks)
   swapBuy: 250_000,
   swapSell: 250_000,
   executeBuyback: 250_000,
@@ -162,7 +162,8 @@ export const CU = {
   recordSamplesBase: 20_000,
   claim: 200_000,
   processQueue: 450_000, // 13 entries: ~245k paying, ~323k escrowing
-  skimSettle: 200_000,
+  /** v0.6: skim 92–115k (H-1 identity cross-checks, PDA-bump dependent per pool) + settle ~18k + ATA ~15k. */
+  skimSettle: 300_000,
   /**
    * Per call. 9 calls ≈ 72k total for a typical coin, but every call re-derives the queue PDA
    * (~1.3–1.5k CU per extra bump attempt): a low-bump coin needed 140k (> the old 9 × 12k →
