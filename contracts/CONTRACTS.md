@@ -29,7 +29,8 @@ cargo test -p tests                    # LiteSVM integration tests (needs `ancho
 | Build | `fumpad.so` | rent | `fumpad_lp_locker.so` | rent |
 |---|---|---|---|---|
 | before (O3, no flags) | 1,086,184 | 5.519 SOL | 209,960 | 1.067 SOL |
-| **now** | **800,672 (−26.3%)** | **4.068 SOL** | **184,216 (−12.3%)** | **0.937 SOL** |
+| tuned (v0.5) | 800,672 (−26.3%) | 4.068 SOL | 184,216 (−12.3%) | 0.937 SOL |
+| **v0.6** (final-review fixes, same build profile) | **835,544 (+4.4%)** | **4.245 SOL** | **187,512 (+1.8%)** | **0.953 SOL** |
 
 Rent = `solana rent <len + 45>` (program-data header), refundable on close; `solana program deploy` sizes the
 program-data account to the `.so` — pass `--max-len` for upgrade headroom, or `solana program extend` later.
@@ -66,11 +67,17 @@ CU before → after (chosen build, same keys): curve `buy` 45,674 → 46,619 (+2
    are (principal stays locked; skims may stop) — re-run the locker test suite against the exact `.so` first.
 3. `graduate` fails cleanly (whole instruction reverts, coin stays `Complete`) while the locker isn't deployed, so finish step 2 before opening launches.
 
-**Upgrading `fumpad` over an existing Global** (e.g. devnet v0.4 → v0.5): `solana program extend` if the new `.so` is
+**Upgrading `fumpad` over an existing Global** (e.g. devnet v0.5 → v0.6): `solana program extend` if the new `.so` is
 larger than the program-data account, `solana program deploy target/deploy/fumpad.so --program-id <id>` (upgrade
 authority signs), then immediately `migrate_global` signed by `Global.admin` (SDK `migrateGlobalIx`; devnet:
 `npx tsx scripts/devnet/migrate-global.ts` in `services/`). Every instruction that loads Global fails until it runs. The
-locker is immutable and unaffected.
+mainnet locker is immutable and unaffected (see the v0.6 notes for devnet's still-upgradeable locker).
+
+**Mainnet admin setup (v0.6, FINAL_REVIEW.md):** `fumpad` upgrade authority = Squads v4 ≥ 3-of-5 with a Squads time
+lock ≥ 48h; `Global.admin` = a separate 3-of-5; guardian = a 2-of-3 (after `initialize_global`: `propose_admin(admin,
+treasury, guardian)` → 48h → `accept_admin` by the admin); keepers ≤ 3 hot keys on separate infra; treasury cold.
+Order: deploy fumpad → `initialize_global` (upgrade-authority key) → hand the authority to Squads → deploy the locker
+`--final` (after re-running the full suite, incl. the mainnet PumpSwap fixtures, on that exact `.so`) → open launches.
 
 `tests/src/flow.rs` drives a real coin through the whole lifecycle (used by `d10_tests.rs`
 and `e2e_tests.rs`); `Env::set_sol_usd` writes a fresh Pyth SOL/USD account.
@@ -78,6 +85,82 @@ and `e2e_tests.rs`); `Env::set_sol_usd` writes a fresh Pyth SOL/USD account.
 program + PumpSwap GlobalConfig, global initialized, one keeper). Devnet account dumps live
 in `tests/fixtures/` (`solana account -u d <addr> --output json -o <file>`;
 `solana program dump -u d <id> <file>.so`).
+
+## v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)
+Regenerate the client from `target/idl/*.json` (`services`: `npm run sync-idl`, `npm run vectors`). Every `issue_*` test
+in `tests/src/final_review.rs` is now a `regression_*` test.
+
+**Locker (H-1, before `--final`)** — no interface change. `parse_pool` accepts `len >= POOL_LEN` (287) and reads the
+prefix; `read_pool` cross-checks pool == PDA ["pool", index, creator, base, quote] (stored bump), lp_mint == PDA
+["pool_lp_mint", pool], base/quote vault == ATA(pool, mint, Token-2022 / SPL Token); `UnknownPoolLayout` for
+shorter or shifted layouts, `WrongAccount` for a wrong discriminator. Tests: `locker_tests::regression_skim_*`
+(real `extend_account` to 301 bytes; foreign/fake pool data), `final_review::regression_extend_account_*`.
+
+**State layout**
+- `Global` **680 → 776 bytes**: `guardian: Pubkey`, `pause_expires_at: i64`, `pending_admin_eta: i64` carved from
+  `reserved` (128 → 80, right after `params`); `pending_admin`, `pending_treasury`, `pending_guardian` (Pubkeys)
+  appended after `pending_eta`. `migrate_global` upgrades 672 (v0.4) and 680 (v0.5) Globals (`LEGACY_PARAMS_LENS`
+  = [183, 187]): guardian = stored admin, active pause flags → `pause_expires_at = now + 7 days`, empty proposal;
+  the snipe args only matter from 672. Existing params are **not** re-validated (devnet's test params migrate).
+- `Coin.rewards: RewardTerms { trigger_multiple_bps u32, claim_bps u16, max_claim_pool_bps u16, min_sell_usd_cents u64,
+  min_hold_secs i64, rebuy_window_secs i64, claim_window_secs i64, max_open_tickets u8 }` (41 bytes) carved from
+  `reserved` (60 → 19); size unchanged (338). Snapshotted at `create_coin`; zeros (pre-v0.6 coins) = follow
+  `Global.params`. Clients: `coinRewardParams(coin, global)` for trigger / claim / cap / windows.
+- `Params` layout unchanged (187 bytes). Default `max_price_age_secs` **60 → 150**.
+
+**Params validation (`Params::is_valid`)** — every param bounded (`constants.rs` `MIN_*` / `MAX_*`, SPEC §6.2), feed
+pinned to `PYTH_SOL_USD_FEED_ID`, `curve_consistent()` (graduation_lamports = curve raise ±10 bps, raise > fee, LP
+opening price = curve final price ±10 bps). Local/devnet test windows (e.g. 2 s hold, 60 s oracle window) are no
+longer accepted by `initialize_global` / `queue_params`: the local stack seeds its Global into the genesis
+(`services/scripts/local/harness.ts` `startValidator({ global })`).
+
+**Instructions**
+| Change | Details |
+|---|---|
+| `set_admin` **removed** | → `propose_admin` / `accept_admin` / `cancel_admin` |
+| `propose_admin(new_admin, platform_treasury, guardian)` (admin, **new**) | `admin` (signer), `global` (mut), `event_authority`, `program`. All three keys non-zero (`InvalidParams`); replaces any proposal; eta = now + 48h (`ADMIN_TIMELOCK_SECS`). Event `AdminProposed`. |
+| `accept_admin()` (**new**) | `new_admin` (signer = `Global.pending_admin`), `global` (mut), `event_authority`, `program`. Errors `NoPendingAdmin`, `Unauthorized`, `TimelockNotElapsed`. Event `AdminAccepted`. |
+| `cancel_admin()` (admin or guardian, **new**) | `authority` (signer), `global` (mut), `event_authority`, `program`. Event `AdminProposalCancelled`. |
+| `set_pause(paused)` | accounts now `authority` (admin **or guardian**, signer), `global` (mut), `event_authority`, `program`. Bits outside `PAUSE_ALL` (0b1111) → `InvalidParams`. Non-zero → `pause_expires_at = now + 7 days`; 0 → 0. Event `PauseSet`. |
+| `cancel_params()` | account `admin` renamed `authority` (admin **or guardian**). Event `ParamsCancelled` + `authority`. |
+| `set_keepers(keepers)` | + `event_authority`, `program` (event `KeepersSet`). |
+| `initialize_global(...)` | + `event_authority` (PDA `["__event_authority"]`) after `system_program` (event `GlobalInitialized`); guardian = admin. |
+| `close_position()` (wallet, **new**) | `wallet` (signer, mut — rent goes here), `position` (mut, `["position", mint, wallet]`), `event_authority`, `program`; remaining = ticket PDAs `["ticket", mint, wallet, seq]` for seq 0..`next_ticket_seq` (≤ 64), none a live FUMPAD account. Errors `PositionNotEmpty` (open tickets, wrong count, unclosed ticket), `InvalidAccount` (wrong PDA). Event `PositionClosed`. |
+| `close_ticket` | **`coin`** (`["coin", ticket.mint]`) appended after `claim_queue` (claim window from the coin's snapshot). |
+| `execute_buyback` | `pool_authority` → **`pumpswap_signer`** (mut, PDA `["pumpswap_signer"]`); `buyback_wsol` = ATA(pumpswap_signer, WSOL); venue slice user = `pumpswap_signer`, **exactly 17 accounts** (`WrongVenue` otherwise). One-time setup: PumpSwap `init_user_volume_accumulator(payer, user = pumpswap_signer)` (SDK `buildPostGraduation` does it). |
+| `graduate` | **no remaining accounts** (`InvalidAccount`); `pool_base_vault` / `pool_quote_vault` must be ATA(pool, mint, Token-2022) / ATA(pool, WSOL, SPL Token), `amm_event_authority` the PumpSwap event-authority PDA (`WrongVenue`). Respects `PAUSE_GRADUATE`. |
+| `sell` | never paused (`PAUSE_TRADE` no longer applies). |
+| curve `buy`, `swap_buy`, `swap_sell`, `execute_buyback`, `create_coin`, claims | pause checks honour `pause_expires_at`. |
+
+**Pause flags:** `PAUSE_LAUNCH` 1, `PAUSE_TRADE` 2 (curve buys, router, buyback), `PAUSE_CLAIMS` 4, **`PAUSE_GRADUATE` 8**.
+`Global::is_paused(flag, now)`. Constants: `ADMIN_TIMELOCK_SECS` (48h), `MAX_PAUSE_SECS` (7 days),
+`PUMPSWAP_SIGNER_SEED`, `VENUE_V2_ACCOUNTS` (17), `MAX_CLOSE_POSITION_TICKETS` (64), the `MIN_*`/`MAX_*` param bounds.
+
+**Events:** new `GlobalInitialized`, `PauseSet`, `KeepersSet`, `AdminProposed`, `AdminAccepted`, `AdminProposalCancelled`,
+`PositionClosed`; appended fields: `ParamsCancelled.authority`, `GlobalMigrated.guardian`, `.pause_expires_at`
+(SDK `LEGACY_EVENT_PADS` decodes older payloads with them zeroed).
+**Errors (appended):** 6037 `NoPendingAdmin`, 6038 `PositionNotEmpty`.
+
+**Keeper behaviour:** buyback setup inits the volume accumulator of `pumpswap_signer`; reward decisions (auto-claim,
+queue pre-check, trigger pre-filter) use each coin's snapshot; pauses respect their expiry; failed transactions log
+their simulation/execution logs.
+
+**Devnet upgrade (v0.5 → v0.6):**
+1. `anchor build` (both programs). The devnet fumpad program-data account (1,089,832 bytes) fits the new `.so`.
+2. `solana program deploy -u d target/deploy/fumpad.so --program-id ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv`
+   (upgrade authority 9HXg… signs), then **immediately** `migrate_global` from `Global.admin`:
+   `npx tsx scripts/devnet/migrate-global.ts` (args `{ snipe_window_slots: 4, snipe_start_bps: 9_900 }` — ignored for
+   the 680-byte devnet Global; the admin pays ≈0.00067 SOL extra rent). Global becomes 776 bytes, guardian = admin.
+3. The devnet locker is still upgradeable (authority 9HXg…): `solana program deploy -u d
+   target/deploy/fumpad_lp_locker.so --program-id 8TkV5aWsBJ9bHr96HV5iQXrCJ51XvHTTtxnufMQmEaY9` to get the H-1 fix
+   (no state change; existing `Lock` accounts unchanged).
+4. Keeper/SDK: deploy the v0.6 services; the keeper inits the `pumpswap_signer` volume accumulator on its next
+   post-graduation pass. Old buyback dust in ATA(pool_authority, WSOL) stays there (unused).
+5. Devnet's test params (30 s hold, 5-min oracle window, 15 samples, 0.3 SOL curve) stay live but are outside the
+   v0.6 bounds — any new `queue_params` must be in bounds (e.g. 60 s hold, 10-min window, ≥ 10 samples).
+   Coins created before the upgrade follow `Global.params` for rewards (no snapshot); new coins snapshot.
+
+**Compute (v0.6 deltas, `cu_report` + locker/venue/curve CU tests, same machine):** CU_V06_PLACEHOLDER
 
 ## v0.5 interface changes (D19 snipe tax, D20 graduation fee — SDK / keeper / indexer / app)
 Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-idl`, `npm run vectors`). SPEC §3 (D20) and §4.1 (D19) have the rationale.
