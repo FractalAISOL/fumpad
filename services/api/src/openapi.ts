@@ -35,6 +35,7 @@ export const OPENAPI = {
           q("sort", { enum: ["trending", "new", "mcap", "closest", "graduating"] }),
           q("status", { enum: ["curve", "graduated", "all"] }),
           q("limit", { type: "integer", minimum: 1, maximum: 200 }),
+          q("symbol", { type: "string" }, "Only coins with this symbol (case-insensitive, $ optional), newest first, at most 50."),
         ],
         responses: ok(arr("CoinSummary")),
       },

@@ -156,6 +156,7 @@ export async function buildServer(
             sort: { type: "string", enum: ["trending", "new", "mcap", "closest", "graduating"] },
             status: { type: "string", enum: ["curve", "graduated", "all"] },
             limit: limitProp(200),
+            symbol: { type: "string", minLength: 1, maxLength: 16 },
           },
         },
       },
@@ -165,6 +166,12 @@ export async function buildServer(
       const sort = oneOf<CoinSort>(qs.sort, ["trending", "new", "mcap", "closest", "graduating"], "sort", "trending");
       const status = oneOf(qs.status, ["curve", "graduated", "all"] as const, "status", "all");
       const limit = int(qs.limit, 50);
+      // H-3: `?symbol=` = every coin with that symbol (case-insensitive), newest first (≤ 50).
+      if (qs.symbol !== undefined) {
+        const sym = qs.symbol.replace(/^\$/, "").toUpperCase();
+        const rows = await cached(`symbol:${sym}:50`, 3_000, () => repo.coinsBySymbol(sym, 50));
+        return rows.filter((c) => status === "all" || (status === "graduated" ? c.status === "graduated" : c.status !== "graduated")).slice(0, limit);
+      }
       return cached(`list:${sort}:${status}:${limit}`, 3_000, () => repo.listCoins({ sort, status, limit }));
     },
   );

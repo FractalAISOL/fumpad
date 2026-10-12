@@ -1233,6 +1233,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "isYou": {
         "type": "boolean"
       },
+      "mint": {
+        "$ref": "#/components/schemas/Address",
+        "description": "The coin behind `symbol` (links go by mint; older API builds omit it and link by symbol)."
+      },
       "multiple": {
         "type": "number"
       },

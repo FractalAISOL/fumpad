@@ -133,6 +133,7 @@ describe("L-5 health, L-3 validation, H-3 coin routing", () => {
     expect((await app.inject({ method: "GET", url: `/v1/coins/by-mint/${Keypair.generate().publicKey.toBase58()}` })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: "/v1/coins/by-symbol/$dup" })).json().map((m: { mint: string }) => m.mint)).toEqual([mintB, mintA]);
     expect((await app.inject({ method: "GET", url: "/v1/coins/by-symbol/NOPE" })).json()).toEqual([]);
+    expect((await app.inject({ method: "GET", url: "/v1/coins?symbol=dup&sort=new&status=all&limit=200" })).json().map((m: { mint: string }) => m.mint)).toEqual([mintB, mintA]);
     expect((await app.inject({ method: "GET", url: "/v1/coins/ONE" })).json().mint).toBe(mintA);
     expect((await app.inject({ method: "GET", url: `/v1/coins/${mintB}` })).json().mint).toBe(mintB);
   });
