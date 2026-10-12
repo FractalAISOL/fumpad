@@ -61,7 +61,7 @@ export class RpcSource {
   /** signature → first time getTransaction returned nothing for it (retry queue). */
   private missing = new Map<string, number>();
   private hints = new Set<string>();
-  private hinting = false;
+  private draining?: Promise<void>;
 
   constructor(private conn: Connection, private db: Db, private ingestor: Ingestor, private opts: RpcSourceOpts, private log: Logger) {}
 
@@ -220,13 +220,16 @@ export class RpcSource {
       this.hints.add(s);
     }
     this.stats.hints += signatures.length;
-    if (!this.hinting) void this.drainHints();
+    void this.drainHints();
   }
 
   /** Process queued hints; resolves when the queue is empty (tests await it). */
-  async drainHints(): Promise<void> {
-    if (this.hinting) return;
-    this.hinting = true;
+  drainHints(): Promise<void> {
+    this.draining ??= this.drain().finally(() => (this.draining = undefined));
+    return this.draining;
+  }
+
+  private async drain(): Promise<void> {
     try {
       while (this.hints.size) {
         const batch = [...this.hints].slice(0, 20);
@@ -249,8 +252,6 @@ export class RpcSource {
       }
     } catch (e) {
       this.log.warn({ err: String(e) }, "webhook hints failed (poller will catch up)");
-    } finally {
-      this.hinting = false;
     }
   }
 

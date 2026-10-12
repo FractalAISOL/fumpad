@@ -16,7 +16,7 @@
  * same signed message while it is fresh: a replay can only re-reserve the mint that wallet
  * already holds.
  */
-import { createPublicKey, verify } from "node:crypto";
+import { createPrivateKey, createPublicKey, randomBytes, sign, verify } from "node:crypto";
 
 import type { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -76,4 +76,11 @@ export function launchAuthError(
     ok = false;
   }
   return ok ? null : "auth signature does not match the creator wallet";
+}
+
+/** Node-side signer for the launch message (tests, scripts; wallets use `signMessage`). */
+export function signLaunchAuth(secretKey: Uint8Array, a: { creator: string; symbol: string; nonce?: string; issuedAt?: number }): { message: string; signature: string } {
+  const message = launchAuthMessage({ creator: a.creator, symbol: a.symbol, nonce: a.nonce ?? randomBytes(12).toString("hex"), issuedAt: a.issuedAt ?? Date.now() });
+  const key = createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(secretKey.subarray(0, 32))]), format: "der", type: "pkcs8" });
+  return { message, signature: bs58.encode(sign(null, Buffer.from(message, "utf8"), key)) };
 }

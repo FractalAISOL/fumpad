@@ -15,7 +15,7 @@ export const OPENAPI = {
     title: "FUMPAD API",
     version: "0.1.0",
     description:
-      "Read API over the FUMPAD indexer (REST + WebSocket). Responses are the app's `FumpadData` types (app/src/data/types.ts): SOL amounts in SOL, token amounts in whole tokens (6 decimals), prices in SOL per token, times in unix milliseconds. Rate limited per IP.",
+      "Read API over the FUMPAD indexer (REST + WebSocket). Responses are the app's `FumpadData` types (app/src/data/types.ts): SOL amounts in SOL, token amounts in whole tokens (6 decimals), prices in SOL per token, times in unix milliseconds. Rate limited per client IP (server-side rendering authenticates with the x-fumpad-ssr header instead).",
   },
   servers: [{ url: "/" }],
   paths: {
@@ -39,7 +39,28 @@ export const OPENAPI = {
         responses: ok(arr("CoinSummary")),
       },
     },
-    "/v1/coins/{symbolOrMint}": { get: { summary: "Coin detail (getCoin)", parameters: [p("symbolOrMint")], responses: { ...ok(ref("CoinDetail")), ...notFound } } },
+    "/v1/coins/by-mint/{mint}": { get: { summary: "Coin detail by mint (preferred; mints are unique, symbols are not)", parameters: [p("mint")], responses: { ...ok(ref("CoinDetail")), ...notFound } } },
+    "/v1/coins/by-symbol/{symbol}": {
+      get: {
+        summary: "Every coin with this symbol (case-insensitive, leading $ optional), newest first. Empty array when none.",
+        parameters: [p("symbol"), q("limit", { type: "integer", minimum: 1, maximum: 50 })],
+        responses: ok(arr("CoinSummary")),
+      },
+    },
+    "/v1/coins/{symbolOrMint}": {
+      get: {
+        summary: "Coin detail, legacy (getCoin). Exact mint wins; a symbol must match exactly one coin, otherwise 300 with {error, symbol, matches: CoinSummary[] newest first}. Prefer /v1/coins/by-mint/{mint}.",
+        parameters: [p("symbolOrMint")],
+        responses: { ...ok(ref("CoinDetail")), "300": { description: "Ambiguous symbol", content: { "application/json": { schema: { type: "object", properties: { error: { type: "string" }, symbol: { type: "string" }, matches: arr("CoinSummary") } } } } }, ...notFound },
+      },
+    },
+    "/v1/launch/prepare": {
+      post: {
+        summary:
+          "D18 vanity launch: reserve a …fmbL mint and return the mint-signed launch tx. Body {creator, name, symbol, uri, initialBuyLamports?, slippageBps?, priorityMicroLamports?, auth: {message, signature}}; auth.message = 'FUMPAD launch\\ncreator: <creator>\\nsymbol: <symbol>\\nnonce: <16-64 [A-Za-z0-9_-]>\\nissuedAt: <unix ms>' signed (ed25519 signMessage) by the creator wallet; signature base58 or base64.",
+        responses: { "200": { description: "OK" }, "401": { description: "Missing/invalid wallet signature" }, "429": { description: "Rate limited" }, "503": { description: "Pool empty / launches disabled" } },
+      },
+    },
     "/v1/coins/{mint}/prices": {
       get: { summary: "Price series (getPriceSeries)", parameters: [p("mint"), q("range", { enum: ["1h", "1d", "7d", "all"] }, undefined, true)], responses: ok(arr("PricePoint")) },
     },
@@ -103,7 +124,7 @@ export const OPENAPI = {
         responses: { "101": { description: "Switching protocols" } },
       },
     },
-    "/health": { get: { summary: "Liveness + indexer lag", responses: ok({ type: "object" }) } },
+    "/health": { get: { summary: "Liveness ({ok}). Detail (indexer lag, WS, cache, vanity pool) only with the x-fumpad-ssr secret header.", responses: ok({ type: "object" }) } },
   },
   components: { schemas: SCHEMAS },
 } as const;

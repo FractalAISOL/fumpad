@@ -14,11 +14,12 @@ import type { Board, ChartRange, FeedKind, Side } from "./generated/app-types.js
 import type { CoinSort } from "./generated/app-interface.js";
 import { LiveHub } from "./live.js";
 import { OPENAPI } from "./openapi.js";
-import { Repo } from "./repo.js";
+import { AmbiguousSymbolError, Repo } from "./repo.js";
 import { systemStatus } from "./status.js";
 import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
 import { registerLaunchRoutes } from "./launch/routes.js";
 import { MintVault } from "./launch/vault.js";
+import { clientIpTrust, ssrAuthorized, SSR_HEADER } from "./net.js";
 
 /** Mint-existence / block-height probe for the vanity pool sweeper. */
 export function connectionProbe(conn: Connection): ChainProbe {
@@ -36,6 +37,13 @@ export function connectionProbe(conn: Connection): ChainProbe {
 }
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const B58 = "^[1-9A-HJ-NP-Za-km-z]{32,44}$";
+
+// L-3: JSON-schema validation (Fastify/ajv) for every query string and path parameter;
+// a malformed value is a 400 before any handler runs (no NaN reaching SQL).
+const mintParam = { type: "object", properties: { mint: { type: "string", pattern: B58 } }, required: ["mint"] } as const;
+const viewerQs = { type: "object", properties: { viewer: { type: "string", pattern: `${B58}|^$` } } } as const;
+const limitProp = (max: number) => ({ type: "integer", minimum: 1, maximum: max }) as const;
 const bad = (msg: string) => Object.assign(new Error(msg), { statusCode: 400 });
 const addr = (v: unknown, name: string) => {
   if (typeof v !== "string" || !BASE58.test(v)) throw bad(`invalid ${name}`);
@@ -66,8 +74,24 @@ export async function buildServer(
   opts: { logStream?: NodeJS.WritableStream } = {},
 ): Promise<{ app: FastifyInstance; deps: ApiDeps }> {
   const app = Fastify({
-    logger: { level: cfg.logLevel, redact: ["req.headers.authorization"], ...(opts.logStream ? { stream: opts.logStream } : {}) },
-    trustProxy: true,
+    logger: {
+      level: cfg.logLevel,
+      redact: ["req.headers.authorization", `req.headers["${SSR_HEADER}"]`],
+      serializers: {
+        // `xffHops` (entry count only, never the addresses' content beyond req.ip) lets an
+        // operator check TRUST_PROXY_HOPS against what the platform proxy actually sends.
+        req: (r: { method: string; url: string; ip: string; headers: Record<string, string | string[] | undefined> }) => ({
+          method: r.method,
+          url: r.url,
+          remoteAddress: r.ip,
+          xffHops: typeof r.headers["x-forwarded-for"] === "string" ? r.headers["x-forwarded-for"].split(",").length : 0,
+        }),
+      },
+      ...(opts.logStream ? { stream: opts.logStream } : {}),
+    },
+    // H-2: never trust every X-Forwarded-For hop (the leftmost entry is client-controlled).
+    // Trust exactly TRUST_PROXY_HOPS hops (Railway's edge: 1) plus optional private CIDRs.
+    trustProxy: clientIpTrust(cfg.trustProxyHops, cfg.trustProxyCidrs),
     bodyLimit: 64 * 1024,
   });
   const db = deps?.db ?? createPool(cfg.databaseUrl);
@@ -83,7 +107,11 @@ export async function buildServer(
       // Per transaction: everything keyed by a touched mint/wallet plus the cheap cross-coin
       // lists. Leaderboards (a full ticket scan) are left to their 10 s TTL instead of being
       // recomputed after every trade.
-      (mints, wallets) => cache.invalidate(mints ? [...mints, ...(wallets ?? []), "list", "feed", "stats", "closest", "tickets", "profile"] : undefined),
+      // L-11: only what a transaction can change — keys of the touched mints/wallets (coin,
+      // prices, holders, queue, trades, tickets:<wallet>, portfolio, profile:<wallet>, …), the
+      // single-ticket lookups and the small cross-coin lists. No longer every wallet's
+      // tickets/profile on every trade.
+      (mints, wallets) => cache.invalidate(mints ? [...mints, ...(wallets ?? []), "list", "feed", "stats", "closest", "tickets:one"] : undefined),
       app.log,
       { coalesceMs: cfg.liveCoalesceMs },
     );
@@ -95,12 +123,16 @@ export async function buildServer(
             suffix: cfg.vanitySuffix,
             reservationMs: cfg.launchReservationMs,
             maxActivePerIp: cfg.launchMaxActivePerIp,
+            reserve: cfg.launchPoolReserve,
+            rpcTimeoutMs: cfg.launchRpcTimeoutMs,
           })
         : null;
   const all: ApiDeps = { db, conn, repo, chain, cache, live, pool };
 
   await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "POST", "OPTIONS"] });
-  await app.register(rateLimit, { max: cfg.rateLimitPerMin, timeWindow: "1 minute", allowList: cfg.rateLimitAllow });
+  // SSR requests (shared secret header, H-2) are exempt; everyone else is limited per real IP.
+  const isSsr = (req: { headers: Record<string, string | string[] | undefined> }) => ssrAuthorized(req.headers[SSR_HEADER], cfg.ssrSecret);
+  await app.register(rateLimit, { max: cfg.rateLimitPerMin, timeWindow: "1 minute", allowList: (req) => isSsr(req) });
   await app.register(websocket, { options: { maxPayload: 4 * 1024 } });
 
   app.addHook("onSend", async (_req, reply) => {
@@ -113,53 +145,108 @@ export async function buildServer(
   app.get("/v1/stats", async () => cached("stats", 5_000, async () => repo.getStats(await chain.solUsd())));
   app.get("/v1/sol-usd", async () => ({ solUsd: await chain.solUsd() }));
   app.get("/v1/params", async () => cached("params", 30_000, () => repo.getParams()));
-  app.get("/v1/coins", async (req) => {
-    const qs = req.query as Record<string, string>;
-    const sort = oneOf<CoinSort>(qs.sort, ["trending", "new", "mcap", "closest", "graduating"], "sort", "trending");
-    const status = oneOf(qs.status, ["curve", "graduated", "all"] as const, "status", "all");
-    const limit = int(qs.limit, 50);
-    return cached(`list:${sort}:${status}:${limit}`, 3_000, () => repo.listCoins({ sort, status, limit }));
-  });
-  app.get("/v1/coins/:id", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (id.length > 64) throw bad("invalid coin");
-    const c = await cached(`coin:${id}`, 2_000, () => repo.getCoin(id));
+  app.get(
+    "/v1/coins",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            sort: { type: "string", enum: ["trending", "new", "mcap", "closest", "graduating"] },
+            status: { type: "string", enum: ["curve", "graduated", "all"] },
+            limit: limitProp(200),
+          },
+        },
+      },
+    },
+    async (req) => {
+      const qs = req.query as Record<string, string>;
+      const sort = oneOf<CoinSort>(qs.sort, ["trending", "new", "mcap", "closest", "graduating"], "sort", "trending");
+      const status = oneOf(qs.status, ["curve", "graduated", "all"] as const, "status", "all");
+      const limit = int(qs.limit, 50);
+      return cached(`list:${sort}:${status}:${limit}`, 3_000, () => repo.listCoins({ sort, status, limit }));
+    },
+  );
+  // H-3: mint is the only unambiguous coin id. Clients route by mint.
+  app.get("/v1/coins/by-mint/:mint", { schema: { params: mintParam } }, async (req, reply) => {
+    const { mint } = req.params as { mint: string };
+    const c = await cached(`coin:${mint}`, 2_000, () => repo.getCoinByMint(mint));
     if (!c) return reply.code(404).send({ error: "not found" });
     return c;
   });
-  app.get("/v1/coins/:mint/prices", async (req) => {
+  // Every coin with this symbol (case-insensitive, `$` optional), newest first. Never picks one.
+  app.get(
+    "/v1/coins/by-symbol/:symbol",
+    { schema: { params: { type: "object", properties: { symbol: { type: "string", minLength: 1, maxLength: 16 } }, required: ["symbol"] }, querystring: { type: "object", properties: { limit: limitProp(50) } } } },
+    async (req) => {
+      const { symbol } = req.params as { symbol: string };
+      const limit = int((req.query as Record<string, string>).limit, 20);
+      return cached(`symbol:${symbol.replace(/^\$/, "").toUpperCase()}:${limit}`, 3_000, () => repo.coinsBySymbol(symbol, limit));
+    },
+  );
+  // Legacy (symbol or mint). An exact mint wins; a symbol must match exactly one coin, else
+  // 300 Multiple Choices with the candidates (newest first) instead of silently picking one.
+  app.get("/v1/coins/:id", { schema: { params: { type: "object", properties: { id: { type: "string", minLength: 1, maxLength: 64 } }, required: ["id"] } } }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    try {
+      const c = await cached(`coin:${id}`, 2_000, () => repo.getCoin(id));
+      if (!c) return reply.code(404).send({ error: "not found" });
+      return c;
+    } catch (e) {
+      if (!(e instanceof AmbiguousSymbolError)) throw e;
+      const matches = await repo.coinsBySymbol(e.symbol, 20);
+      reply.header("link", `</v1/coins/by-symbol/${encodeURIComponent(e.symbol)}>; rel="alternate"`);
+      return reply.code(300).send({ error: "ambiguous symbol: use /v1/coins/by-mint/:mint", symbol: e.symbol, matches });
+    }
+  });
+  app.get("/v1/coins/:mint/prices", { schema: { params: mintParam, querystring: { type: "object", properties: { range: { type: "string", enum: ["1h", "1d", "7d", "all"] } } } } }, async (req) => {
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const range = oneOf<ChartRange>((req.query as Record<string, string>).range, ["1h", "1d", "7d", "all"], "range", "1d");
     return cached(`prices:${mint}:${range}`, 5_000, () => repo.getPriceSeries(mint, range));
   });
-  app.get("/v1/coins/:mint/holders", async (req) => {
+  app.get("/v1/coins/:mint/holders", { schema: { params: mintParam, querystring: viewerQs } }, async (req) => {
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const viewer = optAddr((req.query as Record<string, string>).viewer, "viewer");
     return cached(`holders:${mint}:${viewer ?? ""}`, 5_000, () => repo.getHolders(mint, viewer));
   });
-  app.get("/v1/coins/:mint/fumbles", async (req) => {
+  app.get("/v1/coins/:mint/fumbles", { schema: { params: mintParam, querystring: viewerQs } }, async (req) => {
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const viewer = optAddr((req.query as Record<string, string>).viewer, "viewer");
     return cached(`fumbles:${mint}:${viewer ?? ""}`, 3_000, () => repo.getRecentFumbles(mint, viewer));
   });
-  app.get("/v1/coins/:mint/queue", async (req) => {
+  app.get("/v1/coins/:mint/queue", { schema: { params: mintParam, querystring: viewerQs } }, async (req) => {
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const viewer = optAddr((req.query as Record<string, string>).viewer, "viewer");
     return cached(`queue:${mint}:${viewer ?? ""}`, 3_000, () => repo.getClaimQueue(mint, viewer));
   });
-  app.get("/v1/coins/:mint/trades", async (req) => {
+  app.get("/v1/coins/:mint/trades", { schema: { params: mintParam, querystring: { type: "object", properties: { limit: limitProp(100) } } } }, async (req) => {
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const limit = Math.min(int((req.query as Record<string, string>).limit, 30), 100);
     return cached(`trades:${mint}:${limit}`, 2_000, () => repo.getRecentTrades(mint, limit));
   });
-  app.get("/v1/feed", async (req) => {
+  app.get(
+    "/v1/feed",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["launch", "fumble", "cross", "graduation", "claim", "all"] },
+            before: { type: "integer", minimum: 0 },
+            limit: limitProp(100),
+          },
+        },
+      },
+    },
+    async (req) => {
     const qs = req.query as Record<string, string>;
     const kind = oneOf<FeedKind | "all">(qs.kind, ["launch", "fumble", "cross", "graduation", "claim", "all"], "kind", "all");
     const before = qs.before !== undefined ? Number(qs.before) : undefined;
     const limit = int(qs.limit, 30);
     return cached(`feed:${kind}:${before ?? ""}:${limit}`, 2_000, () => repo.getFeed({ kind, before, limit }));
-  });
-  app.get("/v1/closest", async (req) => {
+    },
+  );
+  app.get("/v1/closest", { schema: { querystring: { type: "object", properties: { viewer: viewerQs.properties.viewer, limit: limitProp(50) } } } }, async (req) => {
     const qs = req.query as Record<string, string>;
     const viewer = optAddr(qs.viewer, "viewer");
     const limit = Math.min(int(qs.limit, 5), 50);
@@ -197,13 +284,13 @@ export async function buildServer(
     if (!t) return reply.code(404).send({ error: "not found" });
     return t;
   });
-  app.get("/v1/leaderboards/:board", async (req) => {
+  app.get("/v1/leaderboards/:board", { schema: { params: { type: "object", properties: { board: { type: "string", enum: ["fumbles", "claimers", "diamond"] } }, required: ["board"] }, querystring: viewerQs } }, async (req) => {
     const board = oneOf<Board>((req.params as { board: string }).board, ["fumbles", "claimers", "diamond"], "board");
     const viewer = optAddr((req.query as Record<string, string>).viewer, "viewer");
     const rows = await cached(`board:${board}`, 10_000, () => repo.getLeaderboard(board));
     return rows.map((r) => ({ ...r, isYou: viewer ? r.address === viewer : false }));
   });
-  app.get("/v1/profiles/:id", async (req, reply) => {
+  app.get("/v1/profiles/:id", { schema: { params: { type: "object", properties: { id: { type: "string", minLength: 1, maxLength: 64 } }, required: ["id"] } } }, async (req, reply) => {
     const { id } = req.params as { id: string };
     if (id.length > 64) throw bad("invalid profile");
     const pr = await cached(`profile:${id}`, 5_000, () => repo.getProfile(id));
@@ -212,7 +299,21 @@ export async function buildServer(
   });
   app.get(
     "/v1/quote",
-    { config: { rateLimit: { max: cfg.quoteRateLimitPerMin, timeWindow: "1 minute" } } },
+    {
+      config: { rateLimit: { max: cfg.quoteRateLimitPerMin, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            mint: { type: "string", pattern: B58 },
+            side: { type: "string", enum: ["buy", "sell"] },
+            amount: { type: "number", minimum: 0, maximum: 1e15 },
+            wallet: { type: "string", pattern: `${B58}|^$` },
+          },
+          required: ["mint", "side", "amount"],
+        },
+      },
+    },
     async (req) => {
       const qs = req.query as Record<string, string>;
       const mint = addr(qs.mint, "mint");
@@ -220,7 +321,7 @@ export async function buildServer(
       const amount = Number(qs.amount);
       if (!Number.isFinite(amount) || amount < 0 || amount > 1e15) throw bad("invalid amount");
       const wallet = optAddr(qs.wallet, "wallet");
-      const row = await cached(`coin:${mint}`, 2_000, () => repo.getCoin(mint));
+      const row = await cached(`coin:${mint}`, 2_000, () => repo.getCoinByMint(mint));
       return chain.quote({ mint, side, amount, wallet, symbol: row?.symbol });
     },
   );
@@ -232,15 +333,24 @@ export async function buildServer(
   });
 
   // ── WebSocket feed ──────────────────────────────────────────────────────────
+  // M-6: global cap + per-IP cap (on the H-2 client IP). Backpressure: messages are
+  // serialized once per broadcast (LiveHub) and a client with more than
+  // WS_MAX_BUFFERED_BYTES unsent is dropped (it reconnects and resyncs).
   const perIp = new Map<string, number>();
+  let wsTotal = 0;
   app.get("/v1/ws", { websocket: true }, (socket, req) => {
     const ip = req.ip;
+    if (wsTotal >= cfg.maxWsTotal) {
+      socket.close(1013, "server busy");
+      return;
+    }
     const n = (perIp.get(ip) ?? 0) + 1;
     if (n > cfg.maxWsPerIp) {
       socket.close(1008, "too many connections");
       return;
     }
     perIp.set(ip, n);
+    wsTotal++;
     socket.send(JSON.stringify({ type: "hello", serverTime: Date.now() }));
     const unsub = live.subscribe((_m, json) => {
       if (socket.readyState !== 1) return;
@@ -258,14 +368,19 @@ export async function buildServer(
     socket.on("close", () => {
       unsub();
       clearInterval(ping);
-      perIp.set(ip, Math.max(0, (perIp.get(ip) ?? 1) - 1));
+      wsTotal = Math.max(0, wsTotal - 1);
+      const left = (perIp.get(ip) ?? 1) - 1;
+      if (left > 0) perIp.set(ip, left);
+      else perIp.delete(ip);
     });
   });
 
   // ── docs + health ───────────────────────────────────────────────────────────
   app.get("/openapi.json", async () => OPENAPI);
   app.get("/v1/status", async () => cached("status", 5_000, () => systemStatus(db, pool, cfg.statusKeeperUrl)));
-  app.get("/health", async (_req, reply) => {
+  // L-5: public /health is a bare liveness answer; the detail (lag, pool, live stats) needs
+  // the SSR secret header.
+  app.get("/health", async (req, reply) => {
     let dbOk = false;
     let lagSecs: number | null = null;
     try {
@@ -276,13 +391,15 @@ export async function buildServer(
     } catch {
       /* db down */
     }
-    const vanityPool = pool && dbOk ? await pool.stats().catch(() => null) : null;
+    const vanityPool = pool && dbOk && isSsr(req) ? await pool.stats().catch(() => null) : null;
     reply.code(dbOk ? 200 : 503);
-    return { ok: dbOk, version: serviceInfo("api"), lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool };
+    reply.header("cache-control", "no-store");
+    if (!isSsr(req)) return { ok: dbOk };
+    return { ok: dbOk, version: serviceInfo("api"), lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, wsConnections: wsTotal, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool };
   });
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────
-  registerLaunchRoutes(app, cfg, { conn, client: chain.client, pool });
+  registerLaunchRoutes(app, cfg, { conn, client: chain.client, pool, db });
   let sweeper: NodeJS.Timeout | undefined;
   if (pool && cfg.launchSweepMs > 0) {
     sweeper = setInterval(() => {
@@ -300,6 +417,7 @@ export async function buildServer(
       if (err.statusCode >= 500) app.log.warn({ msg: err.message }, "launch unavailable");
       return reply.code(err.statusCode).send({ error: err.message });
     }
+    if ((err as { validation?: unknown }).validation) return reply.code(400).send({ error: err.message });
     const code = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
     if (code >= 500) app.log.error({ err: { message: err.message, name: err.name, stack: err.stack } }, "request failed");
     reply.code(code).send({ error: code >= 500 ? "internal error" : err.message });

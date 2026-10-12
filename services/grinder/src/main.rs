@@ -13,7 +13,13 @@
 //!   --bench SECS     measure keys/sec on this machine (no DB, nothing stored)
 //! Options: --suffix S (VANITY_SUFFIX, default fmbL) --threads T (GRINDER_THREADS,
 //! default = cores) --target N (POOL_TARGET, default 200).
-//! Env: DATABASE_URL, MINT_POOL_KEY, POOL_POLL_SECS (30).
+//! Env: DATABASE_URL, MINT_POOL_KEY, POOL_POLL_SECS (30), DATABASE_SSL (L-4):
+//!   disable      plaintext (only for a trusted private network / local dev)
+//!   prefer       (default) TLS when the server offers it, certificate not verified
+//!   require      TLS mandatory, certificate not verified (self-signed, e.g. Railway Postgres)
+//!   verify-full  TLS mandatory, certificate chain + hostname verified (DATABASE_SSL_ROOT_CERT
+//!                = optional PEM CA bundle path)
+//! Run the grinder under its own Postgres role limited to `vanity_mints` (see README).
 
 mod crypto;
 mod suffix;
@@ -29,7 +35,9 @@ use std::{
 };
 
 use ed25519_dalek::SigningKey;
-use postgres::{Client, NoTls};
+use native_tls::{Certificate, TlsConnector};
+use postgres::{config::SslMode, Client};
+use postgres_native_tls::MakeTlsConnector;
 use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
 use rand_core::RngCore;
 use zeroize::Zeroizing;
@@ -130,7 +138,7 @@ struct Pool {
 
 impl Pool {
     fn connect(url: &str, key: PoolKey, suffix: &str) -> Result<Self, String> {
-        let mut db = Client::connect(url, NoTls).map_err(|e| format!("postgres connect: {e}"))?;
+        let mut db = connect_db(url)?;
         // The table comes from the indexer's migrations; wait for them on a fresh DB.
         let t0 = Instant::now();
         loop {
@@ -171,6 +179,32 @@ impl Pool {
             .map(|_| ())
             .map_err(|e| format!("postgres insert: {e}"))
     }
+}
+
+/// Postgres connection honouring DATABASE_SSL (see the module docs).
+fn connect_db(url: &str) -> Result<Client, String> {
+    let mode = env::var("DATABASE_SSL").unwrap_or_else(|_| "prefer".into());
+    let mut cfg: postgres::Config = url.parse().map_err(|e| format!("DATABASE_URL: {e}"))?;
+    let mut tls = TlsConnector::builder();
+    match mode.as_str() {
+        "disable" => {
+            cfg.ssl_mode(SslMode::Disable);
+        }
+        "prefer" | "require" => {
+            cfg.ssl_mode(if mode == "require" { SslMode::Require } else { SslMode::Prefer });
+            tls.danger_accept_invalid_certs(true).danger_accept_invalid_hostnames(true);
+        }
+        "verify-full" => {
+            cfg.ssl_mode(SslMode::Require);
+            if let Ok(path) = env::var("DATABASE_SSL_ROOT_CERT") {
+                let pem = std::fs::read(&path).map_err(|e| format!("DATABASE_SSL_ROOT_CERT: {e}"))?;
+                tls.add_root_certificate(Certificate::from_pem(&pem).map_err(|e| format!("DATABASE_SSL_ROOT_CERT: {e}"))?);
+            }
+        }
+        other => return Err(format!("DATABASE_SSL must be disable|prefer|require|verify-full, got {other}")),
+    }
+    let connector = MakeTlsConnector::new(tls.build().map_err(|e| format!("tls: {e}"))?);
+    cfg.connect(connector).map_err(|e| format!("postgres connect: {e}"))
 }
 
 struct Opts {
