@@ -10,11 +10,12 @@
  * `./store` and registers the actions (sign, export, connect…) the app calls.
  */
 import { PrivyProvider, type User, usePrivy } from "@privy-io/react-auth";
-import { toSolanaWalletConnectors, useCreateWallet, useExportWallet, useSignTransaction, useWallets } from "@privy-io/react-auth/solana";
+import { toSolanaWalletConnectors, useCreateWallet, useExportWallet, useSignMessage, useSignTransaction, useWallets } from "@privy-io/react-auth/solana";
 import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import { VersionedTransaction } from "@solana/web3.js";
 import { useEffect, useMemo, useRef } from "react";
 import { RPC, RPC_WS, SOLANA_CHAIN } from "@/chain/connection";
+import { vetLaunchAuthMessage } from "@/chain/launchAuth";
 import { colorDark, colorLight } from "@/design/tokens";
 import { PRIVY_APP_ID, registerWalletActions, setWalletSnapshot } from "./store";
 
@@ -40,6 +41,7 @@ function Bridge() {
   const { ready, authenticated, user, login, logout, connectWallet } = usePrivy();
   const { ready: walletsReady, wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
+  const { signMessage } = useSignMessage();
   const { exportWallet } = useExportWallet();
   const { createWallet } = useCreateWallet();
 
@@ -63,9 +65,9 @@ function Bridge() {
   }, [ready, walletsReady, authenticated, label, embedded, extAddress, extName, extIcon]);
 
   // Actions read the latest hooks through a ref so they can be registered once.
-  const latest = useRef({ wallets, signTransaction, exportWallet, createWallet, login, logout, connectWallet });
+  const latest = useRef({ wallets, signTransaction, signMessage, exportWallet, createWallet, login, logout, connectWallet });
   useEffect(() => {
-    latest.current = { wallets, signTransaction, exportWallet, createWallet, login, logout, connectWallet };
+    latest.current = { wallets, signTransaction, signMessage, exportWallet, createWallet, login, logout, connectWallet };
   });
 
   useEffect(() => {
@@ -88,6 +90,19 @@ function Bridge() {
           options: { uiOptions: { showWalletUIs: !silent } },
         });
         return VersionedTransaction.deserialize(signedTransaction);
+      },
+      async signMessage(address, message, { silent }) {
+        const w = latest.current.wallets.find((x) => x.address === address);
+        if (!w) throw new Error("That wallet isn't connected. Reconnect it from the wallet menu.");
+        // Last line of the message allow-list: the only message signed without a window is a
+        // fresh FUMPAD launch message for this very wallet (throws otherwise).
+        if (silent) vetLaunchAuthMessage(message, address);
+        const { signature } = await latest.current.signMessage({
+          message,
+          wallet: w,
+          options: { uiOptions: { showWalletUIs: !silent, title: "Confirm you own this wallet", description: "Signing this message proves the launch is yours. It costs nothing and sends nothing." } },
+        });
+        return signature;
       },
     });
     return () => registerWalletActions(null);

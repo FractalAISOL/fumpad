@@ -239,3 +239,73 @@
   text-decoration-thickness: 2px;
   text-underline-offset: 3px;
 }
+
+/* Launch progress (M-2 ownership message → reserve → approve → confirm). */
+.steps {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: var(--s-3);
+  display: grid;
+  gap: var(--s-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  background: var(--sunken);
+}
+.step {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+.stepMark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: var(--w-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.stepText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.stepLabel {
+  line-height: 20px;
+}
+.stepHint {
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.stepDone {
+  color: var(--ink-2);
+}
+.stepActive {
+  color: var(--ink);
+  font-weight: var(--w-semibold);
+}
+.stepActive .stepMark {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+  animation: stepPulse 1.4s ease-in-out infinite;
+}
+.stepActive .stepHint {
+  font-weight: normal;
+}
+@keyframes stepPulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stepActive .stepMark {
+    animation: none;
+  }
+}

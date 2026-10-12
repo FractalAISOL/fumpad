@@ -5,6 +5,7 @@
  */
 import type { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { type SilentPolicy, vetFumpadTx } from "./allowlist";
+import { vetLaunchAuthMessage } from "./launchAuth";
 
 export type SignerKind = "embedded" | "external";
 
@@ -15,6 +16,11 @@ export interface FumpadSigner {
   name: string;
   /** `silent` hides the embedded wallet's prompt; external wallets prompt regardless. */
   sign(tx: VersionedTransaction, opts: { silent: boolean }): Promise<VersionedTransaction>;
+  /**
+   * `signMessage` over raw bytes (ed25519 signature, 64 bytes). `silent` is honoured only for
+   * a vetted FUMPAD launch message (`./launchAuth`); the wallet bridge re-checks it.
+   */
+  signMessage(message: Uint8Array, opts: { silent: boolean }): Promise<Uint8Array>;
 }
 
 /** Same message bytes: a wallet that rewrites the message would break co-signatures and our checks. */
@@ -34,4 +40,14 @@ export async function signFumpadTx(signer: FumpadSigner, tx: VersionedTransactio
   const signed = await signer.sign(tx, { silent: signer.kind === "embedded" && instant });
   if (!sameMessage(tx, signed)) throw new Error("Your wallet changed the transaction, so it wasn't sent. Try again.");
   return signed;
+}
+
+/**
+ * M-2: sign the launch proof-of-ownership message. Same rule as transactions: vetted first
+ * whichever wallet signs (`vetLaunchAuthMessage`, the message allow-list), and silent only
+ * from the embedded wallet with instant trading on. Any other message never gets here.
+ */
+export async function signLaunchMessage(signer: FumpadSigner, message: Uint8Array, instant: boolean): Promise<Uint8Array> {
+  vetLaunchAuthMessage(message, signer.publicKey);
+  return signer.signMessage(message, { silent: signer.kind === "embedded" && instant });
 }

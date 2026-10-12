@@ -26,9 +26,10 @@ import type { SilentPolicy } from "./allowlist";
 import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, fumpadClient } from "./build";
 import { getConnection } from "./connection";
 import { checkLaunchBinding, LAUNCH_SLIPPAGE_BPS } from "./launch";
+import { dropLaunchAuth, getLaunchAuth, type LaunchAuth } from "./launchAuth";
 import { instantDecision, lamportsSol, simulateSpend, worstCaseSpend } from "./limits";
 import { VANITY_SUFFIX } from "./program";
-import { type FumpadSigner, signFumpadTx } from "./signer";
+import { type FumpadSigner, signFumpadTx, signLaunchMessage } from "./signer";
 
 export interface TxOk {
   signature: string;
@@ -37,6 +38,12 @@ export interface TxOk {
 }
 
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "done" | "error";
+
+/**
+ * Where a launch is, for the progress list: prove wallet ownership (M-2 signed message),
+ * reserve the `…fmbL` mint (prepare), approve the transaction, confirm on chain.
+ */
+export type LaunchStep = "auth" | "reserve" | "sign" | "confirm" | "done";
 
 export interface BuyArgs {
   mint: string;
@@ -120,6 +127,31 @@ const API = process.env.NEXT_PUBLIC_FUMPAD_API?.replace(/\/+$/, "");
 /** Pyth SOL/USD PriceUpdateV2 account for sells (SDK default: the sponsored feed, on mainnet and devnet). */
 const PYTH_SOL_USD = process.env.NEXT_PUBLIC_PYTH_SOL_USD || undefined;
 
+class PrepareError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** The prepare body (M-2: with the creator's signed ownership message). */
+function prepareBody(creator: PublicKey, args: LaunchArgs, auth: LaunchAuth): Record<string, unknown> {
+  return {
+    creator: creator.toBase58(),
+    name: args.name,
+    symbol: args.symbol,
+    uri: args.uri,
+    initialBuyLamports: args.initialBuySol > 0 ? solToLamports(args.initialBuySol).toString() : undefined,
+    slippageBps: LAUNCH_SLIPPAGE_BPS,
+    auth,
+  };
+}
+
+/** A wallet's "user rejected" error, whatever the wallet calls it. */
+const rejected = (e: unknown) => /reject|denied|declin|cancel|closed/i.test(e instanceof Error ? e.message : String(e ?? ""));
+
 async function postPrepare(body: Record<string, unknown>): Promise<{ mint: string; transaction: string; lastValidBlockHeight: number; suffix: string }> {
   const res = await fetch(`${API}/v1/launch/prepare`, {
     method: "POST",
@@ -134,7 +166,7 @@ async function postPrepare(body: Record<string, unknown>): Promise<{ mint: strin
     } catch {
       /* not json */
     }
-    throw new Error(msg);
+    throw new PrepareError(res.status, msg);
   }
   return res.json();
 }
@@ -173,6 +205,7 @@ function useActiveSigner(): FumpadSigner | null {
       kind,
       name: name ?? "Wallet",
       sign: (tx, opts) => walletActions().signTransaction(address, tx, opts),
+      signMessage: (message, opts) => walletActions().signMessage(address, message, opts),
     } satisfies FumpadSigner;
   }, [mode, address, kind, name]);
 }
@@ -194,6 +227,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   const signer = useActiveSigner();
   const [status, setStatus] = useState<TxStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [launchStep, setLaunchStep] = useState<LaunchStep | null>(null);
   /** The latest error without waiting for a re-render (callers read it right after `await`). */
   const errorRef = useRef<string | null>(null);
   const connection = getConnection();
@@ -384,33 +418,65 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
    * mint and a create_coin(+first buy) transaction the server already signed AS THE MINT
    * (the mint's secret never leaves the server). Mock: a fake `…fmbL` address.
    */
+  /**
+   * M-2: the prepare call with the creator's signed ownership message. The message is signed
+   * once per (wallet, ticker) and reused while the API still accepts it (10 min); a cached one
+   * the API refuses is dropped and signed again, once.
+   */
+  const prepareSigned = useCallback(
+    async (s: FumpadSigner, args: LaunchArgs) => {
+      for (let attempt = 0; ; attempt++) {
+        setLaunchStep("auth");
+        let auth: LaunchAuth;
+        let fresh: boolean;
+        try {
+          ({ auth, fresh } = await getLaunchAuth(s.publicKey, args.symbol, (m) => signLaunchMessage(s, m, instant)));
+        } catch (e) {
+          if (rejected(e)) throw new Error("You didn't confirm in your wallet, so nothing was reserved.");
+          throw e;
+        }
+        setLaunchStep("reserve");
+        try {
+          return await postPrepare(prepareBody(s.publicKey, args, auth));
+        } catch (e) {
+          if (e instanceof PrepareError && e.status === 401) {
+            dropLaunchAuth(s.publicKey.toBase58(), args.symbol);
+            if (!fresh && attempt === 0) continue;
+          }
+          throw e;
+        }
+      }
+    },
+    [instant],
+  );
+
   const prepareLaunch = useCallback(
     async (args: LaunchArgs): Promise<PreparedLaunch | null> => {
       setError(null);
       setStatus("building");
       try {
         if (!live) {
+          // Mock: the same steps, simulated (the demo wallet signs nothing).
+          setLaunchStep("auth");
+          await wait(450);
+          setLaunchStep("reserve");
           await wait(350);
+          setLaunchStep(null);
           setStatus("idle");
           return { mint: fakeMint(), suffix: VANITY_SUFFIX, simulated: true, args, preparedAt: Date.now() };
         }
-        const r = await postPrepare({
-          creator: signer!.publicKey.toBase58(),
-          name: args.name,
-          symbol: args.symbol,
-          uri: args.uri,
-          initialBuyLamports: args.initialBuySol > 0 ? solToLamports(args.initialBuySol).toString() : undefined,
-          slippageBps: LAUNCH_SLIPPAGE_BPS,
-        });
+        const r = await prepareSigned(signer!, args);
+        setLaunchStep(null);
         setStatus("idle");
         return { mint: r.mint, suffix: r.suffix, simulated: false, args, preparedAt: Date.now(), transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight };
       } catch (e) {
+        setLaunchStep(null);
         setStatus("error");
         setError(e instanceof Error ? e.message : "Couldn't prepare the launch.");
         return null;
       }
     },
-    [live, signer],
+    [live, signer, prepareSigned],
   );
 
   /**
@@ -425,23 +491,22 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
       run(async () => {
         if (prepared.simulated || !live) {
           const counted = await guardSimulated("launch", prepared.args.initialBuySol, "Launch for");
-          const ok = await simulate(setStatus, 1400);
+          setLaunchStep("sign");
+          const ok = await simulate((st) => {
+            setStatus(st);
+            if (st === "confirming") setLaunchStep("confirm");
+          }, 1400);
           counted();
+          setLaunchStep("done");
           return ok;
         }
         const s = signer!;
         setStatus("building");
         let p = prepared;
         if (Date.now() - p.preparedAt > PREPARED_MAX_AGE_MS) {
-          // Blockhash about to expire: the API returns the same reserved mint with a fresh tx.
-          const r = await postPrepare({
-            creator: s.publicKey.toBase58(),
-            name: p.args.name,
-            symbol: p.args.symbol,
-            uri: p.args.uri,
-            initialBuyLamports: p.args.initialBuySol > 0 ? solToLamports(p.args.initialBuySol).toString() : undefined,
-            slippageBps: LAUNCH_SLIPPAGE_BPS,
-          });
+          // Blockhash about to expire: the API returns the same reserved mint with a fresh tx
+          // (the signed ownership message is reused while it is fresh, else signed again).
+          const r = await prepareSigned(s, p.args);
           if (r.mint !== p.mint) throw new Error("The launch address changed. Review it again before launching.");
           p = { ...p, transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, preparedAt: Date.now() };
         }
@@ -452,18 +517,24 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         checkLaunchBinding(tx, { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: p.args.name, symbol: p.args.symbol, uri: p.args.uri, initialBuyLamports, params });
         const spend = instant ? await instantSpend(tx, s.publicKey, "launch", p.args.initialBuySol) : BigInt(0);
         await guardInstant(spend, "Launch for");
+        setLaunchStep("sign");
         setStatus("signing");
         // A wallet that rewrites the message would void the mint's signature: signFumpadTx refuses it.
         const signed = await signFumpadTx(s, tx, { action: "launch", coSigner: p.mint, maxSolInLamports: initialBuyLamports }, instant);
+        setLaunchStep("confirm");
         setStatus("confirming");
         const signature = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3 });
         if (instant) addInstantSpent(spend);
         const res = await connection.confirmTransaction({ signature, blockhash: tx.message.recentBlockhash, lastValidBlockHeight: p.lastValidBlockHeight! }, "confirmed");
         if (res.value.err) throw new Error("The launch transaction failed on chain. Nothing but the network fee was spent.");
+        setLaunchStep("done");
         setStatus("done");
         return { signature, simulated: false };
-      }, "launch", prepared.mint),
-    [run, guardSimulated, guardInstant, instantSpend, live, signer, instant, connection, client],
+      }, "launch", prepared.mint).then((ok) => {
+        if (!ok) setLaunchStep(null);
+        return ok;
+      }),
+    [run, guardSimulated, guardInstant, instantSpend, live, signer, instant, connection, client, prepareSigned],
   );
 
   /** D17: let (or stop) the keeper claim this coin's tickets for you. */
@@ -508,6 +579,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
 
   const reset = useCallback(() => {
     setStatus("idle");
+    setLaunchStep(null);
     setError(null);
     errorRef.current = null;
   }, []);
@@ -522,6 +594,8 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
     claim,
     prepareLaunch,
     launch,
+    /** The launch's current step (null when no launch is in flight). */
+    launchStep,
     setAutoClaim,
     withdrawCreatorFees,
     reset,

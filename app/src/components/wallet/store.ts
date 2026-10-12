@@ -52,6 +52,12 @@ export interface WalletActions {
    * has no effect on external wallets, which always ask.
    */
   signTransaction(address: string, tx: VersionedTransaction, opts: { silent: boolean }): Promise<VersionedTransaction>;
+  /**
+   * `signMessage` with the account at `address` (64-byte ed25519 signature). `silent` is only
+   * honoured for a FUMPAD launch message that passes `vetLaunchAuthMessage`; anything else
+   * shows the wallet's window (or is refused, see PrivyIsland).
+   */
+  signMessage(address: string, message: Uint8Array, opts: { silent: boolean }): Promise<Uint8Array>;
 }
 
 const PREF_KEY = "fumpad.wallet.signer.v1";
@@ -129,6 +135,9 @@ const mockActions: WalletActions = {
   async signTransaction() {
     throw new Error("The demo wallet doesn't sign real transactions.");
   },
+  async signMessage() {
+    throw new Error("The demo wallet doesn't sign messages.");
+  },
 };
 
 /** Current actions, or a stub that explains the wallet is still loading. */
@@ -138,7 +147,7 @@ export function walletActions(): WalletActions {
   const loading = () => {
     throw new Error("The wallet is still loading. Try again in a second.");
   };
-  return { login: () => {}, logout: async () => {}, connectExternal: () => {}, createEmbedded: async () => loading(), exportKey: async () => loading(), signTransaction: async () => loading() };
+  return { login: () => {}, logout: async () => {}, connectExternal: () => {}, createEmbedded: async () => loading(), exportKey: async () => loading(), signTransaction: async () => loading(), signMessage: async () => loading() };
 }
 
 export function useWallet() {

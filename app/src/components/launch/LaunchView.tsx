@@ -2,7 +2,7 @@
 
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { splitVanity } from "@/chain/program";
-import { type PreparedLaunch, useFumpadTx } from "@/chain/tx";
+import { type LaunchStep, type PreparedLaunch, useFumpadTx } from "@/chain/tx";
 import { cpOut } from "@/data/chain";
 import {
   AmountInput,
@@ -328,6 +328,7 @@ export function LaunchView() {
             <Button type="submit" size="lg" block loading={!review && tx.status === "building"}>
               Review launch
             </Button>
+            {!review && (tx.launchStep === "auth" || tx.launchStep === "reserve") && <LaunchProgress step={tx.launchStep} instant={tx.instant} />}
             {tried && !valid && (
               <p className={s.err} role="alert">
                 Fix the {Object.keys(errs).length === 1 ? "field" : `${Object.keys(errs).length} fields`} above to continue.
@@ -411,6 +412,7 @@ export function LaunchView() {
             { k: "Total", v: <span className="num">{f.sol(firstBuy + 0.02)} SOL</span> },
           ]}
         />
+        {tx.launchStep && <LaunchProgress step={tx.launchStep} instant={tx.instant} />}
         {isDemo && <p className={s.hint}>Demo wallet: the launch is simulated.</p>}
       </Dialog>
     </div>
@@ -432,5 +434,49 @@ function MintAddress({ mint, suffix }: { mint: string; suffix: string }) {
       </div>
       {tail && <p className={s.hint}>Every coin launched on FUMPAD ends in {tail}, so fakes are easy to spot.</p>}
     </div>
+  );
+}
+
+const STEPS: { id: Exclude<LaunchStep, "done">; label: (instant: boolean) => string; hint: (instant: boolean) => string }[] = [
+  {
+    id: "auth",
+    label: () => "Confirm you own this wallet",
+    hint: (instant) =>
+      instant
+        ? "Your Trading wallet signs a short FUMPAD message. It costs nothing and sends nothing."
+        : "Sign the FUMPAD message in your wallet. It costs nothing and sends nothing.",
+  },
+  { id: "reserve", label: () => "Reserve your coin's address", hint: () => "FUMPAD sets aside an address ending in fmbL for your coin." },
+  {
+    id: "sign",
+    label: (instant) => (instant ? "Sign the launch" : "Approve the launch"),
+    hint: (instant) => (instant ? "Signing with your Trading wallet." : "Approve the transaction in your wallet."),
+  },
+  { id: "confirm", label: () => "Confirm on Solana", hint: () => "Waiting for the network. Usually a few seconds." },
+];
+
+/** The launch's steps: done, current (with what to do), still to come. */
+function LaunchProgress({ step, instant }: { step: LaunchStep; instant: boolean }) {
+  const at = step === "done" ? STEPS.length : STEPS.findIndex((x) => x.id === step);
+  return (
+    <ol className={s.steps} aria-label="Launch progress">
+      {STEPS.map((x, i) => {
+        const state = i < at ? "done" : i === at ? "active" : "todo";
+        return (
+          <li key={x.id} className={cx(s.step, state === "done" && s.stepDone, state === "active" && s.stepActive)} aria-current={state === "active" ? "step" : undefined}>
+            <span className={s.stepMark} aria-hidden>
+              {state === "done" ? "✓" : i + 1}
+            </span>
+            <span className={s.stepText}>
+              <span className={s.stepLabel}>
+                {x.label(instant)}
+                {state === "done" && <span className="sr-only"> (done)</span>}
+              </span>
+              {state === "active" && <span className={s.stepHint}>{x.hint(instant)}</span>}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
