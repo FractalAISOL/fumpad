@@ -42,7 +42,8 @@
 }
 .navLink {
   position: relative;
-  padding: 8px 12px;
+  padding: 8px 10px;
+  white-space: nowrap;
   border-radius: var(--r-2);
   color: var(--ink-2);
   font-weight: var(--w-medium);
@@ -128,14 +129,23 @@
   .nav {
     display: flex;
   }
-  .sol {
-    display: inline;
-  }
+}
+@media (min-width: 1000px) {
   .launchText {
     display: inline;
   }
   .launch {
     padding: 0 14px;
+  }
+}
+
+/* Five nav items plus the SOL figure only fit from 1100 px. */
+@media (min-width: 1100px) {
+  .sol {
+    display: inline;
+  }
+  .navLink {
+    padding: 8px 12px;
   }
 }
 

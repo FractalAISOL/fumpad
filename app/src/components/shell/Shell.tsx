@@ -102,7 +102,7 @@ export function Header({ solUsd }: { solUsd: number }) {
         <div className={s.right}>
           <span className={cx("num", s.sol)}>SOL ${solUsd.toFixed(2)}</span>
           <ThemeToggle />
-          <Link href="/launch" className={s.launch}>
+          <Link href="/launch" className={s.launch} aria-label="Launch a coin">
             <IconPlus width={16} height={16} />
             <span className={s.launchText}>Launch a coin</span>
           </Link>
