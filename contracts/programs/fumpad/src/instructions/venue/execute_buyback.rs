@@ -97,7 +97,7 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
     let a = &mut *ctx.accounts;
     let p = a.global.params;
 
-    require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_TRADE, now), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
 
     let wsol_info = a.buyback_wsol.to_account_info();

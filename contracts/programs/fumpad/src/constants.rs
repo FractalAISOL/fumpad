@@ -95,6 +95,10 @@ pub const MAX_GRADUATION_FEE_LAMPORTS: u64 = 1_000_000_000; // 1 SOL
 pub const MAX_FEE_BPS: u16 = 200; // 2% of the SOL side
 /// D15: delay between `queue_params` and the earliest `execute_params`.
 pub const PARAMS_TIMELOCK_SECS: i64 = 48 * 3_600;
+/// M-2 (v0.6): delay between `propose_admin` and the earliest `accept_admin`.
+pub const ADMIN_TIMELOCK_SECS: i64 = 48 * 3_600;
+/// M-3 (v0.6): a `set_pause` lapses after this long unless renewed by another `set_pause`.
+pub const MAX_PAUSE_SECS: i64 = 7 * 86_400;
 /// D13: a coin `Complete` for this long reopens curve sells (escape hatch).
 pub const ESCAPE_HATCH_SECS: i64 = 7 * 86_400;
 

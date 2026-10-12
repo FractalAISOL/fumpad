@@ -97,7 +97,7 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
     let a = &mut *ctx.accounts;
 
     require!(tokens_in > 0, FumpadError::ZeroAmount);
-    require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_TRADE, now), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
 
     let user_info = a.user.to_account_info();

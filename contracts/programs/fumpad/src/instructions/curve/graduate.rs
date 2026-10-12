@@ -15,7 +15,7 @@ use crate::{
     events::Graduated,
     instructions::{rewards::init_claim_queue::CLAIM_QUEUE_SPACE, venue::init_observations::OBSERVATIONS_SPACE},
     external::pumpswap::{self, lp_mint_pda, pool_pda, token_amount, CreatePoolAccounts, CreatePoolArgs, WSOL_MINT},
-    state::{Coin, CoinStatus, Global},
+    state::{Coin, CoinStatus, Global, PAUSE_GRADUATE},
 };
 
 /// PumpSwap pool index used for every FUMPAD pool.
@@ -148,6 +148,9 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     let a = &mut *ctx.accounts;
     require!(a.coin.status == CoinStatus::Complete, FumpadError::WrongCoinStatus);
     let now = Clock::get()?.unix_timestamp;
+    // L-5 (v0.6): graduation has its own pause (e.g. a PumpSwap incident); D13 still reopens
+    // the curve for sells after 7 days in `Complete`.
+    require!(!a.global.is_paused(PAUSE_GRADUATE, now), FumpadError::Paused);
 
     // D14: the fee snapshotted at create_coin, never the current global value.
     let grad_fee = a.coin.fees.graduation_fee_lamports;

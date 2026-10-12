@@ -592,7 +592,7 @@ impl Fx {
     fn set_pause(&mut self, flags: u8) {
         let admin = self.env.admin.insecure_clone();
         let ix = ix(
-            fumpad::accounts::AdminOnly { admin: kp_pk(&admin), global: self.env.global_pda() },
+            fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&admin), global: self.env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
             fumpad::instruction::SetPause { paused: flags },
         );
         expect_ok(self.env.send(&[ix], &[&admin]));

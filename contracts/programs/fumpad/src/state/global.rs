@@ -14,20 +14,40 @@ pub struct Global {
     pub platform_treasury: Pubkey,
     /// Keys allowed to sign `record_samples`. Pubkey::default() = empty slot.
     pub keepers: [Pubkey; MAX_KEEPERS],
-    /// Bitmask of `PAUSE_*` flags.
+    /// Bitmask of `PAUSE_*` flags; in force only until `pause_expires_at` (M-3).
     pub paused: u8,
     pub params: Params,
-    pub reserved: [u8; 128],
+    /// M-2 (v0.6): may `set_pause`, `cancel_params` and `cancel_admin` — never queue or
+    /// propose. Pubkey::default() = none (only the admin can then). Carved from `reserved`.
+    pub guardian: Pubkey,
+    /// M-3 (v0.6): `paused` flags lapse at this unix time (`set_pause` sets now +
+    /// `MAX_PAUSE_SECS`; renewing needs another `set_pause`). Carved from `reserved`.
+    pub pause_expires_at: i64,
+    /// M-2 (v0.6): earliest `accept_admin` time of the proposed authority change
+    /// (`pending_admin`, …); 0 = no proposal. Carved from `reserved`.
+    pub pending_admin_eta: i64,
+    pub reserved: [u8; 80],
     /// D15: params queued by `queue_params`, applied by `execute_params` once
     /// `pending_eta` has passed. `pending_eta == 0` = nothing queued.
     /// (Appended in v0.3: Global grew by `Params::INIT_SPACE + 8` bytes.)
     pub pending_params: Params,
     pub pending_eta: i64,
+    /// M-2 (appended in v0.6, Global 680 → 776 bytes): the authority set proposed by
+    /// `propose_admin`, applied by `accept_admin` — signed by `pending_admin` itself — once
+    /// `pending_admin_eta` has passed (48h). The guardian or the admin can `cancel_admin`.
+    pub pending_admin: Pubkey,
+    pub pending_treasury: Pubkey,
+    pub pending_guardian: Pubkey,
 }
 
 pub const PAUSE_LAUNCH: u8 = 1 << 0;
+/// Curve buys, router buys/sells and buybacks. Never curve sells (M-3: holders can always exit).
 pub const PAUSE_TRADE: u8 = 1 << 1;
 pub const PAUSE_CLAIMS: u8 = 1 << 2;
+/// L-5 (v0.6): `graduate` (e.g. during a PumpSwap incident). The D13 hatch still opens after 7 days.
+pub const PAUSE_GRADUATE: u8 = 1 << 3;
+/// Every defined flag; `set_pause` rejects other bits.
+pub const PAUSE_ALL: u8 = PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS | PAUSE_GRADUATE;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 pub struct Params {
@@ -265,7 +285,12 @@ impl Global {
     pub fn is_keeper(&self, key: &Pubkey) -> bool {
         *key != Pubkey::default() && self.keepers.iter().any(|k| k == key)
     }
-    pub fn is_paused(&self, flag: u8) -> bool {
-        self.paused & flag != 0
+    /// `flag` is paused and the pause hasn't lapsed (M-3).
+    pub fn is_paused(&self, flag: u8, now: i64) -> bool {
+        self.paused & flag != 0 && now < self.pause_expires_at
+    }
+    /// M-2: the admin, or the guardian if one is set.
+    pub fn is_admin_or_guardian(&self, key: &Pubkey) -> bool {
+        *key == self.admin || (self.guardian != Pubkey::default() && *key == self.guardian)
     }
 }

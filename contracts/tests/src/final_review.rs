@@ -11,7 +11,7 @@ use fumpad::{
     error::FumpadError,
     external::pumpswap::{event_authority_pda, WSOL_MINT},
     math::price::price_q64,
-    state::{CoinStatus, Global, Params, TicketStatus, PAUSE_TRADE},
+    state::{CoinStatus, Global, Params, TicketStatus, PAUSE_ALL, PAUSE_TRADE},
     PUMPSWAP_PROGRAM_ID,
 };
 use solana_keypair::Keypair;
@@ -64,7 +64,36 @@ fn extend_account_ix(account: &Pubkey, user: &Pubkey) -> solana_instruction::Ins
 }
 
 fn admin_only_ix(admin: &Pubkey, global: Pubkey, data: impl anchor_lang::InstructionData) -> solana_instruction::Instruction {
-    ix(fumpad::accounts::AdminOnly { admin: *admin, global }, data)
+    ix(fumpad::accounts::AdminOnly { admin: *admin, global, event_authority: event_authority(), program: fumpad::ID }, data)
+}
+
+/// M-2: `set_pause` / `cancel_params` / `cancel_admin` — admin or guardian.
+fn guardian_ix(authority: &Pubkey, global: Pubkey, data: impl anchor_lang::InstructionData) -> solana_instruction::Instruction {
+    ix(
+        fumpad::accounts::GuardianOrAdmin { authority: *authority, global, event_authority: event_authority(), program: fumpad::ID },
+        data,
+    )
+}
+
+fn accept_admin_ix(new_admin: &Pubkey, global: Pubkey) -> solana_instruction::Instruction {
+    ix(
+        fumpad::accounts::AcceptAdmin { new_admin: *new_admin, global, event_authority: event_authority(), program: fumpad::ID },
+        fumpad::instruction::AcceptAdmin {},
+    )
+}
+
+/// Hands the guardian role to a fresh key (propose → 48h → accept by the admin itself).
+fn with_guardian(env: &mut Env) -> Keypair {
+    let guardian = Keypair::new();
+    env.svm.airdrop(&solana_signer::Signer::pubkey(&guardian), SOL).unwrap();
+    let (admin, global) = (env.admin.insecure_clone(), env.global_pda());
+    let ak = kp_pk(&admin);
+    let p = fumpad::instruction::ProposeAdmin { new_admin: ak, platform_treasury: kp_pk(&env.treasury), guardian: kp_pk(&guardian) };
+    ok(env.send(&[admin_only_ix(&ak, global, p)], &[&admin]));
+    env.warp(fumpad::ADMIN_TIMELOCK_SECS);
+    ok(env.send(&[accept_admin_ix(&ak, global)], &[&admin]));
+    assert_eq!(env.fetch::<Global>(&global).guardian, kp_pk(&guardian));
+    guardian
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -178,37 +207,79 @@ fn regression_params_changes_cannot_reprice_live_tickets() {
 /// queue; timelock or two-step (`propose`/`accept`) `set_admin`; and put the program upgrade
 /// authority behind a Squads time lock ≥ the params timelock (otherwise an upgrade bypasses
 /// everything instantly).
+///
+/// FIXED (v0.6): `set_admin` is gone; `propose_admin(admin, treasury, guardian)` → 48h →
+/// `accept_admin` signed by the NEW admin; a separate guardian can `cancel_params`,
+/// `cancel_admin` and `set_pause` (never queue/propose). With a stolen admin key the attacker
+/// can neither take over (the guardian cancels the proposal within the 48h) nor push params
+/// through (the guardian cancels them), nor replace the guardian (that's a proposal too).
 #[test]
-fn issue_admin_rotation_is_immediate_so_timelock_cannot_be_cancelled() {
+fn regression_stolen_admin_key_cannot_outrun_the_guardian() {
     let mut env = Env::new();
     let global = env.global_pda();
+    assert_eq!(env.fetch::<Global>(&global).guardian, kp_pk(&env.admin), "guardian defaults to the admin");
+    let guardian = with_guardian(&mut env);
+    let gk = kp_pk(&guardian);
     let stolen = env.admin.insecure_clone(); // attacker has a copy of the admin key
+    let sk = kp_pk(&stolen);
     let attacker = Keypair::new();
     let ak = kp_pk(&attacker);
     env.svm.airdrop(&solana_signer::Signer::pubkey(&attacker), SOL).unwrap();
 
-    // 1. Rotate admin to the attacker, immediately (no timelock, no acceptance).
-    let i = admin_only_ix(&kp_pk(&stolen), global, fumpad::instruction::SetAdmin { new_admin: ak, platform_treasury: ak });
-    ok(env.send(&[i], &[&stolen]));
-    // 2. Attacker queues a change (here: fee to the 2% cap, every coin launched later).
-    let mut p = Params::default();
-    p.fee_bps = 200;
-    let q = ix(
-        fumpad::accounts::QueueParams { admin: ak, global, event_authority: event_authority(), program: fumpad::ID },
-        fumpad::instruction::QueueParams { params: p },
-    );
-    ok(env.send(&[q], &[&attacker]));
-    // 3. The team (old admin key) can no longer cancel.
-    let c = ix(
-        fumpad::accounts::CancelParams { admin: kp_pk(&stolen), global, event_authority: event_authority(), program: fumpad::ID },
-        fumpad::instruction::CancelParams {},
-    );
-    expect_err(env.send(&[c], &[&stolen]), FumpadError::Unauthorized);
-    // 4. 48h later anyone executes it; treasury already redirected at step 1.
-    env.warp(fumpad::PARAMS_TIMELOCK_SECS);
-    ok(env.execute_params());
+    // 1. Rotation is a proposal (admin, treasury AND guardian → attacker); nothing changes yet.
+    let p = fumpad::instruction::ProposeAdmin { new_admin: ak, platform_treasury: ak, guardian: ak };
+    let m = ok(env.send(&[admin_only_ix(&sk, global, p)], &[&stolen]));
+    assert_eq!(events::<fumpad::events::AdminProposed>(&m)[0].eta, env.now() + fumpad::ADMIN_TIMELOCK_SECS);
     let g: Global = env.fetch(&global);
-    assert_eq!((g.admin, g.platform_treasury, g.params.fee_bps), (ak, ak, 200));
+    assert_eq!((g.admin, g.guardian, g.pending_admin), (sk, gk, ak));
+    expect_err(env.send(&[accept_admin_ix(&ak, global)], &[&attacker]), FumpadError::TimelockNotElapsed);
+    // 2. Attacker (still "admin") queues params; the guardian cancels both.
+    let q = ix(
+        fumpad::accounts::QueueParams { admin: sk, global, event_authority: event_authority(), program: fumpad::ID },
+        fumpad::instruction::QueueParams { params: Params { fee_bps: 200, ..Params::default() } },
+    );
+    ok(env.send(&[q], &[&stolen]));
+    let m = ok(env.send(&[guardian_ix(&gk, global, fumpad::instruction::CancelParams {})], &[&guardian]));
+    assert_eq!(events::<fumpad::events::ParamsCancelled>(&m)[0].authority, gk);
+    let m = ok(env.send(&[guardian_ix(&gk, global, fumpad::instruction::CancelAdmin {})], &[&guardian]));
+    assert_eq!(events::<fumpad::events::AdminProposalCancelled>(&m)[0].authority, gk);
+    // 3. 48h later there is nothing to accept or execute.
+    env.warp(fumpad::ADMIN_TIMELOCK_SECS);
+    expect_err(env.send(&[accept_admin_ix(&ak, global)], &[&attacker]), FumpadError::NoPendingAdmin);
+    expect_err(env.execute_params(), FumpadError::NoPendingParams);
+    let g: Global = env.fetch(&global);
+    assert_eq!((g.admin, g.platform_treasury, g.guardian, g.params.fee_bps), (sk, kp_pk(&env.treasury), gk, 100));
+    // The guardian can't queue or propose; strangers can't cancel or pause.
+    let q = ix(
+        fumpad::accounts::QueueParams { admin: gk, global, event_authority: event_authority(), program: fumpad::ID },
+        fumpad::instruction::QueueParams { params: Params::default() },
+    );
+    expect_err(env.send(&[q], &[&guardian]), FumpadError::Unauthorized);
+    let p = fumpad::instruction::ProposeAdmin { new_admin: gk, platform_treasury: gk, guardian: gk };
+    expect_err(env.send(&[admin_only_ix(&gk, global, p)], &[&guardian]), FumpadError::Unauthorized);
+    expect_err(env.send(&[guardian_ix(&ak, global, fumpad::instruction::SetPause { paused: 1 })], &[&attacker]), FumpadError::Unauthorized);
+
+    // A legitimate rotation: only the proposed key can accept, after 48h; old admin loses power.
+    let next = Keypair::new();
+    let nk = kp_pk(&next);
+    env.svm.airdrop(&solana_signer::Signer::pubkey(&next), SOL).unwrap();
+    let p = fumpad::instruction::ProposeAdmin { new_admin: nk, platform_treasury: nk, guardian: gk };
+    ok(env.send(&[admin_only_ix(&sk, global, p)], &[&stolen]));
+    env.warp(fumpad::ADMIN_TIMELOCK_SECS);
+    expect_err(env.send(&[accept_admin_ix(&sk, global)], &[&stolen]), FumpadError::Unauthorized);
+    let m = ok(env.send(&[accept_admin_ix(&nk, global)], &[&next]));
+    let ev = &events::<fumpad::events::AdminAccepted>(&m)[0];
+    assert_eq!((ev.previous_admin, ev.admin, ev.platform_treasury, ev.guardian), (sk, nk, nk, gk));
+    let g: Global = env.fetch(&global);
+    assert_eq!((g.admin, g.platform_treasury, g.pending_admin_eta, g.pending_admin), (nk, nk, 0, Pubkey::default()));
+    let q = ix(
+        fumpad::accounts::QueueParams { admin: sk, global, event_authority: event_authority(), program: fumpad::ID },
+        fumpad::instruction::QueueParams { params: Params::default() },
+    );
+    expect_err(env.send(&[q], &[&stolen]), FumpadError::Unauthorized);
+    // Zero keys are refused.
+    let p = fumpad::instruction::ProposeAdmin { new_admin: nk, platform_treasury: Pubkey::default(), guardian: gk };
+    expect_err(env.send(&[admin_only_ix(&nk, global, p)], &[&next]), FumpadError::InvalidParams);
 }
 
 /// [M-3] `PAUSE_TRADE` freezes curve holders with no exit and no expiry — including the D13
@@ -217,21 +288,33 @@ fn issue_admin_rotation_is_immediate_so_timelock_cannot_be_cancelled() {
 /// pre-graduation coin's SOL (~85 SOL per complete coin). SPEC §6 only promises that graduated
 /// coins stay sellable on PumpSwap.
 ///
-/// Fix: never block curve `sell` (or at least the D13 path) with `PAUSE_TRADE`, or give pauses
-/// an on-chain expiry (e.g. `paused_until ≤ now + 72h`, renewable only through the timelock).
+/// FIXED (v0.6): curve `sell` ignores every pause flag (only buys respect `PAUSE_TRADE`), so
+/// the D13 hatch and ordinary exits always work; and every pause lapses `MAX_PAUSE_SECS`
+/// (7 days) after its `set_pause` unless renewed.
 #[test]
-fn issue_pause_trade_freezes_curve_sells_and_escape_hatch_indefinitely() {
+fn regression_pause_never_freezes_curve_sells_and_lapses() {
     let (mut f, whale) = completed();
     f.env.warp(fumpad::ESCAPE_HATCH_SECS + 1); // D13 hatch is open
     let global = f.env.global_pda();
     let admin = f.env.admin.insecure_clone();
-    let i = admin_only_ix(&kp_pk(&admin), global, fumpad::instruction::SetPause { paused: PAUSE_TRADE });
-    ok(f.env.send(&[i], &[&admin]));
-    f.env.warp(365 * DAY);
+    let m = ok(f.env.send(&[guardian_ix(&kp_pk(&admin), global, fumpad::instruction::SetPause { paused: PAUSE_ALL })], &[&admin]));
+    let ev = &events::<fumpad::events::PauseSet>(&m)[0];
+    assert_eq!((ev.paused, ev.expires_at), (PAUSE_ALL, f.now() + fumpad::MAX_PAUSE_SECS));
     let tokens = f.tokens(&kp_pk(&whale));
-    expect_err(f.sell(&whale, tokens / 10), FumpadError::Paused);
-    assert_eq!(f.coin_state().status, CoinStatus::Complete, "still frozen a year later");
-    assert!(f.coin_state().real_sol_reserves > 84 * SOL);
+    ok(f.sell(&whale, tokens / 10)); // hatch exit under a full pause
+    assert_eq!(f.coin_state().status, CoinStatus::Curve);
+    ok(f.sell(&whale, tokens / 10)); // and ordinary curve sells
+    let u = f.env.new_user(10);
+    expect_err(f.buy(&u, SOL), FumpadError::Paused); // buys are paused
+    // Unknown flag bits are refused.
+    let bad = guardian_ix(&kp_pk(&admin), global, fumpad::instruction::SetPause { paused: 1 << 4 });
+    expect_err(f.env.send(&[bad], &[&admin]), FumpadError::InvalidParams);
+    // The pause lapses on its own after 7 days.
+    f.env.warp(fumpad::MAX_PAUSE_SECS - 2);
+    expect_err(f.buy(&u, SOL), FumpadError::Paused);
+    f.env.warp(2);
+    ok(f.buy(&u, SOL));
+    assert!(!f.env.fetch::<Global>(&global).is_paused(PAUSE_TRADE, f.now()));
 }
 
 /// [M-4] Default `max_price_age_secs` = 60 s equals the heartbeat of the sponsored mainnet
@@ -432,20 +515,51 @@ fn regression_params_is_valid_rejects_degenerate_values() {
 /// CONTRACTS.md / SPEC §6 say every state change emits one and the indexer is event-sourced.
 /// A pause, a keeper swap or an admin/treasury rotation is invisible to event-based monitoring.
 /// Fix: `#[event_cpi]` on `AdminOnly` + `PauseSet`, `KeepersSet`, `AdminSet` events.
+///
+/// FIXED (v0.6): `GlobalInitialized`, `PauseSet`, `KeepersSet`, `AdminProposed`,
+/// `AdminAccepted`, `AdminProposalCancelled` (and `ParamsCancelled.authority`,
+/// `GlobalMigrated.guardian`). `init_observations` / `init_claim_queue` stay silent (no admin
+/// state; the PDAs' creation is visible on-chain and the keeper drives them).
 #[test]
-fn issue_admin_changes_emit_no_events() {
+fn regression_admin_changes_emit_events() {
     let mut env = Env::new();
     let global = env.global_pda();
     let admin = env.admin.insecure_clone();
     let ak = kp_pk(&admin);
-    for data in [
-        admin_only_ix(&ak, global, fumpad::instruction::SetPause { paused: 7 }),
-        admin_only_ix(&ak, global, fumpad::instruction::SetKeepers { keepers: [Pubkey::new_unique(); fumpad::MAX_KEEPERS] }),
-        admin_only_ix(&ak, global, fumpad::instruction::SetAdmin { new_admin: ak, platform_treasury: Pubkey::new_unique() }),
-    ] {
-        let m = ok(env.send(&[data], &[&admin]));
-        assert!(m.inner_instructions.iter().all(|v| v.is_empty()), "no event self-CPI");
-    }
+    let keepers = [Pubkey::new_unique(); fumpad::MAX_KEEPERS];
+    let m = ok(env.send(&[guardian_ix(&ak, global, fumpad::instruction::SetPause { paused: 7 })], &[&admin]));
+    let e = &events::<fumpad::events::PauseSet>(&m)[0];
+    assert_eq!((e.paused, e.expires_at, e.authority), (7, env.now() + fumpad::MAX_PAUSE_SECS, ak));
+    let m = ok(env.send(&[guardian_ix(&ak, global, fumpad::instruction::SetPause { paused: 0 })], &[&admin]));
+    assert_eq!(events::<fumpad::events::PauseSet>(&m)[0].expires_at, 0);
+    let m = ok(env.send(&[admin_only_ix(&ak, global, fumpad::instruction::SetKeepers { keepers })], &[&admin]));
+    assert_eq!(events::<fumpad::events::KeepersSet>(&m)[0].keepers, keepers);
+    let t = Pubkey::new_unique();
+    let p = fumpad::instruction::ProposeAdmin { new_admin: ak, platform_treasury: t, guardian: ak };
+    let m = ok(env.send(&[admin_only_ix(&ak, global, p)], &[&admin]));
+    assert_eq!(events::<fumpad::events::AdminProposed>(&m)[0].platform_treasury, t);
+    let m = ok(env.send(&[guardian_ix(&ak, global, fumpad::instruction::CancelAdmin {})], &[&admin]));
+    assert_eq!(events::<fumpad::events::AdminProposalCancelled>(&m).len(), 1);
+    expect_err(env.send(&[guardian_ix(&ak, global, fumpad::instruction::CancelAdmin {})], &[&admin]), FumpadError::NoPendingAdmin);
+
+    // initialize_global: re-run on a wiped Global PDA.
+    env.svm.set_account(addr(&global), Default::default()).unwrap();
+    let program_data =
+        Pubkey::find_program_address(&[fumpad::ID.as_ref()], &anchor_lang::solana_program::bpf_loader_upgradeable::ID).0;
+    let init = ix(
+        fumpad::accounts::InitializeGlobal {
+            payer: kp_pk(&env.payer),
+            global,
+            program: fumpad::ID,
+            program_data,
+            system_program: SYSTEM,
+            event_authority: event_authority(),
+        },
+        fumpad::instruction::InitializeGlobal { admin: ak, platform_treasury: t, params: Params::default() },
+    );
+    let m = ok(env.send(&[init], &[]));
+    let e = &events::<fumpad::events::GlobalInitialized>(&m)[0];
+    assert_eq!((e.admin, e.platform_treasury, e.guardian, e.params), (ak, t, ak, Params::default()));
 }
 
 /// [L-4] `Position` accounts can never be closed (no instruction does it): every wallet that

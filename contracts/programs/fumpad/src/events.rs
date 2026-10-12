@@ -201,6 +201,8 @@ pub struct ParamsUpdated {
 #[event]
 pub struct ParamsCancelled {
     pub ts: i64,
+    /// v0.6: the admin or the guardian (M-2).
+    pub authority: Pubkey,
 }
 
 /// D13: a coin stuck in `Complete` for 7 days reopened its curve (escape hatch).
@@ -256,5 +258,72 @@ pub struct GlobalMigrated {
     pub snipe_start_bps: u16,
     /// Lamports the admin added to keep the larger account rent-exempt.
     pub rent_paid: u64,
+    pub ts: i64,
+    /// v0.6 (M-2): the guardian after migration (= the admin for a pre-v0.6 Global).
+    pub guardian: Pubkey,
+    /// v0.6 (M-3): when the migrated pause flags lapse (now + 7 days if any flag was set).
+    pub pause_expires_at: i64,
+}
+
+// ── v0.6 (final pre-mainnet review) ────────────────────────────────────────
+
+/// L-3: `initialize_global`.
+#[event]
+pub struct GlobalInitialized {
+    pub admin: Pubkey,
+    pub platform_treasury: Pubkey,
+    pub guardian: Pubkey,
+    pub params: crate::state::Params,
+    pub ts: i64,
+}
+
+/// L-3 / M-3: `set_pause` by the admin or the guardian; flags lapse at `expires_at` (0 = none set).
+#[event]
+pub struct PauseSet {
+    pub paused: u8,
+    pub expires_at: i64,
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+/// L-3: `set_keepers` (immediate; keepers can only trigger samples of on-chain reserves).
+#[event]
+pub struct KeepersSet {
+    pub keepers: [Pubkey; crate::constants::MAX_KEEPERS],
+    pub ts: i64,
+}
+
+/// M-2: the admin proposed a new admin / treasury / guardian; `accept_admin` from `eta`.
+#[event]
+pub struct AdminProposed {
+    pub admin: Pubkey,
+    pub platform_treasury: Pubkey,
+    pub guardian: Pubkey,
+    pub eta: i64,
+    pub ts: i64,
+}
+
+/// M-2: the proposed admin accepted; `admin`, `platform_treasury`, `guardian` are now live.
+#[event]
+pub struct AdminAccepted {
+    pub previous_admin: Pubkey,
+    pub admin: Pubkey,
+    pub platform_treasury: Pubkey,
+    pub guardian: Pubkey,
+    pub ts: i64,
+}
+
+/// M-2: a proposal was cancelled (by the admin or the guardian).
+#[event]
+pub struct AdminProposalCancelled {
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+/// L-4: a wallet closed its empty Position (rent back to it).
+#[event]
+pub struct PositionClosed {
+    pub mint: Pubkey,
+    pub wallet: Pubkey,
     pub ts: i64,
 }

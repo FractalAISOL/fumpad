@@ -92,7 +92,7 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
     let a = &mut *ctx.accounts;
 
     require!(sol_in > 0, FumpadError::ZeroAmount);
-    require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_TRADE, now), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
 
     let (rebuy, venue) = hooks::split_rebuy_accounts(&a.position, remaining)?;

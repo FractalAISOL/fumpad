@@ -46,7 +46,8 @@ pub mod fumpad {
         instructions::handle_execute_params(ctx)
     }
 
-    pub fn cancel_params(ctx: Context<CancelParams>) -> Result<()> {
+    /// M-2: admin or guardian.
+    pub fn cancel_params(ctx: Context<GuardianOrAdmin>) -> Result<()> {
         instructions::handle_cancel_params(ctx)
     }
 
@@ -56,7 +57,8 @@ pub mod fumpad {
         instructions::handle_migrate_global(ctx, args)
     }
 
-    pub fn set_pause(ctx: Context<AdminOnly>, paused: u8) -> Result<()> {
+    /// M-2 / M-3: admin or guardian; flags lapse after 7 days unless renewed.
+    pub fn set_pause(ctx: Context<GuardianOrAdmin>, paused: u8) -> Result<()> {
         instructions::handle_set_pause(ctx, paused)
     }
 
@@ -64,8 +66,23 @@ pub mod fumpad {
         instructions::handle_set_keepers(ctx, keepers)
     }
 
-    pub fn set_admin(ctx: Context<AdminOnly>, new_admin: Pubkey, platform_treasury: Pubkey) -> Result<()> {
-        instructions::handle_set_admin(ctx, new_admin, platform_treasury)
+    /// M-2 (replaces `set_admin`): propose a new admin / treasury / guardian; the new admin
+    /// applies it with `accept_admin` after 48h; the guardian or admin can `cancel_admin`.
+    pub fn propose_admin(
+        ctx: Context<AdminOnly>,
+        new_admin: Pubkey,
+        platform_treasury: Pubkey,
+        guardian: Pubkey,
+    ) -> Result<()> {
+        instructions::handle_propose_admin(ctx, new_admin, platform_treasury, guardian)
+    }
+
+    pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+        instructions::handle_accept_admin(ctx)
+    }
+
+    pub fn cancel_admin(ctx: Context<GuardianOrAdmin>) -> Result<()> {
+        instructions::handle_cancel_admin(ctx)
     }
 
     // ── curve / launch / graduation ─────────────────────────────────────────

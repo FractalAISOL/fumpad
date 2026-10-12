@@ -1,10 +1,13 @@
-//! `migrate_global`: grow a v0.3/v0.4 (672-byte) Global to the current layout in place.
+//! `migrate_global`: grow a v0.3/v0.4 (672-byte) or v0.5 (680-byte) Global to the current (v0.6, 776-byte) layout in place.
 
 use anchor_lang::{prelude::Pubkey, AccountSerialize, Space};
 use fumpad::{
     error::FumpadError,
     events::GlobalMigrated,
-    instructions::{global_len, MigrateGlobalArgs, GLOBAL_ADMIN_OFFSET, GLOBAL_PARAMS_OFFSET, GLOBAL_RESERVED_LEN},
+    instructions::{
+        global_len, legacy_global_len, MigrateGlobalArgs, GLOBAL_ADMIN_OFFSET, GLOBAL_PARAMS_OFFSET, GLOBAL_RESERVED_LEN,
+        GOVERNANCE_TAIL_LEN,
+    },
     state::{Global, Params},
 };
 
@@ -33,16 +36,27 @@ fn migrate(env: &mut Env, args: MigrateGlobalArgs) -> litesvm::types::Transactio
     env.send(&[i], &[&admin])
 }
 
-/// The v0.4 bytes of a current Global: both `Params` copies without the 4 bytes v0.5 appended.
-fn downgrade(new: &[u8]) -> Vec<u8> {
+/// The pre-v0.6 bytes of a current Global whose `Params` were `params_len` bytes (183 = v0.4,
+/// 672-byte Global; 187 = v0.5, 680): the v0.6 governance tail dropped, both `Params` copies
+/// cut, and the fields v0.6 carved from `reserved` (guardian, pause_expires_at,
+/// pending_admin_eta — first 48 bytes) zeroed, as an old program left them.
+fn downgrade_to(new: &[u8], params_len: usize) -> Vec<u8> {
     let p = Params::INIT_SPACE;
-    let n = p - OLD_PARAMS_LEN;
+    let n = p - params_len;
     let o = GLOBAL_PARAMS_OFFSET;
     let mut v = Vec::new();
     v.extend_from_slice(&new[..o + p - n]);
-    v.extend_from_slice(&new[o + p..o + p + GLOBAL_RESERVED_LEN + p - n]);
-    v.extend_from_slice(&new[o + p + GLOBAL_RESERVED_LEN + p..]);
+    let mut region = new[o + p..o + p + GLOBAL_RESERVED_LEN].to_vec();
+    region[..48].fill(0);
+    v.extend_from_slice(&region);
+    v.extend_from_slice(&new[o + p + GLOBAL_RESERVED_LEN..o + p + GLOBAL_RESERVED_LEN + p - n]);
+    v.extend_from_slice(&new[o + 2 * p + GLOBAL_RESERVED_LEN..new.len() - GOVERNANCE_TAIL_LEN]);
     v
+}
+
+/// v0.4 (672-byte) bytes of a current Global.
+fn downgrade(new: &[u8]) -> Vec<u8> {
+    downgrade_to(new, OLD_PARAMS_LEN)
 }
 
 /// Overwrite the Global PDA with `data` at the rent-exempt minimum for its size.
@@ -68,8 +82,12 @@ fn ser(g: &Global) -> Vec<u8> {
 }
 
 /// A Global with non-default everything (pause bits, keepers, a queued change), crafted
-/// into the v0.4 672-byte layout.
+/// into the v0.4 672-byte layout (`legacy_env_at(187)`: the v0.5 680-byte one).
 fn legacy_env() -> (Env, Global) {
+    legacy_env_at(OLD_PARAMS_LEN)
+}
+
+fn legacy_env_at(params_len: usize) -> (Env, Global) {
     let mut env = Env::new();
     // A small (devnet-style) curve: 0.3 SOL virtual, 0.85 SOL raise, no graduation fee.
     let mut p = crate::curve_tests::curve_params(300_000_000, 850_000_000, 0);
@@ -81,14 +99,14 @@ fn legacy_env() -> (Env, Global) {
     let admin = env.admin.insecure_clone();
     ok(env.send(
         &[ix(
-            fumpad::accounts::AdminOnly { admin: kp_pk(&admin), global: env.global_pda() },
+            fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&admin), global: env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
             fumpad::instruction::SetPause { paused: fumpad::state::PAUSE_CLAIMS },
         )],
         &[&admin],
     ));
     let before: Global = env.fetch(&env.global_pda());
-    let old = downgrade(&global_bytes(&env));
-    assert_eq!(old.len(), 672);
+    let old = downgrade_to(&global_bytes(&env), params_len);
+    assert_eq!(old.len(), legacy_global_len(params_len));
     put_global(&mut env, old);
     (env, before)
 }
@@ -105,9 +123,9 @@ fn migrates_672_byte_global_keeping_existing_fields() {
     let m = ok(migrate(&mut env, args));
 
     let acc = env.account(&gk).unwrap();
-    assert_eq!(acc.data.len(), 680);
+    assert_eq!(acc.data.len(), 776);
     assert_eq!(acc.data.len(), 8 + Global::INIT_SPACE);
-    assert_eq!(acc.lamports, env.svm.minimum_balance_for_rent_exemption(680));
+    assert_eq!(acc.lamports, env.svm.minimum_balance_for_rent_exemption(776));
     let rent_paid = acc.lamports - global_before;
     assert!(rent_paid > 0);
     // Admin paid exactly the extra rent (the fee payer is `payer`, not the admin).
@@ -125,7 +143,7 @@ fn migrates_672_byte_global_keeping_existing_fields() {
 
     let ev = crate::flow::events::<GlobalMigrated>(&m);
     assert_eq!(ev.len(), 1);
-    assert_eq!((ev[0].old_len, ev[0].new_len), (672, 680));
+    assert_eq!((ev[0].old_len, ev[0].new_len), (672, 776));
     assert_eq!((ev[0].snipe_window_slots, ev[0].snipe_start_bps, ev[0].rent_paid), (6, 5_000, rent_paid));
 
     // The 48h timelock still governs existing params: the change queued before the upgrade
@@ -135,6 +153,29 @@ fn migrates_672_byte_global_keeping_existing_fields() {
     let g: Global = env.fetch(&gk);
     assert_eq!(g.params.fee_bps, 120);
     assert_eq!((g.params.snipe_window_slots, g.params.snipe_start_bps), (6, 5_000));
+}
+
+/// v0.6 (M-2/M-3): a v0.5 680-byte Global (the devnet layout today) grows to 776 bytes: the
+/// guardian becomes the stored admin, the active pause gets its 7-day expiry, no authority
+/// proposal; every other byte (incl. the v0.5 snipe params — args are ignored) is kept.
+#[test]
+fn migrates_680_byte_global_adding_governance_fields() {
+    let (mut env, before) = legacy_env_at(fumpad::instructions::LEGACY_PARAMS_LENS[1]);
+    let gk = env.global_pda();
+    assert_eq!(env.account(&gk).unwrap().data.len(), 680);
+    // Before the migration nothing loads the old Global.
+    assert!(env.queue_params(Params::default()).is_err());
+    let m = ok(migrate(&mut env, MigrateGlobalArgs { snipe_window_slots: 0, snipe_start_bps: 0 }));
+    assert_eq!(env.account(&gk).unwrap().data.len(), 776);
+    let g: Global = env.fetch(&gk);
+    assert_eq!(ser(&g), ser(&before), "snipe params kept, guardian = admin, pause expiry = now + 7 days");
+    assert_eq!(g.guardian, kp_pk(&env.admin));
+    assert_eq!(g.pause_expires_at, env.now() + fumpad::MAX_PAUSE_SECS);
+    let ev = &crate::flow::events::<GlobalMigrated>(&m)[0];
+    assert_eq!((ev.old_len, ev.new_len, ev.guardian, ev.pause_expires_at), (680, 776, g.guardian, g.pause_expires_at));
+    // The new roles work right away.
+    ok(env.queue_params(Params::default()));
+    assert!(!g.is_paused(fumpad::state::PAUSE_CLAIMS, env.now() + fumpad::MAX_PAUSE_SECS));
 }
 
 #[test]

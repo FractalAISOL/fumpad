@@ -68,8 +68,8 @@ fn regression_admin_cannot_retroactively_take_raised_sol() {
     f.env.warp(fumpad::PARAMS_TIMELOCK_SECS - 1);
     expect_err(f.env.execute_params(), FumpadError::TimelockNotElapsed);
     let cancel = ix(
-        fumpad::accounts::CancelParams {
-            admin: kp_pk(&f.env.admin),
+        fumpad::accounts::GuardianOrAdmin {
+            authority: kp_pk(&f.env.admin),
             global: f.env.global_pda(),
             event_authority: event_authority(),
             program: fumpad::ID,

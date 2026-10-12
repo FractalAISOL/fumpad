@@ -13,7 +13,7 @@ use fumpad::{
         fees::{compute_fee, snipe_curve_offer, snipe_tax},
         price::price_q64,
     },
-    state::{Coin, CoinStatus, Params, Position, SnipeConfig, PAUSE_CLAIMS, PAUSE_LAUNCH, PAUSE_TRADE},
+    state::{Coin, CoinStatus, Params, Position, SnipeConfig, PAUSE_CLAIMS, PAUSE_GRADUATE, PAUSE_LAUNCH, PAUSE_TRADE},
 };
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata, TransactionResult};
 use solana_keypair::Keypair;
@@ -293,7 +293,7 @@ fn graduate(env: &mut Env, mint: &Pubkey) -> TransactionResult {
 
 fn set_pause(env: &mut Env, flags: u8) {
     let i = ix(
-        fumpad::accounts::AdminOnly { admin: kp_pk(&env.admin), global: env.global_pda() },
+        fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&env.admin), global: env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
         fumpad::instruction::SetPause { paused: flags },
     );
     let admin = env.admin.insecure_clone();
@@ -690,11 +690,9 @@ fn trade_rejections() {
     // (Simulated by asking the math directly; on-chain the wallet cap hits first.)
     assert!(quote_sell(&reserves(&c), c.virtual_token_reserves).is_none());
 
-    // Pause.
+    // Pause: buys stop, curve sells never do (M-3, v0.6 — holders can always exit).
     set_pause(&mut env, PAUSE_TRADE);
     assert_fumpad_err(buy(&mut env, &u, &mint, SOL, 1), FumpadError::Paused);
-    assert_fumpad_err(sell(&mut env, &u, &mint, held / 2, 0), FumpadError::Paused);
-    set_pause(&mut env, PAUSE_LAUNCH | PAUSE_CLAIMS);
     ok(sell(&mut env, &u, &mint, held, net));
     assert_lamport_invariant(&env, &mint);
 }
@@ -1036,18 +1034,45 @@ fn graduate_rejections() {
 
 /// Pause flags don't block graduation (liquidity must be able to leave the curve).
 #[test]
-fn graduate_is_permissionless_and_not_paused() {
+fn graduate_is_permissionless_and_has_its_own_pause() {
     let mut env = env();
     let creator = env.new_user(10);
     let mint = create_coin(&mut env, &creator);
     let whale = env.new_user(1_000);
     complete_curve(&mut env, &mint, &whale);
-    set_pause(&mut env, PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS);
-    // A random wallet pays and signs.
     let rando = env.new_user(1);
-    let i = ix(graduate_accounts(&env, &kp_pk(&rando), &mint), fumpad::instruction::Graduate {});
+    let grad = |env: &Env| ix(graduate_accounts(env, &kp_pk(&rando), &mint), fumpad::instruction::Graduate {});
+    // L-5 (v0.6): PAUSE_GRADUATE stops it…
+    set_pause(&mut env, PAUSE_GRADUATE);
+    let i = grad(&env);
+    assert_fumpad_err(env.send_as(&rando, &[cu_limit(GRADUATE_CU), i], &[&rando]), FumpadError::Paused);
+    // …the other flags don't, and a random wallet pays and signs.
+    set_pause(&mut env, PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS);
+    let i = grad(&env);
     ok(env.send_as(&rando, &[cu_limit(GRADUATE_CU), i], &[&rando]));
     assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).status, CoinStatus::Graduated);
+}
+
+/// L-5 + M-3: a graduation pause lapses after 7 days on its own (`MAX_PAUSE_SECS`), and a
+/// coin held in `Complete` by it reopens its curve for sells (D13) — the pause can't trap SOL.
+#[test]
+fn graduate_pause_lapses_and_escape_hatch_still_opens() {
+    let mut env = env();
+    let creator = env.new_user(10);
+    let mint = create_coin(&mut env, &creator);
+    let whale = env.new_user(1_000);
+    complete_curve(&mut env, &mint, &whale);
+    set_pause(&mut env, PAUSE_GRADUATE);
+    assert_fumpad_err(graduate(&mut env, &mint), FumpadError::Paused);
+    env.warp(fumpad::ESCAPE_HATCH_SECS);
+    let held = token_amount(&env, &ata(&kp_pk(&whale), &mint, &TOKEN_2022));
+    ok(sell(&mut env, &whale, &mint, held / 10, 0)); // hatch: Complete → Curve
+    assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).status, CoinStatus::Curve);
+    // Re-complete; the pause (7 days, = MAX_PAUSE_SECS) has lapsed by now: graduation runs.
+    set_pause(&mut env, PAUSE_GRADUATE);
+    env.warp(fumpad::MAX_PAUSE_SECS);
+    complete_curve(&mut env, &mint, &whale);
+    ok(graduate(&mut env, &mint));
 }
 
 /// Griefing check: anyone can pre-create the pool's ATAs (their addresses are

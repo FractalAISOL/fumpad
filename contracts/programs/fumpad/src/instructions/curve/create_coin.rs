@@ -85,7 +85,7 @@ pub struct CreateCoin<'info> {
 pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String, uri: String) -> Result<()> {
     let a = &mut *ctx.accounts;
     let p = a.global.params;
-    require!(!a.global.is_paused(PAUSE_LAUNCH), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_LAUNCH, Clock::get()?.unix_timestamp), FumpadError::Paused);
     require!(
         name.len() <= MAX_NAME_LEN && symbol.len() <= MAX_SYMBOL_LEN && uri.len() <= MAX_URI_LEN,
         FumpadError::MetadataTooLong

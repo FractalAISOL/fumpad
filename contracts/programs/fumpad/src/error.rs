@@ -91,4 +91,10 @@ pub enum FumpadError {
     // ── v0.5 (appended) ─────────────────────────────────────────────────────
     #[msg("Global account layout is unknown or newer than this program (migrate_global never shrinks)")]
     UnsupportedGlobalLayout,
+
+    // ── v0.6 (appended) ─────────────────────────────────────────────────────
+    #[msg("No admin change is proposed")]
+    NoPendingAdmin,
+    #[msg("Position still has open tickets or tracked tokens")]
+    PositionNotEmpty,
 }

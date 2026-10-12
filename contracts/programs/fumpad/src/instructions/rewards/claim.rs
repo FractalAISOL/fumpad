@@ -93,7 +93,7 @@ pub(crate) fn decide_claim(
     now: i64,
 ) -> Result<Decision> {
     let p = coin.reward_params(&global.params); // M-1
-    require!(!global.is_paused(PAUSE_CLAIMS), FumpadError::Paused);
+    require!(!global.is_paused(PAUSE_CLAIMS, now), FumpadError::Paused);
     require!(coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
     require!(t.status == TicketStatus::Open, FumpadError::TicketNotOpen);
     let deadline = t.sell_ts.checked_add(p.claim_window_secs).ok_or(FumpadError::MathOverflow)?;
