@@ -147,13 +147,15 @@
   right: 0;
   bottom: 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   background: var(--surface);
   border-top: 1px solid var(--rule);
   padding-bottom: env(safe-area-inset-bottom);
 }
 .tab {
   position: relative;
+  min-width: 0;
+  white-space: nowrap;
   display: flex;
   flex-direction: column;
   align-items: center;
