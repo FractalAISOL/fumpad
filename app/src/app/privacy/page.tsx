@@ -6,6 +6,7 @@ export const metadata: Metadata = { title: "Privacy", description: "Draft privac
 const TOC = [
   { id: "public", label: "Public by design" },
   { id: "login", label: "Login and the Trading wallet" },
+  { id: "waitlist", label: "The launch waitlist" },
   { id: "device", label: "On your device" },
   { id: "logs", label: "Servers and logs" },
   { id: "sharing", label: "Who else sees data" },
@@ -30,6 +31,12 @@ export default function PrivacyPage() {
         <p>
           Login (email, X, Google or a Solana wallet) and the embedded Trading wallet are provided by Privy. Privy processes your login details under its
           own privacy policy. FUMPAD receives your wallet address and account identifier, never your private key.
+        </p>
+      </DocSection>
+      <DocSection id="waitlist" title="The launch waitlist">
+        <p>
+          If you join the waitlist, FUMPAD stores the email address or X handle you give, the time, and a one-way hash of your IP address (used only to
+          limit sign-ups per network; the address itself isn&apos;t stored). It&apos;s used to tell you once when FUMPAD opens, and nothing else.
         </p>
       </DocSection>
       <DocSection id="device" title="On your device">

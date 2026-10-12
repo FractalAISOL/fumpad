@@ -61,6 +61,13 @@ export interface ApiConfig {
   launchPoolReserve: number;
   /** Timeout for each RPC call made by prepare (outside the DB transaction). */
   launchRpcTimeoutMs: number;
+  // ── Pre-launch waitlist (POST /v1/waitlist) ───────────────────────────────
+  /** Per-IP waitlist requests per minute. */
+  waitlistRateLimitPerMin: number;
+  /** Sign-ups one IP may add per rolling day (DB-enforced, across instances). */
+  waitlistPerIpPerDay: number;
+  /** HMAC key for ip_hash. Unset = derived from DATABASE_URL. */
+  waitlistIpSalt?: string;
 }
 
 export function loadApiConfig(env = process.env): ApiConfig {
@@ -105,5 +112,8 @@ export function loadApiConfig(env = process.env): ApiConfig {
     launchMinBalanceLamports: BigInt(env.LAUNCH_MIN_BALANCE_LAMPORTS ?? "10000000"),
     launchPoolReserve: Number(env.LAUNCH_POOL_RESERVE ?? 5),
     launchRpcTimeoutMs: Number(env.LAUNCH_RPC_TIMEOUT_MS ?? 5_000),
+    waitlistRateLimitPerMin: Number(env.WAITLIST_RATE_LIMIT_PER_MIN ?? 5),
+    waitlistPerIpPerDay: Number(env.WAITLIST_PER_IP_PER_DAY ?? 20),
+    waitlistIpSalt: env.WAITLIST_IP_SALT || undefined,
   };
 }

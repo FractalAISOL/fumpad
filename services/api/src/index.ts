@@ -11,3 +11,4 @@ export * from "./launch/vault.js";
 export * from "./status.js";
 export * from "./launch/auth.js";
 export * from "./net.js";
+export * from "./waitlist.js";

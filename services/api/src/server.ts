@@ -20,6 +20,7 @@ import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
 import { registerLaunchRoutes } from "./launch/routes.js";
 import { MintVault } from "./launch/vault.js";
 import { clientIpTrust, ssrAuthorized, SSR_HEADER } from "./net.js";
+import { WaitlistError, registerWaitlistRoutes } from "./waitlist.js";
 
 /** Mint-existence / block-height probe for the vanity pool sweeper. */
 export function connectionProbe(conn: Connection): ChainProbe {
@@ -400,6 +401,9 @@ export async function buildServer(
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────
   registerLaunchRoutes(app, cfg, { conn, client: chain.client, pool, db });
+
+  // ── Pre-launch waitlist ─────────────────────────────────────────────────────
+  registerWaitlistRoutes(app, cfg, db);
   let sweeper: NodeJS.Timeout | undefined;
   if (pool && cfg.launchSweepMs > 0) {
     sweeper = setInterval(() => {
@@ -417,6 +421,7 @@ export async function buildServer(
       if (err.statusCode >= 500) app.log.warn({ msg: err.message }, "launch unavailable");
       return reply.code(err.statusCode).send({ error: err.message });
     }
+    if (err instanceof WaitlistError) return reply.code(err.statusCode).send({ error: err.message });
     if ((err as { validation?: unknown }).validation) return reply.code(400).send({ error: err.message });
     const code = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
     if (code >= 500) app.log.error({ err: { message: err.message, name: err.name, stack: err.stack } }, "request failed");

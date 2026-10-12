@@ -1,0 +1,538 @@
+/* The hero: a tall scroll track with a sticky 100svh stage. Breakpoints 600 / 900 as in the app. */
+
+.hero {
+  position: relative;
+  height: 560vh;
+}
+.stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+  contain: layout paint;
+}
+
+/* ── Intro headline ─────────────────────────────────────────────────────────── */
+.intro {
+  position: absolute;
+  left: var(--wr-gut);
+  right: var(--wr-gut);
+  top: calc(var(--wr-top) + 2vh);
+  z-index: 3;
+  will-change: transform, opacity;
+}
+.title {
+  font-size: clamp(42px, 7.6vw, 168px);
+  line-height: 0.9;
+  font-weight: 820;
+  font-variation-settings: "wdth" 125;
+  letter-spacing: -0.05em;
+  max-width: 11.5em;
+  text-wrap: balance;
+}
+.lede {
+  margin-top: clamp(16px, 2.2vw, 40px);
+  max-width: 34em;
+  font-size: clamp(16px, 1.3vw, 24px);
+  line-height: 1.45;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* ── Readout: the run, in multiples of your sell ───────────────────────────── */
+.readout {
+  position: absolute;
+  right: var(--wr-gut);
+  top: calc(var(--wr-top) + 1vh);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  opacity: 0;
+}
+.roNum {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 75;
+  font-weight: 600;
+  font-size: clamp(40px, 11vw, 260px);
+  line-height: 0.9;
+  letter-spacing: -0.07em;
+  font-variant-numeric: tabular-nums;
+  transition: color var(--dur-slow) var(--ease-out);
+}
+.roLbl {
+  margin-top: 6px;
+  font-size: clamp(12px, 1vw, 17px);
+  color: var(--ink-3);
+}
+.stage[data-money="1"] .roNum {
+  color: var(--flare);
+}
+
+/* ── Plot ──────────────────────────────────────────────────────────────────── */
+.plot {
+  position: absolute;
+  left: var(--wr-gut);
+  right: var(--wr-gut);
+  top: 30%;
+  bottom: 25%;
+}
+@media (min-width: 900px) {
+  .plot {
+    top: 22%;
+    bottom: 25%;
+  }
+}
+.svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.svg text {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 80;
+}
+.grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.axisText {
+  fill: var(--ink-3);
+}
+.line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.run {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 0.1 9;
+}
+@media (min-width: 900px) {
+  .line,
+  .run {
+    stroke-width: 3.5;
+  }
+  .run {
+    stroke-dasharray: 0.1 11;
+  }
+}
+.ten {
+  stroke: var(--ink-3);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  transition: stroke var(--dur-slow) var(--ease-out);
+}
+.tenText {
+  fill: var(--ink-3);
+  font-weight: 650;
+  transition: fill var(--dur-slow) var(--ease-out);
+}
+.tenNote {
+  fill: var(--ink-3);
+  font-family: var(--f-sans) !important;
+  font-variation-settings: "wdth" 100 !important;
+  font-weight: 520;
+  transition: fill var(--dur-slow) var(--ease-out);
+}
+.stage[data-money="1"] .ten {
+  stroke: var(--flare);
+}
+.stage[data-money="1"] .tenText,
+.stage[data-money="1"] .tenNote {
+  fill: var(--flare-text);
+}
+.ring {
+  fill: var(--canvas);
+  stroke: var(--ink);
+}
+.ringText {
+  fill: var(--ink-2);
+  font-family: var(--f-sans) !important;
+  font-variation-settings: "wdth" 100 !important;
+  font-weight: 560;
+}
+.dot {
+  fill: var(--flare);
+}
+.headDot {
+  fill: var(--ink);
+}
+.headPulse {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pulse 1.8s var(--ease-out) infinite;
+}
+@keyframes pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(3.4);
+    opacity: 0;
+  }
+}
+.tag {
+  fill: var(--ink-2);
+}
+
+/* ── The ticket (prints top-down) ──────────────────────────────────────────── */
+.ticket {
+  position: absolute;
+  left: var(--wr-gut);
+  top: calc(var(--wr-top) + 1vh);
+  z-index: 2;
+  width: clamp(196px, 23vw, 400px);
+  padding: clamp(12px, 1.2vw, 22px) clamp(14px, 1.3vw, 24px) 0;
+  background: var(--surface);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-3);
+  will-change: clip-path, transform;
+}
+.tHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: clamp(8px, 0.8vw, 14px);
+  border-bottom: 1px solid var(--rule);
+}
+.tTitle {
+  font-weight: 680;
+  font-variation-settings: "wdth" 108;
+  font-size: clamp(14px, 1.15vw, 21px);
+}
+.tNo,
+.tPrice,
+.tTokens,
+.tAmount,
+.tScale {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 85;
+  font-variant-numeric: tabular-nums;
+}
+.tNo {
+  font-size: clamp(11px, 0.85vw, 15px);
+  color: var(--ink-3);
+}
+.tTokens {
+  margin-top: clamp(8px, 0.9vw, 16px);
+  font-size: clamp(15px, 1.35vw, 25px);
+  font-weight: 560;
+  letter-spacing: -0.02em;
+}
+.tPrice {
+  margin-top: 2px;
+  font-size: clamp(11px, 0.85vw, 15px);
+  color: var(--ink-2);
+}
+.tGauge {
+  margin: clamp(10px, 1vw, 18px) 0 clamp(12px, 1.1vw, 20px);
+}
+.tTrack {
+  position: relative;
+  height: clamp(8px, 0.7vw, 12px);
+  background: var(--sunken);
+  border: 1px solid var(--rule-2);
+  container-type: inline-size;
+}
+/* 10× sits at log(10)/log(30) = 67.7% of a 1–30× log track. */
+.tTrack::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 67.7%;
+  background: repeating-linear-gradient(-45deg, var(--flare) 0 1.5px, transparent 1.5px 5px);
+  opacity: 0.4;
+}
+.tFill {
+  position: absolute;
+  inset: 0;
+  background: var(--ink);
+  transform-origin: left;
+  transform: scaleX(0);
+}
+.stage[data-money="1"] .tFill {
+  background: linear-gradient(to right, var(--ink) 0 67.7%, var(--flare) 67.7%);
+}
+.tPost {
+  position: absolute;
+  left: calc(67.7% - 1px);
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--flare);
+  z-index: 1;
+}
+.tNeedle {
+  position: absolute;
+  left: -2px;
+  top: -5px;
+  bottom: -5px;
+  width: 3px;
+  background: var(--ink);
+  z-index: 2;
+}
+.stage[data-money="1"] .tNeedle {
+  background: var(--flare);
+}
+.tScale {
+  position: relative;
+  height: 1.4em;
+  margin-top: 6px;
+  font-size: clamp(10px, 0.75vw, 13px);
+  color: var(--ink-3);
+}
+.tScale span {
+  position: absolute;
+  top: 0;
+}
+.tScale span:first-child {
+  left: 0;
+}
+.tScale span:last-child {
+  right: 0;
+}
+.tScale .tTen {
+  left: 67.7%;
+  transform: translateX(-50%);
+  color: var(--flare-text);
+  font-weight: 650;
+}
+.tClaim {
+  border-top: 1px solid var(--rule);
+  padding-top: clamp(10px, 1vw, 16px);
+}
+.tClaimHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: clamp(12px, 1vw, 17px);
+}
+.tClaimHead span:first-child {
+  font-weight: 650;
+  color: var(--flare-text);
+}
+.tBack {
+  color: var(--ink-3);
+}
+.tAmount {
+  margin-top: 4px;
+  font-size: clamp(20px, 2vw, 38px);
+  font-weight: 650;
+  font-variation-settings: "wdth" 80;
+  letter-spacing: -0.04em;
+  color: var(--flare);
+}
+/* The perforated stub. */
+.tStub {
+  position: relative;
+  margin: clamp(12px, 1.1vw, 18px) calc(-1 * clamp(14px, 1.3vw, 24px)) 0;
+  padding: clamp(8px, 0.8vw, 12px) clamp(14px, 1.3vw, 24px);
+  border-top: 1.5px dashed var(--rule-2);
+  font-size: clamp(11px, 0.85vw, 14px);
+  color: var(--ink-3);
+}
+
+/* ── Captions ──────────────────────────────────────────────────────────────── */
+.captions {
+  position: absolute;
+  left: var(--wr-gut);
+  right: var(--wr-gut);
+  bottom: max(20px, 4svh);
+  z-index: 3;
+  display: grid;
+  pointer-events: none;
+}
+.caption {
+  grid-area: 1 / 1;
+  align-self: end;
+  max-width: min(900px, 100%);
+  opacity: 0;
+  transform: translate3d(0, 14px, 0);
+  transition:
+    opacity var(--dur-slow) var(--ease-out),
+    transform var(--dur-slow) var(--ease-out);
+}
+.capHead {
+  font-size: clamp(26px, 3.6vw, 76px);
+  line-height: 0.98;
+  font-weight: 760;
+  font-variation-settings: "wdth" 118;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+  max-width: 14em;
+}
+.caption[data-money] .capHead {
+  color: var(--flare-text);
+}
+.caption[data-big] .capHead {
+  font-size: clamp(36px, 4.8vw, 116px);
+  font-variation-settings: "wdth" 125;
+  font-weight: 820;
+  letter-spacing: -0.05em;
+}
+.capSub {
+  margin-top: clamp(8px, 0.9vw, 16px);
+  font-size: clamp(14px, 1.2vw, 22px);
+  line-height: 1.4;
+  color: var(--ink-2);
+  max-width: 30em;
+}
+.stage[data-beat="0"] .caption[data-i="0"],
+.stage[data-beat="1"] .caption[data-i="1"],
+.stage[data-beat="2"] .caption[data-i="2"],
+.stage[data-beat="3"] .caption[data-i="3"],
+.stage[data-beat="4"] .caption[data-i="4"],
+.stage[data-beat="5"] .caption[data-i="5"] {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── Progress rail (the beats are a sequence) ─────────────────────────────── */
+.railWrap {
+  display: none;
+}
+@media (min-width: 900px) {
+  .railWrap {
+    display: block;
+    position: absolute;
+    right: 8px;
+    top: 34%;
+    bottom: 26%;
+    width: 2px;
+  }
+}
+.railTrack {
+  position: absolute;
+  inset: 0;
+  background: var(--rule);
+}
+.railFill {
+  position: absolute;
+  inset: 0;
+  background: var(--ink-2);
+  transform-origin: top;
+  transform: scaleY(0);
+}
+.railTick {
+  position: absolute;
+  left: -3px;
+  width: 8px;
+  height: 1px;
+  background: var(--ink-3);
+}
+
+/* ── Scroll cue ────────────────────────────────────────────────────────────── */
+.cue {
+  position: absolute;
+  right: var(--wr-gut);
+  bottom: max(20px, 4svh);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.cueLine {
+  width: 1px;
+  height: 36px;
+  background: var(--ink-3);
+  transform-origin: top;
+  animation: cue 1.8s var(--ease-inOut) infinite;
+}
+@keyframes cue {
+  0% {
+    transform: scaleY(0);
+  }
+  50% {
+    transform: scaleY(1);
+    transform-origin: top;
+  }
+  51% {
+    transform-origin: bottom;
+  }
+  100% {
+    transform: scaleY(0);
+    transform-origin: bottom;
+  }
+}
+@media (max-width: 599px) {
+  .cue {
+    display: none;
+  }
+}
+
+/* ── Reduced motion: the final frame, unpinned, and the story as a list ──── */
+.story {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero {
+    height: auto;
+  }
+  .stage {
+    position: relative;
+    height: auto;
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+    padding: var(--wr-top) var(--wr-gut) 48px;
+    gap: 28px;
+  }
+  .intro,
+  .readout,
+  .ticket,
+  .plot {
+    position: relative;
+    inset: auto;
+    left: auto;
+    right: auto;
+    top: auto;
+    transform: none !important;
+  }
+  .intro {
+    order: 0;
+  }
+  .plot {
+    order: 2;
+    height: min(48svh, 520px);
+  }
+  .readout {
+    order: 1;
+    align-self: flex-end;
+  }
+  .ticket {
+    order: 3;
+  }
+  .captions,
+  .cue,
+  .railWrap,
+  .headPulse {
+    display: none;
+  }
+  .story {
+    order: 4;
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding-left: 1.4em;
+    max-width: 40em;
+    font-size: 16px;
+    line-height: 1.45;
+    color: var(--ink-2);
+  }
+  .story strong {
+    color: var(--ink);
+    font-weight: 650;
+  }
+}
