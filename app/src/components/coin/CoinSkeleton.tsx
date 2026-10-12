@@ -14,20 +14,24 @@ export function CoinSkeleton() {
             <Skeleton w="min(420px, 70vw)" h={13} />
           </div>
         </div>
-        <div className={s.grid}>
-          <Panel as="div">
-            <div className={s.chartBox} style={{ padding: 16 }}>
-              <Skeleton h="100%" />
-            </div>
-          </Panel>
-          <Panel as="div">
-            <div style={{ padding: 16, display: "grid", gap: 12 }}>
-              <Skeleton h={36} />
-              <Skeleton h={56} />
-              <Skeleton h={120} />
-              <Skeleton h={48} />
-            </div>
-          </Panel>
+        <div className={s.cols}>
+          <div className={s.colMain}>
+            <Panel as="div">
+              <div className={s.chartBox} style={{ padding: 16 }}>
+                <Skeleton h="100%" />
+              </div>
+            </Panel>
+          </div>
+          <div className={s.colSide}>
+            <Panel as="div">
+              <div style={{ padding: 16, display: "grid", gap: 12 }}>
+                <Skeleton h={36} />
+                <Skeleton h={56} />
+                <Skeleton h={120} />
+                <Skeleton h={48} />
+              </div>
+            </Panel>
+          </div>
         </div>
       </Loading>
     </div>

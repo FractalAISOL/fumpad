@@ -16,7 +16,7 @@ export async function generateMetadata({ params }: { params: Promise<{ symbol: s
   const { symbol } = await params;
   const c = await cachedCoin(symbol);
   if (!c) return { title: "Coin not found" };
-  return { title: `${c.name} ($${c.symbol})`, description: c.description };
+  return { title: `${c.name} ($${c.symbol})`, description: c.description.trim() || undefined };
 }
 
 export default function CoinPage({ params }: { params: Promise<{ symbol: string }> }) {

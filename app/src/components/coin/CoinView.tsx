@@ -23,6 +23,9 @@ import {
   CurveMeter,
   EmptyState,
   Gauge,
+  IconGlobe,
+  IconTelegram,
+  IconX,
   KV,
   Loading,
   Multiple,
@@ -75,6 +78,74 @@ function extend(points: PricePoint[], add: PricePoint[], range: ChartRange, now:
   while (cut < out.length - 2 && out[cut + 1].t < from) cut++;
   const trimmed = cut ? out.slice(cut) : out;
   return trimmed.length > MAX_POINTS ? trimmed.slice(trimmed.length - MAX_POINTS) : trimmed;
+}
+
+type CoinLink = { href: string; label: string; icon: typeof IconX };
+
+/** Only http(s) links from creator metadata are ever rendered. */
+function safeHref(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const u = new URL(raw.trim());
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The coin's X / Telegram / website from its metadata socials, else its labelled links; deduplicated. */
+function coinLinks(coin: CoinDetail): CoinLink[] {
+  const out: CoinLink[] = [];
+  const add = (raw: string | undefined, label: string, icon: CoinLink["icon"]) => {
+    const href = safeHref(raw);
+    if (href && !out.some((l) => l.href === href)) out.push({ href, label, icon });
+  };
+  const so = coin.socials;
+  add(so?.x, "X", IconX);
+  add(so?.telegram, "Telegram", IconTelegram);
+  if (so?.website) add(so.website, hostOf(so.website), IconGlobe);
+  for (const l of coin.links ?? []) {
+    const k = l.label.toLowerCase();
+    if (k === "x" || k === "twitter") add(l.href, "X", IconX);
+    else if (k === "telegram") add(l.href, "Telegram", IconTelegram);
+    else add(l.href, l.label || hostOf(l.href), IconGlobe);
+  }
+  return out;
+}
+
+function hostOf(raw: string): string {
+  try {
+    return new URL(raw).hostname.replace(/^www\./, "");
+  } catch {
+    return "Website";
+  }
+}
+
+/**
+ * Keeps the side column in view from 1000 px: it sticks under the header when it fits the
+ * viewport; when it's taller, its top goes negative so it scrolls until its last panel is in
+ * view and then holds (no gap opens beside the main column).
+ */
+function useStickySide() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const set = () => {
+      const header = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-h")) || 58;
+      const top = Math.min(header + 16, window.innerHeight - el.offsetHeight - 16);
+      el.style.setProperty("--side-top", `${Math.round(top)}px`);
+    };
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(el);
+    window.addEventListener("resize", set);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", set);
+    };
+  }, []);
+  return ref;
 }
 
 export function CoinView({
@@ -172,6 +243,9 @@ export function CoinView({
 
   const others = useMemo(() => fumbles.filter((r) => !r.isYou && r.owner !== address).map((r) => ({ t: r.ts, p: r.sol / r.tokens })), [fumbles, address]);
   const loading = series.range !== range;
+  const sideRef = useStickySide();
+  const description = coin.description?.trim();
+  const links = useMemo(() => coinLinks(coin), [coin]);
 
   const head = (
     <header className={s.head}>
@@ -206,7 +280,7 @@ export function CoinView({
   );
 
   const chart = (
-    <Panel className={s.chartPanel} aria-labelledby="chart-h">
+    <Panel className={cx(s.chartPanel, s.oChart)} aria-labelledby="chart-h">
       <PanelHead id="chart-h" title="Price">
         <Segmented size="sm" label="Chart range" value={range} onChange={setRange} items={RANGES} />
       </PanelHead>
@@ -301,11 +375,11 @@ export function CoinView({
   return (
     <div className="wrap">
       {head}
-      <div className={s.grid}>
-        <div className={s.leftCol}>
+      <div className={s.cols}>
+        <div className={s.colMain}>
           {chart}
           {grad ? (
-            <Panel aria-labelledby="queue-h">
+            <Panel className={s.oCurve} aria-labelledby="queue-h">
               <PanelHead id="queue-h" title="Claim queue" aside="ordered by sell time, small claims skip ahead" />
               <Table
                 caption={`${coin.symbol} claim queue`}
@@ -325,7 +399,7 @@ export function CoinView({
               </PanelNote>
             </Panel>
           ) : (
-            <Panel aria-labelledby="curve-h">
+            <Panel className={s.oCurve} aria-labelledby="curve-h">
               <PanelHead id="curve-h" title="Bonding curve" aside={`graduates at ${f.fixed(target, target < 10 ? 2 : 0)} SOL, then moves to PumpSwap`} />
               <div className={s.curveBox}>
                 <div className={s.curveStats}>
@@ -346,18 +420,101 @@ export function CoinView({
               </PanelNote>
             </Panel>
           )}
-        </div>
-        <Panel className={s.tradePanel}>
-          <PanelBody>
-            <TradePanel coin={coin} myTicket={mine} />
-          </PanelBody>
-        </Panel>
-      </div>
+          <Panel className={s.oFumbles} aria-labelledby="fumbles-h">
+            <PanelHead id="fumbles-h" title="Recent fumbles" aside={`sells over ${f.usd(params.minSellUsd)} through FUMPAD`} />
+            <Table
+              caption={`Recent ${coin.symbol} fumbles`}
+              columns={fumbleCols}
+              rows={fumbles}
+              rowKey={(r) => r.ticket}
+              highlight={(r) => !!r.isYou || r.owner === address}
+              empty={
+                <EmptyState title="No fumbles yet" compact>
+                  Nobody has sold ${coin.symbol} for {f.usd(params.minSellUsd)} or more through FUMPAD. The first ticket starts the board.
+                </EmptyState>
+              }
+            />
+          </Panel>
 
-      <div className={s.lower}>
-        {grad ? (
-          <>
-            <Panel aria-labelledby="pool-h">
+          <Panel className={s.oTrades} aria-labelledby="trades-h">
+            <PanelHead id="trades-h" title="Recent trades" aside="through FUMPAD, live" />
+            {trades === null ? (
+              <Loading label="Loading trades">
+                <div className={s.tradesSkel}>
+                  {[0, 1, 2, 3].map((i) => (
+                    <Skeleton key={i} h={14} />
+                  ))}
+                </div>
+              </Loading>
+            ) : trades.length ? (
+              <ul className={s.trades} aria-live="polite" aria-relevant="additions">
+                {trades.slice(0, 12).map((t) => {
+                  const k = t.signature + t.wallet + t.ts;
+                  return (
+                    <li key={k} className={cx(freshTrades.has(k) && s.fresh)}>
+                      <span className={cx(s.side, t.side === "sell" && s.sideSell)}>
+                        <span aria-hidden="true">{t.side === "buy" ? "▲" : "▼"}</span> {t.side === "buy" ? "Buy" : "Sell"}
+                      </span>
+                      <span className={s.who}>
+                        <Address address={t.wallet} you={t.wallet === address} />
+                        {t.snipeTaxSol !== undefined && t.snipeTaxBps !== undefined && (
+                          <span title={`${f.fixed(t.snipeTaxSol, 3)} SOL of this buy went to the reward pool (snipe protection).`}>
+                            <Badge tone="muted" className={s.taxTag}>
+                              snipe-taxed {f.fixed(t.snipeTaxBps / 100, 0)}%
+                            </Badge>
+                          </span>
+                        )}
+                      </span>
+                      <Tokens value={t.tokens} compact />
+                      <Sol value={t.sol} />
+                      <span className={cx("num muted", s.tradeAgo)}>{f.ago(t.ts, now)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <EmptyState title="No trades yet" compact>
+                The first buy of ${coin.symbol} shows up here as it happens.
+              </EmptyState>
+            )}
+          </Panel>
+
+          <Panel className={s.oAbout} aria-labelledby="about-h">
+            <PanelHead id="about-h" title="About" />
+            <PanelBody>
+              {description && <p className={s.about}>{description}</p>}
+              {links.length > 0 && (
+                <ul className={s.links} aria-label={`${coin.symbol} links`}>
+                  {links.map((l) => (
+                    <li key={l.href}>
+                      <a href={l.href} target="_blank" rel="noopener noreferrer nofollow">
+                        <l.icon width={14} height={14} aria-hidden="true" />
+                        <span>{l.label}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <KV
+                className={description || links.length ? s.kvGap : undefined}
+                rows={[
+                  { k: "Mint", v: <Address address={coin.mint} avatar={false} link={false} copy /> },
+                  { k: "Tickets filed", v: <span className="num">{f.int(coin.ticketsCreated)}</span> },
+                  { k: "Volume, 24h", v: <Sol value={coin.volume24hSol} /> },
+                ]}
+              />
+            </PanelBody>
+          </Panel>
+        </div>
+        <div className={s.colSide} ref={sideRef}>
+          <Panel className={cx(s.tradePanel, s.oTrade)}>
+            <PanelBody>
+              <TradePanel coin={coin} myTicket={mine} />
+            </PanelBody>
+          </Panel>
+
+          {grad ? (
+            <Panel className={s.oPool} aria-labelledby="pool-h">
               <PanelHead id="pool-h" title="Reward pool" aside={`${coin.symbol} held for claims`} />
               <PanelBody>
                 <Stat label={`≈ ${f.sol(coin.poolTokens * (coin.median ?? coin.price))} SOL at the median price`}>
@@ -392,10 +549,8 @@ export function CoinView({
                 Liquidity is locked forever in an immutable locker. Its trading fees are skimmed: tokens go to this pool, SOL to FUMPAD and the creator.
               </PanelNote>
             </Panel>
-          </>
-        ) : (
-          <>
-            <Panel aria-labelledby="pool-h">
+          ) : (
+            <Panel className={s.oPool} aria-labelledby="pool-h">
               <PanelHead id="pool-h" title="Reward pool" aside="filling" />
               <PanelBody>
                 <Stat label="8% seeded at launch, plus curve-fee buybacks">
@@ -413,99 +568,25 @@ export function CoinView({
                 />
               </PanelBody>
             </Panel>
-          </>
-        )}
-
-        <Panel className={s.span2} aria-labelledby="fumbles-h">
-          <PanelHead id="fumbles-h" title="Recent fumbles" aside={`sells over ${f.usd(params.minSellUsd)} through FUMPAD`} />
-          <Table
-            caption={`Recent ${coin.symbol} fumbles`}
-            columns={fumbleCols}
-            rows={fumbles}
-            rowKey={(r) => r.ticket}
-            highlight={(r) => !!r.isYou || r.owner === address}
-            empty={
-              <EmptyState title="No fumbles yet" compact>
-                Nobody has sold ${coin.symbol} for {f.usd(params.minSellUsd)} or more through FUMPAD. The first ticket starts the board.
-              </EmptyState>
-            }
-          />
-        </Panel>
-
-        <Panel className={s.span2} aria-labelledby="trades-h">
-          <PanelHead id="trades-h" title="Recent trades" aside="through FUMPAD, live" />
-          {trades === null ? (
-            <Loading label="Loading trades">
-              <div className={s.tradesSkel}>
-                {[0, 1, 2, 3].map((i) => (
-                  <Skeleton key={i} h={14} />
-                ))}
-              </div>
-            </Loading>
-          ) : trades.length ? (
-            <ul className={s.trades} aria-live="polite" aria-relevant="additions">
-              {trades.slice(0, 12).map((t) => {
-                const k = t.signature + t.wallet + t.ts;
-                return (
-                  <li key={k} className={cx(freshTrades.has(k) && s.fresh)}>
-                    <span className={cx(s.side, t.side === "sell" && s.sideSell)}>
-                      <span aria-hidden="true">{t.side === "buy" ? "▲" : "▼"}</span> {t.side === "buy" ? "Buy" : "Sell"}
-                    </span>
-                    <span className={s.who}>
-                      <Address address={t.wallet} you={t.wallet === address} />
-                      {t.snipeTaxSol !== undefined && t.snipeTaxBps !== undefined && (
-                        <span title={`${f.fixed(t.snipeTaxSol, 3)} SOL of this buy went to the reward pool (snipe protection).`}>
-                          <Badge tone="muted" className={s.taxTag}>
-                            snipe-taxed {f.fixed(t.snipeTaxBps / 100, 0)}%
-                          </Badge>
-                        </span>
-                      )}
-                    </span>
-                    <Tokens value={t.tokens} compact />
-                    <Sol value={t.sol} />
-                    <span className={cx("num muted", s.tradeAgo)}>{f.ago(t.ts, now)}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <EmptyState title="No trades yet" compact>
-              The first buy of ${coin.symbol} shows up here as it happens.
-            </EmptyState>
           )}
-        </Panel>
 
-        <Panel aria-labelledby="holders-h">
-          <PanelHead id="holders-h" title="Holders" aside={<span className="num">{f.int(holders.total)}</span>} />
-          <ul className={s.holders}>
-            {holders.top.map((h) => (
-              <li key={h.address + h.kind}>
-                <Address
-                  address={h.address}
-                  name={h.label}
-                  you={h.kind === "you" || h.address === address}
-                  link={h.kind === "holder" || h.kind === "you" || h.kind === "creator"}
-                />
-                <span className="num">{f.fixed(h.share, 2)}%</span>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-
-        <Panel aria-labelledby="about-h">
-          <PanelHead id="about-h" title="About" />
-          <PanelBody>
-            <p className={s.about}>{coin.description}</p>
-            <KV
-              className={s.kvGap}
-              rows={[
-                { k: "Mint", v: <Address address={coin.mint} avatar={false} link={false} copy /> },
-                { k: "Tickets filed", v: <span className="num">{f.int(coin.ticketsCreated)}</span> },
-                { k: "Volume, 24h", v: <Sol value={coin.volume24hSol} /> },
-              ]}
-            />
-          </PanelBody>
-        </Panel>
+          <Panel className={s.oHolders} aria-labelledby="holders-h">
+            <PanelHead id="holders-h" title="Holders" aside={<span className="num">{f.int(holders.total)}</span>} />
+            <ul className={s.holders}>
+              {holders.top.map((h) => (
+                <li key={h.address + h.kind}>
+                  <Address
+                    address={h.address}
+                    name={h.label}
+                    you={h.kind === "you" || h.address === address}
+                    link={h.kind === "holder" || h.kind === "you" || h.kind === "creator"}
+                  />
+                  <span className="num">{f.fixed(h.share, 2)}%</span>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        </div>
       </div>
     </div>
   );

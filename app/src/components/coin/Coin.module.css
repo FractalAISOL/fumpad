@@ -49,16 +49,49 @@
   }
 }
 
-.grid {
+/*
+ * Two independent columns from 1000 px: each stacks by its own height, so no panel waits on a
+ * row in the other column. Below 1000 px both columns dissolve (display: contents) into one
+ * stack, ordered so the trade panel follows the chart and curve.
+ */
+.cols {
   display: grid;
   gap: var(--s-4);
   grid-template-columns: minmax(0, 1fr);
 }
+.colMain,
+.colSide {
+  display: contents;
+}
+.oChart { order: 1; }
+.oCurve { order: 2; }
+.oTrade { order: 3; }
+.oPool { order: 4; }
+.oFumbles { order: 5; }
+.oTrades { order: 6; }
+.oHolders { order: 7; }
+.oAbout { order: 8; }
 @media (min-width: 1000px) {
-  .grid {
+  .cols {
     grid-template-columns: minmax(0, 1fr) 372px;
     gap: var(--s-5);
     align-items: start;
+  }
+  .colMain,
+  .colSide {
+    display: grid;
+    gap: var(--s-5);
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /*
+   * The side column sticks under the header. When it is taller than the viewport, --side-top
+   * (set from its height) goes negative: it scrolls with the page until its last panel is in
+   * view, then holds, so its bottom never leaves a gap beside the main column.
+   */
+  .colSide {
+    position: sticky;
+    top: var(--side-top, calc(var(--header-h) + 16px));
   }
 }
 
@@ -116,12 +149,6 @@
 /* Trade */
 .tradePanel {
   min-width: 0;
-}
-@media (min-width: 1000px) {
-  .tradePanel {
-    position: sticky;
-    top: calc(var(--header-h) + 16px);
-  }
 }
 .trade {
   display: grid;
@@ -237,24 +264,6 @@
   text-align: center;
 }
 
-/* Lower */
-.lower {
-  display: grid;
-  gap: var(--s-4);
-  margin-top: var(--s-4);
-  align-items: start;
-  grid-template-columns: minmax(0, 1fr);
-}
-@media (min-width: 1000px) {
-  .lower {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--s-5);
-    margin-top: var(--s-5);
-  }
-  .span2 {
-    grid-column: span 2;
-  }
-}
 .kvGap {
   margin-top: var(--s-3);
 }
@@ -412,6 +421,45 @@
 .about {
   color: var(--ink-2);
   font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+/* Creator links from the coin metadata; only rendered when there are any. */
+.links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.about + .links {
+  margin-top: var(--s-3);
+}
+.links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  box-shadow: inset 0 0 0 1px var(--rule-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--ink);
+}
+.links a:hover {
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.links a span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.links svg {
+  flex: none;
+  color: var(--ink-3);
 }
 
 .outOfRange {
@@ -426,18 +474,6 @@
   text-underline-offset: 3px;
   text-decoration-color: var(--rule-2);
 }
-.leftCol {
-  display: grid;
-  gap: var(--s-4);
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr);
-}
-@media (min-width: 1000px) {
-  .leftCol {
-    gap: var(--s-5);
-  }
-}
-
 /* Transaction progress under the trade button; empty (no height) when idle. */
 .txStatus {
   margin: 0;
