@@ -10,6 +10,18 @@ import { useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 
+/** Solana's target slot time. */
+const SLOT_SECS = 0.4;
+
+/**
+ * Seconds until the snipe tax is gone, from the quoted rate: the D19 schedule is
+ * min(start, ⌈100%·(W − d)/W⌉) at slot offset d, so ⌈bps·W/10,000⌉ slots remain.
+ */
+function snipeWaitSecs(bps: number, windowSlots: number): number {
+  const w = windowSlots > 0 ? windowSlots : 4;
+  return Math.max(1, Math.round(Math.ceil((bps * w) / 10_000) * SLOT_SECS));
+}
+
 /**
  * Buy/sell with a live ticket preview. The preview explains the ticket price in one
  * sentence: your fill, unless FUMPAD's recent-average floor is higher (D10/D12).
@@ -71,6 +83,9 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
   const over = balance !== undefined && amount > balance;
   const t = quote?.ticket;
   const files = side === "sell" && t?.files;
+  // D19: a curve buy in the launch window pays the snipe tax (quoted at the current slot).
+  const snipe = side === "buy" && quote?.snipeTaxSol && quote.snipeTaxBps ? { sol: quote.snipeTaxSol, pct: quote.snipeTaxBps / 100 } : null;
+  const snipeWait = snipe ? snipeWaitSecs(quote!.snipeTaxBps!, params.snipeWindowSlots) : 0;
 
   const submit = async () => {
     if (!quote || amount <= 0 || over) return;
@@ -159,6 +174,7 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
             { k: "You receive", v: side === "buy" ? <Tokens value={quote.amountOut} symbol={coin.symbol} /> : <Sol value={quote.amountOut} /> },
             { k: "Fee, 1%", v: <Sol value={quote.feeSol} /> },
             { k: `Of which buys ${coin.symbol} for the pool`, v: <Sol value={quote.feePoolSol} /> },
+            ...(snipe ? [{ k: `Snipe tax, ${f.fixed(snipe.pct, 0)}%, to the pool`, v: <Sol value={snipe.sol} /> }] : []),
             ...(quote.venueFeeSol > 0 ? [{ k: "PumpSwap fee, 0.25%", v: <Sol value={quote.venueFeeSol} /> }] : []),
             { k: "Price impact", v: <span className="num">{f.fixed(Math.abs(quote.priceImpact), 2)}%</span> },
           ]}
@@ -234,6 +250,17 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
             </p>
           )}
         </div>
+      )}
+
+      {snipe && amount > 0 && (
+        <p className={s.snipe} role="status">
+          <b>Snipe protection:</b> <span className={cx("num", s.snipePct)}>{f.fixed(snipe.pct, 0)}%</span> of this buy goes to the reward pool — wait ~
+          {snipeWait} s.
+          <small>
+            Buys in the first few slots after launch are taxed into ${coin.symbol}&apos;s reward pool; the tax steps down to zero in about{" "}
+            {f.fixed(Math.max(1, params.snipeWindowSlots) * SLOT_SECS, 1)} s.
+          </small>
+        </p>
       )}
 
       {side === "buy" && quote && amount > 0 && (

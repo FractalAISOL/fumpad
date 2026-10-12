@@ -373,6 +373,9 @@ export function CoinView({
                     { k: "Bought back, 24h", v: <Tokens value={coin.poolBought24h} signed /> },
                     { k: "Paid out, all time", v: <Tokens value={coin.poolPaidOut} /> },
                     { k: "Seeded at launch, 8%", v: <Tokens value={coin.poolSeeded} /> },
+                    ...(coin.snipeTaxSol
+                      ? [{ k: `Snipe tax at launch, ${f.int(coin.snipeTaxedBuys ?? 0)} ${coin.snipeTaxedBuys === 1 ? "buy" : "buys"}`, v: <Sol value={coin.snipeTaxSol} /> }]
+                      : []),
                   ]}
                 />
                 <p className={s.splitLabel}>Where each 1% trade fee goes</p>
@@ -403,6 +406,9 @@ export function CoinView({
                   rows={[
                     { k: "Tickets waiting on graduation", v: <span className="num">{f.int(coin.ticketsOpen)}</span> },
                     { k: "Already past 10×", v: <span className="num">{coin.ticketsPast10x}</span> },
+                    ...(coin.snipeTaxSol
+                      ? [{ k: `Snipe tax at launch, ${f.int(coin.snipeTaxedBuys ?? 0)} ${coin.snipeTaxedBuys === 1 ? "buy" : "buys"}`, v: <Sol value={coin.snipeTaxSol} /> }]
+                      : []),
                   ]}
                 />
               </PanelBody>
@@ -445,7 +451,16 @@ export function CoinView({
                     <span className={cx(s.side, t.side === "sell" && s.sideSell)}>
                       <span aria-hidden="true">{t.side === "buy" ? "▲" : "▼"}</span> {t.side === "buy" ? "Buy" : "Sell"}
                     </span>
-                    <Address address={t.wallet} you={t.wallet === address} />
+                    <span className={s.who}>
+                      <Address address={t.wallet} you={t.wallet === address} />
+                      {t.snipeTaxSol !== undefined && t.snipeTaxBps !== undefined && (
+                        <span title={`${f.fixed(t.snipeTaxSol, 3)} SOL of this buy went to the reward pool (snipe protection).`}>
+                          <Badge tone="muted" className={s.taxTag}>
+                            snipe-taxed {f.fixed(t.snipeTaxBps / 100, 0)}%
+                          </Badge>
+                        </span>
+                      )}
+                    </span>
                     <Tokens value={t.tokens} compact />
                     <Sol value={t.sol} />
                     <span className={cx("num muted", s.tradeAgo)}>{f.ago(t.ts, now)}</span>

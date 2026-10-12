@@ -122,6 +122,59 @@ function liveMedian(c: CoinSpec): number {
   return medianOf(c) * (sim.drift.get(c.symbol) ?? 1);
 }
 
+/* ── D19 snipe protection (mock) ─────────────────────────────────────────── */
+
+/**
+ * The mock's snipe window. On chain a slot is ~0.4 s and the window 4 slots (~1.6 s); here a
+ * "slot" is stretched to 5 s so simulated launches visibly pass through 99 → 75 → 50 → 25 %.
+ * LMBO is frozen at slot 1 of its window for quotes, so mock mode always shows the taxed state.
+ */
+const MOCK_SLOT_MS = 5_000;
+const SNIPE_DEMO = "LMBO";
+/** Session snipe tax on top of the authored stats (simulated taxed buys). */
+const sessionSnipe = new Map<string, { sol: number; buys: number }>();
+
+/** D19 schedule (SDK `snipeTaxBps`): min(start, ⌈10,000·(W − d)/W⌉) at slot offset d < W. */
+function snipeBpsAtSlot(d: number): number {
+  const w = PARAMS.snipeWindowSlots;
+  if (d < 0 || d >= w) return 0;
+  return Math.min(PARAMS.snipeStartBps, Math.ceil((10_000 * (w - d)) / w));
+}
+function mockSnipeBps(c: CoinSpec, ts: number, opts: { quote?: boolean } = {}): number {
+  if (c.status !== "curve") return 0;
+  if (opts.quote && c.symbol === SNIPE_DEMO) return snipeBpsAtSlot(1);
+  return snipeBpsAtSlot(Math.floor((ts - c.createdAt) / MOCK_SLOT_MS));
+}
+
+/** LMBO's launch: the creator's exempt bundled buy, then three snipers at 99 / 75 / 50 %. */
+const DEMO_SNIPES = [
+  { bps: 9_900, budget: 1.0 },
+  { bps: 7_500, budget: 0.4 },
+  { bps: 5_000, budget: 0.18 },
+];
+
+/** Early-launch stats: authored (deterministic) + simulated this session. */
+function snipeStats(c: CoinSpec): Pick<CoinSummary, "snipeTaxSol" | "snipeTaxedBuys"> {
+  let sol = 0;
+  let buys = 0;
+  if (c.symbol === SNIPE_DEMO) {
+    for (const x of DEMO_SNIPES) sol += (x.budget * x.bps) / 10_000;
+    buys = DEMO_SNIPES.length;
+  } else if (c.createdAt <= EPOCH) {
+    const r = rng("snipe:" + c.symbol);
+    if (r() < 0.35) {
+      sol = Math.round(between(r, 0.05, 2.4) * 1000) / 1000;
+      buys = 1 + Math.floor(r() * 5);
+    }
+  }
+  const live = sessionSnipe.get(c.symbol);
+  if (live) {
+    sol += live.sol;
+    buys += live.buys;
+  }
+  return buys > 0 ? { snipeTaxSol: sol, snipeTaxedBuys: buys } : {};
+}
+
 function ticketsOpenOn(c: CoinSpec): number {
   // Young curve coins (the board's New column) have only a handful of sellers yet.
   if (c.status === "curve" && c.createdAt > EPOCH - DAY) return Math.round(curveRaised(c) * 0.35);
@@ -149,6 +202,7 @@ function summary(c: CoinSpec): CoinSummary {
     ticketsOpen: ticketsOpenOn(c),
     spark: [...spark(c.symbol).slice(0, -1), price],
     ...boardExtras(c),
+    ...snipeStats(c),
   };
 }
 
@@ -430,7 +484,7 @@ function makeEvent(kind: FeedKind, seed: string, ts: number, coin?: CoinSpec): F
   switch (kind) {
     case "launch": {
       const c = coin ?? SPEC_BY_SYMBOL.get("LMBO")!;
-      return { ...base, actor: creatorOf(c), actorName: nameOf(creatorOf(c)), ...coinBits(c), kind, poolTokens: PARAMS.rewardPoolSupply };
+      return { ...base, actor: creatorOf(c), actorName: nameOf(creatorOf(c)), ...coinBits(c), kind, poolTokens: PARAMS.rewardPoolSupply, snipeTaxSol: snipeStats(c).snipeTaxSol };
     }
     case "graduation": {
       const c = coin ?? SPEC_BY_SYMBOL.get("BAGS")!;
@@ -605,7 +659,17 @@ function tradesFor(c: CoinSpec): TradeRow[] {
     const name = r() < 0.5 ? pick(r, USERS) : null;
     out.push({ signature: signature(`tr:${c.symbol}:${i}`), mint: mintAddress(c.symbol), wallet: name ? name.address : anon(`tr:${c.symbol}:${i}`), side, tokens: sol / p, sol, price: p, ts: t - Math.floor(r() * 50_000) });
   }
-  return out;
+  if (c.symbol !== SNIPE_DEMO) return out;
+  // LMBO's launch block: snipers taxed into the pool (shown as "snipe-taxed"), the creator's
+  // bundled first buy exempt. Kept within the 12 rows the coin page shows.
+  const p0 = curvePriceAt(0);
+  const launch: TradeRow[] = DEMO_SNIPES.map((x, i) => {
+    const tax = (x.budget * x.bps) / 10_000;
+    const sol = x.budget - tax;
+    return { signature: signature(`snipe:${c.symbol}:${i}`), mint: mintAddress(c.symbol), wallet: anon(`sniper:${i}`), side: "buy" as const, tokens: sol / p0, sol, price: p0, ts: c.createdAt + (i + 1) * 400, snipeTaxSol: tax, snipeTaxBps: x.bps };
+  }).reverse();
+  launch.push({ signature: signature(`launch:${c.symbol}`), mint: mintAddress(c.symbol), wallet: creatorOf(c), side: "buy", tokens: 0.5 / p0, sol: 0.5, price: p0, ts: c.createdAt });
+  return [...out.slice(0, 8), ...launch];
 }
 
 type Listener = (m: LiveMessage) => void;
@@ -651,7 +715,24 @@ function simTrade(c: CoinSpec, ts: number, opts: { buy?: boolean; sol?: number; 
   }
   const price = liveSpot(c);
   const who = opts.wallet ?? (r() < 0.5 ? pick(r, USERS).address : anon(`live:${c.symbol}:${tickN}`));
-  const trade: TradeRow = { signature: signature(`live:${c.symbol}:${tickN}`), mint, wallet: who, side: buy ? "buy" : "sell", tokens: sol / ((before + price) / 2), sol, price, ts };
+  // D19: buys inside the (stretched) launch window: part of `sol` goes to the pool as snipe tax.
+  const bps = buy ? mockSnipeBps(c, ts) : 0;
+  const tax = bps ? (sol * bps) / 10_000 : 0;
+  if (tax > 0) {
+    const cur = sessionSnipe.get(c.symbol) ?? { sol: 0, buys: 0 };
+    sessionSnipe.set(c.symbol, { sol: cur.sol + tax, buys: cur.buys + 1 });
+  }
+  const trade: TradeRow = {
+    signature: signature(`live:${c.symbol}:${tickN}`),
+    mint,
+    wallet: who,
+    side: buy ? "buy" : "sell",
+    tokens: (sol - tax) / ((before + price) / 2),
+    sol: sol - tax,
+    price,
+    ts,
+    ...(tax > 0 ? { snipeTaxSol: tax, snipeTaxBps: bps } : {}),
+  };
   const point = { t: ts, p: price };
   sim.points.set(c.symbol, [...(sim.points.get(c.symbol) ?? []), point].slice(-500));
   sim.trades.set(c.symbol, [trade, ...(sim.trades.get(c.symbol) ?? [])].slice(0, 100));
@@ -1084,14 +1165,17 @@ export class MockFumpadData implements FumpadData {
     if (side === "buy") {
       const fee = amt * FEE;
       const venueFee = onCurve ? 0 : (amt - fee) * VENUE_FEE;
-      const solNet = amt - fee - venueFee;
+      // D19: a buy in the launch window pays snipe tax out of what it spends (to the reward pool).
+      const snipeBps = mockSnipeBps(c, this.now(), { quote: true });
+      const snipeTax = ((amt - fee) * snipeBps) / 10_000;
+      const solNet = amt - fee - venueFee - snipeTax;
       let out = solNet > 0 ? cpOut(x, y, solNet) : 0;
       let partialFill = false;
       if (onCurve && out > d.curveTokensLeft) {
         out = d.curveTokensLeft;
         partialFill = true;
       }
-      const exec = out > 0 ? (amt - fee) / out : spotBefore;
+      const exec = out > 0 ? (amt - fee - snipeTax) / out : spotBefore;
       const now = this.now();
       const recent = open.filter((t) => now - t.sellTs < PARAMS.rebuyWindowSecs * 1000).sort((a, b) => b.sellTs - a.sellTs);
       let left = out;
@@ -1112,6 +1196,7 @@ export class MockFumpadData implements FumpadData {
         venue: onCurve ? "curve" : "pumpswap",
         partialFill,
         rebuyWarning: hit.length ? { tickets: hit.filter((h) => h.debit > 0), totalDebit: out - left } : undefined,
+        ...(snipeTax > 0 ? { snipeTaxSol: snipeTax, snipeTaxBps: snipeBps } : {}),
       };
     }
 

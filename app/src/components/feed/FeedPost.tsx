@@ -92,6 +92,12 @@ function body(e: FeedEvent): ReactNode {
       return (
         <>
           Launched <Tick e={e} />. 8% of supply already sits in its fumble pool. Sell it early, I dare you.
+          {e.snipeTaxSol ? (
+            <>
+              {" "}
+              Snipers paid <span className="num">{f.sol(e.snipeTaxSol)}</span> SOL of snipe tax into it on the way in.
+            </>
+          ) : null}
         </>
       );
   }

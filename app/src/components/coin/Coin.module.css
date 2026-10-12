@@ -205,6 +205,29 @@
 .pvNote b {
   color: var(--ink);
 }
+/* D19 snipe tax: money leaving the buyer for the reward pool — the one orange rule here. */
+.snipe {
+  padding: var(--s-3);
+  border-radius: var(--r-2);
+  background: var(--sunken);
+  box-shadow: inset 3px 0 0 var(--flare);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--ink);
+}
+.snipe b {
+  font-weight: var(--w-bold);
+}
+.snipe small {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.snipePct {
+  color: var(--flare-text);
+  font-weight: var(--w-bold);
+}
 .go {
   margin-top: var(--s-1);
 }
@@ -331,6 +354,20 @@
   display: grid;
   gap: 14px;
   padding: var(--s-4);
+}
+/* Wallet + optional "snipe-taxed" tag share the second column. */
+.who {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.who > :first-child {
+  min-width: 0;
+}
+.taxTag {
+  flex: none;
+  white-space: nowrap;
 }
 /* Direction without hue (DESIGN.md): glyph + weight; sells read quieter. */
 .side {
