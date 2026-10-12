@@ -164,6 +164,28 @@ export async function buildServer(
     const owner = addr((req.params as { owner: string }).owner, "owner");
     return cached(`tickets:${owner}`, 2_000, () => repo.getTickets(owner));
   });
+  // Portfolio: chain balances (one getTokenAccountsByOwner) + the wallet's FUMPAD ledger.
+  // Keys contain the wallet, so the live hub's wallet invalidation clears them.
+  const portfolio = (wallet: string) =>
+    cached(`portfolio:${wallet}`, 3_000, async () => {
+      const balances = await chain.tokenBalances(wallet).catch((e: Error) => {
+        app.log.warn({ wallet, err: e.message }, "token balances unavailable; positions fall back to FUMPAD-tracked amounts");
+        return null;
+      });
+      return repo.getPortfolio(wallet, balances);
+    });
+  app.get("/v1/wallets/:wallet/positions", async (req) => {
+    const wallet = addr((req.params as { wallet: string }).wallet, "wallet");
+    return (await portfolio(wallet)).positions;
+  });
+  app.get("/v1/wallets/:wallet/closed", async (req) => {
+    const wallet = addr((req.params as { wallet: string }).wallet, "wallet");
+    return (await portfolio(wallet)).closed;
+  });
+  app.get("/v1/wallets/:wallet/created", async (req) => {
+    const wallet = addr((req.params as { wallet: string }).wallet, "wallet");
+    return cached(`created:${wallet}`, 3_000, () => repo.getCreatedCoins(wallet));
+  });
   app.get("/v1/tickets/:id", async (req, reply) => {
     const id = addr((req.params as { id: string }).id, "ticket");
     const t = await cached(`tickets:one:${id}`, 2_000, () => repo.getTicket(id));

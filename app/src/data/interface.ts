@@ -3,8 +3,10 @@ import type {
   Board,
   ChartRange,
   CloseCall,
+  ClosedPosition,
   CoinDetail,
   CoinSummary,
+  CreatedCoin,
   FeedEvent,
   FeedKind,
   FumbleRow,
@@ -20,6 +22,7 @@ import type {
   Ticket,
   TradeQuote,
   TradeRow,
+  WalletPosition,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -61,6 +64,13 @@ export interface FumpadData {
 
   getLeaderboard(board: Board, viewer?: Address): Promise<LeaderRow[]>;
   getProfile(addressOrName: string): Promise<Profile | null>;
+
+  /** Coins the wallet holds now (chain balance > 0), with FUMPAD cost basis. */
+  getPositions(wallet: Address): Promise<WalletPosition[]>;
+  /** Coins the wallet traded through FUMPAD and fully exited, last trade first. */
+  getClosedPositions(wallet: Address): Promise<ClosedPosition[]>;
+  /** Coins the wallet launched, newest first, with creator fees. */
+  getCreatedCoins(wallet: Address): Promise<CreatedCoin[]>;
 
   /** Off-chain quote mirroring the program's math (curve or PumpSwap + fee + ticket rules). */
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote>;

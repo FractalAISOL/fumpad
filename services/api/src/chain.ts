@@ -23,6 +23,8 @@ import {
   solToLamports,
   tokensToBase,
   type CoinAccount,
+  decodeTokenAccount,
+  TOKEN_2022_PROGRAM_ID,
 } from "@fumpad/sdk";
 
 import type { TtlCache } from "./cache.js";
@@ -70,6 +72,26 @@ export class ChainReader {
     ]);
     const matured = pos ? maturedNow(pos, bal, now, g.params.minHoldSecs) : 0n;
     return { sol: lam(BigInt(lamports)), tokens: tok(bal), maturedTokens: tok(matured) };
+  }
+
+  /**
+   * Every FUMPAD-relevant token balance of a wallet in one RPC call: the wallet's Token-2022
+   * accounts, kept only when the account is the canonical ATA for its mint (base units).
+   * Cached per wallet for a few seconds; the live hub invalidates `…${wallet}…` keys.
+   */
+  async tokenBalances(wallet: string): Promise<Map<string, bigint>> {
+    return this.cache.get(`chain:tokacc:${wallet}`, 5_000, async () => {
+      const owner = new PublicKey(wallet);
+      const r = await this.conn.getTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, "confirmed");
+      const out = new Map<string, bigint>();
+      for (const { pubkey, account } of r.value) {
+        const a = decodeTokenAccount(new Uint8Array(account.data));
+        if (a.amount === 0n || !a.owner.equals(owner)) continue;
+        if (!coinAta(owner, a.mint).equals(pubkey)) continue;
+        out.set(a.mint.toBase58(), a.amount);
+      }
+      return out;
+    });
   }
 
   async quote(args: { mint: string; side: Side; amount: number; wallet?: string; symbol?: string }): Promise<TradeQuote> {

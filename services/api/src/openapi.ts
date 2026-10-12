@@ -64,6 +64,15 @@ export const OPENAPI = {
     },
     "/v1/closest": { get: { summary: "Closest to 10x (getClosestTo10x)", parameters: [q("limit", { type: "integer" }), viewer], responses: ok(arr("CloseCall")) } },
     "/v1/wallets/{owner}/tickets": { get: { summary: "Tickets of a wallet (getTickets)", parameters: [p("owner")], responses: ok(arr("Ticket")) } },
+    "/v1/wallets/{wallet}/positions": {
+      get: { summary: "Open positions of a wallet, by value (getPositions) — chain balances, FUMPAD average-cost basis", parameters: [p("wallet")], responses: ok(arr("WalletPosition")) },
+    },
+    "/v1/wallets/{wallet}/closed": {
+      get: { summary: "Fully exited positions, last trade first (getClosedPositions) — realized P&L, average cost", parameters: [p("wallet")], responses: ok(arr("ClosedPosition")) },
+    },
+    "/v1/wallets/{wallet}/created": {
+      get: { summary: "Coins the wallet launched, newest first (getCreatedCoins) — with creator fees", parameters: [p("wallet")], responses: ok(arr("CreatedCoin")) },
+    },
     "/v1/tickets/{id}": { get: { summary: "One ticket (getTicket)", parameters: [p("id")], responses: { ...ok(ref("Ticket")), ...notFound } } },
     "/v1/leaderboards/{board}": { get: { summary: "Leaderboard (getLeaderboard) — flagged wallets excluded", parameters: [p("board", "fumbles | claimers | diamond"), viewer], responses: ok(arr("LeaderRow")) } },
     "/v1/profiles/{addressOrName}": { get: { summary: "Profile (getProfile)", parameters: [p("addressOrName")], responses: { ...ok(ref("Profile")), ...notFound } } },

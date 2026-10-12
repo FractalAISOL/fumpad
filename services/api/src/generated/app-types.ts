@@ -363,6 +363,90 @@ export interface Profile {
   achievements: Achievement[];
 }
 
+/* ── Portfolio (wallet profile) ────────────────────────────────────────────── */
+
+/**
+ * Measured from FUMPAD trades (curve + router) with the average-cost method: a buy adds
+ * its tokens and the SOL it cost (fee included); a sell removes tokens at the running
+ * average cost and books what it paid out (after the fee) minus that cost as realized
+ * P&L. Fumble payouts (claims) arrive at zero cost. Balances come from the chain (the
+ * wallet's canonical Token-2022 account). Nothing here is a projection.
+ */
+export interface PortfolioCoin {
+  mint: Address;
+  symbol: string;
+  name: string;
+  tile: 0 | 1 | 2;
+  imageUrl?: string;
+  status: CoinStatus;
+  /** Real SOL raised on the curve (pre-graduation). */
+  curveSol: number;
+  graduationSol?: number;
+}
+
+export interface WalletPosition extends PortfolioCoin {
+  /** Tokens in the wallet now (chain). */
+  balance: number;
+  /** Spot, SOL per token. */
+  price: number;
+  /** balance × price, SOL. */
+  valueSol: number;
+  /** Tokens FUMPAD trades and payouts account for: bought + payouts − sold. */
+  trackedTokens: number;
+  /** Average cost of the tracked tokens, SOL per token (payouts count at zero). */
+  avgCost: number;
+  /** Tokens the cost basis covers: min(balance, tracked). */
+  coveredTokens: number;
+  /** What the covered tokens cost, SOL. */
+  costSol: number;
+  /** covered × price − cost. Undefined when no token is covered. */
+  unrealizedSol?: number;
+  /** unrealized ÷ cost, percent. Undefined at zero cost (payout-only positions). */
+  unrealizedPct?: number;
+  /** Realized on sells so far (a position partly sold). */
+  realizedSol: number;
+  /** The balance holds tokens acquired outside FUMPAD; the cost basis covers FUMPAD trades only. */
+  partialBasis: boolean;
+  boughtTokens: number;
+  /** Tokens received as fumble payouts (zero cost). */
+  payoutTokens: number;
+  firstTs?: Millis;
+  lastTs?: Millis;
+  /** Open fumble tickets on this coin (open or queued). */
+  openTickets: number;
+  /** Highest current multiple among them. */
+  bestMultiple?: number;
+}
+
+export interface ClosedPosition extends PortfolioCoin {
+  boughtTokens: number;
+  /** SOL spent on buys, fees included. */
+  boughtSol: number;
+  soldTokens: number;
+  /** SOL received from sells, after fees. */
+  soldSol: number;
+  payoutTokens: number;
+  /** Sale proceeds minus the average cost of the tokens sold. */
+  realizedSol: number;
+  /** realized ÷ cost of the tokens sold, percent. Undefined at zero cost. */
+  realizedPct?: number;
+  /** Sells exceeded what FUMPAD trades explain; P&L covers the explained part only. */
+  partialBasis: boolean;
+  firstTs: Millis;
+  lastTs: Millis;
+  /** Fumble tickets the wallet filed on this coin. */
+  ticketsEarned: number;
+}
+
+/** A coin the wallet launched, with its creator fees. */
+export interface CreatedCoin extends CoinSummary {
+  /** Creator share of trading fees, all time, SOL. */
+  feesEarnedSol: number;
+  feesWithdrawnSol: number;
+  /** Sitting in the coin account, withdrawable by the creator now. */
+  feesWithdrawableSol: number;
+}
+
 /* ── Launch ────────────────────────────────────────────────────────────────── */
 
 export interface LaunchDraft {

@@ -18,7 +18,7 @@ describe("API ↔ app data contract", () => {
     expect(strip(readFileSync(join(here, "../src/generated/app-interface.ts"), "utf8"))).toBe(readFileSync(join(app, "interface.ts"), "utf8").replace('from "./types";', 'from "./app-types.js";'));
   });
   it("OpenAPI documents one route per FumpadData method + ws + health", () => {
-    const methods = ["getStats", "getSolUsd", "getParams", "getRecentTrades", "subscribeLive", "listCoins", "getCoin", "getPriceSeries", "getHolders", "getRecentFumbles", "getClaimQueue", "getFeed", "subscribeFeed", "getClosestTo10x", "getTickets", "getTicket", "getLeaderboard", "getProfile", "quoteTrade", "getBalances"];
+    const methods = ["getStats", "getSolUsd", "getParams", "getRecentTrades", "subscribeLive", "listCoins", "getCoin", "getPriceSeries", "getHolders", "getRecentFumbles", "getClaimQueue", "getFeed", "subscribeFeed", "getClosestTo10x", "getTickets", "getTicket", "getLeaderboard", "getProfile", "quoteTrade", "getBalances", "getPositions", "getClosedPositions", "getCreatedCoins"];
     const summaries = Object.values(OPENAPI.paths).map((p) => (p as { get: { summary: string } }).get.summary).join(" ");
     for (const m of methods) if (m !== "subscribeFeed" && m !== "subscribeLive") expect(summaries).toContain(`(${m})`);
     expect(summaries).toContain("(subscribeFeed, subscribeLive)");

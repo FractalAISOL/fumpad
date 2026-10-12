@@ -13,6 +13,7 @@ import type {
   CloseCall,
   CoinDetail,
   CoinSummary,
+  CreatedCoin,
   FeedEvent,
   FeedKind,
   FumbleRow,
@@ -28,6 +29,7 @@ import type {
   TradeRow,
 } from "./generated/app-types.js";
 import type { CoinSort } from "./generated/app-interface.js";
+import { assemble, buildBooks, type LedgerEntry, type PortfolioCoinRow, type TicketStat } from "./portfolio.js";
 
 const Q64 = 1n << 64n;
 const lam = (v: string | number | bigint | null | undefined) => (v === null || v === undefined ? 0 : Number(v) / 1e9);
@@ -625,6 +627,107 @@ export class Repo {
       flagged: flagged || !!st?.flagged,
       achievements: ACHIEVEMENTS.map((a) => ({ ...a, earned: a.id === "clean" ? !flagged && !!earned.clean : !!earned[a.id] })),
     };
+  }
+
+  /* ── Wallet portfolio ─────────────────────────────────────────────────────── */
+
+  /**
+   * The wallet's FUMPAD ledger: its trades (curve + router; SOL paid with the fee on buys,
+   * received after the fee on sells) and the fumble payouts it received (claims paid to the
+   * wallet, and escrowed ones once withdrawn), in chain order. Index lookups on
+   * trades_wallet and claims_owner.
+   */
+  async ledger(wallet: string): Promise<LedgerEntry[]> {
+    const r = await this.db.query<{ kind: "buy" | "sell" | "payout"; mint: string; tokens: string; lamports: string; ts: string; slot: string; idx: number }>(
+      `SELECT CASE WHEN t.is_buy THEN 'buy' ELSE 'sell' END AS kind, t.mint, t.token_amount AS tokens,
+              CASE WHEN t.is_buy THEN t.sol_amount + t.fee_pool + t.fee_platform + t.fee_creator
+                   ELSE GREATEST(t.sol_amount - t.fee_pool - t.fee_platform - t.fee_creator, 0) END AS lamports,
+              t.ts, t.slot, t.idx
+         FROM trades t WHERE t.wallet = $1
+       UNION ALL
+       SELECT 'payout', cl.mint, cl.amount, 0, cl.ts, x.slot, cl.idx
+         FROM claims cl JOIN transactions x ON x.signature = cl.signature
+        WHERE cl.owner = $1 AND (NOT cl.escrowed OR EXISTS (SELECT 1 FROM tickets k WHERE k.ticket = cl.ticket AND k.status = 'claimed'))
+       LIMIT 50000`,
+      [wallet],
+    );
+    return r.rows.map((x) => ({ kind: x.kind, mint: x.mint, tokens: BigInt(x.tokens), lamports: BigInt(x.lamports), ts: Number(x.ts), slot: Number(x.slot), idx: Number(x.idx) }));
+  }
+
+  /** Per coin: tickets the wallet filed, how many are still open, and the best open multiple. */
+  async walletTicketStats(wallet: string): Promise<Map<string, TicketStat>> {
+    const p = await this.params();
+    const r = await this.db.query<{ mint: string; earned: number; open: number; best: number | null }>(
+      `SELECT t.mint, count(*)::int AS earned,
+              count(*) FILTER (WHERE t.status = 'queued' OR (t.status = 'open' AND t.sell_ts + $2 >= $3))::int AS open,
+              max(CASE WHEN (t.status = 'queued' OR (t.status = 'open' AND t.sell_ts + $2 >= $3)) AND t.sell_price_q64 > 0
+                       THEN ((CASE WHEN c.status = 'graduated' AND c.median_q64 IS NOT NULL THEN c.median_q64 ELSE c.price_q64 END) / t.sell_price_q64)::float8 END) AS best
+         FROM tickets t JOIN coins c USING (mint) WHERE t.owner = $1 GROUP BY t.mint`,
+      [wallet, Number(p.claimWindowSecs), nowSecs()],
+    );
+    return new Map(r.rows.map((x) => [x.mint, { earned: x.earned, open: x.open, best: x.best }]));
+  }
+
+  /** The few coin fields a portfolio row shows, for a set of mints (non-FUMPAD mints drop out). */
+  async portfolioCoins(mints: string[]): Promise<Map<string, PortfolioCoinRow>> {
+    if (!mints.length) return new Map();
+    const p = await this.params();
+    const r = await this.db.query<{ mint: string; symbol: string; name: string; status: CoinRow["status"]; price_q64: string; real_sol: string; raised_lamports: string; metadata: CoinRow["metadata"] }>(
+      "SELECT mint, symbol, name, status, price_q64, real_sol, raised_lamports, metadata FROM coins WHERE mint = ANY($1::text[])",
+      [mints],
+    );
+    return new Map(
+      r.rows.map((c) => [
+        c.mint,
+        {
+          mint: c.mint,
+          symbol: c.symbol,
+          name: c.name,
+          tile: tileOf(c.mint),
+          imageUrl: c.metadata?.image || undefined,
+          status: c.status,
+          curveSol: c.status === "graduated" ? lam(c.raised_lamports) : lam(c.real_sol),
+          graduationSol: lam(p.graduationLamports),
+          price: px(c.price_q64),
+        },
+      ]),
+    );
+  }
+
+  /**
+   * Open and closed positions. `balances` are the wallet's canonical Token-2022 balances
+   * (base units) from the chain; null when the RPC is unavailable (positions then fall back
+   * to what FUMPAD trades explain).
+   */
+  async getPortfolio(wallet: string, balances: Map<string, bigint> | null) {
+    const [ledger, tickets] = await Promise.all([this.ledger(wallet), this.walletTicketStats(wallet)]);
+    const books = buildBooks(ledger);
+    const coins = await this.portfolioCoins([...new Set([...books.keys(), ...(balances?.keys() ?? [])])]);
+    return assemble(books, balances, coins, tickets);
+  }
+
+  /** Coins the wallet launched (coins_creator), newest first, with creator fees. */
+  async getCreatedCoins(wallet: string): Promise<CreatedCoin[]> {
+    const trig = (await this.params()).triggerMultipleBps;
+    const r = await this.db.query<CoinRow & { creator_fees_unclaimed: string }>(
+      `SELECT * FROM (${coinSelect(trig)} WHERE c.creator = $2) c ORDER BY c.created_at DESC LIMIT 100`,
+      [nowSecs(), wallet],
+    );
+    if (!r.rows.length) return [];
+    const w = await this.db.query<{ mint: string; withdrawn: string }>(
+      "SELECT mint, sum(lamports) AS withdrawn FROM fee_withdrawals WHERE mint = ANY($1::text[]) AND is_creator GROUP BY mint",
+      [r.rows.map((c) => c.mint)],
+    );
+    const withdrawn = new Map(w.rows.map((x) => [x.mint, lam(x.withdrawn)]));
+    return Promise.all(
+      r.rows.map(async (c) => {
+        const out = withdrawn.get(c.mint) ?? 0;
+        const now = lam(c.creator_fees_unclaimed);
+        // Every creator fee (curve, router, settled LP fees) accrues in Coin.creator_fees_unclaimed
+        // until withdrawn, so earned = withdrawn + unclaimed, exactly.
+        return { ...(await this.summary(c)), feesEarnedSol: out + now, feesWithdrawnSol: out, feesWithdrawableSol: now };
+      }),
+    );
   }
 
   async getStats(solUsd: number): Promise<PlatformStats> {

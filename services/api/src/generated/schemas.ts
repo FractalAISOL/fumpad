@@ -92,6 +92,99 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "ClosedPosition": {
+    "additionalProperties": false,
+    "properties": {
+      "boughtSol": {
+        "description": "SOL spent on buys, fees included.",
+        "type": "number"
+      },
+      "boughtTokens": {
+        "type": "number"
+      },
+      "curveSol": {
+        "description": "Real SOL raised on the curve (pre-graduation).",
+        "type": "number"
+      },
+      "firstTs": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "graduationSol": {
+        "type": "number"
+      },
+      "imageUrl": {
+        "type": "string"
+      },
+      "lastTs": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "mint": {
+        "$ref": "#/components/schemas/Address"
+      },
+      "name": {
+        "type": "string"
+      },
+      "partialBasis": {
+        "description": "Sells exceeded what FUMPAD trades explain; P&L covers the explained part only.",
+        "type": "boolean"
+      },
+      "payoutTokens": {
+        "type": "number"
+      },
+      "realizedPct": {
+        "description": "realized ÷ cost of the tokens sold, percent. Undefined at zero cost.",
+        "type": "number"
+      },
+      "realizedSol": {
+        "description": "Sale proceeds minus the average cost of the tokens sold.",
+        "type": "number"
+      },
+      "soldSol": {
+        "description": "SOL received from sells, after fees.",
+        "type": "number"
+      },
+      "soldTokens": {
+        "type": "number"
+      },
+      "status": {
+        "$ref": "#/components/schemas/CoinStatus"
+      },
+      "symbol": {
+        "type": "string"
+      },
+      "ticketsEarned": {
+        "description": "Fumble tickets the wallet filed on this coin.",
+        "type": "number"
+      },
+      "tile": {
+        "enum": [
+          0,
+          1,
+          2
+        ],
+        "type": "number"
+      }
+    },
+    "required": [
+      "boughtSol",
+      "boughtTokens",
+      "curveSol",
+      "firstTs",
+      "lastTs",
+      "mint",
+      "name",
+      "partialBasis",
+      "payoutTokens",
+      "realizedSol",
+      "soldSol",
+      "soldTokens",
+      "status",
+      "symbol",
+      "ticketsEarned",
+      "tile"
+    ],
+    "type": "object"
+  },
   "CoinDetail": {
     "additionalProperties": false,
     "properties": {
@@ -432,6 +525,138 @@ export const SCHEMAS: Record<string, unknown> = {
       "spark",
       "trades24h",
       "creatorFlagged"
+    ],
+    "type": "object"
+  },
+  "CreatedCoin": {
+    "additionalProperties": false,
+    "description": "A coin the wallet launched, with its creator fees.",
+    "properties": {
+      "change24h": {
+        "type": "number"
+      },
+      "closestMultiple": {
+        "description": "The open ticket nearest to 10×: the highest multiple still below the trigger.",
+        "type": "number"
+      },
+      "createdAt": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "creator": {
+        "$ref": "#/components/schemas/Address"
+      },
+      "creatorFlagged": {
+        "description": "The creator's wallet carries an indexer flag (linked wallets, rebuys elsewhere).",
+        "type": "boolean"
+      },
+      "curveSol": {
+        "description": "Real SOL raised on the curve (pre-graduation).",
+        "type": "number"
+      },
+      "feesEarnedSol": {
+        "description": "Creator share of trading fees, all time, SOL.",
+        "type": "number"
+      },
+      "feesWithdrawableSol": {
+        "description": "Sitting in the coin account, withdrawable by the creator now.",
+        "type": "number"
+      },
+      "feesWithdrawnSol": {
+        "type": "number"
+      },
+      "graduatedAt": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "graduationSol": {
+        "description": "SOL the curve must raise to graduate (Global.params; 85 on mainnet, scaled down on devnet).",
+        "type": "number"
+      },
+      "holders": {
+        "type": "number"
+      },
+      "imageUrl": {
+        "type": "string"
+      },
+      "marketCapSol": {
+        "type": "number"
+      },
+      "median": {
+        "description": "30-minute median of keeper samples, SOL per token. Graduated coins only.",
+        "type": "number"
+      },
+      "mint": {
+        "$ref": "#/components/schemas/Address"
+      },
+      "name": {
+        "type": "string"
+      },
+      "poolTokens": {
+        "description": "Reward pool balance, tokens.",
+        "type": "number"
+      },
+      "price": {
+        "description": "Spot, SOL per token.",
+        "type": "number"
+      },
+      "socials": {
+        "$ref": "#/components/schemas/CoinSocials",
+        "description": "Creator-supplied links from the metadata (http/https only)."
+      },
+      "spark": {
+        "description": "Last 24 points of price, oldest first, for sparklines.",
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "status": {
+        "$ref": "#/components/schemas/CoinStatus"
+      },
+      "symbol": {
+        "type": "string"
+      },
+      "ticketsOpen": {
+        "type": "number"
+      },
+      "tile": {
+        "description": "Monogram style for the generated tile (until real images land).",
+        "enum": [
+          0,
+          1,
+          2
+        ],
+        "type": "number"
+      },
+      "trades24h": {
+        "description": "FUMPAD trades (curve + router) in the last 24 hours.",
+        "type": "number"
+      },
+      "volume24hSol": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "change24h",
+      "createdAt",
+      "creator",
+      "creatorFlagged",
+      "curveSol",
+      "feesEarnedSol",
+      "feesWithdrawableSol",
+      "feesWithdrawnSol",
+      "holders",
+      "marketCapSol",
+      "mint",
+      "name",
+      "poolTokens",
+      "price",
+      "spark",
+      "status",
+      "symbol",
+      "ticketsOpen",
+      "tile",
+      "trades24h",
+      "volume24hSol"
     ],
     "type": "object"
   },
@@ -1137,6 +1362,51 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "PortfolioCoin": {
+    "additionalProperties": false,
+    "description": "Measured from FUMPAD trades (curve + router) with the average-cost method: a buy adds its tokens and the SOL it cost (fee included); a sell removes tokens at the running average cost and books what it paid out (after the fee) minus that cost as realized P&L. Fumble payouts (claims) arrive at zero cost. Balances come from the chain (the wallet's canonical Token-2022 account). Nothing here is a projection.",
+    "properties": {
+      "curveSol": {
+        "description": "Real SOL raised on the curve (pre-graduation).",
+        "type": "number"
+      },
+      "graduationSol": {
+        "type": "number"
+      },
+      "imageUrl": {
+        "type": "string"
+      },
+      "mint": {
+        "$ref": "#/components/schemas/Address"
+      },
+      "name": {
+        "type": "string"
+      },
+      "status": {
+        "$ref": "#/components/schemas/CoinStatus"
+      },
+      "symbol": {
+        "type": "string"
+      },
+      "tile": {
+        "enum": [
+          0,
+          1,
+          2
+        ],
+        "type": "number"
+      }
+    },
+    "required": [
+      "mint",
+      "symbol",
+      "name",
+      "tile",
+      "status",
+      "curveSol"
+    ],
+    "type": "object"
+  },
   "PricePoint": {
     "additionalProperties": false,
     "properties": {
@@ -1767,6 +2037,127 @@ export const SCHEMAS: Record<string, unknown> = {
       "sol",
       "price",
       "ts"
+    ],
+    "type": "object"
+  },
+  "WalletPosition": {
+    "additionalProperties": false,
+    "properties": {
+      "avgCost": {
+        "description": "Average cost of the tracked tokens, SOL per token (payouts count at zero).",
+        "type": "number"
+      },
+      "balance": {
+        "description": "Tokens in the wallet now (chain).",
+        "type": "number"
+      },
+      "bestMultiple": {
+        "description": "Highest current multiple among them.",
+        "type": "number"
+      },
+      "boughtTokens": {
+        "type": "number"
+      },
+      "costSol": {
+        "description": "What the covered tokens cost, SOL.",
+        "type": "number"
+      },
+      "coveredTokens": {
+        "description": "Tokens the cost basis covers: min(balance, tracked).",
+        "type": "number"
+      },
+      "curveSol": {
+        "description": "Real SOL raised on the curve (pre-graduation).",
+        "type": "number"
+      },
+      "firstTs": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "graduationSol": {
+        "type": "number"
+      },
+      "imageUrl": {
+        "type": "string"
+      },
+      "lastTs": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "mint": {
+        "$ref": "#/components/schemas/Address"
+      },
+      "name": {
+        "type": "string"
+      },
+      "openTickets": {
+        "description": "Open fumble tickets on this coin (open or queued).",
+        "type": "number"
+      },
+      "partialBasis": {
+        "description": "The balance holds tokens acquired outside FUMPAD; the cost basis covers FUMPAD trades only.",
+        "type": "boolean"
+      },
+      "payoutTokens": {
+        "description": "Tokens received as fumble payouts (zero cost).",
+        "type": "number"
+      },
+      "price": {
+        "description": "Spot, SOL per token.",
+        "type": "number"
+      },
+      "realizedSol": {
+        "description": "Realized on sells so far (a position partly sold).",
+        "type": "number"
+      },
+      "status": {
+        "$ref": "#/components/schemas/CoinStatus"
+      },
+      "symbol": {
+        "type": "string"
+      },
+      "tile": {
+        "enum": [
+          0,
+          1,
+          2
+        ],
+        "type": "number"
+      },
+      "trackedTokens": {
+        "description": "Tokens FUMPAD trades and payouts account for: bought + payouts − sold.",
+        "type": "number"
+      },
+      "unrealizedPct": {
+        "description": "unrealized ÷ cost, percent. Undefined at zero cost (payout-only positions).",
+        "type": "number"
+      },
+      "unrealizedSol": {
+        "description": "covered × price − cost. Undefined when no token is covered.",
+        "type": "number"
+      },
+      "valueSol": {
+        "description": "balance × price, SOL.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "avgCost",
+      "balance",
+      "boughtTokens",
+      "costSol",
+      "coveredTokens",
+      "curveSol",
+      "mint",
+      "name",
+      "openTickets",
+      "partialBasis",
+      "payoutTokens",
+      "price",
+      "realizedSol",
+      "status",
+      "symbol",
+      "tile",
+      "trackedTokens",
+      "valueSol"
     ],
     "type": "object"
   }
