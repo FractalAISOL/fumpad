@@ -353,3 +353,4 @@ mod smoke {
 #[cfg(test)] mod review_venue;
 #[cfg(test)] mod cu_report;
 #[cfg(test)] mod migrate_tests;
+#[cfg(test)] mod final_review;
