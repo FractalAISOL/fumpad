@@ -38,6 +38,13 @@ export interface ApiConfig {
   launchMaxActivePerIp: number;
   launchMaxInitialBuyLamports: bigint;
   launchMaxPriorityMicroLamports: number;
+  // ── Pre-launch waitlist (POST /v1/waitlist) ───────────────────────────────
+  /** Per-IP waitlist requests per minute. */
+  waitlistRateLimitPerMin: number;
+  /** Sign-ups one IP may add per rolling day (DB-enforced, across instances). */
+  waitlistPerIpPerDay: number;
+  /** HMAC key for ip_hash. Unset = derived from DATABASE_URL. */
+  waitlistIpSalt?: string;
 }
 
 export function loadApiConfig(env = process.env): ApiConfig {
@@ -67,5 +74,8 @@ export function loadApiConfig(env = process.env): ApiConfig {
     launchMaxActivePerIp: Number(env.LAUNCH_MAX_ACTIVE_PER_IP ?? 3),
     launchMaxInitialBuyLamports: BigInt(env.LAUNCH_MAX_INITIAL_BUY_LAMPORTS ?? "100000000000"),
     launchMaxPriorityMicroLamports: Number(env.LAUNCH_MAX_PRIORITY_MICROLAMPORTS ?? 5_000_000),
+    waitlistRateLimitPerMin: Number(env.WAITLIST_RATE_LIMIT_PER_MIN ?? 5),
+    waitlistPerIpPerDay: Number(env.WAITLIST_PER_IP_PER_DAY ?? 20),
+    waitlistIpSalt: env.WAITLIST_IP_SALT || undefined,
   };
 }
