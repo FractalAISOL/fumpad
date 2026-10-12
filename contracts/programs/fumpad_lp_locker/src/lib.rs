@@ -177,7 +177,8 @@ pub struct LockLp<'info> {
     /// FUMPAD's pool-authority PDA: only FUMPAD can sign for it (only `graduate` does).
     #[account(seeds = [b"pool_authority"], bump, seeds::program = FUMPAD_PROGRAM_ID)]
     pub fumpad_authority: Signer<'info>,
-    /// CHECK: PumpSwap pool; owner, discriminator and creator checked in the handler.
+    /// CHECK: PumpSwap pool; owner, discriminator, identity (PDA, LP mint, vault ATAs) and
+    /// creator checked in the handler.
     pub pool: UncheckedAccount<'info>,
     #[account(mint::token_program = token_program)]
     pub lp_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -298,6 +299,8 @@ pub enum LockerError {
 // ── PumpSwap pool / token reads ─────────────────────────────────────────────
 
 pub struct PoolView {
+    pub bump: u8,
+    pub index: u16,
     pub creator: Pubkey,
     pub base_mint: Pubkey,
     pub quote_mint: Pubkey,
@@ -317,18 +320,24 @@ fn u64_at(d: &[u8], o: usize) -> u64 {
     if d.len() >= o + 8 { u64::from_le_bytes(d[o..o + 8].try_into().unwrap()) } else { 0 }
 }
 
-/// Exact size of a PumpSwap `Pool` in the layout parsed below (IDL; every FUMPAD pool is
-/// created with it). Fail closed: any other size — e.g. PumpSwap reallocating pools for a
-/// new layout — is refused, so `lock` (→ `graduate`) and `skim` stop and the principal stays
-/// locked, rather than reading fields at shifted offsets.
+/// Size of a PumpSwap `Pool` in the IDL layout every FUMPAD pool is created with — the
+/// MINIMUM accepted (H-1). PumpSwap only ever appends `Pool` fields, and its permissionless
+/// `extend_account` grows any pool to the program's current size (301 bytes on mainnet,
+/// 2026-10), so longer pools are accepted and only this stable 287-byte prefix is read.
+/// Shorter pools and a wrong discriminator are refused; a layout that moved prefix fields
+/// fails the identity cross-checks in `read_pool`. Either way `lock` (→ `graduate`) and
+/// `skim` stop and the principal stays locked, rather than reading shifted offsets.
 pub const POOL_LEN: usize = 287;
 
-/// Pool layout per PumpSwap IDL (exactly `POOL_LEN` bytes).
+/// Pool fields per PumpSwap IDL, read from the first `POOL_LEN` bytes (anything after them
+/// is ignored). Pure; the identity cross-checks need the account key (`read_pool`).
 pub fn parse_pool(d: &[u8]) -> Result<PoolView> {
     require!(d.len() >= 8 && d[..8] == POOL_DISCRIMINATOR, LockerError::WrongAccount);
-    require!(d.len() == POOL_LEN, LockerError::UnknownPoolLayout);
+    require!(d.len() >= POOL_LEN, LockerError::UnknownPoolLayout);
     let virtual_quote = i128::from_le_bytes(d[245..261].try_into().unwrap());
     Ok(PoolView {
+        bump: d[8],
+        index: u16::from_le_bytes([d[9], d[10]]),
         creator: key_at(d, 11),
         base_mint: key_at(d, 43),
         quote_mint: key_at(d, 75),
@@ -341,9 +350,26 @@ pub fn parse_pool(d: &[u8]) -> Result<PoolView> {
     })
 }
 
+/// Owner + `parse_pool`, then identity cross-checks instead of an exact size (H-1): the
+/// stored fields must reproduce the account's own address and PumpSwap's derivations —
+/// pool == PDA ["pool", index, creator, base_mint, quote_mint] (stored bump), lp_mint == PDA
+/// ["pool_lp_mint", pool], base vault == ATA(pool, base_mint, Token-2022), quote vault ==
+/// ATA(pool, quote_mint, SPL Token). A layout that moved any of these fields fails them.
 fn read_pool(info: &AccountInfo) -> Result<PoolView> {
     require_keys_eq!(*info.owner, PUMPSWAP_PROGRAM_ID, LockerError::WrongAccount);
-    parse_pool(&info.try_borrow_data()?)
+    let p = parse_pool(&info.try_borrow_data()?)?;
+    let pool = info.key();
+    let index = p.index.to_le_bytes();
+    let seeds: [&[u8]; 6] = [b"pool", &index, p.creator.as_ref(), p.base_mint.as_ref(), p.quote_mint.as_ref(), &[p.bump]];
+    let pda = Pubkey::create_program_address(&seeds, &PUMPSWAP_PROGRAM_ID).map_err(|_| error!(LockerError::UnknownPoolLayout))?;
+    require_keys_eq!(pda, pool, LockerError::UnknownPoolLayout);
+    let lp_mint = Pubkey::find_program_address(&[b"pool_lp_mint", pool.as_ref()], &PUMPSWAP_PROGRAM_ID).0;
+    require_keys_eq!(p.lp_mint, lp_mint, LockerError::UnknownPoolLayout);
+    let base_vault = get_associated_token_address_with_program_id(&pool, &p.base_mint, &anchor_spl::token_2022::ID);
+    require_keys_eq!(p.base_vault, base_vault, LockerError::UnknownPoolLayout);
+    let quote_vault = get_associated_token_address_with_program_id(&pool, &p.quote_mint, &SPL_TOKEN_ID);
+    require_keys_eq!(p.quote_vault, quote_vault, LockerError::UnknownPoolLayout);
+    Ok(p)
 }
 
 fn token_amount(info: &AccountInfo) -> Result<u64> {

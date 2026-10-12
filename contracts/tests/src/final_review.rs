@@ -14,7 +14,6 @@ use fumpad::{
     state::{CoinStatus, Global, Params, TicketStatus, PAUSE_TRADE},
     PUMPSWAP_PROGRAM_ID,
 };
-use fumpad_lp_locker::LockerError;
 use solana_keypair::Keypair;
 
 use crate::flow::*;
@@ -84,13 +83,14 @@ fn admin_only_ix(admin: &Pubkey, global: Pubkey, data: impl anchor_lang::Instruc
 /// The FUMPAD router/oracle are unaffected (`fumpad::external::pumpswap::parse_pool` accepts
 /// longer pools).
 ///
-/// Fix (BEFORE deploying the locker --final): accept `len >= POOL_LEN` (PumpSwap only appends
-/// fields; the offsets used — creator, mints, lp_mint, vaults, lp_supply, virtual_quote,
-/// protocol/creator fees — are in the stable prefix) and cross-check the layout instead of
-/// the size: pool key == PDA(["pool", index, creator, base, quote]), lp_mint == PDA(["pool_lp_mint",
-/// pool]), vaults == ATAs of the pool. Keep `UnknownPoolLayout` for len < 287 / bad discriminator.
+/// FIXED (v0.6): the locker accepts `len >= POOL_LEN` (PumpSwap only appends fields; the
+/// offsets used — creator, mints, lp_mint, vaults, lp_supply, virtual_quote, protocol/creator
+/// fees — are in the stable prefix) and cross-checks identity instead of the size: pool key ==
+/// PDA(["pool", index, creator, base, quote]), lp_mint == PDA(["pool_lp_mint", pool]), vaults ==
+/// ATAs of the pool. `UnknownPoolLayout` stays for len < 287 / shifted fields; wrong
+/// discriminator → `WrongAccount`. More cases: `locker_tests::regression_skim_*`.
 #[test]
-fn issue_anyone_can_brick_lp_skim_with_pumpswap_extend_account() {
+fn regression_extend_account_no_longer_bricks_lp_skim() {
     let (mut f, whale) = graduated();
     assert_eq!(f.env.account(&f.pool).unwrap().data.len(), fumpad_lp_locker::POOL_LEN);
     outside_round_trips(&mut f, &whale, 5, 20 * SOL);
@@ -102,13 +102,16 @@ fn issue_anyone_can_brick_lp_skim_with_pumpswap_extend_account() {
     ok(f.env.send_as(&g, &[extend_account_ix(&f.pool, &gk)], &[&g]));
     assert_eq!(f.env.account(&f.pool).unwrap().data.len(), 301);
 
-    // Skim is now refused, and stays refused however much fee growth accrues.
-    expect_custom(f.skim(), locker_code(LockerError::UnknownPoolLayout));
+    // Skims keep working on the extended pool, and keep working as fees accrue.
+    ok(f.skim());
+    let skimmed1 = f.lock_state().lp_skimmed;
+    assert!(skimmed1 > 0);
     outside_round_trips(&mut f, &whale, 5, 20 * SOL);
-    expect_custom(f.skim(), locker_code(LockerError::UnknownPoolLayout));
-    assert_eq!(f.lock_state().lp_skimmed, 0, "nothing can ever be skimmed again");
+    ok(f.skim());
+    assert!(f.lock_state().lp_skimmed > skimmed1);
+    assert!(f.locked_value() >= f.lp_principal() * (1.0 - 1e-12), "principal intact");
 
-    // FUMPAD itself keeps working on the extended pool (only the immutable locker is stuck).
+    // FUMPAD itself keeps working on the extended pool.
     let t = f.env.new_user(10);
     ok(f.swap_buy(&t, SOL));
     ok(f.keeper_sample());

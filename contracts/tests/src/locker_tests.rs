@@ -559,9 +559,11 @@ fn graduate_and_skim_fit_a_legacy_transaction() {
     assert!(g <= 1232 && s <= 1232 && ss <= 1232);
 }
 
-/// C-Info4: the locker fails closed on an unexpected PumpSwap `Pool` size (e.g. PumpSwap
-/// reallocating its pools for a new layout): `skim` refuses with `UnknownPoolLayout` and the
-/// LP stays where it is; with the known layout back, skims resume.
+/// C-Info4 / H-1: the locker fails closed on a PumpSwap `Pool` it can't read safely — shorter
+/// than the 287-byte IDL layout, or a layout whose prefix fields moved (here: one byte
+/// inserted after the bump, so every field shifts) — `skim` refuses with `UnknownPoolLayout`
+/// and the LP stays where it is. Longer pools with the same prefix are fine (appended
+/// fields, see `regression_skim_works_on_pools_extended_by_pumpswap`).
 #[test]
 fn regression_skim_fails_closed_on_unknown_pool_layout() {
     let (mut f, whale) = graduated();
@@ -569,9 +571,12 @@ fn regression_skim_fails_closed_on_unknown_pool_layout() {
     let lp0 = f.locked_lp();
     let orig = f.env.account(&f.pool).unwrap();
     assert_eq!(orig.data.len(), fumpad_lp_locker::POOL_LEN);
-    for len in [fumpad_lp_locker::POOL_LEN + 8, 300, fumpad_lp_locker::POOL_LEN - 1] {
-        let mut p = orig.clone();
-        p.data.resize(len, 0);
+    let mut short = orig.clone();
+    short.data.truncate(fumpad_lp_locker::POOL_LEN - 1);
+    let mut shifted = orig.clone();
+    shifted.data.insert(9, 0); // a new field before `index`: same length + 1, every field shifted
+    shifted.data.resize(301, 0);
+    for p in [short, shifted] {
         f.env.svm.set_account(addr(&f.pool), p).unwrap();
         expect_custom(f.skim(), locker_code(LockerError::UnknownPoolLayout));
         assert_eq!(f.locked_lp(), lp0, "principal untouched");
@@ -579,5 +584,92 @@ fn regression_skim_fails_closed_on_unknown_pool_layout() {
     f.env.svm.set_account(addr(&f.pool), orig).unwrap();
     let m = ok(f.skim());
     assert!(skimmed(&m).lp_withdrawn > 0);
+    assert_principal_intact(&f);
+}
+
+/// PumpSwap `extend_account(account, user)` — permissionless; grows a Pool to PumpSwap's
+/// current size (301 bytes).
+fn extend_pool_ix(f: &Flow, user: &Pubkey) -> solana_instruction::Instruction {
+    raw_ix(
+        PUMPSWAP_PROGRAM_ID,
+        vec![w(f.pool), Meta::new(*user, true), r(SYSTEM), r(fumpad::external::pumpswap::event_authority_pda()), r(PUMPSWAP_PROGRAM_ID)],
+        vec![234, 102, 194, 203, 150, 72, 62, 229],
+    )
+}
+
+/// H-1: after a REAL `extend_account` (287 → 301 bytes, any wallet can do it) skims keep
+/// working, repeatedly, with the principal intact; third-party deposits/withdrawals and
+/// FUMPAD's own router/oracle work on the extended pool too.
+#[test]
+fn regression_skim_works_on_pools_extended_by_pumpswap() {
+    let (mut f, whale) = graduated();
+    let g = f.env.new_user(1);
+    let gk = kp_pk(&g);
+    let ext = extend_pool_ix(&f, &gk);
+    ok(f.env.send_as(&g, &[ext], &[&g]));
+    assert_eq!(f.env.account(&f.pool).unwrap().data.len(), 301);
+    nothing_to_skim(&mut f);
+
+    for _ in 0..3 {
+        outside_round_trips(&mut f, &whale, 4, 20 * SOL);
+        let m = ok(f.skim());
+        assert!(skimmed(&m).lp_withdrawn > 0);
+        assert_principal_intact(&f);
+        nothing_to_skim(&mut f);
+    }
+    // A third-party LP enters and leaves the extended pool; principal still intact, skim works.
+    let lp = third_party_lp(&mut f, &whale, 300_000_000 * M);
+    let held = f.locked_lp();
+    deposit(&mut f, &lp, held / 4);
+    outside_round_trips(&mut f, &whale, 4, 20 * SOL);
+    let all = lp_balance(&f, &lp);
+    withdraw(&mut f, &lp, all);
+    ok(f.skim());
+    assert_principal_intact(&f);
+    // Extending again is a no-op for the size; FUMPAD's router/oracle keep working.
+    let ext = extend_pool_ix(&f, &gk);
+    ok(f.env.send_as(&g, &[ext], &[&g]));
+    assert_eq!(f.env.account(&f.pool).unwrap().data.len(), 301);
+    let t = f.env.new_user(10);
+    ok(f.swap_buy(&t, SOL));
+    ok(f.keeper_sample());
+}
+
+/// H-1: identity is cross-checked, not taken from the size — a PumpSwap-owned account with
+/// the Pool discriminator but fields that don't reproduce its own address / LP-mint PDA /
+/// vault ATAs is refused (here: another coin's pool data planted at this pool's address, and
+/// this pool with its vault keys pointed elsewhere), whatever its length.
+#[test]
+fn regression_skim_rejects_fake_or_foreign_pool_data() {
+    let (mut f, whale) = graduated();
+    outside_round_trips(&mut f, &whale, 5, 20 * SOL);
+    let lp0 = f.locked_lp();
+    let orig = f.env.account(&f.pool).unwrap();
+    // Foreign: a second coin graduates; its pool's bytes copied over ours (both 287 and 301).
+    let (f2, _) = graduated();
+    let foreign = f2.env.account(&f2.pool).unwrap();
+    assert_ne!(f2.pool, f.pool);
+    let mut cases = vec![];
+    for len in [fumpad_lp_locker::POOL_LEN, 301] {
+        let mut a = orig.clone();
+        a.data = foreign.data.clone();
+        a.data.resize(len, 0);
+        cases.push(a);
+    }
+    // Fake: our pool, base vault key (offset 139) / quote vault key (171) / lp_mint (107) / creator
+    // (11) replaced by attacker-chosen keys.
+    for off in [11usize, 107, 139, 171] {
+        let mut a = orig.clone();
+        a.data.resize(301, 0);
+        a.data[off..off + 32].copy_from_slice(Pubkey::new_unique().as_ref());
+        cases.push(a);
+    }
+    for a in cases {
+        f.env.svm.set_account(addr(&f.pool), a).unwrap();
+        expect_custom(f.skim(), locker_code(LockerError::UnknownPoolLayout));
+        assert_eq!(f.locked_lp(), lp0, "principal untouched");
+    }
+    f.env.svm.set_account(addr(&f.pool), orig).unwrap();
+    ok(f.skim());
     assert_principal_intact(&f);
 }

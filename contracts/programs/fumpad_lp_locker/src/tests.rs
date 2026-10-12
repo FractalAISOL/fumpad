@@ -161,14 +161,27 @@ fn covers_is_exact() {
     assert!(!lock.covers(499, 200, 1_000));
 }
 
-/// C-Info4: the locker fails closed on any Pool size other than the known layout.
+/// H-1 (was C-Info4 "exact length"): the locker reads the stable 287-byte prefix of any Pool
+/// at least that long (PumpSwap's `extend_account` grows pools to 301 bytes), and refuses
+/// shorter pools and a wrong discriminator. Identity cross-checks: `locker_tests`.
 #[test]
-fn parse_pool_requires_exact_known_length() {
+fn parse_pool_accepts_extended_pools_and_refuses_short_ones() {
     let mut d = vec![0u8; POOL_LEN];
     d[..8].copy_from_slice(&POOL_DISCRIMINATOR);
+    d[8] = 253;
+    d[9..11].copy_from_slice(&3u16.to_le_bytes());
     d[203..211].copy_from_slice(&7u64.to_le_bytes());
-    assert_eq!(parse_pool(&d).unwrap().lp_supply, 7);
-    for len in [0usize, 7, 211, 261, 286, 288, 300, 1_024] {
+    d[271..279].copy_from_slice(&5u64.to_le_bytes());
+    d[279..287].copy_from_slice(&6u64.to_le_bytes());
+    let p = parse_pool(&d).unwrap();
+    assert_eq!((p.bump, p.index, p.lp_supply, p.waiting_fees), (253, 3, 7, 11));
+    for len in [POOL_LEN, 288, 301, 1_024] {
+        let mut x = d.clone();
+        x.resize(len, 0xAB); // appended fields never change the prefix read
+        let q = parse_pool(&x).unwrap();
+        assert_eq!((q.bump, q.index, q.lp_supply, q.waiting_fees), (253, 3, 7, 11), "len {len}");
+    }
+    for len in [0usize, 7, 8, 211, 261, 286] {
         let mut x = d.clone();
         x.resize(len, 0);
         if len >= 8 {
@@ -177,6 +190,7 @@ fn parse_pool_requires_exact_known_length() {
         assert!(parse_pool(&x).is_err(), "len {len} accepted");
     }
     let mut bad = d.clone();
+    bad.resize(301, 0);
     bad[0] ^= 1;
     assert!(parse_pool(&bad).is_err());
 }
