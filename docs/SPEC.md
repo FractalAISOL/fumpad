@@ -24,6 +24,9 @@ Status: v0.4 — matches the contracts (D13–D17 implemented) · 2026-10-11 · 
 | D16 | **Max 2 claim-queue entries per wallet per coin**; payouts to accounts that refuse transfers go to a per-ticket escrow the owner withdraws later (`withdraw_escrow`), so such entries leave the queue. Details §5.3.1. |
 | D17 | **Reward pool 8% of supply** (was 5%), keeping 10% claims and the 50/30/20 split; curve re-derived: virtual tokens ≈987.18M, ≈729.66M on the curve, ≈190.34M to the LP (§3). **Claim queue capacity 1024** (was 256). **Auto-claim:** a registered keeper may claim on a ticket owner's behalf (`claim_for`; payout always to the owner's canonical ATA, or escrow); on by default, the owner can opt out per coin (`set_auto_claim`). Details §3, §5.3. Source: `sim/REPORT.md` option C. |
 | D18 | **Vanity mints ending `fmbL`**, app-level only (not enforced on-chain, like pump.fun). A backend service pre-grinds a pool of mint keypairs; the launch flow co-signs `create_coin` server-side so mint secrets never leave the server. Lowercase `fmbl` is impossible (base58 excludes `l`). |
+| D19 | **Snipe protection.** Buys in the first ~2 s after launch (measured in slots, ~5 slots) pay a decaying tax starting at 99% and stepping down to the normal fee by the end of the window. Buys only; the tax goes to the coin's reward pool; the creator's first buy inside the launch transaction is exempt. Schedule snapshotted per coin. |
+| D20 | **Graduation fee ≈ 0.6 SOL** (≈0.7% of the 85 SOL raise, under the 1 SOL cap) to cover the keeper's post-graduation setup rent (1024-entry claim queue ≈0.57 SOL + observations). |
+| — | Stock-paired coins: post-launch feature (not in v1). |
 
 ## 1. Verified facts (Phase 0 check)
 
