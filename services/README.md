@@ -1,7 +1,7 @@
 # FUMPAD off-chain services
 
-TypeScript (Node 22, strict, ESM), npm workspaces, plus one Rust binary. Built against contract **v0.4**
-(D17: 8% pool, 1024-entry queue, keeper auto-claim; `contracts/target/idl`, synced into `sdk/src/idl`).
+TypeScript (Node 22, strict, ESM), npm workspaces, plus one Rust binary. Built against contract **v0.5**
+(D19 snipe tax, D20 graduation fee split, `migrate_global`; D17: 8% pool, 1024-entry queue, keeper auto-claim; `contracts/target/idl`, synced into `sdk/src/idl`).
 
 ```
 services/
@@ -64,6 +64,18 @@ program accepts any fresh mint, like pump.fun's `pump`).
   **and** the mint account doesn't exist (if it does, it becomes `used`). `/health` reports `vanityPool` counts.
 - SDK: `isFumpadVanityMint(pubkey, suffix = "fmbL")`, `launchMetadataError`, `inspectLaunchTx`; `buildLaunch` accepts a
   mint `PublicKey` (co-signed elsewhere) as well as a `Keypair`.
+
+### D19 / D20 (v0.5) — and the still-live v0.4 devnet program
+- **Older layouts decode.** `decodeTransactionEvents` / `decodeEventRaw` accept pre-v0.5 `Trade`, `Graduated`,
+  `ParamsQueued`/`ParamsUpdated` (fields appended in v0.5 read as 0; `FumpadEvent.legacy = true`), with a strict length
+  check (Anchor's decoder silently accepts short u64 tails). `decodeGlobal` reads the 672-byte Global (`legacyLayout`).
+- **Indexer** (migration 005): `trades.snipe_tax/snipe_tax_bps`; per coin `snipe_tax_lamports`, `snipe_taxed_buys`,
+  `pool_inflow_lamports` (pool fee share + snipe tax) and the graduation split (`graduation_caller_refund`,
+  `_setup_prefunded`, `_platform_fee`; NULL for a v0.4 `Graduated`). Buy cost basis (positions, ledger) includes the tax.
+- **API**: `TradeRow.snipeTaxSol/snipeTaxBps`, `CoinSummary.snipeTaxSol/snipeTaxedBuys`, `CoinDetail.poolInflowSol`,
+  `FeedLaunch.snipeTaxSol`, `/v1/params` `snipeWindowSlots`, `snipeStartBps`, `graduationFeeSol`; `/v1/quote` buys inside
+  the launch window carry `snipeTaxSol/snipeTaxBps` (quoted at the current slot; the creator's launch-slot buy is exempt).
+- **Upgrade**: after the program upgrade run `npx tsx scripts/devnet/migrate-global.ts` (admin key) — see CONTRACTS.md.
 
 ### D17 auto-claim (v0.4)
 Keeper job `autoclaim` (`JOB_AUTOCLAIM`, on): for each graduated coin whose covered keeper median reaches its lowest

@@ -8,14 +8,18 @@ export const LAMPORTS_PER_SOL = 1_000_000_000;
 const BASE_PER_TOKEN = 10 ** TOKEN_DECIMALS;
 const Q64 = BigInt(1) << BigInt(64);
 
-/** Program defaults from `constants.rs`. Live values come from the `Global` account. */
+/**
+ * Mainnet program defaults from `constants.rs` (v0.5). Only a fallback: views read the live
+ * `Global.params` through `getParams()` (`useProtocolParams()`), and devnet runs its own scaled
+ * curve. Keep in sync with contracts/CONTRACTS.md when the defaults change.
+ */
 export const PARAMS = {
   totalSupply: 1_000_000_000,
   rewardPoolSupply: 80_000_000,
-  curveSupply: 729_655_172.413793,
-  lpSupply: 190_344_827.586207,
+  curveSupply: 730_811_425.785218,
+  lpSupply: 189_188_574.214782,
   initialVirtualSol: 30,
-  initialVirtualTokens: 987_180_527.383367,
+  initialVirtualTokens: 988_744_870.180001,
   graduationSol: 85,
   feeBps: 100,
   feePoolShareBps: 5_000,
@@ -31,6 +35,9 @@ export const PARAMS = {
   maxOpenTickets: 5,
   oracleWindowSecs: 1_800,
   oracleMinSamples: 84,
+  snipeWindowSlots: 4,
+  snipeStartBps: 9_900,
+  graduationFeeSol: 0.65,
 } as const;
 
 /** A coin's graduation target in SOL: from the data source when it has one (devnet runs a scaled-down curve). */

@@ -10,6 +10,7 @@ import {
   decodePythPriceUpdate,
   decodeTicket,
   FumpadClient,
+  isCreatorLaunchBuy,
   maturedNow,
   previewRebuy,
   previewTicket,
@@ -20,6 +21,7 @@ import {
   quoteSwapBuy,
   quoteSwapSell,
   reservesOf,
+  snipeTaxBps,
   solToLamports,
   tokensToBase,
   type CoinAccount,
@@ -116,7 +118,15 @@ export class ChainReader {
 
     if (args.side === "buy") {
       const budget = solToLamports(amt);
-      const q = onCurve ? quoteCurveBuy(reservesOf(coin), fees, budget) : quoteSwapBuy(pool!, fees, budget, venueFeeBps);
+      // D19: inside the launch window a curve buy pays the snipe tax. Quote at the current slot
+      // (pessimistic: the tax only decays); the creator's bundled launch buy is exempt.
+      let snipeBps = 0;
+      if (onCurve && coin.snipe.windowSlots > 0) {
+        const slot = BigInt(await this.cache.get("chain:slot", 400, () => this.conn.getSlot("confirmed")));
+        const exempt = !!wallet && isCreatorLaunchBuy({ user: wallet.toBase58(), creator: coin.creator.toBase58(), slot, launchSlot: coin.snipe.launchSlot, tradeCount: coin.tradeCount });
+        snipeBps = exempt ? 0 : snipeTaxBps(coin.snipe, slot);
+      }
+      const q = onCurve ? quoteCurveBuy(reservesOf(coin), fees, budget, snipeBps) : quoteSwapBuy(pool!, fees, budget, venueFeeBps);
       if (!q) throw Object.assign(new Error("quote unavailable"), { statusCode: 422 });
       let rebuyWarning: TradeQuote["rebuyWarning"];
       if (wallet && pos && pos.openTickets.length && q.tokensOut > 0n) {
@@ -148,6 +158,7 @@ export class ChainReader {
         venue: q.venue,
         partialFill: q.partialFill || undefined,
         rebuyWarning,
+        ...(q.snipeTax > 0n ? { snipeTaxSol: lam(q.snipeTax), snipeTaxBps: q.snipeTaxBps } : {}),
       };
     }
 

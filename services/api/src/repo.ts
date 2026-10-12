@@ -80,6 +80,9 @@ export interface CoinRow {
   holders: string | null;
   creator_flagged: boolean;
   closest_multiple: number | null;
+  snipe_tax_lamports: string | null;
+  snipe_taxed_buys: number | null;
+  pool_inflow_lamports: string | null;
 }
 
 /**
@@ -169,6 +172,9 @@ export class Repo {
       socials: socialsOf(c.metadata),
       closestMultiple: c.closest_multiple ?? undefined,
       creatorFlagged: !!c.creator_flagged,
+      ...(c.snipe_tax_lamports && BigInt(c.snipe_tax_lamports) > 0n
+        ? { snipeTaxSol: lam(c.snipe_tax_lamports), snipeTaxedBuys: Number(c.snipe_taxed_buys ?? 0) }
+        : {}),
     };
   }
 
@@ -263,6 +269,7 @@ export class Repo {
       ammSol: c.amm_quote ? lam(c.amm_quote) : undefined,
       ammTokens: c.amm_base ? tok(c.amm_base) : undefined,
       curveSol1h: lam(e.sol1h),
+      poolInflowSol: lam(c.pool_inflow_lamports ?? "0"),
     };
   }
 
@@ -309,10 +316,13 @@ export class Repo {
       maxOpenTickets: p.maxOpenTickets,
       oracleWindowSecs: Number(p.oracleWindowSecs),
       oracleMinSamples: p.oracleMinSamples,
+      snipeWindowSlots: p.snipeWindowSlots ?? 0,
+      snipeStartBps: p.snipeStartBps ?? 0,
+      graduationFeeSol: lam(p.graduationFeeLamports),
     };
   }
 
-  private tradeRows(r: { signature: string; mint: string; wallet: string; is_buy: boolean; token_amount: string; sol_amount: string; virtual_sol: string; virtual_tokens: string; ts: string }[]): TradeRow[] {
+  private tradeRows(r: { signature: string; mint: string; wallet: string; is_buy: boolean; token_amount: string; sol_amount: string; virtual_sol: string; virtual_tokens: string; ts: string; snipe_tax: string; snipe_tax_bps: number }[]): TradeRow[] {
     return r.map((x) => ({
       signature: x.signature,
       mint: x.mint,
@@ -322,13 +332,14 @@ export class Repo {
       sol: lam(x.sol_amount),
       price: px(spotQ64(x.virtual_sol, x.virtual_tokens)),
       ts: Number(x.ts) * 1000,
+      ...(BigInt(x.snipe_tax) > 0n ? { snipeTaxSol: lam(x.snipe_tax), snipeTaxBps: Number(x.snipe_tax_bps) } : {}),
     }));
   }
 
   /** Latest FUMPAD trades on a coin, newest first (getRecentTrades). */
   async getRecentTrades(mint: string, limit = 30): Promise<TradeRow[]> {
     const r = await this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
-      `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts FROM trades
+      `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
        WHERE mint = $1 ORDER BY ts DESC, slot DESC, idx DESC LIMIT $2`,
       [mint, Math.min(Math.max(limit, 1), 100)],
     );
@@ -346,7 +357,7 @@ export class Repo {
     if (!sig) return { coin, trades: [], points: [] };
     const [tr, sm] = await Promise.all([
       this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
-        `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts FROM trades
+        `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
          WHERE signature = $1 AND mint = $2 ORDER BY idx`,
         [sig, mint],
       ),
@@ -640,7 +651,7 @@ export class Repo {
   async ledger(wallet: string): Promise<LedgerEntry[]> {
     const r = await this.db.query<{ kind: "buy" | "sell" | "payout"; mint: string; tokens: string; lamports: string; ts: string; slot: string; idx: number }>(
       `SELECT CASE WHEN t.is_buy THEN 'buy' ELSE 'sell' END AS kind, t.mint, t.token_amount AS tokens,
-              CASE WHEN t.is_buy THEN t.sol_amount + t.fee_pool + t.fee_platform + t.fee_creator
+              CASE WHEN t.is_buy THEN t.sol_amount + t.fee_pool + t.fee_platform + t.fee_creator + t.snipe_tax
                    ELSE GREATEST(t.sol_amount - t.fee_pool - t.fee_platform - t.fee_creator, 0) END AS lamports,
               t.ts, t.slot, t.idx
          FROM trades t WHERE t.wallet = $1
@@ -820,9 +831,10 @@ interface FeedRow {
   symbol: string;
   coin_name: string;
   name: string | null;
+  snipe_tax_lamports: string | null;
 }
 const FEED_SELECT = `
-  SELECT f.id, f.kind, f.ts, f.actor, f.mint, f.payload, c.symbol, c.name AS coin_name, u.name
+  SELECT f.id, f.kind, f.ts, f.actor, f.mint, f.payload, c.symbol, c.name AS coin_name, u.name, c.snipe_tax_lamports
     FROM feed_events f JOIN coins c ON c.mint = f.mint LEFT JOIN users u ON u.address = f.actor`;
 
 function feedEvent(r: FeedRow): FeedEvent {
@@ -841,7 +853,12 @@ function feedEvent(r: FeedRow): FeedEvent {
   const p = r.payload as Record<string, number & boolean>;
   switch (r.kind) {
     case "launch":
-      return { ...base, kind: "launch", poolTokens: p.poolTokens };
+      return {
+        ...base,
+        kind: "launch",
+        poolTokens: p.poolTokens,
+        ...(r.snipe_tax_lamports && BigInt(r.snipe_tax_lamports) > 0n ? { snipeTaxSol: lam(r.snipe_tax_lamports) } : {}),
+      };
     case "fumble":
       return { ...base, kind: "fumble", tokens: p.tokens, sol: p.sol, ticketPrice: p.ticketPrice };
     case "cross":

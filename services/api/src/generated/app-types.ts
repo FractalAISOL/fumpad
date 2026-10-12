@@ -59,6 +59,12 @@ export interface CoinSummary {
   closestMultiple?: number;
   /** The creator's wallet carries an indexer flag (linked wallets, rebuys elsewhere). */
   creatorFlagged: boolean;
+  /**
+   * D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward
+   * pool as snipe tax, and how many buys paid it. Absent when none did.
+   */
+  snipeTaxSol?: number;
+  snipeTaxedBuys?: number;
 }
 
 export interface CoinSocials {
@@ -92,6 +98,8 @@ export interface CoinDetail extends CoinSummary {
   ammSol?: number;
   ammTokens?: number;
   curveSol1h: number;
+  /** SOL FUMPAD trades sent to the reward pool: the pool's fee share plus any snipe tax. */
+  poolInflowSol?: number;
 }
 
 export type ChartRange = "1h" | "1d" | "7d" | "all";
@@ -222,6 +230,12 @@ export interface TradeQuote {
   rebuyWarning?: RebuyWarning;
   /** Curve buys that would fill the curve are partially filled. */
   partialFill?: boolean;
+  /**
+   * D19: the buy lands in the coin's launch window, so part of it is snipe tax paid to the reward
+   * pool (SOL, included in amountIn) at `snipeTaxBps`. Absent outside the window.
+   */
+  snipeTaxSol?: number;
+  snipeTaxBps?: number;
 }
 
 export interface TicketPreview {
@@ -270,6 +284,8 @@ interface FeedBase {
 export interface FeedLaunch extends FeedBase {
   kind: "launch";
   poolTokens: number;
+  /** D19: snipe tax that launch-window buys have paid into the pool so far (SOL). */
+  snipeTaxSol?: number;
 }
 export interface FeedFumble extends FeedBase {
   kind: "fumble";
@@ -494,6 +510,12 @@ export interface ProtocolParams {
   /** The claim median's window. */
   oracleWindowSecs: number;
   oracleMinSamples: number;
+  /** D19: curve buys within this many slots of launch pay the snipe tax (0 = off). */
+  snipeWindowSlots: number;
+  /** D19: snipe tax at the launch slot, bps (9,900 = 99%), decaying to 0 over the window. */
+  snipeStartBps: number;
+  /** D20: SOL taken at graduation to pay the pool's setup rent (remainder to FUMPAD). */
+  graduationFeeSol: number;
 }
 
 /* ── Trades & live updates ─────────────────────────────────────────────────── */
@@ -510,6 +532,9 @@ export interface TradeRow {
   /** Spot after the trade, SOL per token. */
   price: number;
   ts: Millis;
+  /** D19: snipe tax this buy paid to the reward pool (SOL, on top of `sol`) and its rate. Absent when none. */
+  snipeTaxSol?: number;
+  snipeTaxBps?: number;
 }
 
 /**

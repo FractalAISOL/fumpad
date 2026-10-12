@@ -278,6 +278,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "poolBought24h": {
         "type": "number"
       },
+      "poolInflowSol": {
+        "description": "SOL FUMPAD trades sent to the reward pool: the pool's fee share plus any snipe tax.",
+        "type": "number"
+      },
       "poolPaidOut": {
         "type": "number"
       },
@@ -299,6 +303,13 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "referencePrice": {
         "description": "D10 reference average (10-min TWAP), SOL per token. Used only as the ticket floor.",
+        "type": "number"
+      },
+      "snipeTaxSol": {
+        "description": "D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward pool as snipe tax, and how many buys paid it. Absent when none did.",
+        "type": "number"
+      },
+      "snipeTaxedBuys": {
         "type": "number"
       },
       "socials": {
@@ -469,6 +480,13 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "Spot, SOL per token.",
         "type": "number"
       },
+      "snipeTaxSol": {
+        "description": "D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward pool as snipe tax, and how many buys paid it. Absent when none did.",
+        "type": "number"
+      },
+      "snipeTaxedBuys": {
+        "type": "number"
+      },
       "socials": {
         "$ref": "#/components/schemas/CoinSocials",
         "description": "Creator-supplied links from the metadata (http/https only)."
@@ -596,6 +614,13 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "price": {
         "description": "Spot, SOL per token.",
+        "type": "number"
+      },
+      "snipeTaxSol": {
+        "description": "D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward pool as snipe tax, and how many buys paid it. Absent when none did.",
+        "type": "number"
+      },
+      "snipeTaxedBuys": {
         "type": "number"
       },
       "socials": {
@@ -1007,6 +1032,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "reposts": {
+        "type": "number"
+      },
+      "snipeTaxSol": {
+        "description": "D19: snipe tax that launch-window buys have paid into the pool so far (SOL).",
         "type": "number"
       },
       "symbol": {
@@ -1521,6 +1550,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "feePoolShareBps": {
         "type": "number"
       },
+      "graduationFeeSol": {
+        "description": "D20: SOL taken at graduation to pay the pool's setup rent (remainder to FUMPAD).",
+        "type": "number"
+      },
       "graduationSol": {
         "type": "number"
       },
@@ -1560,6 +1593,14 @@ export const SCHEMAS: Record<string, unknown> = {
       "rewardPoolSupply": {
         "type": "number"
       },
+      "snipeStartBps": {
+        "description": "D19: snipe tax at the launch slot, bps (9,900 = 99%), decaying to 0 over the window.",
+        "type": "number"
+      },
+      "snipeWindowSlots": {
+        "description": "D19: curve buys within this many slots of launch pay the snipe tax (0 = off).",
+        "type": "number"
+      },
       "totalSupply": {
         "type": "number"
       },
@@ -1589,7 +1630,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "claimWindowSecs",
       "maxOpenTickets",
       "oracleWindowSecs",
-      "oracleMinSamples"
+      "oracleMinSamples",
+      "snipeWindowSlots",
+      "snipeStartBps",
+      "graduationFeeSol"
     ],
     "type": "object"
   },
@@ -1962,6 +2006,13 @@ export const SCHEMAS: Record<string, unknown> = {
       "side": {
         "$ref": "#/components/schemas/Side"
       },
+      "snipeTaxBps": {
+        "type": "number"
+      },
+      "snipeTaxSol": {
+        "description": "D19: the buy lands in the coin's launch window, so part of it is snipe tax paid to the reward pool (SOL, included in amountIn) at `snipeTaxBps`. Absent outside the window.",
+        "type": "number"
+      },
       "spotBefore": {
         "description": "Spot before the trade.",
         "type": "number"
@@ -2013,6 +2064,13 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "signature": {
         "type": "string"
+      },
+      "snipeTaxBps": {
+        "type": "number"
+      },
+      "snipeTaxSol": {
+        "description": "D19: snipe tax this buy paid to the reward pool (SOL, on top of `sol`) and its rate. Absent when none.",
+        "type": "number"
       },
       "sol": {
         "description": "SOL in (buys) or out (sells), before the fee.",

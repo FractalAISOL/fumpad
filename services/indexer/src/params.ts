@@ -13,8 +13,11 @@ export function storeable(p: Params): Stored {
   return o as Stored;
 }
 export function fromStored(s: Stored): Params {
+  const defs = DEFAULT_PARAMS as unknown as Record<string, unknown>;
   const o: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(s)) o[k] = typeof (DEFAULT_PARAMS as unknown as Record<string, unknown>)[k] === "bigint" ? BigInt(v) : v;
+  for (const [k, v] of Object.entries(s)) o[k] = typeof defs[k] === "bigint" ? BigInt(v) : v;
+  // Params appended since the copy was stored (e.g. v0.5 snipe_*) didn't exist then: 0 = off.
+  for (const [k, d] of Object.entries(defs)) if (!(k in o)) o[k] = typeof d === "bigint" ? 0n : typeof d === "number" ? 0 : d;
   return o as unknown as Params;
 }
 

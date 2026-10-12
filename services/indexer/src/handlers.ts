@@ -171,11 +171,14 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const d = e.data;
         const mint = b58(d.mint);
         const wallet = b58(d.user);
+        // D19 (v0.5): 0 outside the launch window and for v0.4 events (decoded with the fields zeroed).
+        const snipeTax = d.snipeTax ?? 0n;
+        const snipeBps = d.snipeTaxBps ?? 0;
         const ins = await c.query(
           `INSERT INTO trades (signature, idx, slot, ts, mint, wallet, is_buy, on_amm, token_amount, sol_amount, fee_pool, fee_platform, fee_creator,
-             pool_tokens_bought, price_q64, virtual_sol, virtual_tokens)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT DO NOTHING`,
-          [ctx.signature, e.index, ctx.slot, s(d.ts), mint, wallet, d.isBuy, d.onAmm, s(d.tokenAmount), s(d.solAmount), s(d.feePool), s(d.feePlatform), s(d.feeCreator), s(d.poolTokensBought), s(d.priceQ64), s(d.virtualSolReserves), s(d.virtualTokenReserves)],
+             pool_tokens_bought, price_q64, virtual_sol, virtual_tokens, snipe_tax, snipe_tax_bps)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT DO NOTHING`,
+          [ctx.signature, e.index, ctx.slot, s(d.ts), mint, wallet, d.isBuy, d.onAmm, s(d.tokenAmount), s(d.solAmount), s(d.feePool), s(d.feePlatform), s(d.feeCreator), s(d.poolTokensBought), s(d.priceQ64), s(d.virtualSolReserves), s(d.virtualTokenReserves), s(snipeTax), snipeBps],
         );
         if (!ins.rowCount) break;
         const spot = priceQ64(d.virtualSolReserves, d.virtualTokenReserves) ?? 0n;
@@ -195,11 +198,15 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         }
         await c.query(
           `UPDATE coins SET volume_lamports = volume_lamports + $2, trade_count = trade_count + 1, last_trade_at = GREATEST(COALESCE(last_trade_at,0), $3),
-             pool_tokens = pool_tokens + $4, pool_bought = pool_bought + $4, updated_at = now() WHERE mint = $1`,
-          [mint, s(d.solAmount), s(d.ts), s(d.poolTokensBought)],
+             pool_tokens = pool_tokens + $4, pool_bought = pool_bought + $4,
+             pool_inflow_lamports = pool_inflow_lamports + $5 + $6,
+             snipe_tax_lamports = snipe_tax_lamports + $6, snipe_taxed_buys = snipe_taxed_buys + (CASE WHEN $6::numeric > 0 THEN 1 ELSE 0 END),
+             updated_at = now() WHERE mint = $1`,
+          [mint, s(d.solAmount), s(d.ts), s(d.poolTokensBought), s(d.feePool), s(snipeTax)],
         );
+        // Cost basis: a buy costs sol + fees + snipe tax (the tax is charged to the buyer).
         await position(ctx, mint, wallet, d.ts, d.isBuy
-          ? { balance: d.tokenAmount, bought: d.tokenAmount, solIn: d.solAmount + d.feePool + d.feePlatform + d.feeCreator, buys: 1 }
+          ? { balance: d.tokenAmount, bought: d.tokenAmount, solIn: d.solAmount + d.feePool + d.feePlatform + d.feeCreator + snipeTax, buys: 1 }
           : { balance: -d.tokenAmount, sold: d.tokenAmount, solOut: d.solAmount - d.feePool - d.feePlatform - d.feeCreator, sells: 1 });
         await upsertUser(ctx, wallet, d.ts);
         if (d.onAmm) await trackMultiples(ctx, mint, spot, d.ts, false);
@@ -218,8 +225,13 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const spot = priceQ64(d.solDeposited, d.tokensDeposited) ?? 0n;
         await c.query(
           `UPDATE coins SET status = 'graduated', graduated_at = $2, amm_pool = $3, raised_lamports = $4, tokens_to_lp = $5, lp_locked = $6,
-             amm_quote = $4, amm_base = $5, price_q64 = $7, price_slot = $8, real_sol = 0 WHERE mint = $1`,
-          [mint, s(d.ts), b58(d.pool), s(d.solDeposited), s(d.tokensDeposited), s(d.lpLocked), s(spot), ctx.slot],
+             amm_quote = $4, amm_base = $5, price_q64 = $7, price_slot = $8, real_sol = 0,
+             graduation_caller_refund = $9, graduation_setup_prefunded = $10, graduation_platform_fee = $11 WHERE mint = $1`,
+          [
+            mint, s(d.ts), b58(d.pool), s(d.solDeposited), s(d.tokensDeposited), s(d.lpLocked), s(spot), ctx.slot,
+            // D20 (v0.5) fee split; NULL for a v0.4 Graduated (no split recorded).
+            ...(e.legacy ? [null, null, null] : [s(d.callerRefund), s(d.setupPrefunded), s(d.platformFee)]),
+          ],
         );
         // Tickets already ≥ trigger at the graduation price become claimable once sampled (D1).
         const r = await c.query<{ n: string }>(
