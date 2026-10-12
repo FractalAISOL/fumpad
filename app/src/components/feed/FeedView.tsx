@@ -9,6 +9,7 @@ import { useLiveMessages, useRefresh } from "../shell/live";
 import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Feed.module.css";
 import { FeedPost } from "./FeedPost";
+import { coinHref } from "@/components/coin/ident";
 
 type Filter = FeedKind | "all";
 const FILTERS: { value: Filter; label: React.ReactNode }[] = [
@@ -217,7 +218,7 @@ export function FeedView({
               <li key={c.ticket} className={s.closeRow}>
                 <div className={s.closeTop}>
                   <span className={s.closeWho}>
-                    <Link href={`/coin/${c.symbol}`} className="ticker">
+                    <Link href={coinHref(c)} className="ticker">
                       ${c.symbol}
                     </Link>{" "}
                     <span className="muted">
@@ -237,7 +238,7 @@ export function FeedView({
           <ul className={s.list}>
             {trending.map((c) => (
               <li key={c.mint}>
-                <Link href={`/coin/${c.symbol}`} className={s.trow}>
+                <Link href={coinHref(c)} className={s.trow}>
                   <CoinTile symbol={c.symbol} variant={c.tile} size="sm" />
                   <span className={s.nm}>
                     <span className="ticker">${c.symbol}</span>

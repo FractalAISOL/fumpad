@@ -1,8 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
-import { Providers } from "@/components/shell/Providers";
+import { ShellGate } from "@/components/prelaunch/ShellGate";
 import { Footer } from "@/components/shell/Footer";
-import { Header, TabBar, THEME_SCRIPT } from "@/components/shell/Shell";
+import { THEME_SCRIPT } from "@/components/shell/theme";
 import { shellSnapshot } from "@/data/server";
 import { archivo, martian } from "@/design/fonts";
 import { colorDark, colorLight, tokensToCss } from "@/design/tokens";
@@ -40,14 +40,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <style dangerouslySetInnerHTML={{ __html: TOKENS_CSS }} />
       </head>
       <body>
-        <Providers now={now} params={params} solUsd={solUsd}>
-          <Header solUsd={solUsd} />
-          <main id="main" className={s.main}>
-            {children}
-          </main>
-          <Footer />
-          <TabBar />
-        </Providers>
+        {/* The app shell, except on the pre-launch waiting room (app/soon), which has its own. */}
+        <ShellGate footer={<Footer />} mainClassName={s.main} now={now} params={params} solUsd={solUsd}>
+          {children}
+        </ShellGate>
       </body>
     </html>
   );

@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
+import { isAddress } from "@/components/coin/ident";
 import { cardCopy, cardPalette, curveProgress, multipleText, parseStyle } from "@/components/share/card";
-import { getFumpadData } from "@/data";
+import { serverData } from "@/data/ssr";
 import * as f from "@/design/format";
 import { gauge as G } from "@/design/tokens";
 
@@ -24,12 +25,19 @@ const fonts = Promise.all([
 /** The big multiple shrinks with its length so "11.6×" and "<0.1×" fit beside the copy. */
 const figureSize = (text: string) => (text.length <= 4 ? 176 : text.length === 5 ? 140 : 118);
 
+/** Cards change when the ticket does (crossing, claim): an hour at the edge, served stale while it refreshes. */
+const CARD_CACHE = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400";
+/** Misses are cached briefly so a flood of made-up ids doesn't reach the API each time. */
+const MISS_CACHE = "public, max-age=60, s-maxage=300";
+
 export async function GET(req: Request, ctx: { params: Promise<{ ticket: string }> }) {
   const { ticket: id } = await ctx.params;
+  // L-2: a ticket id is a base58 PDA; anything else never reaches the API.
+  if (!isAddress(id)) return new Response("Invalid ticket id", { status: 400, headers: { "Cache-Control": MISS_CACHE, "Content-Type": "text/plain; charset=utf-8" } });
   const style = parseStyle(new URL(req.url).searchParams.get("style"));
-  const data = getFumpadData();
+  const data = serverData();
   const [t, params] = await Promise.all([data.getTicket(id), data.getParams()]);
-  if (!t) return new Response("Ticket not found", { status: 404 });
+  if (!t) return new Response("Ticket not found", { status: 404, headers: { "Cache-Control": MISS_CACHE, "Content-Type": "text/plain; charset=utf-8" } });
   const copy = cardCopy(t, params);
   // Curve cards show how far the coin is from graduating.
   const progress = copy.kind === "curve" ? curveProgress(await data.getCoin(t.mint).catch(() => null)) : undefined;
@@ -65,7 +73,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
           </svg>
           <span style={{ fontFamily: "ArchivoWide", fontSize: 30, letterSpacing: "-0.04em" }}>FUMPAD</span>
         </div>
-        <span style={{ fontFamily: "Mono", fontSize: 18, color: c.sub }}>fumpad.app/c/{t.symbol}</span>
+        {/* H-3: the coin by mint (symbols aren't unique); the last eight characters are what tell coins apart. */}
+        <span style={{ display: "flex", fontFamily: "Mono", fontSize: 18, color: c.sub }}>
+          fumpad.app/c/{t.mint.slice(0, 4)}…<span style={{ color: c.fg }}>{t.mint.slice(-8)}</span>
+        </span>
       </div>
 
       {/* middle */}
@@ -154,7 +165,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
         { name: "Martian", data: monoBig, weight: 600, style: "normal" },
         { name: "Mono", data: mono, weight: 400, style: "normal" },
       ],
-      headers: { "Cache-Control": "public, max-age=300, s-maxage=3600" },
+      headers: { "Cache-Control": CARD_CACHE },
     },
   );
 }

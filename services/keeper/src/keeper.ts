@@ -14,7 +14,10 @@
  *            (devnet scaled params, pre-v0.5 coins) leave the shortfall to the keeper.
  *  buyback   execute_buyback when buyback_lamports ≥ threshold, a keeper median exists and
  *            spot is within the program's ±deviation band (pre-checked → no failing txs).
- *  queue     process_queue when the head entries fit; creates missing owner ATAs first.
+ *  queue     process_queue: simulates the program's skip-ahead walk and passes accounts for
+ *            exactly the entries that will be paid (H-4); no keeper-paid owner ATAs (a
+ *            missing/closed ATA escrows on chain, rent refundable to the keeper); zero-pay
+ *            runs alert and back off.
  *  autoclaim (D17, v0.4) claim_for every Open ticket whose trigger holds on the covered
  *            keeper median, unless its owner opted out (Position.auto_claim_opt_out); oldest
  *            first; skips wallets at the D16 queue limit unless the claim pays now; the
@@ -25,7 +28,10 @@
  *  params    execute_params once a queued change's 48 h timelock has elapsed.
  *
  * Idempotency: every action is derived from fresh chain state and guarded by an in-flight
- * key, so a restart or a parallel keeper at worst sends a tx the program rejects.
+ * key, so a restart at worst sends a tx the program rejects. Single instance (L-10): with
+ * DATABASE_URL the keeper holds a Postgres advisory lock before its first send.
+ * Spend (M-7): per-tx priority-fee cap, daily budget (essential jobs only once exceeded),
+ * persisted lookup table, status-filtered scans.
  */
 import { createServer, type Server } from "node:http";
 
@@ -35,11 +41,17 @@ import {
   Connection,
   PublicKey,
 } from "@solana/web3.js";
+import bs58 from "bs58";
 import { pino, type Logger } from "pino";
 
 import {
   OBSERVATIONS_ACCOUNT_SIZE,
+  accountDiscriminator,
   BPS_DENOM,
+  computeBudgetIxs,
+  CU,
+  FUMPAD_PROGRAM_ID,
+  processQueueIx,
   type CoinAccount,
   coinAddresses,
   coinRewardParams,
@@ -68,7 +80,15 @@ import {
 
 import { Alerter } from "./alerts.js";
 import type { KeeperConfig } from "./config.js";
+import { planQueuePayments, type SpendState, trackSpend } from "./policy.js";
 import { Sender } from "./sender.js";
+import { KeeperStore } from "./store.js";
+
+/** Byte offset of `Coin.status` (8 disc + bump + mint + creator). */
+const COIN_STATUS_OFFSET = 8 + 1 + 32 + 32;
+const COIN_STATUS_BYTE = { curve: 0, complete: 1, graduated: 2 } as const;
+/** Jobs that keep running over the daily budget (oracle liveness, graduation, timelocked params). */
+const ESSENTIAL_JOBS = new Set(["sample", "graduate", "params"]);
 
 interface CoinState {
   mint: PublicKey;
@@ -82,6 +102,9 @@ interface CoinState {
   lastBuybackAt: number;
   lastFeesAt: number;
   lastQueueAt: number;
+  /** Queue runs to skip after zero-pay runs (exponential backoff). */
+  queueBackoff?: number;
+  queueSkip?: number;
   lastAutoClaimAt?: number;
   setupDone: boolean;
 }
@@ -157,9 +180,14 @@ export class Keeper {
   private timer?: NodeJS.Timeout;
   private server?: Server;
   private alt?: { table: AddressLookupTableAccount; addresses: Set<string> };
+  private altLoaded = false;
   private loopAt = 0;
   private balance = 0n;
+  private lastFullScan = 0;
+  private spend: SpendState | null = null;
+  readonly store?: KeeperStore;
   readonly jobs: Record<string, JobHealth> = {};
+  stats = { zeroPayRuns: 0, queuePaid: 0, overBudgetSkips: 0 };
 
   constructor(readonly cfg: KeeperConfig, log?: Logger) {
     this.log = log ?? pino({ name: "keeper", level: cfg.logLevel, base: { service: "keeper" }, timestamp: pino.stdTimeFunctions.isoTime, formatters: { level: (l) => ({ level: l }) } });
@@ -167,6 +195,15 @@ export class Keeper {
     this.client = new FumpadClient(this.conn);
     this.sender = new Sender(this.conn, cfg.keeper, cfg, this.log);
     this.alerts = new Alerter(this.log, { botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId });
+    if (cfg.databaseUrl) this.store = new KeeperStore(cfg.databaseUrl, this.log);
+  }
+
+  private get metaKey() {
+    return `keeper:${this.keeperKey.toBase58()}`;
+  }
+
+  get overBudget(): boolean {
+    return !!this.spend && BigInt(this.spend.lamports) >= this.cfg.dailyBudgetLamports;
   }
 
   get keeperKey() {
@@ -174,15 +211,30 @@ export class Keeper {
   }
 
   async start(): Promise<void> {
-    this.log.info({ keeper: this.keeperKey.toBase58(), dryRun: this.cfg.dryRun, jobs: this.cfg.jobs }, "keeper starting");
+    this.log.info({ keeper: this.keeperKey.toBase58(), dryRun: this.cfg.dryRun, jobs: this.cfg.jobs, singleInstanceLock: !!this.store }, "keeper starting");
     if (this.cfg.healthPort) {
       this.server = createServer((req, res) => {
         if (req.url?.startsWith("/health")) {
+          // L-5: slim (no balance, no raw errors); details go to the logs every scan.
           const h = this.health();
-          res.writeHead(h.ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify(h, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
+          res.writeHead(h.ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify(h));
         } else res.writeHead(404).end();
       });
       await new Promise<void>((r) => this.server!.listen(this.cfg.healthPort, r));
+    }
+    if (this.store) {
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
+      const self = this;
+      await this.store.acquireLock(
+        (e) => {
+          if (this.stopped) return;
+          this.log.error({ err: e.message }, "lost the keeper lock; exiting so a single instance resumes");
+          process.exit(1);
+        },
+        { signal: { get stopped() { return self.stopped; } } },
+      );
+      this.log.info("keeper lock acquired (single instance)");
+      this.spend = await this.store.getMeta<SpendState>(`${this.metaKey}:spend`);
     }
     const tick = async () => {
       if (this.stopped) return;
@@ -196,6 +248,7 @@ export class Keeper {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     await new Promise<void>((r) => (this.server ? this.server.close(() => r()) : r()));
+    await this.store?.close();
   }
 
   health() {
@@ -204,15 +257,26 @@ export class Keeper {
     const failing = Object.entries(this.jobs).filter(([, j]) => j.failures >= 3).map(([k]) => k);
     return {
       ok: loopFresh && failing.length === 0,
+      version: { sha: process.env.GIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || null, deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null, startedAt: STARTED_AT },
+      msSinceLoop: now - this.loopAt,
+      failingJobs: failing,
+      overBudget: this.overBudget,
+    };
+  }
+
+  /** Operator detail (logged each full scan; never served). */
+  detail() {
+    return {
       keeper: this.keeperKey.toBase58(),
       dryRun: this.cfg.dryRun,
-      msSinceLoop: now - this.loopAt,
       balanceSol: Number(this.balance) / 1e9,
+      spentTodaySol: this.spend ? Number(this.spend.lamports) / 1e9 : 0,
+      budgetSol: Number(this.cfg.dailyBudgetLamports) / 1e9,
       coins: this.coins.size,
       graduated: [...this.coins.values()].filter((c) => c.coin.status === "graduated").length,
-      failingJobs: failing,
-      jobs: this.jobs,
+      jobs: Object.fromEntries(Object.entries(this.jobs).map(([k, j]) => [k, { runs: j.runs, actions: j.actions, failures: j.failures }])),
       sender: this.sender.stats,
+      stats: this.stats,
       alertsSent: this.alerts.sent,
     };
   }
@@ -234,6 +298,10 @@ export class Keeper {
   }
 
   private async job(name: string, fn: () => Promise<number>) {
+    if (this.overBudget && !ESSENTIAL_JOBS.has(name)) {
+      this.stats.overBudgetSkips++;
+      return;
+    }
     const h = (this.jobs[name] ??= { failures: 0, runs: 0, actions: 0 });
     h.runs++;
     try {
@@ -260,7 +328,11 @@ export class Keeper {
       this.pendingEta = g.pendingEta;
       this.paused = g.paused;
       this.pauseExpiresAt = g.pauseExpiresAt;
-      const all = await this.client.scanCoins();
+      // M-7 scan limits: only complete/graduated coins every scan; every coin (curve coins
+      // matter only for platform-fee withdrawals) on the slow full scan.
+      const full = now - this.lastFullScan > this.cfg.fullScanIntervalSecs * 1000;
+      const all = full ? await this.client.scanCoins() : [...(await this.scanCoinsByStatus("complete")), ...(await this.scanCoinsByStatus("graduated"))];
+      if (full) this.lastFullScan = now;
       for (const c of all) {
         const k = c.mint.toBase58();
         const prev = this.coins.get(k);
@@ -268,10 +340,19 @@ export class Keeper {
       }
       this.balance = BigInt(await this.conn.getBalance(this.keeperKey));
       if (this.balance < this.cfg.minKeeperLamports) await this.alerts.alert("balance", `keeper balance low: ${Number(this.balance) / 1e9} SOL`);
+      const wasOver = this.overBudget;
+      this.spend = trackSpend(this.spend, this.balance);
+      await this.store?.setMeta(`${this.metaKey}:spend`, this.spend);
+      if (this.overBudget && !wasOver)
+        await this.alerts.alert(
+          "budget",
+          `keeper spent ${Number(this.spend.lamports) / 1e9} SOL today (budget ${Number(this.cfg.dailyBudgetLamports) / 1e9}); only sample/graduate/params run until 00:00 UTC`,
+        );
+      if (full) this.log.info(this.detail(), "keeper status");
       this.lastScan = now;
     } else {
-      // Cheap refresh of known coins' accounts.
-      const list = [...this.coins.values()];
+      // Cheap refresh of known coins' accounts (not curve coins: the full scan covers them).
+      const list = [...this.coins.values()].filter((c) => c.coin.status !== "curve");
       for (let i = 0; i < list.length; i += 100) {
         const chunk = list.slice(i, i + 100);
         const infos = await this.conn.getMultipleAccountsInfo(chunk.map((c) => coinAddresses(c.mint).coin));
@@ -316,6 +397,18 @@ export class Keeper {
         }
       });
     }
+  }
+
+  /** getProgramAccounts for Coin accounts with one status (memcmp on the status byte). */
+  private async scanCoinsByStatus(status: keyof typeof COIN_STATUS_BYTE): Promise<CoinAccount[]> {
+    const res = await this.conn.getProgramAccounts(FUMPAD_PROGRAM_ID, {
+      commitment: "confirmed",
+      filters: [
+        { memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Coin")) } },
+        { memcmp: { offset: COIN_STATUS_OFFSET, bytes: bs58.encode(Uint8Array.from([COIN_STATUS_BYTE[status]])) } },
+      ],
+    });
+    return res.map((r) => decodeCoinSafe(r.account.data)).filter((c): c is CoinAccount => !!c);
   }
 
   private async guard(key: string, fn: () => Promise<number>): Promise<number> {
@@ -386,12 +479,25 @@ export class Keeper {
       const a = coinAddresses(m);
       return [a.coin, a.observations, a.pool, a.poolBase, a.poolQuote];
     });
+    if (!this.altLoaded) {
+      this.altLoaded = true;
+      await this.loadAlt();
+    }
+    const missingNow = this.alt ? want.filter((k) => !this.alt!.addresses.has(k.toBase58())) : want;
+    if (this.alt && this.alt.addresses.size + missingNow.length > 256) {
+      // Full: retire it (deactivate now, close later to recover the rent) and start a new one.
+      await this.retireAlt(this.alt.table.key);
+      this.alt = undefined;
+    }
     if (!this.alt) {
       const slot = await this.conn.getSlot("finalized");
       const [ix, table] = AddressLookupTableProgram.createLookupTable({ authority: this.keeperKey, payer: this.keeperKey, recentSlot: slot });
       const r = await this.sender.send("alt-create", { instructions: [ix] });
       if (!r.ok) return undefined;
       this.alt = { table: { key: table, state: { addresses: [] } } as unknown as AddressLookupTableAccount, addresses: new Set() };
+      // M-7: persist so restarts reuse it instead of paying for a new table each boot.
+      await this.store?.setMeta(`${this.metaKey}:alt`, { address: table.toBase58() });
+      if (!this.store) this.log.warn({ table: table.toBase58() }, "lookup table created; set KEEPER_LOOKUP_TABLE to reuse it after a restart");
     }
     const missing = want.filter((k) => !this.alt!.addresses.has(k.toBase58()));
     if (this.alt.addresses.size + missing.length > 256) return undefined;
@@ -407,6 +513,45 @@ export class Keeper {
     if (!fresh) return undefined;
     this.alt.table = fresh;
     return fresh;
+  }
+
+  /** Reuse KEEPER_LOOKUP_TABLE or the persisted table if it is ours and active. */
+  private async loadAlt(): Promise<void> {
+    const addr = this.cfg.lookupTable ?? (await this.store?.getMeta<{ address: string }>(`${this.metaKey}:alt`))?.address;
+    await this.closeRetiredAlts();
+    if (!addr) return;
+    try {
+      const t = (await this.conn.getAddressLookupTable(new PublicKey(addr))).value;
+      if (!t || !t.isActive() || !t.state.authority?.equals(this.keeperKey)) {
+        this.log.warn({ table: addr }, "configured/persisted lookup table unusable (missing, deactivated or another authority); creating a new one");
+        return;
+      }
+      this.alt = { table: t, addresses: new Set(t.state.addresses.map((a) => a.toBase58())) };
+      this.log.info({ table: addr, entries: t.state.addresses.length }, "reusing lookup table");
+    } catch (e) {
+      this.log.warn({ table: addr, err: String(e) }, "lookup table load failed");
+    }
+  }
+
+  private async retireAlt(table: PublicKey): Promise<void> {
+    const ix = AddressLookupTableProgram.deactivateLookupTable({ lookupTable: table, authority: this.keeperKey });
+    const r = await this.sender.send("alt-deactivate", { instructions: [ix] });
+    if (!r.ok) this.log.warn({ table: table.toBase58(), err: r.error }, "lookup table deactivate failed");
+    const retired = (await this.store?.getMeta<string[]>(`${this.metaKey}:alt-retired`)) ?? [];
+    await this.store?.setMeta(`${this.metaKey}:alt-retired`, [...new Set([...retired, table.toBase58()])]);
+  }
+
+  /** Close deactivated tables once their cool-down passed (refunds the rent to the keeper). */
+  private async closeRetiredAlts(): Promise<void> {
+    const retired = (await this.store?.getMeta<string[]>(`${this.metaKey}:alt-retired`)) ?? [];
+    if (!retired.length || this.cfg.dryRun) return;
+    const left: string[] = [];
+    for (const a of retired) {
+      const ix = AddressLookupTableProgram.closeLookupTable({ lookupTable: new PublicKey(a), authority: this.keeperKey, recipient: this.keeperKey });
+      const r = await this.sender.send("alt-close", { instructions: [ix] }, { retries: 0 });
+      if (!r.ok) left.push(a); // still cooling down: try on a later restart
+    }
+    await this.store?.setMeta(`${this.metaKey}:alt-retired`, left);
   }
 
   // ── graduation + setup ───────────────────────────────────────────────────
@@ -471,24 +616,49 @@ export class Keeper {
 
   async runQueues(): Promise<number> {
     const p = this.params!;
+    if (isPaused({ paused: this.paused, pauseExpiresAt: this.pauseExpiresAt }, PAUSE_CLAIMS, this.chainNow)) return 0; // v0.6: pauses lapse
     let n = 0;
     for (const c of this.coins.values()) {
       if (c.coin.status !== "graduated" || Date.now() - c.lastQueueAt < this.cfg.queueIntervalSecs * 1000) continue;
       c.lastQueueAt = Date.now();
+      if (c.queueSkip && c.queueSkip > 0) {
+        c.queueSkip--;
+        continue;
+      }
       const q = await this.client.claimQueue(c.mint);
       if (!q || q.len === 0) continue;
       const pool = await this.client.tokenBalance(coinAddresses(c.mint).rewardVault);
-      const cap = (pool * BigInt(coinRewardParams(c.coin, p).maxClaimPoolBps)) / BPS_DENOM; // M-1: per-coin cap
-      if (!q.entries.some((e) => e.amount > 0n && e.amount <= cap && e.amount <= pool)) continue;
+      // H-4: pass accounts for exactly the entries the program's walk will pay (v0.6 M-1: the
+      // coin's snapshotted per-claim cap).
+      const plan = planQueuePayments(q.entries, pool, coinRewardParams(c.coin, p).maxClaimPoolBps);
+      if (!plan.pay.length) continue;
       n += await this.guard(`queue:${c.mint.toBase58()}`, async () => {
-        const b = await this.client.buildProcessQueue({ cranker: this.keeperKey, mint: c.mint });
-        if (!b) return 0;
-        for (const ata of await this.client.buildCreateAtas({ payer: this.keeperKey, mint: c.mint, owners: b.owners })) {
-          const r = await this.sender.send("create_owner_atas", ata);
-          if (!r.ok) this.log.warn({ err: r.error }, "owner ATA creation failed; payout may escrow");
-        }
+        // No keeper-paid owner ATAs (H-4: an owner could close its ATA between runs and farm
+        // the rent). A missing/closed ATA makes the program escrow the payout; the escrow rent
+        // is refunded to the keeper by withdraw_escrow.
+        const b = {
+          instructions: [
+            ...computeBudgetIxs(CU.processQueue),
+            processQueueIx({ cranker: this.keeperKey, mint: c.mint, maxEntries: plan.pay.length, entries: plan.pay.map((e) => ({ ticket: e.ticket, owner: e.owner })) }),
+          ],
+        };
         const r = await this.sender.send("process_queue", b);
         if (!r.ok) throw new Error(`process_queue failed: ${r.error}`);
+        if (r.simulated) return 1;
+        const after = await this.client.claimQueue(c.mint);
+        const left = new Set((after?.entries ?? []).map((e) => e.ticket.toBase58()));
+        const paid = plan.pay.filter((e) => !left.has(e.ticket.toBase58())).length;
+        this.stats.queuePaid += paid;
+        if (paid === 0) {
+          this.stats.zeroPayRuns++;
+          c.queueBackoff = Math.min(32, (c.queueBackoff ?? 0) * 2 || 1);
+          c.queueSkip = c.queueBackoff;
+          await this.alerts.alert(`queue-zero-pay:${c.mint.toBase58()}`, `process_queue on ${c.mint.toBase58()} paid nothing (planned ${plan.pay.length}); backing off ${c.queueBackoff} runs`);
+        } else {
+          c.queueBackoff = 0;
+          this.alerts.resolve(`queue-zero-pay:${c.mint.toBase58()}`);
+        }
+        this.log.info({ mint: c.mint.toBase58(), planned: plan.pay.length, paid, signature: r.signature }, "queue processed");
         return 1;
       });
     }
@@ -585,6 +755,8 @@ export class Keeper {
     });
   }
 }
+
+const STARTED_AT = Date.now();
 
 function decodeCoinSafe(data: Uint8Array): CoinAccount | null {
   try {

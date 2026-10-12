@@ -7,6 +7,7 @@ import { Button, IconArrowLeft, IconCopy, IconDownload, IconX, Segmented, cx, us
 import { useViewer } from "../shell/Providers";
 import { type CardStyle, cardCopy, loudLabel, ogSrc, postText } from "./card";
 import s from "./Share.module.css";
+import { coinHref } from "@/components/coin/ident";
 
 export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string }) {
   const [style, setStyle] = useState<CardStyle>("flare");
@@ -50,7 +51,7 @@ export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string
           <h1 className={s.h1}>Share card</h1>
           <p className={s.lede}>
             1200 × 630, made for X. The ring is where it was sold; the needle is where it went.{" "}
-            <Link href={`/coin/${ticket.symbol}`} className={s.coin}>
+            <Link href={coinHref(ticket)} className={s.coin}>
               View ${ticket.symbol}
             </Link>
           </p>
@@ -68,7 +69,7 @@ export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string
       </div>
 
       <div className={s.stage}>
-        <Link href={`/coin/${ticket.symbol}`} className={cx(s.frame, !loaded[style] && s.loading)} aria-label={`$${ticket.symbol} coin page`}>
+        <Link href={coinHref(ticket)} className={cx(s.frame, !loaded[style] && s.loading)} aria-label={`$${ticket.symbol} coin page`}>
           {/* eslint-disable-next-line @next/next/no-img-element -- generated PNG from our own /og route */}
           <img
             key={style}

@@ -9,6 +9,7 @@ import * as f from "@/design/format";
 import { useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
+import { minOutFromQuote } from "@/chain/build";
 
 /** Solana's target slot time. */
 const SLOT_SECS = 0.4;
@@ -89,11 +90,17 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
 
   const submit = async () => {
     if (!quote || amount <= 0 || over) return;
+    // M-9: the slippage bound comes from the quote on screen, so it must be the quote for this amount and side.
+    if (quote.side !== side || quote.amountIn !== amount) {
+      toast("The price is updating. Check the quote and try again.");
+      return;
+    }
     const before = bal;
+    const minOut = minOutFromQuote(quote.amountOut);
     const res =
       side === "buy"
-        ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: quote.amountOut * 0.98, openTickets: [], expectedOut: quote.amountOut })
-        : await tx.sell({ mint: coin.mint, tokensIn: amount, minSolOut: quote.amountOut * 0.98, expectedOut: quote.amountOut });
+        ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: minOut, openTickets: [], expectedOut: quote.amountOut })
+        : await tx.sell({ mint: coin.mint, tokensIn: amount, minSolOut: minOut, expectedOut: quote.amountOut });
     if (!res) {
       toast(tx.lastError() ?? "The transaction didn't go through.");
       return;

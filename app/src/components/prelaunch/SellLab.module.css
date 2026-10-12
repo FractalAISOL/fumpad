@@ -1,0 +1,243 @@
+.lab {
+  display: grid;
+  gap: clamp(16px, 1.6vw, 28px);
+}
+.chart {
+  position: relative;
+  height: clamp(300px, 34vw, 640px);
+  touch-action: pan-y;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.chart[data-dragging] {
+  cursor: grabbing;
+}
+.svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.svg text {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 80;
+}
+.grid {
+  stroke: var(--rule);
+}
+.axis {
+  fill: var(--ink-3);
+}
+.grad {
+  stroke: var(--rule-2);
+  stroke-dasharray: 2 4;
+}
+.gradText {
+  fill: var(--ink-3);
+  font-family: var(--f-sans) !important;
+  font-variation-settings: "wdth" 100 !important;
+}
+.line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+.run {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0.1 6;
+}
+.hatchMark {
+  fill: var(--ink-3);
+  opacity: 0.3;
+}
+.lab[data-status="claim"] .hatchMark {
+  fill: var(--flare);
+  opacity: 0.4;
+}
+.ten {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.tenText {
+  fill: var(--ink-2);
+  font-weight: 600;
+}
+.lab[data-status="claim"] .ten {
+  stroke: var(--flare);
+}
+.lab[data-status="claim"] .tenText {
+  fill: var(--flare-text);
+}
+.dot {
+  fill: var(--flare);
+}
+
+/* The handle: an HTML element over the SVG so it can take focus and a big touch target. */
+.handle {
+  position: absolute;
+  left: -22px;
+  top: -22px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  touch-action: none;
+  will-change: transform;
+}
+.handle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+}
+.ring {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--canvas);
+  border: 3.5px solid var(--ink);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.chart[data-dragging] .ring,
+.handle:hover .ring {
+  transform: scale(1.18);
+}
+.handleLbl {
+  position: absolute;
+  top: 44px;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 560;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+.hint {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.amounts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.amounts legend {
+  float: left;
+  margin-right: 10px;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+.amount {
+  position: relative;
+}
+.amount input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.amount span {
+  display: inline-block;
+  padding: 7px 12px;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-2);
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 85;
+  font-size: 13px;
+  color: var(--ink-2);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.amount input:checked + span {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--on-ink);
+}
+.amount input:focus-visible + span {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.readouts {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  background: var(--rule);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+@media (min-width: 760px) {
+  .readouts {
+    grid-template-columns: 1fr 1fr 1.35fr;
+  }
+}
+.readouts > div {
+  background: var(--canvas);
+  padding: 16px 0;
+}
+@media (min-width: 760px) {
+  .readouts > div {
+    padding: 18px 20px 18px 0;
+  }
+  .readouts > div + div {
+    padding-left: 20px;
+  }
+}
+.readouts dt {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.readouts dd {
+  margin: 0;
+}
+.num {
+  margin-top: 6px !important;
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 85;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(17px, 1.5vw, 26px);
+  font-weight: 560;
+  letter-spacing: -0.02em;
+}
+.money {
+  color: var(--flare);
+}
+.small {
+  margin-top: 6px !important;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  max-width: 36em;
+}
+.note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 62em;
+}

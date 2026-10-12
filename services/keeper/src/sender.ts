@@ -34,10 +34,25 @@ export interface SenderOpts {
   priorityPercentile: number;
   priorityMinMicroLamports: number;
   priorityMaxMicroLamports: number;
+  /** Cap on one tx's priority fee in lamports (µ-lamports/CU × CU limit / 1e6). */
+  priorityMaxLamportsPerTx?: number;
+}
+
+/** CU limit a tx requests (SetComputeUnitLimit), else the runtime default 200k per instruction. */
+export function computeUnitLimit(ixs: TransactionInstruction[]): number {
+  const lim = ixs.find((i) => i.programId.equals(COMPUTE_BUDGET_PROGRAM_ID) && i.data[0] === 2 && i.data.length >= 5);
+  if (lim) return Buffer.from(lim.data).readUInt32LE(1);
+  return 200_000 * Math.max(1, ixs.filter((i) => !i.programId.equals(COMPUTE_BUDGET_PROGRAM_ID)).length);
+}
+
+/** M-7: clamp µ-lamports/CU so the whole tx pays at most `maxLamports` in priority fees. */
+export function capPriority(microLamports: number, cuLimit: number, maxLamports: number | undefined): number {
+  if (maxLamports === undefined || cuLimit <= 0) return microLamports;
+  return Math.max(0, Math.min(microLamports, Math.floor((maxLamports * 1_000_000) / cuLimit)));
 }
 
 export class Sender {
-  stats = { sent: 0, failed: 0, simulated: 0, lastPriority: 0 };
+  stats = { sent: 0, failed: 0, simulated: 0, lastPriority: 0, cappedPriority: 0 };
 
   constructor(private conn: Connection, private payer: Keypair, private opts: SenderOpts, private log: Logger) {}
 
@@ -63,7 +78,9 @@ export class Sender {
 
   async send(label: string, b: BuiltTx, o: { lookupTables?: AddressLookupTableAccount[]; retries?: number } = {}): Promise<SendResult> {
     const writable = [...new Map(b.instructions.flatMap((i) => i.keys.filter((k) => k.isWritable).map((k) => [k.pubkey.toBase58(), k.pubkey]))).values()];
-    const fee = await this.priorityFee(writable);
+    const want = await this.priorityFee(writable);
+    const fee = capPriority(want, computeUnitLimit(b.instructions), this.opts.priorityMaxLamportsPerTx);
+    if (fee < want) this.stats.cappedPriority++;
     const ixs = this.withPriority(b.instructions, fee);
     const retries = o.retries ?? 2;
     for (let attempt = 0; ; attempt++) {

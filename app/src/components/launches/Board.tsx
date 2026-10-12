@@ -31,6 +31,10 @@ import {
 } from "./model";
 import { usePersisted } from "./persist";
 import s from "./Board.module.css";
+import { coinHref, hasLookalikeChars } from "@/components/coin/ident";
+import { MintTag } from "@/components/coin/MintTag";
+import { minOutFromQuote } from "@/chain/build";
+import { FIRST_TIME_RENT, solLamports } from "@/chain/limits";
 
 /** Live data, and whether quick-buys go on chain (else they are simulated by the mock). */
 const LIVE_API = !!process.env.NEXT_PUBLIC_FUMPAD_API;
@@ -110,7 +114,7 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
   const pct = curveFraction(c, graduationSol) * 100;
   const target = graduationSol || graduationSolOf(c);
   const raised = c.status === "curve" ? c.curveSol : target;
-  const href = `/coin/${encodeURIComponent(c.symbol)}`;
+  const href = coinHref(c);
   const so = c.socials;
   return (
     <article className={cx(s.row, arrival && s.arrived)} data-mint={c.mint}>
@@ -120,6 +124,8 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
           <span className={cx("ticker", s.tk)}>${c.symbol}</span>
           <span className={s.full}>{c.name}</span>
         </Link>
+        {/* H-3: a symbol or name with non-ASCII look-alikes shows its mint right in the row. */}
+        {(hasLookalikeChars(c.symbol) || hasLookalikeChars(c.name)) && <MintTag mint={c.mint} />}
         {arrival && <span className={s.tag}>{arrival.kind === "graduated" ? "Graduated" : "Past 50%"}</span>}
         <Age ts={c.createdAt} />
       </div>
@@ -522,7 +528,8 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
       setBusyMint(c.mint);
       try {
         const quote = await data.quoteTrade({ mint: c.mint, side: "buy", amount, wallet: address });
-        const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: quote.amountOut * 0.98, openTickets: [], expectedOut: quote.amountOut });
+        // M-9: the bound is this quote (fetched on click) minus the slippage, not a later re-quote.
+        const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: minOutFromQuote(quote.amountOut), openTickets: [], expectedOut: quote.amountOut });
         if (res) toast(`Bought ${f.tokens(quote.amountOut)} ${c.symbol}.`);
         else toast(lastError() ?? "The buy didn't go through.");
       } catch {
@@ -548,7 +555,8 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
         : `Buying $${busyCoin.symbol}: preparing the transaction…`;
   const buyLabel = f.fixed(amount, amount < 1 ? (amount < 0.01 ? 3 : 2) : 1).replace(/\.?0+$/, "") || "0";
   // Instant only within the per-trade limit; above it the buy asks on screen first.
-  const instantBuy = instant && amount <= maxSol;
+  // The limit counts the fee and first-time account rent too (M-9, chain/limits.ts); the session cap can still ask.
+  const instantBuy = instant && solLamports(amount) + FIRST_TIME_RENT <= solLamports(maxSol);
 
   return (
     <div className={cx("wrap", s.page)}>

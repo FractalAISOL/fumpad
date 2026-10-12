@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { cx } from "../cx";
+import { safeImageSrc } from "../image";
 import { shortAddr } from "../format";
 import { IconCheck, IconCopy } from "./Icons";
 import s from "./Identity.module.css";
@@ -18,19 +19,25 @@ export function CoinTile({
   variant = 0,
   size = "md",
   imageUrl,
+  localPreview,
   className,
 }: {
   symbol: string;
   variant?: 0 | 1 | 2;
   size?: "sm" | "md" | "lg" | "xl";
+  /** Creator-supplied (coin metadata): only https / ipfs:// / ar:// render (L-1, `../image.ts`). */
   imageUrl?: string;
+  /** The launch form's own `blob:` preview of the file being uploaded. */
+  localPreview?: boolean;
   className?: string;
 }) {
+  const src = safeImageSrc(imageUrl, { allowBlob: localPreview });
+  const [failed, setFailed] = useState<string | null>(null);
   return (
     <span className={cx(s.tile, s[`t${variant}`], s[size], className)} aria-hidden="true">
-      {imageUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element -- user-supplied preview blob
-        <img src={imageUrl} alt="" className={s.tileImg} />
+      {src && failed !== src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- third-party URL, no optimizer proxy; no referrer leaves the page
+        <img src={src} alt="" className={s.tileImg} referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setFailed(src)} />
       ) : (
         symbol.slice(0, 2)
       )}

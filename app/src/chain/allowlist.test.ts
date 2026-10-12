@@ -69,6 +69,30 @@ describe("vetFumpadTx", () => {
     refused(() => vetFumpadTx(t, wallet, { action: "launch" }), /signers/);
   });
 
+  it("refuses a co-signature that doesn't verify (L-7)", () => {
+    const mintKp = Keypair.generate();
+    const ixs = [...cb(), createCoinIx({ creator: wallet, mint: mintKp.publicKey, name: "Pigeon", symbol: "PIGN", uri: "ipfs://x" })];
+    const policy = { action: "launch", coSigner: mintKp.publicKey.toBase58() } as const;
+    // Random bytes in the mint's slot: non-zero, but not a signature.
+    const forged = tx(ixs);
+    forged.signatures[1] = Uint8Array.from({ length: 64 }, (_, i) => (i * 37 + 11) & 255);
+    refused(() => vetFumpadTx(forged, wallet, policy), /signature doesn't match/);
+    // A real signature by the wrong key.
+    const wrongKey = tx(ixs);
+    const imposter = Keypair.generate();
+    const other = tx([...cb(), createCoinIx({ creator: wallet, mint: imposter.publicKey, name: "Pigeon", symbol: "PIGN", uri: "ipfs://x" })]);
+    other.sign([imposter]);
+    wrongKey.signatures[1] = other.signatures[1];
+    refused(() => vetFumpadTx(wrongKey, wallet, policy), /signature doesn't match/);
+    // The mint's real signature over a different message (replayed from another prepare).
+    const a = tx(ixs);
+    a.sign([mintKp]);
+    const b = tx([...cb(300_000), createCoinIx({ creator: wallet, mint: mintKp.publicKey, name: "Pigeon", symbol: "PIGN", uri: "ipfs://x" })]);
+    b.signatures[1] = a.signatures[1];
+    refused(() => vetFumpadTx(b, wallet, policy), /signature doesn't match/);
+    vetFumpadTx(a, wallet, policy);
+  });
+
   it("refuses a buy above the amount the user entered", () => {
     refused(() => vetFumpadTx(tx([...cb(), buy(SOL)]), wallet, { action: "buy", maxSolInLamports: SOL / BigInt(10) }), /more SOL/);
     // Two buys summed.

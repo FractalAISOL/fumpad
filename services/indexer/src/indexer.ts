@@ -17,6 +17,15 @@ import { heliusWebhookHandler, subscribeLogs } from "./sources/push.js";
 import { RpcSource } from "./sources/rpc.js";
 import { heartbeatKey, serviceInfo } from "./version.js";
 
+/** Log-safe RPC URL: origin only (keys can live in the path or query). */
+export function redactUrl(u: string): string {
+  try {
+    return new URL(u).origin;
+  } catch {
+    return "<invalid url>";
+  }
+}
+
 export class Indexer {
   readonly db: Db;
   readonly conn: Connection;
@@ -37,7 +46,7 @@ export class Indexer {
     this.log = log ?? createLogger("indexer", cfg.logLevel);
     this.db = createPool(cfg.databaseUrl);
     this.conn = new Connection(cfg.rpcUrl, { commitment: cfg.commitment, wsEndpoint: cfg.wsUrl, disableRetryOnRateLimit: false });
-    this.chainSync = new ChainSync(this.conn, this.db, this.log, { debounceMs: 500, fetchMetadata: cfg.fetchMetadata });
+    this.chainSync = new ChainSync(this.conn, this.db, this.log, { debounceMs: 500, fetchMetadata: cfg.fetchMetadata, metadataFetch: { ipfsGateway: cfg.ipfsGateway } });
     this.ingestor = new Ingestor({
       db: this.db,
       conn: this.conn,
@@ -47,7 +56,7 @@ export class Indexer {
       onParamsChanged: () => void this.reloadParams(),
     });
     this.rpc = new RpcSource(this.conn, this.db, this.ingestor, { commitment: cfg.commitment, pageSize: cfg.pageSize, backfillFromSlot: cfg.backfillFromSlot, reconcileDepth: cfg.reconcileDepth }, this.log);
-    this.finalizer = new Finalizer(this.conn, this.db, () => this.params, this.log);
+    this.finalizer = new Finalizer(this.conn, this.db, () => this.params, this.log, { dropMisses: cfg.finalizeDropMisses, dropAfterSecs: cfg.finalizeDropAfterSecs });
     this.deriver = new Deriver(this.conn, this.db, this.log, { fundingLookupsPerCycle: cfg.fundingLookupsPerCycle, claimWindowSecs: () => this.params.claimWindowSecs });
   }
 
@@ -59,7 +68,7 @@ export class Indexer {
     await migrate(this.db, (m) => this.log.info(m));
     await this.reloadParams();
     await this.rpc.ensureCursors();
-    this.log.info({ rpc: this.cfg.rpcUrl.replace(/api-key=[^&]+/, "api-key=***"), commitment: this.cfg.commitment }, "indexer starting");
+    this.log.info({ rpc: redactUrl(this.cfg.rpcUrl), commitment: this.cfg.commitment, webhook: this.cfg.webhookEnabled }, "indexer starting");
 
     const loop = (name: string, ms: number, fn: () => Promise<unknown>, firstDelay = 0) => {
       const tick = async () => {
@@ -82,11 +91,18 @@ export class Indexer {
     if (this.cfg.wsUrl) this.unsubscribe = subscribeLogs(this.conn, () => this.rpc.poke(), this.log);
 
     if (this.cfg.healthPort || this.cfg.webhookPort) {
-      const webhook = heliusWebhookHandler(this.ingestor, this.log, this.cfg.webhookSecret);
+      // Only mounted when enabled; config refuses to boot an enabled webhook without a secret.
+      const webhook =
+        this.cfg.webhookEnabled && this.cfg.webhookSecret
+          ? heliusWebhookHandler((sigs) => this.rpc.hint(sigs), this.log, { secret: this.cfg.webhookSecret, maxBodyBytes: this.cfg.webhookMaxBodyBytes })
+          : null;
       this.server = createServer((req, res) => {
-        if (req.method === "POST" && req.url?.startsWith("/helius")) return void webhook(req, res);
-        if (req.url?.startsWith("/health")) {
-          void this.health().then((h) => res.writeHead(h.ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify(h)));
+        if (webhook && req.method === "POST" && (req.url === "/helius" || req.url?.startsWith("/helius?"))) return void webhook(req, res);
+        if (req.method === "GET" && (req.url === "/health" || req.url?.startsWith("/health?"))) {
+          void this.health().then(
+            (h) => res.writeHead(h.ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify(h)),
+            () => res.writeHead(503).end(),
+          );
           return;
         }
         res.writeHead(404).end();

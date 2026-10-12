@@ -14,6 +14,7 @@
  *
  * No React, no `@/` imports: unit-tested by `allowlist.test.ts` with `npm test`.
  */
+import { ed25519 } from "@noble/curves/ed25519";
 import { ComputeBudgetProgram, PublicKey, SystemProgram, type VersionedTransaction } from "@solana/web3.js";
 import { FUMPAD_PROGRAM_ID } from "./program";
 
@@ -76,6 +77,15 @@ const startsWith = (d: Uint8Array, p: readonly number[]) => d.length >= p.length
 const u32 = (d: Uint8Array, o: number) => new DataView(d.buffer, d.byteOffset, d.byteLength).getUint32(o, true);
 const u64 = (d: Uint8Array, o: number) => new DataView(d.buffer, d.byteOffset, d.byteLength).getBigUint64(o, true);
 
+/** ed25519 verify; a malformed signature or key is simply invalid. */
+export function verifySignature(sig: Uint8Array, msg: Uint8Array, signer: PublicKey): boolean {
+  try {
+    return sig.length === 64 && ed25519.verify(sig, msg, signer.toBytes());
+  } catch {
+    return false;
+  }
+}
+
 interface Ix {
   program: PublicKey;
   keys: PublicKey[];
@@ -93,8 +103,16 @@ function open(tx: VersionedTransaction, wallet: PublicKey, coSigners: string[]):
   const signers = keys.slice(0, n);
   const others = signers.slice(1).map((k) => k.toBase58());
   if (others.length !== coSigners.length || others.some((k) => !coSigners.includes(k))) refuse("it asks for unexpected signers");
-  // Co-signers sign before us; a blank slot means someone wants our signature first.
-  for (let i = 1; i < n; i++) if (!tx.signatures[i] || tx.signatures[i].every((b) => b === 0)) refuse("a co-signer hasn't signed");
+  // Co-signers sign before us; a blank slot means someone wants our signature first. L-7: the
+  // signature must verify (ed25519 over these exact message bytes), not just be non-zero.
+  if (n > 1) {
+    const msg = m.serialize();
+    for (let i = 1; i < n; i++) {
+      const sig = tx.signatures[i];
+      if (!sig || sig.every((b) => b === 0)) refuse("a co-signer hasn't signed");
+      if (!verifySignature(sig, msg, keys[i])) refuse("a co-signer's signature doesn't match the transaction");
+    }
+  }
   const ixs = m.compiledInstructions.map((c) => {
     if (c.programIdIndex >= keys.length || c.accountKeyIndexes.some((i) => i >= keys.length)) refuse("it references accounts it doesn't list");
     return { program: keys[c.programIdIndex], keys: c.accountKeyIndexes.map((i) => keys[i]), data: c.data };

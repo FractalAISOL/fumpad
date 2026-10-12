@@ -12,13 +12,14 @@ import { coinAddresses, decodeCoin, decodePumpPool, decodeTokenAccount, priceQ64
 
 import type { Db } from "./db.js";
 import type { Logger } from "./log.js";
+import { safeFetch, SafeFetchError, type SafeFetchOptions } from "./safeFetch.js";
 
 export class ChainSync {
   private queue = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
   stats = { synced: 0, errors: 0 };
 
-  constructor(private conn: Connection, private db: Db, private log: Logger, private opts: { debounceMs: number; fetchMetadata: boolean }) {}
+  constructor(private conn: Connection, private db: Db, private log: Logger, private opts: { debounceMs: number; fetchMetadata: boolean; metadataFetch?: SafeFetchOptions }) {}
 
   enqueue(mints: string[]) {
     for (const m of mints) this.queue.add(m);
@@ -84,19 +85,26 @@ export class ChainSync {
     if (this.opts.fetchMetadata) await this.fetchMetadata(mint);
   }
 
+  /**
+   * Off-chain metadata JSON (M-3): any coin can carry any `uri`, so it is fetched under the
+   * SSRF policy (safeFetch: https/ipfs/ar only, public addresses only incl. every redirect
+   * hop, 64 KiB, 5 s). Only short strings are kept; failures store a coarse error code
+   * (never the network error text, which would map internal hosts/ports).
+   */
   private async fetchMetadata(mint: string) {
     const r = await this.db.query<{ uri: string; metadata: unknown }>("SELECT uri, metadata FROM coins WHERE mint = $1", [mint]);
     const row = r.rows[0];
-    if (!row || row.metadata || !/^https?:\/\//.test(row.uri)) return;
+    if (!row || row.metadata || !row.uri || !/^(https?|ipfs|ar):\/\//i.test(row.uri)) return;
     let meta: Record<string, unknown> = { fetchedAt: Date.now() };
     try {
-      const res = await fetch(row.uri, { signal: AbortSignal.timeout(3_000), redirect: "follow" });
-      const text = (await res.text()).slice(0, 64 * 1024);
-      const j = JSON.parse(text) as Record<string, unknown>;
+      const res = await safeFetch(row.uri, { timeoutMs: 5_000, maxBytes: 64 * 1024, maxRedirects: 3, ...this.opts.metadataFetch });
+      if (res.status !== 200) throw new SafeFetchError("http", "status");
+      const j = JSON.parse(res.body.toString("utf8")) as Record<string, unknown>;
+      if (!j || typeof j !== "object" || Array.isArray(j)) throw new SafeFetchError("http", "not an object");
       const pickStr = (k: string) => (typeof j[k] === "string" ? (j[k] as string).slice(0, 500) : undefined);
       meta = { ...meta, description: pickStr("description"), image: pickStr("image"), website: pickStr("website"), twitter: pickStr("twitter"), telegram: pickStr("telegram") };
     } catch (e) {
-      meta.error = String(e).slice(0, 200);
+      meta.error = e instanceof SafeFetchError ? e.code : e instanceof SyntaxError ? "invalid_json" : "failed";
     }
     await this.db.query("UPDATE coins SET metadata = $2 WHERE mint = $1", [mint, JSON.stringify(meta)]);
   }
