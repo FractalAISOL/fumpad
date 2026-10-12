@@ -10,7 +10,7 @@ import { FUMPAD_IDL, LP_LOCKER_IDL, fumpadCoder, idlInstruction } from "../src/c
 import { FUMPAD_PROGRAM_ID, PUMPSWAP_PROGRAM_ID } from "../src/constants.js";
 import * as I from "../src/instructions/index.js";
 import { DEFAULT_PARAMS } from "../src/params.js";
-import { coinAddresses, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, ticketPda } from "../src/pda.js";
+import { coinAddresses, coinAta, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, ticketPda } from "../src/pda.js";
 
 const k = () => Keypair.generate().publicKey;
 const user = k();
@@ -34,6 +34,8 @@ const built: Record<string, [TransactionInstruction, number]> = {
   graduate: [I.graduateIx({ payer: user, mint }), 0],
   register_holdings: [I.registerHoldingsIx({ user, mint, openTickets: [t1] }), 1],
   claim: [I.claimIx({ owner: user, mint, ticket: t1 }), 0],
+  claim_for: [I.claimForIx({ keeper: user, mint, ticket: t1, owner: k() }), 0],
+  set_auto_claim: [I.setAutoClaimIx({ wallet: user, mint, enabled: false }), 0],
   process_queue: [I.processQueueIx({ cranker: user, mint, maxEntries: 2, entries: [{ ticket: t1, owner: user }, { ticket: t2, owner: k() }] }), 8],
   close_ticket: [I.closeTicketIx({ caller: user, ticket: t1, owner: user, mint, queued: true }), 0],
   withdraw_creator_fees: [I.withdrawCreatorFeesIx({ creator: user, mint }), 0],
@@ -88,6 +90,21 @@ describe("instruction builders vs IDL", () => {
     expect(ix.keys[n + 1].pubkey.equals(positionPda(mint, user)).valueOf()).toBe(true);
     expect(ix.keys[n + 3].pubkey.equals(escrowPda(t1))).toBe(true);
     expect(ix.keys[n + 4].pubkey.equals(t2)).toBe(true);
+  });
+
+  it("claim_for (v0.4): position/ATA/escrow belong to the ticket owner, keeper signs (16 accounts)", () => {
+    const owner = k();
+    const ix = I.claimForIx({ keeper: user, mint, ticket: t1, owner });
+    const names = idlInstruction(FUMPAD_IDL, "claim_for").accounts.map((a) => a.name);
+    expect(names.length).toBe(16);
+    const at = (n: string) => ix.keys[names.indexOf(n)];
+    expect(at("keeper").pubkey.equals(user) && at("keeper").isSigner).toBe(true);
+    expect(at("position").pubkey.equals(positionPda(mint, owner))).toBe(true);
+    expect(at("owner_ata").pubkey.equals(coinAta(owner, mint))).toBe(true);
+    expect(at("escrow").pubkey.equals(escrowPda(t1))).toBe(true);
+    const sa = I.setAutoClaimIx({ wallet: owner, mint, enabled: true });
+    expect(sa.keys[1].pubkey.equals(positionPda(mint, owner))).toBe(true);
+    expect((fumpadCoder().instruction.decode(sa.data)!.data as { enabled: boolean }).enabled).toBe(true);
   });
 
   it("graduate uses its own WSOL PDA", () => {

@@ -200,3 +200,35 @@
 .done {
   margin-top: var(--s-8);
 }
+
+/* D18: the coin's address, `…fmbL` suffix set apart by weight + underline (orange is for money). */
+.mintBox {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-2);
+  background: var(--sunken);
+  display: grid;
+  gap: var(--s-2);
+}
+.mintLabel {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-2);
+}
+.mintAddr {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  word-break: break-all;
+  line-height: 1.45;
+}
+.mintSuffix {
+  color: var(--ink);
+  font-weight: var(--w-heavy);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}

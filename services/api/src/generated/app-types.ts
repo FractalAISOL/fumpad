@@ -54,7 +54,7 @@ export interface CoinSummary {
 export interface CoinDetail extends CoinSummary {
   description: string;
   links: { label: string; href: string }[];
-  /** Tokens seeded to the pool at launch (5% of supply). */
+  /** Tokens seeded to the pool at launch (8% of supply). */
   poolSeeded: number;
   poolBought24h: number;
   poolPaidOut: number;
@@ -147,6 +147,10 @@ export interface Ticket {
   claimTx?: string;
   /** Debits applied by rebuys within 7 days. */
   rebuyDebited: number;
+  /** D17: the keeper may claim this coin's tickets for the owner (per coin; on unless opted out). */
+  autoClaim: boolean;
+  /** The keeper claimed (or queued) this ticket on the owner's behalf. */
+  autoClaimed?: boolean;
 }
 
 /* ── Queue ─────────────────────────────────────────────────────────────────── */
@@ -275,6 +279,8 @@ export interface FeedClaim extends FeedBase {
   sol: number;
   fromQueue: boolean;
   skippedAhead: boolean;
+  /** D17: paid by the keeper's auto-claim, not a click. */
+  auto?: boolean;
 }
 export type FeedEvent = FeedLaunch | FeedFumble | FeedCross | FeedGraduation | FeedClaim;
 

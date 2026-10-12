@@ -79,7 +79,16 @@ export const MIN_COVERED_BUCKETS = 5;
 export const MAX_QUEUE_ENTRIES_PER_TX = 13;
 export const MAX_KEEPERS = 3;
 export const OBSERVATION_CAPACITY = 256;
-export const CLAIM_QUEUE_CAPACITY = 256;
+/** D17 (v0.4): 1024 entries (was 256). */
+export const CLAIM_QUEUE_CAPACITY = 1024;
+/** ClaimQueue account size: 8 disc + 48 header + 80 × capacity = 81,976 bytes. */
+export const CLAIM_QUEUE_ACCOUNT_SIZE = 8 + 48 + 80 * CLAIM_QUEUE_CAPACITY;
+/** `init_claim_queue` grows the account ≤ 10 KiB per call: 9 calls (one tx) for 1024 entries. */
+export const CLAIM_QUEUE_INIT_CALLS = Math.ceil(CLAIM_QUEUE_ACCOUNT_SIZE / 10_240);
+/** Global.paused flag bits (state/global.rs). */
+export const PAUSE_LAUNCH = 1;
+export const PAUSE_TRADE = 2;
+export const PAUSE_CLAIMS = 4;
 export const MAX_SAMPLE_COINS = 10;
 /** Coins per legacy `record_samples` tx (5 accounts each); more needs v0 + ALT. */
 export const MAX_SAMPLE_COINS_LEGACY = 5;
@@ -132,7 +141,11 @@ export const CU = {
   claim: 200_000,
   processQueue: 450_000, // 13 entries: ~245k paying, ~323k escrowing
   skimSettle: 200_000,
-  initClaimQueue: 100_000,
+  /** Per call; 9 calls measured at ~69k total (v0.4 cu_report). */
+  initClaimQueue: 12_000,
+  /** claim_for 74–87k measured + keeper-paid idempotent ATA create. */
+  claimFor: 160_000,
+  setAutoClaim: 30_000,
   initObservations: 60_000,
   default: 200_000,
 } as const;

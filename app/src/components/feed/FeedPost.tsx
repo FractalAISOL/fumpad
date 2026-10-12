@@ -70,6 +70,11 @@ function body(e: FeedEvent): ReactNode {
         <>
           Queued claim for {f.tokens(e.tokens)} <Tick e={e} /> just paid. The pool grew into it.
         </>
+      ) : e.auto ? (
+        <>
+          Auto-claimed {f.tokens(e.tokens)} <Tick e={e} /> while I wasn&apos;t looking. The keeper clicked the button for me.{" "}
+          {pickLine(e.id, ["Didn't even have to watch the chart.", "Slept through my own comeback.", "Fumbled the sell, not the claim."])}
+        </>
       ) : (
         <>
           Claimed {f.tokens(e.tokens)} <Tick e={e} />. Paid in the same transaction.{" "}
@@ -86,7 +91,7 @@ function body(e: FeedEvent): ReactNode {
     case "launch":
       return (
         <>
-          Launched <Tick e={e} />. 5% of supply already sits in its fumble pool. Sell it early, I dare you.
+          Launched <Tick e={e} />. 8% of supply already sits in its fumble pool. Sell it early, I dare you.
         </>
       );
   }

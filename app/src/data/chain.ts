@@ -11,11 +11,11 @@ const Q64 = BigInt(1) << BigInt(64);
 /** Program defaults from `constants.rs`. Live values come from the `Global` account. */
 export const PARAMS = {
   totalSupply: 1_000_000_000,
-  rewardPoolSupply: 50_000_000,
-  curveSupply: 753_448_275.862069,
-  lpSupply: 196_551_724.137931,
+  rewardPoolSupply: 80_000_000,
+  curveSupply: 729_655_172.413793,
+  lpSupply: 190_344_827.586207,
   initialVirtualSol: 30,
-  initialVirtualTokens: 1_019_371_196.754564,
+  initialVirtualTokens: 987_180_527.383367,
   graduationSol: 85,
   feeBps: 100,
   feePoolShareBps: 5_000,

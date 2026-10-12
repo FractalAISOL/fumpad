@@ -17,6 +17,21 @@ export interface ApiConfig {
   /** Pyth SOL/USD PriceUpdateV2 account. */
   pythAccount?: string;
   logLevel: string;
+  // ── D18 vanity launches (POST /v1/launch/prepare) ─────────────────────────
+  /** AES-256-GCM key for pooled mint secrets (same as the grinder's). Unset = launches disabled. */
+  mintPoolKey?: string;
+  vanitySuffix: string;
+  /** A reservation returns to the pool after this long if its launch never landed. */
+  launchReservationMs: number;
+  launchSweepMs: number;
+  /** Per-IP prepare requests per minute. */
+  launchRateLimitPerMin: number;
+  /** Per-wallet prepare requests per minute. */
+  launchWalletLimitPerMin: number;
+  /** Active reservations one IP may hold (pool-drain guard). */
+  launchMaxActivePerIp: number;
+  launchMaxInitialBuyLamports: bigint;
+  launchMaxPriorityMicroLamports: number;
 }
 
 export function loadApiConfig(env = process.env): ApiConfig {
@@ -34,5 +49,14 @@ export function loadApiConfig(env = process.env): ApiConfig {
     solUsdFallback: Number(env.SOL_USD_FALLBACK ?? 150),
     pythAccount: env.PYTH_SOL_USD_ACCOUNT || undefined,
     logLevel: env.LOG_LEVEL ?? "info",
+    mintPoolKey: env.MINT_POOL_KEY || undefined,
+    vanitySuffix: env.VANITY_SUFFIX || "fmbL",
+    launchReservationMs: Math.round(Number(env.LAUNCH_RESERVATION_MINUTES ?? 10) * 60_000),
+    launchSweepMs: Number(env.LAUNCH_SWEEP_SECS ?? 15) * 1000,
+    launchRateLimitPerMin: Number(env.LAUNCH_RATE_LIMIT_PER_MIN ?? 10),
+    launchWalletLimitPerMin: Number(env.LAUNCH_WALLET_LIMIT_PER_MIN ?? 6),
+    launchMaxActivePerIp: Number(env.LAUNCH_MAX_ACTIVE_PER_IP ?? 3),
+    launchMaxInitialBuyLamports: BigInt(env.LAUNCH_MAX_INITIAL_BUY_LAMPORTS ?? "100000000000"),
+    launchMaxPriorityMicroLamports: Number(env.LAUNCH_MAX_PRIORITY_MICROLAMPORTS ?? 5_000_000),
   };
 }

@@ -151,6 +151,11 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
            VALUES ($1,$2,$3,$4,$5,$6,$7,'curve',$8,$9,0,$10,$11,$12,$11,$13,$13) ON CONFLICT (mint) DO NOTHING`,
           [mint, b58(d.creator), d.name, d.symbol, d.uri, s(d.ts), ctx.signature, s(p.initialVirtualSol), s(p.initialVirtualToken), s(realTokens), s(priceQ64(p.initialVirtualSol, p.initialVirtualToken)!), ctx.slot, s(p.rewardPoolSupply)],
         );
+        // D18: a pooled vanity mint is spent for good — mark it used and wipe its secret.
+        await c.query(
+          `UPDATE vanity_mints SET status = 'used', used_tx = $2, used_at = now(), secret_enc = NULL WHERE pubkey = $1 AND status <> 'used'`,
+          [mint, ctx.signature],
+        );
         await upsertUser(ctx, b58(d.creator), d.ts);
         await feed(ctx, `${id}:launch`, "launch", d.ts, mint, b58(d.creator), { poolTokens: baseToTokens(p.rewardPoolSupply) });
         ctx.touched.add(mint);
@@ -292,10 +297,12 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const mint = b58(d.mint);
         const ticket = b58(d.ticket);
         const t = await c.query<{ sell_ts: string }>("SELECT sell_ts FROM tickets WHERE ticket = $1", [ticket]);
-        await c.query("UPDATE tickets SET status = 'queued', queued_at = $2, claim_amount = $3 WHERE ticket = $1", [ticket, s(d.ts), s(d.amount)]);
+        const by = b58(d.triggeredBy);
+        const auto = by !== b58(d.owner);
+        await c.query("UPDATE tickets SET status = 'queued', queued_at = $2, claim_amount = $3, auto_claimed = $4, crossed_at = COALESCE(crossed_at, $2) WHERE ticket = $1", [ticket, s(d.ts), s(d.amount), auto]);
         const ins = await c.query(
-          "INSERT INTO queue_entries (ticket, mint, owner, amount, sell_ts, queued_at) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (ticket) DO NOTHING",
-          [ticket, mint, b58(d.owner), s(d.amount), t.rows[0]?.sell_ts ?? s(d.ts), s(d.ts)],
+          "INSERT INTO queue_entries (ticket, mint, owner, amount, sell_ts, queued_at, triggered_by) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (ticket) DO NOTHING",
+          [ticket, mint, b58(d.owner), s(d.amount), t.rows[0]?.sell_ts ?? s(d.ts), s(d.ts), by],
         );
         if (ins.rowCount) await c.query("UPDATE coins SET queue_owed = queue_owed + $2 WHERE mint = $1", [mint, s(d.amount)]);
         ctx.touched.add(mint);
@@ -313,15 +320,20 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           ? await c.query("SELECT 1 FROM queue_entries WHERE mint = $1 AND ticket <> $2 AND (sell_ts < $3 OR (sell_ts = $3 AND ticket < $2)) LIMIT 1", [mint, ticket, tr.sell_ts])
           : { rowCount: 0 };
         const skipped = !!older.rowCount;
+        const by = b58(d.triggeredBy);
+        // v0.4: a keeper's claim_for paid it directly (queue payouts are always cranked).
+        const auto = by !== owner && !d.fromQueue;
         const ins = await c.query(
-          `INSERT INTO claims (signature, idx, mint, ticket, owner, amount, from_queue, skipped_ahead, median_q64, sell_price_q64, ts)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
-          [ctx.signature, e.index, mint, ticket, owner, s(d.amount), d.fromQueue, skipped, s(d.medianPriceQ64), tr?.sell_price_q64 ?? null, s(d.ts)],
+          `INSERT INTO claims (signature, idx, mint, ticket, owner, amount, from_queue, skipped_ahead, median_q64, sell_price_q64, ts, triggered_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING`,
+          [ctx.signature, e.index, mint, ticket, owner, s(d.amount), d.fromQueue, skipped, s(d.medianPriceQ64), tr?.sell_price_q64 ?? null, s(d.ts), by],
         );
         if (!ins.rowCount) break;
         await c.query(
-          "UPDATE tickets SET status = 'claimed', claimed_at = $2, claim_sig = $3, claim_amount = $4, claim_median_q64 = $5 WHERE ticket = $1",
-          [ticket, s(d.ts), ctx.signature, s(d.amount), s(d.medianPriceQ64)],
+          // A claim proves the covered median held the trigger (coverage can complete by time alone,
+          // between samples, so the sample-driven cross detection may not have fired yet).
+          "UPDATE tickets SET status = 'claimed', claimed_at = $2, claim_sig = $3, claim_amount = $4, claim_median_q64 = $5, auto_claimed = auto_claimed OR $6, crossed_at = COALESCE(crossed_at, $2) WHERE ticket = $1",
+          [ticket, s(d.ts), ctx.signature, s(d.amount), s(d.medianPriceQ64), auto],
         );
         await removeFromQueue(ctx, ticket, mint);
         await c.query(
@@ -338,6 +350,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           sol: baseToTokens(d.amount) * q64ToSolPerToken(d.medianPriceQ64),
           fromQueue: d.fromQueue,
           skippedAhead: skipped,
+          auto,
         });
         await upsertUser(ctx, owner, d.ts);
         ctx.touched.add(mint);
@@ -423,9 +436,10 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const owner = b58(d.owner);
         const t = await c.query<{ sell_price_q64: string; status: string }>("SELECT sell_price_q64, status FROM tickets WHERE ticket = $1", [ticket]);
         const ins = await c.query(
-          `INSERT INTO claims (signature, idx, mint, ticket, owner, amount, from_queue, escrowed, median_q64, sell_price_q64, ts)
-           VALUES ($1,$2,$3,$4,$5,$6,true,true,0,$7,$8) ON CONFLICT DO NOTHING`,
-          [ctx.signature, e.index, mint, ticket, owner, s(d.amount), t.rows[0]?.sell_price_q64 ?? null, s(d.ts)],
+          `INSERT INTO claims (signature, idx, mint, ticket, owner, amount, from_queue, escrowed, median_q64, sell_price_q64, ts, triggered_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,true,0,$8,$9,$10) ON CONFLICT DO NOTHING`,
+          // v0.4: claim_for can escrow directly (owner ATA refused), not only process_queue.
+          [ctx.signature, e.index, mint, ticket, owner, s(d.amount), t.rows[0]?.status === "queued", t.rows[0]?.sell_price_q64 ?? null, s(d.ts), b58(d.triggeredBy)],
         );
         if (!ins.rowCount) break;
         await c.query("UPDATE tickets SET status = 'escrowed', claim_amount = $2, claimed_at = $3, claim_sig = $4, escrow = $5 WHERE ticket = $1", [ticket, s(d.amount), s(d.ts), ctx.signature, b58(d.escrow)]);
@@ -434,6 +448,17 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           `UPDATE coins SET pool_tokens = GREATEST(pool_tokens - $2::numeric, 0), pool_paid_out = pool_paid_out + $2,
              tickets_open = CASE WHEN $3 THEN GREATEST(tickets_open - 1, 0) ELSE tickets_open END WHERE mint = $1`,
           [mint, s(d.amount), t.rows[0] ? t.rows[0].status === "open" || t.rows[0].status === "queued" : false],
+        );
+        ctx.touched.add(mint);
+        break;
+      }
+      case "AutoClaimSet": {
+        const d = e.data;
+        const mint = b58(d.mint);
+        await c.query(
+          `INSERT INTO positions (mint, wallet, auto_claim_opt_out, first_ts, last_ts) VALUES ($1, $2, $3, $4, $4)
+           ON CONFLICT (mint, wallet) DO UPDATE SET auto_claim_opt_out = EXCLUDED.auto_claim_opt_out`,
+          [mint, b58(d.wallet), !d.enabled, s(d.ts)],
         );
         ctx.touched.add(mint);
         break;

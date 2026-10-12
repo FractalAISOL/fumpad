@@ -285,7 +285,7 @@ export function CoinView({
                     { k: "Largest single claim, 10% of pool", v: <Tokens value={coin.poolTokens * 0.1} /> },
                     { k: "Bought back, 24h", v: <Tokens value={coin.poolBought24h} signed /> },
                     { k: "Paid out, all time", v: <Tokens value={coin.poolPaidOut} /> },
-                    { k: "Seeded at launch, 5%", v: <Tokens value={coin.poolSeeded} /> },
+                    { k: "Seeded at launch, 8%", v: <Tokens value={coin.poolSeeded} /> },
                   ]}
                 />
                 <p className={s.splitLabel}>Where each 1% trade fee goes</p>
@@ -308,7 +308,7 @@ export function CoinView({
             <Panel aria-labelledby="pool-h">
               <PanelHead id="pool-h" title="Reward pool" aside="filling" />
               <PanelBody>
-                <Stat label="5% seeded at launch, plus curve-fee buybacks">
+                <Stat label="8% seeded at launch, plus curve-fee buybacks">
                   <Tokens value={coin.poolTokens} size="xl" symbol={coin.symbol} />
                 </Stat>
                 <KV

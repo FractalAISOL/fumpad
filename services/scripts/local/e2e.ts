@@ -14,19 +14,29 @@
  * coins with a v0 tx + lookup table). Then every API endpoint is checked against chain
  * facts, and the WebSocket must have delivered the feed live.
  */
-import { Connection, Keypair, LAMPORTS_PER_SOL, SystemProgram, TransactionInstruction } from "@solana/web3.js";
+import { randomBytes } from "node:crypto";
+
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, TransactionInstruction, VersionedTransaction } from "@solana/web3.js";
 
 import {
   coinAddresses,
   coinAta,
   decodeTransactionEvents,
+  confirmSignature,
   FumpadClient,
+  inspectLaunchTx,
+  isFumpadVanityMint,
+  tokenDeltas,
   TOKEN_2022_PROGRAM_ID,
   type TxLike,
 } from "@fumpad/sdk";
 
 import { airdrop, directPumpBuy, initGlobal, LOCAL_PARAMS, tokenBalance } from "./actors.js";
-import { keypair, keypairPath, type Postgres, type Service, sleep, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
+import bs58 from "bs58";
+
+import { createPool, migrate } from "@fumpad/indexer";
+
+import { buildGrinder, keypair, keypairPath, type Postgres, type Service, sleep, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
 
 export interface E2EReport {
   ok: boolean;
@@ -42,7 +52,9 @@ export interface E2EReport {
 
 const SOL = BigInt(LAMPORTS_PER_SOL);
 
-export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (s: string) => void; extraCoins?: number } = {}): Promise<E2EReport> {
+export async function runE2E(
+  opts: { rpcPort?: number; apiPort?: number; log?: (s: string) => void; extraCoins?: number; vanityPoolTarget?: number; grinderThreads?: number } = {},
+): Promise<E2EReport> {
   const log = opts.log ?? ((s: string) => console.log(s));
   const t0 = Date.now();
   const rpcPort = opts.rpcPort ?? 8899;
@@ -69,6 +81,21 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
   try {
     log("▶ starting Postgres + solana-test-validator");
     pg = await startPostgres();
+    // D18: the grinder starts first (it needs ~11.3M tries per `fmbL` key), against a
+    // migrated DB, so the pool has a key by the time the scenario launches through the API.
+    const mdb = createPool(pg.url, 2);
+    await migrate(mdb);
+    await mdb.end();
+    const mintPoolKey = randomBytes(32).toString("hex");
+    services.push(
+      startBinary("grinder", buildGrinder(), [], {
+        DATABASE_URL: pg.url,
+        MINT_POOL_KEY: mintPoolKey,
+        POOL_TARGET: String(opts.vanityPoolTarget ?? 2),
+        POOL_POLL_SECS: "2",
+        GRINDER_THREADS: String(opts.grinderThreads ?? 6),
+      }),
+    );
     const auth = keypair("upgrade-authority");
     v = await startValidator({ rpcPort, upgradeAuthority: auth });
     const conn = new Connection(v.rpcUrl, "confirmed");
@@ -95,7 +122,9 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     const common = { DATABASE_URL: pg.url, RPC_URL: v.rpcUrl, LOG_LEVEL: "info" };
     services.push(startService("indexer", "indexer/src/main.ts", { ...common, WS_URL: v.wsUrl, PORT: String(indexerPort), POLL_INTERVAL_MS: "1000", FINALIZE_INTERVAL_MS: "5000", DERIVE_INTERVAL_MS: "2000", RECONCILE_INTERVAL_MS: "15000", FETCH_METADATA: "false" }));
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${indexerPort}/health`)).ok, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, LOG_LEVEL: "warn", PORT: String(apiPort), SOL_USD_FALLBACK: "150", RATE_LIMIT_ALLOW: "127.0.0.1" }));
+    services.push(
+      startService("api", "api/src/main.ts", { ...common, LOG_LEVEL: "info", PORT: String(apiPort), SOL_USD_FALLBACK: "150", RATE_LIMIT_ALLOW: "127.0.0.1", MINT_POOL_KEY: mintPoolKey, LAUNCH_SWEEP_SECS: "5" }),
+    );
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
@@ -116,6 +145,7 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
         PLATFORM_FEES_INTERVAL_SECS: "20",
         PRIORITY_MIN_MICROLAMPORTS: "1000",
         MIN_KEEPER_LAMPORTS: "1000000000",
+        AUTOCLAIM_INTERVAL_SECS: "3",
       }),
     );
     await waitFor("keeper health", async () => (await fetch(`http://127.0.0.1:${keeperPort}/health`)).status > 0, 60_000);
@@ -129,10 +159,35 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     await waitFor("ws open", async () => ws!.readyState === 1, 10_000);
 
     // ── curve phase ──────────────────────────────────────────────────────────
-    const mintKp = Keypair.generate();
-    const mint = mintKp.publicKey;
-    const M = mint.toBase58();
-    await c.send(creator, await c.buildLaunch({ creator: creator.publicKey, mint: mintKp, name: "Fumble", symbol: "FUMB", uri: "https://fumpad.fun/m/fumb.json", initialBuyLamports: SOL / 2n }));
+    // D18: launch exactly like the app — POST /v1/launch/prepare, the wallet signs as fee
+    // payer/creator, the mint signature comes from the server's pre-ground `…fmbL` pool.
+    const pooled = await waitFor("grinder: a …fmbL mint in the pool", async () => {
+      const h = await get<{ vanityPool: { available: number; reserved: number } | null }>("/health");
+      return h.vanityPool && h.vanityPool.available + h.vanityPool.reserved > 0 ? h.vanityPool : null;
+    }, 600_000, 2_000);
+    log(`✓ vanity pool ready (${JSON.stringify(pooled)})`);
+    const prep = await fetch(`${api}/v1/launch/prepare`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ creator: creator.publicKey.toBase58(), name: "Fumble", symbol: "FUMB", uri: "https://fumpad.fun/m/fumb.json", initialBuyLamports: String(SOL / 2n) }),
+    });
+    if (!prep.ok) throw new Error(`prepare → ${prep.status} ${await prep.text()}`);
+    const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number };
+    const launchTx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
+    const launchInfo = inspectLaunchTx(launchTx);
+    check("prepare: server-built create_coin+buy, creator pays, only the mint has signed", launchInfo.feePayer === creator.publicKey.toBase58() && launchInfo.signed.join() === prepared.mint && !!launchInfo.buySolIn && launchInfo.buySolIn <= SOL / 2n, `first buy ${launchInfo.buySolIn} lamports`);
+    launchTx.sign([creator]);
+    const launchRaw = launchTx.serialize();
+    const launchSig = await conn.sendRawTransaction(launchRaw, { maxRetries: 0 });
+    await confirmSignature(conn, launchSig, prepared.lastValidBlockHeight, "confirmed", launchRaw);
+    const M = prepared.mint;
+    const mint = new PublicKey(M);
+    check("launch through the API → mint address ends in fmbL (D18)", isFumpadVanityMint(mint) && M.endsWith("fmbL") && !!(await c.coin(mint)), M);
+    const used = await waitFor("indexer marks the vanity mint used", async () => {
+      const r = await queryRows<{ status: string; used_tx: string | null; wiped: boolean }>(pg!.url, `SELECT status, used_tx, secret_enc IS NULL AS wiped FROM vanity_mints WHERE pubkey = '${M}'`);
+      return r[0]?.status === "used" ? r[0] : null;
+    }, 60_000);
+    check("indexer marked the pooled mint used on CoinCreated and wiped its secret", used.used_tx === launchSig && used.wiped);
     // Tickets must be ≥ 10x by graduation (curve start→graduation ≈ 14.7x), so the
     // sellers exit early: keep virtual SOL ≲ 36 at sell time.
     const buy = async (k: Keypair, sol: bigint) => c.send(k, await c.buildBuy({ user: k.publicKey, mint, budgetLamports: sol * SOL }));
@@ -143,8 +198,9 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
       const tx = await conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
       return { sig, events: decodeTransactionEvents(tx as unknown as TxLike), ticket: b.ticket };
     };
-    await buy(alice, 2n);
-    await buy(eve, 3n);
+    // D17 (8% pool): eve buys enough that her claim stays > 10% of the pool (queued).
+    await buy(alice, 1n);
+    await buy(eve, 4n);
     await sleep(3_500); // > min_hold_secs (2 s) on the chain clock
     const aliceSell = await sellPart(alice, 1n, 2n);
     const eveSell = await sellPart(eve, 19n, 20n);
@@ -159,6 +215,9 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     check("curve sells create tickets (matured, ≥ $50)", [aliceSell, eveSell, carolSell, daveSell].every((s) => s.events.some((e) => e.name === "TicketCreated")));
     const bobTx = await conn.getTransaction(bobTiny, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
     check("sell under $50 files no ticket", !decodeTransactionEvents(bobTx as unknown as TxLike).some((e) => e.name === "TicketCreated"));
+    // D17: auto-claim is on by default; eve opts out on this coin and will claim by hand.
+    await c.send(eve, c.buildSetAutoClaim({ wallet: eve.publicKey, mint, enabled: false }));
+    check("set_auto_claim(false): eve's Position opted out of keeper auto-claim", (await c.position(mint, eve.publicKey))?.autoClaimOptOut === 1);
 
     for (let i = 0; i < 20; i++) {
       const coin = await c.coin(mint);
@@ -173,19 +232,30 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     await waitFor("observations + queue initialised by keeper", async () => !!(await c.observations(mint)) && !!(await c.claimQueue(mint)), 60_000);
     await waitFor("keeper median (5-of-6 bucket coverage)", async () => (await get<{ median?: number }>(`/v1/coins/${M}`)).median !== undefined, 150_000, 2_000);
     check("keeper sampled to a valid median (keeper-only, time-spread)", true);
+    // ── claims ───────────────────────────────────────────────────────────────
+    // D17: alice left auto-claim on → the keeper claims for her (claim_for) as soon as the
+    // covered keeper median holds 10× her ticket price; payout lands in her own ATA.
     let lastSeen = "";
-    const aliceTicket = await waitFor("alice ticket claimable in API", async () => {
-      const t = await get<{ id: string; state: string; multiple: number }[]>(`/v1/wallets/${alice.publicKey.toBase58()}/tickets`);
-      const s = JSON.stringify(t.map((x) => [x.state, x.multiple]));
+    const aliceAuto = await waitFor("keeper auto-claims alice's ticket", async () => {
+      const t = await get<{ id: string; state: string; multiple: number; autoClaimed?: boolean; claimTx?: string }[]>(`/v1/wallets/${alice.publicKey.toBase58()}/tickets`);
+      const s = JSON.stringify(t.map((x) => [x.state, x.multiple, x.autoClaimed]));
       if (s !== lastSeen) log(`    alice tickets: ${(lastSeen = s)}`);
+      return t.find((x) => x.state === "claimed");
+    }, 120_000);
+    const autoRow = (await queryRows<{ triggered_by: string; auto: boolean; signature: string; from_queue: boolean }>(pg.url, `SELECT triggered_by, auto, signature, from_queue FROM claims WHERE ticket = '${aliceSell.ticket.toBase58()}'`))[0];
+    const claimSig = autoRow?.signature;
+    const claimTx = (await conn.getTransaction(claimSig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" })) as unknown as TxLike;
+    const paidEv = decodeTransactionEvents(claimTx).find((e) => e.name === "ClaimPaid");
+    const paid = paidEv?.data as { triggeredBy: PublicKey; owner: PublicKey; amount: bigint } | undefined;
+    check("keeper auto-claim: claim_for emitted ClaimPaid triggered_by the keeper, paid now (not queued)", !!paid && paid.triggeredBy.equals(keeper.publicKey) && paid.owner.equals(alice.publicKey) && !autoRow.from_queue, `${claimSig.slice(0, 12)}…`);
+    const aliceDelta = tokenDeltas(claimTx, M).get(alice.publicKey.toBase58()) ?? 0n;
+    check("auto-claim payout landed in alice's own ATA", !!paid && aliceDelta === paid.amount, `${aliceDelta} base units`);
+    check("indexer/API: claim marked auto, ticket autoClaimed", autoRow.auto && aliceAuto.autoClaimed === true);
+    const eveT = await waitFor("eve ticket claimable (opted out, not auto-claimed)", async () => {
+      const t = await get<{ state: string; autoClaim: boolean; multiple: number }[]>(`/v1/wallets/${eve.publicKey.toBase58()}/tickets`);
       return t.find((x) => x.state === "claimable");
     }, 60_000);
-    check("API derives ticket state 'claimable' (median ≥ 10× ticket price)", true, `multiple ${aliceTicket.multiple.toFixed(2)}×`);
-
-    // ── claims ───────────────────────────────────────────────────────────────
-    const claimSig = await c.send(alice, c.buildClaim({ owner: alice.publicKey, mint, ticket: aliceSell.ticket }));
-    const claimEv = decodeTransactionEvents((await conn.getTransaction(claimSig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" })) as unknown as TxLike);
-    check("alice claim paid immediately (ClaimPaid)", claimEv.some((e) => e.name === "ClaimPaid"));
+    check("API: eve's ticket 'claimable' with autoClaim off (keeper skipped it)", eveT.autoClaim === false, `multiple ${eveT.multiple.toFixed(2)}×`);
     const eveClaim = await c.send(eve, c.buildClaim({ owner: eve.publicKey, mint, ticket: eveSell.ticket }));
     const eveEv = decodeTransactionEvents((await conn.getTransaction(eveClaim, { maxSupportedTransactionVersion: 0, commitment: "confirmed" })) as unknown as TxLike);
     check("eve's large claim (> 10% of pool) queued (ClaimQueued)", eveEv.some((e) => e.name === "ClaimQueued"));
@@ -284,7 +354,7 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     check("claimers leaderboard ranks alice/eve, excludes flagged", board.some((r) => r.address === alice.publicKey.toBase58()) && !board.some((r) => r.address === dave.publicKey.toBase58() || r.address === carol.publicKey.toBase58()));
     const prof = await waitFor("alice profile xp", async () => {
       const p = await get<{ xp: number; achievements: { id: string; earned: boolean }[]; ticketsFiled: number }>(`/v1/profiles/${alice.publicKey.toBase58()}`);
-      return p.xp > 0 ? p : null;
+      return p.xp > 0 && p.achievements.find((a) => a.id === "tenbagger")?.earned ? p : null;
     }, 30_000);
     check("profile: level/xp/achievements derived", prof.ticketsFiled === 1 && prof.achievements.find((a) => a.id === "tenbagger")?.earned === true, `xp ${prof.xp}`);
     for (const path of [`/v1/stats`, `/v1/sol-usd`, `/v1/coins/${M}/prices?range=all`, `/v1/coins/${M}/holders`, `/v1/coins/${M}/fumbles`, `/v1/closest`, `/v1/leaderboards/fumbles`, `/v1/leaderboards/diamond`, `/v1/wallets/${bob.publicKey.toBase58()}/balances/${M}`, `/openapi.json`]) {
@@ -292,8 +362,24 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
       check(`GET ${path.split("?")[0].replace(M, ":mint").replace(bob.publicKey.toBase58(), ":wallet")} → 200`, r.ok);
     }
 
+    const autoFeed = await get<{ kind: string; auto?: boolean }[]>(`/v1/feed?kind=claim&limit=50`);
+    check("feed marks the keeper's claim as auto-claimed", autoFeed.some((f) => f.auto === true));
+
+    // D18: no pooled mint secret ever shows up in a service log (grinder, API, …).
+    const { createDecipheriv } = await import("node:crypto");
+    const left = await queryRows<{ pubkey: string; secret_enc: Buffer }>(pg.url, "SELECT pubkey, secret_enc FROM vanity_mints WHERE secret_enc IS NOT NULL");
+    const allLogs = services.flatMap((s) => s.logs).join("\n");
+    const leaked = left.some((r) => {
+      const d = createDecipheriv("aes-256-gcm", Buffer.from(mintPoolKey, "hex"), r.secret_enc.subarray(0, 12));
+      d.setAAD(Buffer.concat([Buffer.from("fumpad-vanity-mint:v1:"), Buffer.from(r.pubkey)]));
+      d.setAuthTag(r.secret_enc.subarray(44));
+      const seed = Buffer.concat([d.update(r.secret_enc.subarray(12, 44)), d.final()]);
+      return [seed.toString("hex"), seed.toString("base64"), bs58.encode(seed), bs58.encode(Keypair.fromSeed(seed).secretKey), Array.from(seed).join(",")].some((n) => allLogs.includes(n));
+    });
+    check("no mint secret in any service log", !leaked && allLogs.includes("launch prepared"), `${left.length} pooled secrets checked against ${allLogs.length} log bytes`);
+
     const counts: Record<string, number> = {};
-    for (const t of ["transactions", "events", "coins", "trades", "tickets", "claims", "queue_entries", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) counts[t] = await countRows(pg.url, t);
+    for (const t of ["vanity_mints", "transactions", "events", "coins", "trades", "tickets", "claims", "queue_entries", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) counts[t] = await countRows(pg.url, t);
     const keeperHealth = await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json();
     const indexerHealth = await (await fetch(`http://127.0.0.1:${indexerPort}/health`)).json();
     const apiHealth = await (await fetch(`${api}/health`)).json();

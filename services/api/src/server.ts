@@ -15,6 +15,24 @@ import type { CoinSort } from "./generated/app-interface.js";
 import { LiveHub } from "./live.js";
 import { OPENAPI } from "./openapi.js";
 import { Repo } from "./repo.js";
+import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
+import { registerLaunchRoutes } from "./launch/routes.js";
+import { MintVault } from "./launch/vault.js";
+
+/** Mint-existence / block-height probe for the vanity pool sweeper. */
+export function connectionProbe(conn: Connection): ChainProbe {
+  return {
+    async existing(mints) {
+      const out: boolean[] = [];
+      for (let i = 0; i < mints.length; i += 100) {
+        const infos = await conn.getMultipleAccountsInfo(mints.slice(i, i + 100), "confirmed");
+        out.push(...infos.map((a) => !!a && a.lamports > 0));
+      }
+      return out;
+    },
+    blockHeight: () => conn.getBlockHeight("confirmed"),
+  };
+}
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const bad = (msg: string) => Object.assign(new Error(msg), { statusCode: 400 });
@@ -37,11 +55,17 @@ export interface ApiDeps {
   chain: ChainReader;
   cache: TtlCache;
   live: LiveHub;
+  /** D18 vanity mint pool; null when MINT_POOL_KEY is unset (launch endpoints answer 503). */
+  pool: MintPool | null;
 }
 
-export async function buildServer(cfg: ApiConfig, deps?: Partial<ApiDeps>): Promise<{ app: FastifyInstance; deps: ApiDeps }> {
+export async function buildServer(
+  cfg: ApiConfig,
+  deps?: Partial<ApiDeps>,
+  opts: { logStream?: NodeJS.WritableStream } = {},
+): Promise<{ app: FastifyInstance; deps: ApiDeps }> {
   const app = Fastify({
-    logger: { level: cfg.logLevel, redact: ["req.headers.authorization"] },
+    logger: { level: cfg.logLevel, redact: ["req.headers.authorization"], ...(opts.logStream ? { stream: opts.logStream } : {}) },
     trustProxy: true,
     bodyLimit: 64 * 1024,
   });
@@ -53,9 +77,19 @@ export async function buildServer(cfg: ApiConfig, deps?: Partial<ApiDeps>): Prom
   const live =
     deps?.live ??
     new LiveHub(cfg.databaseUrl, (id) => repo.feedById(id), (mints) => cache.invalidate(mints ? [...mints, "list", "feed", "stats", "board", "closest", "tickets"] : undefined), app.log);
-  const all: ApiDeps = { db, conn, repo, chain, cache, live };
+  const pool =
+    deps?.pool !== undefined
+      ? deps.pool
+      : cfg.mintPoolKey
+        ? new MintPool(db, new MintVault(cfg.mintPoolKey), connectionProbe(conn), {
+            suffix: cfg.vanitySuffix,
+            reservationMs: cfg.launchReservationMs,
+            maxActivePerIp: cfg.launchMaxActivePerIp,
+          })
+        : null;
+  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool };
 
-  await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "OPTIONS"] });
+  await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "POST", "OPTIONS"] });
   await app.register(rateLimit, { max: cfg.rateLimitPerMin, timeWindow: "1 minute", allowList: cfg.rateLimitAllow });
   await app.register(websocket, { options: { maxPayload: 4 * 1024 } });
 
@@ -196,17 +230,37 @@ export async function buildServer(cfg: ApiConfig, deps?: Partial<ApiDeps>): Prom
     } catch {
       /* db down */
     }
+    const vanityPool = pool && dbOk ? await pool.stats().catch(() => null) : null;
     reply.code(dbOk ? 200 : 503);
-    return { ok: dbOk, lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, live: live.stats, cache: { hits: cache.hits, misses: cache.misses } };
+    return { ok: dbOk, lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool };
   });
 
+  // ── D18 vanity launches ─────────────────────────────────────────────────────
+  registerLaunchRoutes(app, cfg, { conn, client: chain.client, pool });
+  let sweeper: NodeJS.Timeout | undefined;
+  if (pool && cfg.launchSweepMs > 0) {
+    sweeper = setInterval(() => {
+      pool.sweep().then(
+        (r) => (r.released || r.used) && app.log.info(r, "vanity reservations swept"),
+        (e: Error) => app.log.warn({ err: e.message }, "vanity sweep failed"),
+      );
+    }, cfg.launchSweepMs);
+    sweeper.unref();
+  }
+
   app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
+    if (err instanceof LaunchError) {
+      if (err.retryAfterSecs) reply.header("retry-after", String(err.retryAfterSecs));
+      if (err.statusCode >= 500) app.log.warn({ msg: err.message }, "launch unavailable");
+      return reply.code(err.statusCode).send({ error: err.message });
+    }
     const code = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
-    if (code >= 500) app.log.error(err);
+    if (code >= 500) app.log.error({ err: { message: err.message, name: err.name, stack: err.stack } }, "request failed");
     reply.code(code).send({ error: code >= 500 ? "internal error" : err.message });
   });
 
   app.addHook("onClose", async () => {
+    if (sweeper) clearInterval(sweeper);
     await live.stop();
     if (!deps?.db) await db.end();
   });

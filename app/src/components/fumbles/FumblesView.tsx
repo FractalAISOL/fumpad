@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
 import { DEMO_WALLET, type Ticket, getFumpadData } from "@/data";
-import { Button, EmptyState, Loading, Multiple, Panel, Segmented, Skeleton, TicketCard, cx, useToast } from "@/design";
+import { Button, EmptyState, Loading, Multiple, Panel, PanelHead, Segmented, Skeleton, TicketCard, cx, useToast } from "@/design";
 import * as f from "@/design/format";
 import { ClaimMoment, type ClaimResult } from "../moment/ClaimMoment";
 import { useNow, useViewer } from "../shell/Providers";
@@ -59,6 +59,7 @@ function note(t: Ticket): React.ReactNode {
     parts.push(<>Expired 90 days after the sell. It peaked at {f.multiple(t.peakMultiple)}. Sometimes selling was right.</>);
   }
   if (t.state === "voided") parts.push(<>Rebuys within 7 days brought this ticket to zero.</>);
+  if (t.autoClaimed && (t.state === "claimed" || t.state === "queued")) parts.push(<>Auto-claimed: the keeper claimed it for you, straight to your wallet.</>);
   if (!parts.length) return undefined;
   return parts.map((p, i) => (
     <span key={i}>
@@ -109,6 +110,35 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
   const closest = tickets
     ?.filter((t) => (t.state === "tracking" || t.state === "awaiting-graduation") && t.multiple < 10)
     .sort((a, b) => b.multiple - a.multiple)[0];
+
+  // D17: auto-claim is per coin (Position.auto_claim_opt_out); list coins with open tickets.
+  const autoCoins = useMemo(() => {
+    const m = new Map<string, { mint: string; symbol: string; autoClaim: boolean; open: number }>();
+    for (const t of tickets ?? []) {
+      if (!["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)) continue;
+      const e = m.get(t.mint) ?? { mint: t.mint, symbol: t.symbol, autoClaim: t.autoClaim, open: 0 };
+      e.open++;
+      m.set(t.mint, e);
+    }
+    return [...m.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }, [tickets]);
+  const [autoBusy, setAutoBusy] = useState<string | null>(null);
+
+  const toggleAuto = useCallback(
+    async (mint: string, symbol: string, enabled: boolean) => {
+      setAutoBusy(mint);
+      const res = await tx.setAutoClaim({ mint, enabled, owner: address });
+      setAutoBusy(null);
+      tx.reset();
+      if (!res) {
+        toast(tx.error ?? "Auto-claim didn't change. Try again.");
+        return;
+      }
+      setTickets((ts) => ts?.map((t) => (t.mint === mint ? { ...t, autoClaim: enabled } : t)) ?? ts);
+      toast(enabled ? `Auto-claim on for $${symbol}.` : `Auto-claim off for $${symbol}. You'll claim by hand.`);
+    },
+    [tx, address, toast],
+  );
 
   const onClaim = useCallback(async (): Promise<ClaimResult> => {
     if (!moment) return { status: "error", message: "No ticket selected." };
@@ -193,6 +223,38 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
           </div>
         </div>
       </div>
+
+      {autoCoins.length > 0 && (
+        <Panel className={s.auto} aria-label="Auto-claim">
+          <PanelHead title="Auto-claim" aside="per coin" />
+          <p className={s.autoLede}>
+            When a ticket&apos;s 30-minute median holds 10×, the keeper claims it for you and the tokens land in your wallet. Turn it off to claim by hand.
+          </p>
+          <ul className={s.autoList}>
+            {autoCoins.map((c) => (
+              <li key={c.mint} className={s.autoRow}>
+                <span className="ticker">${c.symbol}</span>
+                <span className={s.autoCount}>
+                  {c.open} open {c.open === 1 ? "ticket" : "tickets"}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={c.autoClaim}
+                  aria-label={`Auto-claim $${c.symbol}`}
+                  className={s.switch}
+                  disabled={autoBusy !== null}
+                  aria-busy={autoBusy === c.mint || undefined}
+                  onClick={() => toggleAuto(c.mint, c.symbol, !c.autoClaim)}
+                >
+                  <span className={s.knob} aria-hidden="true" />
+                  <span className={s.switchText}>{c.autoClaim ? "On" : "Off"}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
 
       <div className={s.bar}>
         <Segmented label="Filter tickets" value={filter} onChange={setFilter} items={FILTERS} />

@@ -6,7 +6,7 @@ import { recordSamplesIx } from "@fumpad/sdk";
 
 import { Alerter } from "../src/alerts.js";
 import { loadKeeperConfig } from "../src/config.js";
-import { Keeper } from "../src/keeper.js";
+import { Keeper, planAutoClaims } from "../src/keeper.js";
 
 const kp = Keypair.generate();
 const cfg = loadKeeperConfig({ KEEPER_SECRET_KEY: JSON.stringify(Array.from(kp.secretKey)), RPC_URL: "http://127.0.0.1:1" } as NodeJS.ProcessEnv);
@@ -48,6 +48,40 @@ describe("keeper sampling policy (SPEC §5.4)", () => {
   });
   it("record_samples rejects > 10 coins", () => {
     expect(() => recordSamplesIx({ sampler: kp.publicKey, mints: Array.from({ length: 11 }, () => Keypair.generate().publicKey) })).toThrow();
+  });
+});
+
+describe("auto-claim policy (D17)", () => {
+  const P = { claimWindowSecs: 1_000n, triggerMultipleBps: 100_000, claimBps: 1_000, maxClaimPoolBps: 1_000 };
+  const owner = (n: number) => new PublicKey(Uint8Array.from({ length: 32 }, () => n));
+  const t = (o: PublicKey, sellTs: bigint, tokens = 1_000n, price = Q) => ({ key: Keypair.generate().publicKey, ticket: { owner: o, tokens, sellPriceQ64: price, sellTs, status: "open" as const } });
+  const base = { optedOut: new Set<string>(), queuedPerOwner: new Map<string, number>(), medianQ64: 10n * Q, now: 500n, params: P, poolTokens: 10_000n };
+
+  it("claims triggered tickets oldest first; skips below-trigger, expired, zero-amount", () => {
+    const a = t(owner(1), 300n);
+    const b = t(owner(2), 100n);
+    const low = t(owner(3), 50n, 1_000n, 2n * Q); // needs 20× Q
+    const old = t(owner(4), -600n); // window ended at 400
+    const dust = t(owner(5), 60n, 9n); // 10% of 9 = 0
+    const picks = planAutoClaims({ ...base, tickets: [a, b, low, old, dust] });
+    expect(picks.map((x) => x.key)).toEqual([b.key, a.key]);
+  });
+  it("respects opt-out and the D16 limit (unless the claim pays now)", () => {
+    const o = owner(7);
+    const small = t(o, 1n, 1_000n); // 100 ≤ 10% of 10_000 → pays now
+    const big = t(o, 2n, 20_000n); // 2_000 > 1_000 cap → would queue
+    const full = new Map([[o.toBase58(), 2]]);
+    expect(planAutoClaims({ ...base, tickets: [small, big], queuedPerOwner: full }).map((x) => x.key)).toEqual([small.key]);
+    expect(planAutoClaims({ ...base, tickets: [small, big] })).toHaveLength(2);
+    expect(planAutoClaims({ ...base, tickets: [small, big], optedOut: new Set([o.toBase58()]) })).toHaveLength(0);
+  });
+  it("claim_for tx: keeper-paid idempotent owner ATA first, then claim_for; job on by default", () => {
+    const o = owner(9);
+    const b = keeper.client.buildClaimFor({ keeper: kp.publicKey, mint: PublicKey.default, ticket: Keypair.generate().publicKey, owner: o });
+    const ixs = b.instructions.filter((i) => !i.programId.equals(ComputeBudgetProgram.programId));
+    expect(ixs).toHaveLength(2);
+    expect(ixs[0].keys[0].pubkey.equals(kp.publicKey) && ixs[0].keys[2].pubkey.equals(o)).toBe(true);
+    expect(cfg.jobs.autoclaim).toBe(true);
   });
 });
 

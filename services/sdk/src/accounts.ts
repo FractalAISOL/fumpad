@@ -69,6 +69,8 @@ export interface PositionAccount {
   openCount: number;
   /** v0.3 R-L2: canonical-ATA balance at FUMPAD's last observation. */
   lastBalance: bigint;
+  /** v0.4 D17: 0 = keeper auto-claim on (default), 1 = opted out. */
+  autoClaimOptOut: number;
 }
 
 export interface TicketAccount {
@@ -193,7 +195,7 @@ export interface ClaimQueueAccount {
   entries: QueueEntry[];
 }
 
-/** Zero-copy `ClaimQueue`: 8 disc | mint | len u16 | bump | pad5 | total_owed u64 | 256 × 80B. */
+/** Zero-copy `ClaimQueue`: 8 disc | mint | len u16 | bump | pad5 | total_owed u64 | 1024 × 80B (v0.4). */
 export function decodeClaimQueue(data: Uint8Array): ClaimQueueAccount {
   const v = dv(data);
   const len = Math.min(v.getUint16(40, true), CLAIM_QUEUE_CAPACITY);

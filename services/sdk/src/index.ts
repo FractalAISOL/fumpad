@@ -18,3 +18,4 @@ export * from "./params.js";
 export * from "./pda.js";
 export * from "./quote.js";
 export * from "./units.js";
+export * from "./vanity.js";

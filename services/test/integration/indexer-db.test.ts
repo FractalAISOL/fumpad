@@ -93,8 +93,8 @@ describe("indexer → db → api (synthetic events)", () => {
     ];
     // Keeper samples spread over the 60 s window (6 buckets) at ~14× alice's ticket price.
     for (let i = 0; i < 7; i++) list.push([`samp${i}`, [ev("SampleRecorded", { mint, price_q64: bn((Q * 14n) / 30_000n), fallback: false, ts: T(12 + i * 10) })]]);
-    list.push(["s7", [ev("ClaimPaid", { mint, ticket: ticketA, owner: alice, amount: bn(3_000_000_000_000n), from_queue: false, median_price_q64: bn((Q * 14n) / 30_000n), ts: T(80) })]]);
-    list.push(["s8", [ev("ClaimQueued", { mint, ticket: ticketB, owner: bob, amount: bn(8_000_000_000_000n), queue_len: 1, ts: T(81) })]]);
+    list.push(["s7", [ev("ClaimPaid", { mint, ticket: ticketA, owner: alice, amount: bn(3_000_000_000_000n), from_queue: false, median_price_q64: bn((Q * 14n) / 30_000n), ts: T(80), triggered_by: alice })]]);
+    list.push(["s8", [ev("ClaimQueued", { mint, ticket: ticketB, owner: bob, amount: bn(9_000_000_000_000n), queue_len: 1, ts: T(81), triggered_by: bob })]]);
     for (const [s, evs] of list) {
       const r = await ing.ingest(tx(s, evs), "rpc", "confirmed");
       expect(r.status).toBe("applied");
@@ -103,7 +103,7 @@ describe("indexer → db → api (synthetic events)", () => {
     const coin = (await db.query("SELECT * FROM coins")).rows[0];
     expect(coin.status).toBe("graduated");
     expect(coin.amm_pool).toBe(pool.toBase58());
-    expect(BigInt(coin.queue_owed)).toBe(8_000_000_000_000n);
+    expect(BigInt(coin.queue_owed)).toBe(9_000_000_000_000n);
     expect(BigInt(coin.pool_tokens)).toBe(P.rewardPoolSupply + 1_000_000n - 3_000_000_000_000n);
     expect(coin.median_q64).not.toBeNull();
     const t = (await db.query("SELECT ticket, status, seq, crossed_at FROM tickets ORDER BY sell_ts")).rows;
@@ -179,5 +179,24 @@ describe("indexer → db → api (synthetic events)", () => {
     const feed = await repo.getFeed({ limit: 50 });
     expect(feed.every((f) => f.symbol === "FUMB" && typeof f.ts === "number")).toBe(true);
     expect(await repo.getCoin("NOPE")).toBeNull();
+  });
+
+  it("v0.4 auto-claim: keeper claim_for is flagged auto, AutoClaimSet opt-out reaches the app types", async () => {
+    const keeper = Keypair.generate().publicKey;
+    for (const [s, evs] of [
+      ["s9", [ev("AutoClaimSet", { mint, wallet: bob, enabled: false, ts: T(90) })]],
+      ["s10", [ev("ClaimPaid", { mint, ticket: ticketA, owner: alice, amount: bn(3_000_000_000_000n), from_queue: false, median_price_q64: bn((Q * 14n) / 30_000n), ts: T(91), triggered_by: keeper })]],
+    ] as const) {
+      expect((await ing.ingest(tx(s, [...evs]), "rpc", "confirmed")).status).toBe("applied");
+    }
+    const cl = (await db.query("SELECT triggered_by, auto FROM claims")).rows;
+    expect(cl).toEqual([{ triggered_by: keeper.toBase58(), auto: true }]);
+    const repo = new Repo(db);
+    const a = await repo.getTickets(alice.toBase58());
+    expect(a[0]).toMatchObject({ state: "claimed", autoClaimed: true, autoClaim: true });
+    const b = await repo.getTickets(bob.toBase58());
+    expect(b[0].autoClaim).toBe(false);
+    const feed = await repo.getFeed({ kind: "claim", limit: 5 });
+    expect(feed[0]).toMatchObject({ kind: "claim", auto: true });
   });
 });

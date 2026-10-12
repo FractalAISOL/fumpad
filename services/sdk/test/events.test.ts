@@ -108,11 +108,26 @@ describe("event decoding", () => {
     expect(decodeTransactionEvents(tx([{ programIdIndex: 1, accounts: [2], data: bs58.encode(t1) }], [], { InstructionError: [0, "x"] }))).toEqual([]);
   });
 
+  it("v0.4: ClaimPaid carries triggered_by (keeper auto-claim) and AutoClaimSet decodes", () => {
+    const keeper = Keypair.generate().publicKey;
+    const ticket = Keypair.generate().publicKey;
+    const paid = Uint8Array.from([
+      ...EVENT_IX_TAG,
+      ...eventBytes("ClaimPaid", { mint, ticket, owner: user, amount: bn(9n), from_queue: false, median_price_q64: bn(3n), ts: bn(5n), triggered_by: keeper }),
+    ]);
+    const set = Uint8Array.from([...EVENT_IX_TAG, ...eventBytes("AutoClaimSet", { mint, wallet: user, enabled: false, ts: bn(6n) })]);
+    const evs = decodeTransactionEvents(tx([{ programIdIndex: 1, accounts: [2], data: bs58.encode(paid) }, { programIdIndex: 1, accounts: [2], data: bs58.encode(set) }], []));
+    expect(evs.map((e) => e.name)).toEqual(["ClaimPaid", "AutoClaimSet"]);
+    const p = evs[0].data as { triggeredBy: PublicKey; owner: PublicKey; amount: bigint };
+    expect(p.triggeredBy.equals(keeper) && p.owner.equals(user) && p.amount === 9n).toBe(true);
+    expect((evs[1].data as { enabled: boolean }).enabled).toBe(false);
+  });
+
   it("every IDL event has a decoder entry", () => {
     const names = (FUMPAD_IDL.events as { name: string }[]).map((e) => e.name).sort();
     expect(names).toEqual(
       [
-        "BuybackExecuted", "ClaimEscrowed", "ClaimPaid", "ClaimQueued", "CoinCreated", "CurveCompleted", "CurveReopened", "EscrowWithdrawn",
+        "AutoClaimSet", "BuybackExecuted", "ClaimEscrowed", "ClaimPaid", "ClaimQueued", "CoinCreated", "CurveCompleted", "CurveReopened", "EscrowWithdrawn",
         "FeesWithdrawn", "Graduated", "HoldingsRegistered", "LpFeesSettled", "ParamsCancelled", "ParamsQueued", "ParamsUpdated",
         "SampleRecorded", "TicketClosed", "TicketCreated", "TicketDebited", "Trade",
       ].sort(),

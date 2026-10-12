@@ -35,7 +35,10 @@ export interface KeeperConfig {
   minKeeperLamports: bigint;
   logLevel: string;
   /** Crank toggles (all on by default). */
-  jobs: Record<"sample" | "graduate" | "buyback" | "skim" | "queue" | "fees" | "params", boolean>;
+  /** D17 auto-claim: how often each graduated coin is checked, and the most claim_for txs per coin per run. */
+  autoClaimIntervalSecs: number;
+  autoClaimMaxPerRun: number;
+  jobs: Record<"sample" | "graduate" | "buyback" | "skim" | "queue" | "fees" | "params" | "autoclaim", boolean>;
 }
 
 /** KEEPER_KEYPAIR = path to a solana-keygen JSON file; KEEPER_SECRET_KEY = JSON array or base58 (for hosted secrets). */
@@ -79,6 +82,8 @@ export function loadKeeperConfig(env = process.env): KeeperConfig {
     telegramChatId: env.TELEGRAM_CHAT_ID || undefined,
     minKeeperLamports: BigInt(env.MIN_KEEPER_LAMPORTS ?? 500_000_000),
     logLevel: env.LOG_LEVEL ?? "info",
+    autoClaimIntervalSecs: n(env.AUTOCLAIM_INTERVAL_SECS, 15),
+    autoClaimMaxPerRun: n(env.AUTOCLAIM_MAX_PER_RUN, 20),
     jobs: {
       sample: on(env.JOB_SAMPLE),
       graduate: on(env.JOB_GRADUATE),
@@ -87,6 +92,7 @@ export function loadKeeperConfig(env = process.env): KeeperConfig {
       queue: on(env.JOB_QUEUE),
       fees: on(env.JOB_FEES),
       params: on(env.JOB_PARAMS),
+      autoclaim: on(env.JOB_AUTOCLAIM),
     },
   };
 }
