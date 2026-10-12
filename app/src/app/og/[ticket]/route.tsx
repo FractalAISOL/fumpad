@@ -1,15 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
-import { CARD_COLORS, cardCopy, parseStyle } from "@/components/share/card";
+import { cardCopy, cardPalette, curveProgress, multipleText, parseStyle } from "@/components/share/card";
 import { getFumpadData } from "@/data";
 import * as f from "@/design/format";
-import { gauge as G, colorLight } from "@/design/tokens";
+import { gauge as G } from "@/design/tokens";
 
 /**
  * 1200×630 share card for X, rendered with next/og (Satori). Static TTF instances of
  * Archivo and Martian Mono live in src/assets/og (Satori can't read variable woff2).
- * GET /og/<ticket>?style=flare|paper|night
+ * GET /og/<ticket>?style=flare|paper|night. Every ticket state has its own card; orange only
+ * appears on money states (claimable, queued, paid). The flare style is the grey canvas otherwise.
  */
 
 const dir = join(process.cwd(), "src/assets/og");
@@ -20,18 +21,24 @@ const fonts = Promise.all([
   readFile(join(dir, "martian-semicondensed-400.ttf")),
 ]);
 
+/** The big multiple shrinks with its length so "11.6×" and "<0.1×" fit beside the copy. */
+const figureSize = (text: string) => (text.length <= 4 ? 176 : text.length === 5 ? 140 : 118);
+
 export async function GET(req: Request, ctx: { params: Promise<{ ticket: string }> }) {
   const { ticket: id } = await ctx.params;
   const style = parseStyle(new URL(req.url).searchParams.get("style"));
-  const [t, params] = await Promise.all([getFumpadData().getTicket(id), getFumpadData().getParams()]);
+  const data = getFumpadData();
+  const [t, params] = await Promise.all([data.getTicket(id), data.getParams()]);
   if (!t) return new Response("Ticket not found", { status: 404 });
-  const median = `${f.durationShort(params.oracleWindowSecs)} median`;
+  const copy = cardCopy(t, params);
+  // Curve cards show how far the coin is from graduating.
+  const progress = copy.kind === "curve" ? curveProgress(await data.getCoin(t.mint).catch(() => null)) : undefined;
   const [wide, body, monoBig, mono] = await fonts;
-  const c = CARD_COLORS[style];
-  const copy = cardCopy(t);
+  const c = cardPalette(style, copy.money);
   const name = t.owner.slice(0, 4) + "…" + t.owner.slice(-4);
-  const pos = f.gaugePos(t.multiple) * 100;
-  const paidOrAccent = style === "flare" ? c.fg : colorLight.flare;
+  const pos = f.gaugePos(copy.figure) * 100;
+  // Closed tickets draw the needle and fill in the secondary tone; money in the accent.
+  const needle = copy.muted ? c.sub : copy.money ? c.accent : c.fg;
   const W = 1200 - 124;
 
   return new ImageResponse(
@@ -54,7 +61,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
             <rect width="32" height="32" rx="5" fill={c.fg} />
             <circle cx="9" cy="22.5" r="3.6" fill="none" stroke={c.bg} strokeWidth="2.4" />
             <path d="M12.2 20.6 L21.5 11" stroke={c.bg} strokeWidth="1.6" strokeDasharray="1.6 2" />
-            <circle cx="23.5" cy="9" r="4.4" fill={style === "flare" ? c.bg : colorLight.flare} />
+            <circle cx="23.5" cy="9" r="4.4" fill={copy.money && style !== "flare" ? c.post : c.bg} />
           </svg>
           <span style={{ fontFamily: "ArchivoWide", fontSize: 30, letterSpacing: "-0.04em" }}>FUMPAD</span>
         </div>
@@ -63,36 +70,37 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
 
       {/* middle */}
       <div style={{ display: "flex", flex: 1, alignItems: "flex-end", justifyContent: "space-between", gap: 36, paddingBottom: 36 }}>
-        <div style={{ display: "flex", flexDirection: "column", width: 600 }}>
-          <div style={{ fontFamily: "ArchivoWide", fontSize: 68, lineHeight: 0.92, letterSpacing: "-0.05em" }}>{copy.head}</div>
-          <div style={{ marginTop: 20, fontSize: 23, lineHeight: 1.3 }}>{copy.body}</div>
+        <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, maxWidth: 640 }}>
+          <div style={{ fontFamily: "ArchivoWide", fontSize: copy.head.length > 14 ? 60 : 72, lineHeight: 0.92, letterSpacing: "-0.05em" }}>{copy.head}</div>
+          <div style={{ marginTop: 18, fontSize: 28, lineHeight: 1.2, color: c.fg }}>{copy.kicker}</div>
+          <div style={{ marginTop: 10, fontSize: 21, lineHeight: 1.32, color: c.sub }}>{copy.body}</div>
+          {progress !== undefined && (
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 18 }}>
+              <div style={{ display: "flex", position: "relative", width: 300, height: 8, background: c.line, borderRadius: 4 }}>
+                <div style={{ position: "absolute", left: 0, top: 0, height: 8, width: Math.max(4, 300 * progress), background: c.fg, borderRadius: 4 }} />
+              </div>
+              <span style={{ fontFamily: "Mono", fontSize: 17, color: c.sub }}>curve {Math.floor(progress * 100)}% to graduation</span>
+            </div>
+          )}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", flexShrink: 0 }}>
           <div
             style={{
               fontFamily: "Martian",
-              fontSize: 176,
+              fontSize: figureSize(multipleText(copy.figure)),
               lineHeight: 0.8,
               letterSpacing: "-0.07em",
-              color: t.multiple >= 10 && style !== "flare" ? paidOrAccent : c.fg,
+              color: copy.muted ? c.sub : copy.money ? c.accent : c.fg,
             }}
           >
-            {f.multiple(t.multiple)}
+            {multipleText(copy.figure)}
           </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14, fontSize: 18, color: c.sub }}>
-            <span>
-              {t.claimedAt
-                ? `${median} at claim, ${f.date(t.claimedAt)}`
-                : t.state === "expired"
-                  ? `peak ${f.multiple(t.peakMultiple)}, expired`
-                  : `${median} now`}
-            </span>
-          </div>
+          <div style={{ display: "flex", marginTop: 14, fontSize: 18, color: c.sub }}>{copy.figureNote}</div>
         </div>
       </div>
 
       {/* ruler */}
-      <div style={{ display: "flex", position: "relative", height: 64, borderTop: `2px solid ${c.fg}` }}>
+      <div style={{ display: "flex", position: "relative", height: 64, borderTop: `2px solid ${copy.muted ? c.sub : c.fg}` }}>
         {G.ticks.map((v) => (
           <div
             key={v}
@@ -102,7 +110,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
               top: 0,
               width: v === 10 ? 5 : (G.major as readonly number[]).includes(v) ? 2 : 1.5,
               height: v === 10 ? 26 : (G.major as readonly number[]).includes(v) ? 22 : 13,
-              background: v === 10 && style !== "flare" ? colorLight.flare : c.fg,
+              background: v === 10 ? c.post : copy.muted ? c.sub : c.fg,
             }}
           />
         ))}
@@ -121,9 +129,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
             {v}×
           </span>
         ))}
-        <div style={{ position: "absolute", left: 0, top: -7, height: 11, width: (pos / 100) * W, background: t.multiple >= 10 ? paidOrAccent : c.fg }} />
+        <div style={{ position: "absolute", left: 0, top: -7, height: 11, width: (pos / 100) * W, background: needle }} />
         <div style={{ position: "absolute", left: -14, top: -16, width: 29, height: 29, borderRadius: 15, border: `5px solid ${c.fg}`, background: c.bg }} />
-        <div style={{ position: "absolute", left: (pos / 100) * W - 3, top: -29, width: 6, height: 50, background: t.multiple >= 10 ? paidOrAccent : c.fg }} />
+        <div style={{ position: "absolute", left: (pos / 100) * W - 3, top: -29, width: 6, height: 50, background: needle }} />
       </div>
 
       {/* foot */}
@@ -134,16 +142,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
             sold {f.date(t.sellTs)}, {f.int(t.originalTokens)} {t.symbol}
           </span>
         </span>
-        <span style={{ display: "flex", gap: 10 }}>
-          {t.claimTx ? (
-            <>
-              <span>Paid from the {t.symbol} pool,</span>
-              <span style={{ fontFamily: "Mono", color: c.fg, marginLeft: 10 }}>tx {f.shortAddr(t.claimTx)}</span>
-            </>
-          ) : (
-            <span>Claim: 10% of tokens sold, from the {t.symbol} pool</span>
-          )}
-        </span>
+        <span style={{ display: "flex" }}>{copy.foot}</span>
       </div>
     </div>,
     {

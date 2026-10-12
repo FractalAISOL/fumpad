@@ -3,6 +3,7 @@
 import type { Ticket } from "@/data";
 import { EmptyState, TicketCard } from "@/design";
 import * as f from "@/design/format";
+import { ShareButton } from "../share/ShareButton";
 import { useNow, useProtocolParams } from "../shell/Providers";
 import s from "./People.module.css";
 
@@ -20,7 +21,7 @@ export function ProfileTickets({ tickets }: { tickets: Ticket[] }) {
   return (
     <ul className={s.list}>
       {sorted.map((t) => (
-        <TicketCard key={t.id} as="li" ticket={t} now={now} />
+        <TicketCard key={t.id} as="li" ticket={t} now={now} action={<ShareButton ticket={t} />} />
       ))}
     </ul>
   );

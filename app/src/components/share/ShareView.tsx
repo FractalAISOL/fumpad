@@ -3,35 +3,58 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { Ticket } from "@/data";
-import { Button, IconArrowLeft, IconX, Segmented, cx, useToast } from "@/design";
-import { type CardStyle, postText } from "./card";
+import { Button, IconArrowLeft, IconCopy, IconDownload, IconX, Segmented, cx, useToast } from "@/design";
+import { useViewer } from "../shell/Providers";
+import { type CardStyle, cardCopy, loudLabel, ogSrc, postText } from "./card";
 import s from "./Share.module.css";
 
 export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string }) {
   const [style, setStyle] = useState<CardStyle>("flare");
   const [loaded, setLoaded] = useState<Record<string, boolean>>({});
   const toast = useToast();
-  const src = `/og/${ticket.id}?style=${style}`;
-  const url = `${siteUrl.replace(/^https?:\/\//, "")}/c/${ticket.symbol}`;
-  const text = postText(ticket, url);
-  const intent = `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(`${siteUrl}/share/${ticket.id}`)}`;
+  const { address } = useViewer();
+  const own = ticket.owner === address;
+  const copy = cardCopy(ticket);
+  const src = ogSrc(ticket, style);
+  const link = `${siteUrl}/share/${ticket.id}`;
+  const text = postText(ticket, own);
+  const intent = `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(link)}`;
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast("Copied the link.");
+    } catch {
+      toast("Copy blocked. Copy the address bar instead.");
+    }
+  };
 
   return (
     <div className="wrap">
       <div className={s.head}>
         <div>
-          <Link href="/fumbles" className={s.back}>
-            <IconArrowLeft width={16} height={16} /> My fumbles
-          </Link>
+          {own ? (
+            <Link href="/fumbles" className={s.back}>
+              <IconArrowLeft width={16} height={16} /> My fumbles
+            </Link>
+          ) : (
+            <Link href={`/u/${ticket.owner}`} className={s.back}>
+              <IconArrowLeft width={16} height={16} /> Wallet profile
+            </Link>
+          )}
           <h1 className={s.h1}>Share card</h1>
-          <p className={s.lede}>1200 × 630, made for X. The ring is where you sold; the needle is where it went.</p>
+          <p className={s.lede}>
+            1200 × 630, made for X. The ring is where it was sold; the needle is where it went.{" "}
+            <Link href={`/coin/${ticket.symbol}`} className={s.coin}>
+              View ${ticket.symbol}
+            </Link>
+          </p>
         </div>
         <Segmented
           label="Card style"
           value={style}
           onChange={setStyle}
           items={[
-            { value: "flare", label: "Flare" },
+            { value: "flare", label: loudLabel(copy.money) },
             { value: "paper", label: "Paper" },
             { value: "night", label: "Night" },
           ]}
@@ -39,18 +62,18 @@ export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string
       </div>
 
       <div className={s.stage}>
-        <div className={cx(s.frame, !loaded[style] && s.loading)}>
+        <Link href={`/coin/${ticket.symbol}`} className={cx(s.frame, !loaded[style] && s.loading)} aria-label={`$${ticket.symbol} coin page`}>
           {/* eslint-disable-next-line @next/next/no-img-element -- generated PNG from our own /og route */}
           <img
             key={style}
             src={src}
             width={1200}
             height={630}
-            alt={`Share card: ${ticket.symbol} ticket at ${ticket.multiple.toFixed(1)}× of the sell price.`}
+            alt={`Share card for a $${ticket.symbol} ticket: ${copy.head} ${copy.kicker}`}
             className={s.img}
             onLoad={() => setLoaded((l) => ({ ...l, [style]: true }))}
           />
-        </div>
+        </Link>
       </div>
 
       <div className={s.tools}>
@@ -58,24 +81,14 @@ export function ShareView({ ticket, siteUrl }: { ticket: Ticket; siteUrl: string
           <Button href={intent} target="_blank" rel="noreferrer" icon={<IconX />}>
             Post to X
           </Button>
-          <Button variant="line" href={src} download={`fumpad-${ticket.symbol}-${ticket.multiple.toFixed(1)}x.png`}>
-            Save image
+          <Button variant="line" icon={<IconCopy />} onClick={copyLink}>
+            Copy link
           </Button>
-          <Button
-            variant="line"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(text);
-                toast("Copied the post text.");
-              } catch {
-                toast("Copy blocked. Select the text below instead.");
-              }
-            }}
-          >
-            Copy text
+          <Button variant="line" icon={<IconDownload />} href={src} download={`fumpad-${ticket.symbol}-${ticket.state}-${style}.png`}>
+            Save PNG
           </Button>
         </div>
-        <span className={s.fine}>The card links to the ticket on-chain, so anyone can check it.</span>
+        <span className={s.fine}>The link opens this card with the ticket&apos;s live state; the card links to ${ticket.symbol}.</span>
       </div>
       <p className={s.copy}>{text}</p>
     </div>

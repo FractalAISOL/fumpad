@@ -1,14 +1,18 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { cardCopy } from "@/components/share/card";
+import { cardCopy, multipleText, ogSrc } from "@/components/share/card";
 import { ShareView } from "@/components/share/ShareView";
 import { DEMO_WALLET } from "@/data";
-import { cachedTicket, cachedTickets } from "@/data/server";
+import { cachedParams, cachedTicket, cachedTickets } from "@/data/server";
 import { Loading, Skeleton } from "@/design";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://fumpad.app";
 
+/**
+ * The demo wallet's tickets are prerendered; any other ticket id renders on its first request
+ * (dynamic params) and is cached like the rest of the data layer.
+ */
 export async function generateStaticParams() {
   const ts = await cachedTickets(DEMO_WALLET);
   // Cache Components needs at least one param; "_" resolves to "not found" like any unknown id.
@@ -17,15 +21,16 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ ticket: string }> }): Promise<Metadata> {
   const { ticket } = await params;
-  const t = await cachedTicket(ticket);
+  const [t, p] = await Promise.all([cachedTicket(ticket), cachedParams()]);
   if (!t) return { title: "Ticket not found" };
-  const { head, body } = cardCopy(t);
-  const image = { url: `/og/${t.id}`, width: 1200, height: 630, alt: `${head} ${body}` };
+  const { head, kicker, body } = cardCopy(t, p);
+  const title = `${head} ${kicker}`;
+  const image = { url: ogSrc(t), width: 1200, height: 630, alt: `${title} ${body}` };
   return {
-    title: `$${t.symbol} at ${t.multiple.toFixed(1)}×`,
+    title: `$${t.symbol} ticket at ${multipleText(t.multiple)}`,
     description: body,
-    openGraph: { title: head, description: body, images: [image] },
-    twitter: { card: "summary_large_image", title: head, description: body, images: [image] },
+    openGraph: { type: "website", title, description: body, url: `/share/${t.id}`, images: [image] },
+    twitter: { card: "summary_large_image", title, description: body, images: [image] },
   };
 }
 

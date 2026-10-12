@@ -105,6 +105,24 @@ export const IconUpload = (p: P) => (
     <path d="M10 13V3.5M6 7.5l4-4 4 4M3.5 13v3.5h13V13" />
   </svg>
 );
+export const IconDownload = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M10 3.5V13M6 9l4 4 4-4M3.5 13v3.5h13V13" />
+  </svg>
+);
+/** Share: a box with an arrow out of it. */
+export const IconShare = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M10 12.5V3M6.5 6.5L10 3l3.5 3.5M6 9.5H4.5v7h11v-7H14" />
+  </svg>
+);
+/** A person: head and shoulders. */
+export const IconUser = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="10" cy="7" r="3.2" />
+    <path d="M3.8 17c.8-3.1 3.3-5 6.2-5s5.4 1.9 6.2 5" />
+  </svg>
+);
 export const IconArrowLeft = (p: P) => (
   <svg {...base(p)}>
     <path d="M16 10H4M9 5l-5 5 5 5" />

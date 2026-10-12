@@ -6,6 +6,7 @@ import { keepSnapshot, type ProtocolParams, type Ticket, getFumpadData } from "@
 import { Button, EmptyState, Loading, Multiple, Panel, PanelHead, Segmented, Skeleton, TicketCard, cx, useToast } from "@/design";
 import * as f from "@/design/format";
 import { ClaimMoment, type ClaimResult } from "../moment/ClaimMoment";
+import { ShareButton } from "../share/ShareButton";
 import { useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Fumbles.module.css";
@@ -327,14 +328,15 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
                 note={note(t, params)}
                 action={
                   t.state === "claimable" ? (
-                    <Button variant="flare" onClick={() => setMoment(t)}>
-                      Claim {f.int(t.claimAmount)}
-                    </Button>
-                  ) : t.state === "claimed" ? (
-                    <Button variant="line" size="sm" href={`/share/${t.id}`}>
-                      Share card
-                    </Button>
-                  ) : undefined
+                    <>
+                      <Button variant="flare" onClick={() => setMoment(t)}>
+                        Claim {f.int(t.claimAmount)}
+                      </Button>
+                      <ShareButton ticket={t} />
+                    </>
+                  ) : (
+                    <ShareButton ticket={t} />
+                  )
                 }
               />
             ))}

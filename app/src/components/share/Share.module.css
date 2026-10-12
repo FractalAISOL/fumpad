@@ -35,6 +35,14 @@
   max-width: 58ch;
 }
 
+.coin {
+  color: var(--ink);
+  font-weight: var(--w-semibold);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  white-space: nowrap;
+}
 .stage {
   background: var(--surface);
   border: 1px solid var(--rule);
@@ -42,6 +50,7 @@
   padding: clamp(12px, 3vw, 32px);
 }
 .frame {
+  display: block;
   position: relative;
   aspect-ratio: 1200 / 630;
   border-radius: 6px;
