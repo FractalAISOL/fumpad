@@ -287,14 +287,16 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
         {tx.status === "building"
           ? "Preparing the transaction…"
           : tx.status === "signing"
-            ? "Approve it in your wallet."
+            ? tx.instant
+              ? "Signing with your Trading wallet…"
+              : "Approve it in your wallet."
             : tx.status === "confirming"
               ? "Confirming on Solana…"
               : optimistic
                 ? "Confirmed. Updating your balance…"
                 : ""}
       </p>
-      {isDemo && <p className={s.demo}>Demo wallet. Trades are simulated until you connect.</p>}
+      {isDemo && <p className={s.demo}>Demo wallet. Trades are simulated until you log in.</p>}
     </section>
   );
 }

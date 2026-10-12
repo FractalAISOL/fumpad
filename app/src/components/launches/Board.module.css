@@ -560,6 +560,25 @@
   color: var(--on-ink);
   box-shadow: none;
 }
+/* Instant: the Trading wallet signs with no popup. Ink outline plus a tag, never orange (not a payout). */
+.buyInstant {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  padding-right: 4px;
+}
+.instantTag {
+  margin-left: 2px;
+  padding: 1px 4px;
+  border-radius: var(--r-1);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  line-height: 1.3;
+}
+.buy:hover:not(:disabled) .instantTag {
+  background: var(--on-ink);
+  color: var(--ink);
+}
 @media (pointer: coarse) {
   .buy {
     height: 40px;

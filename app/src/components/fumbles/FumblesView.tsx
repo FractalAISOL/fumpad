@@ -231,7 +231,7 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
           Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the {f.durationAdj(params.oracleWindowSecs)}{" "}
           median holds there.
         </p>
-        {isDemo && <p className={s.demo}>Showing a demo wallet. Connect yours to see your own tickets.</p>}
+        {isDemo && <p className={s.demo}>Showing a demo wallet. Log in to see your own tickets.</p>}
       </div>
 
       <div className={s.sum} role="group" aria-label="Summary">

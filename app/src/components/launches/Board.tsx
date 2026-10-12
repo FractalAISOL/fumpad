@@ -10,6 +10,7 @@ import * as f from "@/design/format";
 import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import { requestWalletConnect } from "../shell/Wallet";
+import { useInstantSettings } from "../wallet/store";
 import { FilterPanel } from "./Filters";
 import {
   type BoardFilters,
@@ -96,6 +97,8 @@ interface RowProps {
   solUsd: number;
   graduationSol: number;
   buyLabel: string;
+  /** The buy signs with no popup (Trading wallet, Instant trading on, amount within the limit). */
+  instant: boolean;
   busy: boolean;
   /** Another quick-buy is in flight (one signature at a time). */
   locked: boolean;
@@ -103,7 +106,7 @@ interface RowProps {
   onBuy: (c: CoinSummary) => void;
 }
 
-const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, busy, locked, arrival, onBuy }: RowProps) {
+const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, instant, busy, locked, arrival, onBuy }: RowProps) {
   const pct = curveFraction(c, graduationSol) * 100;
   const target = graduationSol || graduationSolOf(c);
   const raised = c.status === "curve" ? c.curveSol : target;
@@ -122,11 +125,11 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
       </div>
       <button
         type="button"
-        className={s.buy}
+        className={cx(s.buy, instant && s.buyInstant)}
         onClick={() => onBuy(c)}
         disabled={locked && !busy}
         aria-busy={busy || undefined}
-        aria-label={busy ? `Buying $${c.symbol}` : `Quick-buy ${buyLabel} SOL of $${c.symbol}`}
+        aria-label={busy ? `Buying $${c.symbol}` : `${instant ? "Instant quick-buy" : "Quick-buy"} ${buyLabel} SOL of $${c.symbol}`}
       >
         {busy ? (
           <span className={s.dots} aria-hidden="true" />
@@ -134,6 +137,11 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
           <>
             <IconBolt width={13} height={13} />
             <span className="num">{buyLabel}</span>
+            {instant && (
+              <span className={s.instantTag} aria-hidden="true">
+                Instant
+              </span>
+            )}
           </>
         )}
       </button>
@@ -311,13 +319,14 @@ interface LaneProps {
   solUsd: number;
   graduationSol: number;
   buyLabel: string;
+  instant: boolean;
   busyMint: string | null;
   arrivals: Record<string, Arrival>;
   onBuy: (c: CoinSummary) => void;
   searching: boolean;
 }
 
-function Lane({ lane, rows, total, filter, onFilter, gradSort, onGradSort, active, solUsd, graduationSol, buyLabel, busyMint, arrivals, onBuy, searching }: LaneProps) {
+function Lane({ lane, rows, total, filter, onFilter, gradSort, onGradSort, active, solUsd, graduationSol, buyLabel, instant, busyMint, arrivals, onBuy, searching }: LaneProps) {
   const id = useId();
   const popId = `${id}-filters`;
   const [open, setOpen] = useState(false);
@@ -379,6 +388,7 @@ function Lane({ lane, rows, total, filter, onFilter, gradSort, onGradSort, activ
               solUsd={solUsd}
               graduationSol={graduationSol}
               buyLabel={buyLabel}
+              instant={instant}
               busy={busyMint === c.mint}
               locked={busyMint !== null}
               arrival={arrivals[c.mint]}
@@ -417,7 +427,8 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
   const now = useNow();
   const toast = useToast();
   const { address, connected } = useViewer();
-  const { buy, reset, lastError, status: txStatus } = useFumpadTx();
+  const { buy, reset, lastError, status: txStatus, instant } = useFumpadTx();
+  const { maxSol } = useInstantSettings();
 
   const [coins, setCoins] = useState<Record<string, CoinSummary>>(() => index([...curve, ...graduated]));
   const [arrivals, setArrivals] = useState<Record<string, Arrival>>({});
@@ -499,7 +510,7 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
     async (c: CoinSummary) => {
       if (busyRef.current) return;
       if (LIVE_API && !connected) {
-        toast("Connect a wallet to quick-buy.");
+        toast("Log in to quick-buy.");
         requestWalletConnect();
         return;
       }
@@ -529,11 +540,15 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
   const status = !busyCoin
     ? ""
     : txStatus === "signing"
-      ? `Buying $${busyCoin.symbol}: approve it in your wallet.`
+      ? instant
+        ? `Buying $${busyCoin.symbol}: signing with your Trading wallet…`
+        : `Buying $${busyCoin.symbol}: approve it in your wallet.`
       : txStatus === "confirming"
         ? `Buying $${busyCoin.symbol}: confirming on Solana…`
         : `Buying $${busyCoin.symbol}: preparing the transaction…`;
   const buyLabel = f.fixed(amount, amount < 1 ? (amount < 0.01 ? 3 : 2) : 1).replace(/\.?0+$/, "") || "0";
+  // Instant only within the per-trade limit; above it the buy asks on screen first.
+  const instantBuy = instant && amount <= maxSol;
 
   return (
     <div className={cx("wrap", s.page)}>
@@ -576,10 +591,14 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
             (amountBad
               ? "Enter an amount between 0 and 1,000 SOL."
               : LIVE_API && !connected
-                ? "Connect a wallet to use ⚡. Your amount is saved in this browser."
+                ? "Log in to use ⚡. Your amount is saved in this browser."
                 : !LIVE_API
                   ? "Demo: ⚡ buys are simulated."
-                  : "⚡ buys this amount with your wallet's approval. Saved in this browser.")}
+                  : instantBuy
+                    ? `Instant: ⚡ buys this amount from your Trading wallet with no popup. Above ${f.sol(maxSol)} SOL it asks first.`
+                    : instant
+                      ? `Above your instant limit of ${f.sol(maxSol)} SOL, so each ⚡ buy asks first.`
+                      : "⚡ buys this amount with your wallet's approval. Saved in this browser.")}
         </p>
       </div>
 
@@ -622,6 +641,7 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
             solUsd={solUsd}
             graduationSol={graduationSol}
             buyLabel={buyLabel}
+            instant={instantBuy}
             busyMint={busyMint}
             arrivals={arrivals}
             onBuy={onBuy}
