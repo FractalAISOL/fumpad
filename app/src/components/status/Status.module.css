@@ -1,0 +1,126 @@
+/*
+ * Status: no red, no green (DESIGN.md). Level is shape + words: a filled dot is fine, a
+ * half-filled ring is running behind, an empty ring is down, a faint ring is no signal yet.
+ */
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--ink-2);
+}
+.ok {
+  background: var(--ink-2);
+}
+.degraded {
+  background: linear-gradient(90deg, var(--ink-2) 50%, transparent 50%);
+}
+.down {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+.unknown,
+.loading {
+  box-shadow: inset 0 0 0 1.5px var(--rule-2);
+}
+
+/* ── Footer link ── */
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* ── /status page ── */
+.page {
+  padding-top: var(--s-8);
+  padding-bottom: var(--s-10);
+  display: grid;
+  gap: var(--s-6);
+  max-width: 880px;
+}
+.h1 {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-2xl);
+  font-variation-settings: "wdth" var(--wdth-title);
+  font-weight: var(--w-bold);
+}
+.overall {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: var(--s-3) 0 0;
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+.overall .dot {
+  width: 12px;
+  height: 12px;
+}
+.checked {
+  margin: var(--s-2) 0 0;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px var(--s-3);
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--rule);
+}
+.row:first-child {
+  border-top: 0;
+}
+.row .dot {
+  transform: translateY(-1px);
+}
+.name {
+  font-weight: var(--w-semibold);
+  color: var(--ink);
+}
+.word {
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+.detail {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}
+.tableWrap {
+  overflow-x: auto;
+}
+.versions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.versions th,
+.versions td {
+  text-align: left;
+  padding: var(--s-3) var(--s-5);
+  border-top: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.versions th {
+  color: var(--ink-3);
+  font-weight: var(--w-medium);
+  border-top: 0;
+}
+.note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  max-width: 64ch;
+}

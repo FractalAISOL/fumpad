@@ -14,6 +14,8 @@ export interface ApiConfig {
   liveCoalesceMs: number;
   /** Drop a WebSocket client whose unsent backlog exceeds this many bytes. */
   wsMaxBufferedBytes: number;
+  /** Optional keeper /health URL (private network) probed by /v1/status. */
+  statusKeeperUrl?: string;
   /** IPs exempt from rate limiting (e.g. the app's SSR egress). */
   rateLimitAllow: string[];
   /** Used when the Pyth account can't be read (local dev without Pyth). */
@@ -51,6 +53,7 @@ export function loadApiConfig(env = process.env): ApiConfig {
     maxWsPerIp: Number(env.MAX_WS_PER_IP ?? 5),
     liveCoalesceMs: Number(env.LIVE_COALESCE_MS ?? 250),
     wsMaxBufferedBytes: Number(env.WS_MAX_BUFFERED_BYTES ?? 4 * 1024 * 1024),
+    statusKeeperUrl: env.STATUS_KEEPER_URL || undefined,
     rateLimitAllow: (env.RATE_LIMIT_ALLOW ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     solUsdFallback: Number(env.SOL_USD_FALLBACK ?? 150),
     pythAccount: env.PYTH_SOL_USD_ACCOUNT || undefined,

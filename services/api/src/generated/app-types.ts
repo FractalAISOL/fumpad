@@ -546,10 +546,11 @@ export interface TradeRow {
 }
 
 /**
- * What the WebSocket (`/v1/ws`) pushes. Every indexed transaction produces one `coins`
- * message (mints and wallets it touched) and, per touched coin, a `coin` message with the
- * coin's fresh state, its new trades and the chart points they add. `resync` is local:
- * the client emits it after a reconnect so views catch up on what they missed.
+ * What the WebSocket (`/v1/ws`) pushes. Indexed transactions are coalesced per short window
+ * (250 ms): one `coins` message (the mints and wallets they touched) and, per touched coin, one
+ * `coin` message with the coin's fresh state, the window's new trades (newest first) and the
+ * chart points they add. `resync` is local: the client emits it after a reconnect so views
+ * catch up on what they missed.
  */
 export type LiveMessage =
   | { type: "feed"; event: FeedEvent }
@@ -557,3 +558,43 @@ export type LiveMessage =
   | { type: "coin"; coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] }
   | { type: "params" }
   | { type: "resync" };
+
+/* ── System status (`/v1/status`, the footer dot and /status) ───────────────── */
+
+/** ok: working; degraded: working but behind or running low; down: not working; unknown: no signal yet. */
+export type HealthLevel = "ok" | "degraded" | "down" | "unknown";
+
+/** One deployed service and the build it runs (git sha when the host provides it). */
+export interface ServiceVersion {
+  name: "api" | "indexer" | "keeper";
+  /** Git commit, when the host exposes one (`GIT_SHA` / `RAILWAY_GIT_COMMIT_SHA`). */
+  sha: string | null;
+  /** Host deployment id (Railway), so two instances can be told apart. */
+  deploymentId: string | null;
+  startedAt: Millis | null;
+  /** Last time the service reported in (the API itself: now). */
+  seenAt: Millis | null;
+}
+
+export interface SystemStatus {
+  /** The worst of the checks below. */
+  level: HealthLevel;
+  at: Millis;
+  indexer: {
+    level: HealthLevel;
+    /** How far behind the chain the indexed data can be: heartbeat age + time since its last poll. */
+    lagSecs: number | null;
+    /** Age of the newest indexed transaction (quiet chains make this large; not an error by itself). */
+    lastTxAgeSecs: number | null;
+    tipSlot: number | null;
+  };
+  keeper: {
+    level: HealthLevel;
+    /** Age of the newest keeper price sample (graduated coins are sampled at least every 8 min). */
+    lastSampleAgeSecs: number | null;
+    graduatedCoins: number;
+  };
+  /** Pre-ground `…fmbL` launch mints. Null when launches are disabled on this API. */
+  vanityPool: { level: HealthLevel; available: number; reserved: number } | null;
+  services: ServiceVersion[];
+}

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { CLUSTER, CLUSTER_LABEL, FUMPAD_PROGRAM_ADDRESS, solscanAccount } from "@/chain/cluster";
 import { Badge, IconExternal, IconX, Mark, Wordmark } from "@/design";
+import { StatusDot } from "../status/StatusDot";
 import s from "./Footer.module.css";
 
 const CLUSTER_NAME = CLUSTER_LABEL ?? "Mainnet";
@@ -93,6 +94,9 @@ export function Footer() {
                 <IconExternal width={12} height={12} aria-hidden="true" className={s.ext} />
                 <span className="sr-only"> (opens in a new tab)</span>
               </a>
+            </li>
+            <li>
+              <StatusDot />
             </li>
             <li className={s.status}>
               <Badge dot tone={CLUSTER === "mainnet" ? "neutral" : "muted"}>

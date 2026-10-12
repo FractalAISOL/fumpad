@@ -1106,6 +1106,16 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "HealthLevel": {
+    "description": "ok: working; degraded: working but behind or running low; down: not working; unknown: no signal yet.",
+    "enum": [
+      "ok",
+      "degraded",
+      "down",
+      "unknown"
+    ],
+    "type": "string"
+  },
   "Holder": {
     "additionalProperties": false,
     "properties": {
@@ -1358,7 +1368,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "object"
       }
     ],
-    "description": "What the WebSocket (`/v1/ws`) pushes. Every indexed transaction produces one `coins` message (mints and wallets it touched) and, per touched coin, a `coin` message with the coin's fresh state, its new trades and the chart points they add. `resync` is local: the client emits it after a reconnect so views catch up on what they missed."
+    "description": "What the WebSocket (`/v1/ws`) pushes. Indexed transactions are coalesced per short window (250 ms): one `coins` message (the mints and wallets they touched) and, per touched coin, one `coin` message with the coin's fresh state, the window's new trades (newest first) and the chart points they add. `resync` is local: the client emits it after a reconnect so views catch up on what they missed."
   },
   "Millis": {
     "type": "number"
@@ -1728,12 +1738,183 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "ServiceVersion": {
+    "additionalProperties": false,
+    "description": "One deployed service and the build it runs (git sha when the host provides it).",
+    "properties": {
+      "deploymentId": {
+        "description": "Host deployment id (Railway), so two instances can be told apart.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "name": {
+        "enum": [
+          "api",
+          "indexer",
+          "keeper"
+        ],
+        "type": "string"
+      },
+      "seenAt": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Millis"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Last time the service reported in (the API itself: now)."
+      },
+      "sha": {
+        "description": "Git commit, when the host exposes one (`GIT_SHA` / `RAILWAY_GIT_COMMIT_SHA`).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "startedAt": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Millis"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "name",
+      "sha",
+      "deploymentId",
+      "startedAt",
+      "seenAt"
+    ],
+    "type": "object"
+  },
   "Side": {
     "enum": [
       "buy",
       "sell"
     ],
     "type": "string"
+  },
+  "SystemStatus": {
+    "additionalProperties": false,
+    "properties": {
+      "at": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "indexer": {
+        "additionalProperties": false,
+        "properties": {
+          "lagSecs": {
+            "description": "How far behind the chain the indexed data can be: heartbeat age + time since its last poll.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lastTxAgeSecs": {
+            "description": "Age of the newest indexed transaction (quiet chains make this large; not an error by itself).",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "level": {
+            "$ref": "#/components/schemas/HealthLevel"
+          },
+          "tipSlot": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "level",
+          "lagSecs",
+          "lastTxAgeSecs",
+          "tipSlot"
+        ],
+        "type": "object"
+      },
+      "keeper": {
+        "additionalProperties": false,
+        "properties": {
+          "graduatedCoins": {
+            "type": "number"
+          },
+          "lastSampleAgeSecs": {
+            "description": "Age of the newest keeper price sample (graduated coins are sampled at least every 8 min).",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "level": {
+            "$ref": "#/components/schemas/HealthLevel"
+          }
+        },
+        "required": [
+          "level",
+          "lastSampleAgeSecs",
+          "graduatedCoins"
+        ],
+        "type": "object"
+      },
+      "level": {
+        "$ref": "#/components/schemas/HealthLevel",
+        "description": "The worst of the checks below."
+      },
+      "services": {
+        "items": {
+          "$ref": "#/components/schemas/ServiceVersion"
+        },
+        "type": "array"
+      },
+      "vanityPool": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "available": {
+                "type": "number"
+              },
+              "level": {
+                "$ref": "#/components/schemas/HealthLevel"
+              },
+              "reserved": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "level",
+              "available",
+              "reserved"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Pre-ground `…fmbL` launch mints. Null when launches are disabled on this API."
+      }
+    },
+    "required": [
+      "level",
+      "at",
+      "indexer",
+      "keeper",
+      "vanityPool",
+      "services"
+    ],
+    "type": "object"
   },
   "Ticket": {
     "additionalProperties": false,

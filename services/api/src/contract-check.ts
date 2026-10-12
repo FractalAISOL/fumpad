@@ -6,6 +6,7 @@
 import type { ChainReader } from "./chain.js";
 import type { FumpadData } from "./generated/app-interface.js";
 import type { Repo } from "./repo.js";
+import type { systemStatus } from "./status.js";
 
 type R<K extends keyof FumpadData> = Awaited<ReturnType<FumpadData[K]>>;
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
@@ -30,4 +31,5 @@ export type ContractCheck = [
   Assert<Same<Awaited<ReturnType<ChainReader["quote"]>>, R<"quoteTrade">>>,
   Assert<Same<Awaited<ReturnType<ChainReader["balances"]>>, R<"getBalances">>>,
   Assert<Same<Awaited<ReturnType<ChainReader["solUsd"]>>, R<"getSolUsd">>>,
+  Assert<Same<Awaited<ReturnType<typeof systemStatus>>, R<"getStatus">>>,
 ];

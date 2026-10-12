@@ -5,7 +5,7 @@ import websocket from "@fastify/websocket";
 import { Connection } from "@solana/web3.js";
 import Fastify, { type FastifyInstance } from "fastify";
 
-import { createPool, type Db } from "@fumpad/indexer";
+import { createPool, type Db, serviceInfo } from "@fumpad/indexer";
 
 import { TtlCache } from "./cache.js";
 import { ChainReader } from "./chain.js";
@@ -15,6 +15,7 @@ import type { CoinSort } from "./generated/app-interface.js";
 import { LiveHub } from "./live.js";
 import { OPENAPI } from "./openapi.js";
 import { Repo } from "./repo.js";
+import { systemStatus } from "./status.js";
 import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
 import { registerLaunchRoutes } from "./launch/routes.js";
 import { MintVault } from "./launch/vault.js";
@@ -263,6 +264,7 @@ export async function buildServer(
 
   // ── docs + health ───────────────────────────────────────────────────────────
   app.get("/openapi.json", async () => OPENAPI);
+  app.get("/v1/status", async () => cached("status", 5_000, () => systemStatus(db, pool, cfg.statusKeeperUrl)));
   app.get("/health", async (_req, reply) => {
     let dbOk = false;
     let lagSecs: number | null = null;
@@ -276,7 +278,7 @@ export async function buildServer(
     }
     const vanityPool = pool && dbOk ? await pool.stats().catch(() => null) : null;
     reply.code(dbOk ? 200 : 503);
-    return { ok: dbOk, lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool };
+    return { ok: dbOk, version: serviceInfo("api"), lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool };
   });
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────

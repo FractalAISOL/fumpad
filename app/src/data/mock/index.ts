@@ -22,6 +22,7 @@ import type {
   ProtocolParams,
   QueueEntry,
   Side,
+  SystemStatus,
   Ticket,
   TicketChainStatus,
   TradeQuote,
@@ -1144,6 +1145,20 @@ export class MockFumpadData implements FumpadData {
 
   async getClosedPositions(wallet: Address): Promise<ClosedPosition[]> {
     return portfolioOf(wallet).closed;
+  }
+
+  /** The demo world has no backend: everything is fine, by construction. */
+  async getStatus(): Promise<SystemStatus> {
+    const at = this.now();
+    const svc = (name: "api" | "indexer" | "keeper") => ({ name, sha: "mock", deploymentId: null, startedAt: EPOCH, seenAt: at });
+    return {
+      level: "ok",
+      at,
+      indexer: { level: "ok", lagSecs: 1, lastTxAgeSecs: 4, tipSlot: null },
+      keeper: { level: "ok", lastSampleAgeSecs: 95, graduatedCoins: COIN_SPECS.filter((c) => c.status === "graduated").length },
+      vanityPool: { level: "ok", available: 200, reserved: 1 },
+      services: [svc("api"), svc("indexer"), svc("keeper")],
+    };
   }
 
   async getCreatedCoins(wallet: Address): Promise<CreatedCoin[]> {

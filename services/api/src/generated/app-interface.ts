@@ -20,6 +20,7 @@ import type {
   ProtocolParams,
   QueueEntry,
   Side,
+  SystemStatus,
   Ticket,
   TradeQuote,
   TradeRow,
@@ -77,4 +78,7 @@ export interface FumpadData {
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote>;
   /** Wallet balances for the trade panel. */
   getBalances(wallet: Address, mint: Address): Promise<{ sol: number; tokens: number; maturedTokens: number }>;
+
+  /** Backend health: indexer lag, keeper sampling, launch mint pool, deployed versions. */
+  getStatus(): Promise<SystemStatus>;
 }

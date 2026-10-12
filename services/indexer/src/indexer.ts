@@ -7,7 +7,7 @@ import { DEFAULT_PARAMS, type Params } from "@fumpad/sdk";
 
 import { ChainSync } from "./chainSync.js";
 import type { IndexerConfig } from "./config.js";
-import { createPool, type Db, migrate } from "./db.js";
+import { createPool, type Db, migrate, setMeta } from "./db.js";
 import { Deriver } from "./derive.js";
 import { Finalizer } from "./finality.js";
 import { Ingestor } from "./ingest.js";
@@ -15,6 +15,7 @@ import { createLogger, type Logger } from "./log.js";
 import { loadParams } from "./params.js";
 import { heliusWebhookHandler, subscribeLogs } from "./sources/push.js";
 import { RpcSource } from "./sources/rpc.js";
+import { heartbeatKey, serviceInfo } from "./version.js";
 
 export class Indexer {
   readonly db: Db;
@@ -77,6 +78,7 @@ export class Indexer {
     loop("finalize", this.cfg.finalizeIntervalMs, () => this.finalizer.runOnce());
     loop("derive", this.cfg.deriveIntervalMs, () => this.deriver.runOnce());
     loop("params", 60_000, () => this.reloadParams());
+    loop("heartbeat", 15_000, () => this.heartbeat());
     if (this.cfg.wsUrl) this.unsubscribe = subscribeLogs(this.conn, () => this.rpc.poke(), this.log);
 
     if (this.cfg.healthPort || this.cfg.webhookPort) {
@@ -93,6 +95,19 @@ export class Indexer {
     }
   }
 
+  /** Liveness + version into `meta` for the API's /v1/status (no extra network hop between services). */
+  async heartbeat() {
+    const h = await this.health();
+    await setMeta(this.db, heartbeatKey("indexer"), {
+      ...h.version,
+      at: Date.now(),
+      ok: h.ok,
+      tipSlot: h.tipSlot || null,
+      lastIngestedSlot: h.lastIngestedSlot,
+      msSinceLastPoll: h.msSinceLastPoll,
+    });
+  }
+
   async health() {
     let tip = 0;
     try {
@@ -105,6 +120,7 @@ export class Indexer {
     const ok = tip > 0 && sincePoll < Math.max(60_000, this.cfg.pollIntervalMs * 10);
     return {
       ok,
+      version: serviceInfo("indexer"),
       uptimeSec: Math.round((Date.now() - this.startedAt) / 1000),
       tipSlot: tip,
       lastIngestedSlot: last,

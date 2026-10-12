@@ -20,6 +20,12 @@ export const OPENAPI = {
   servers: [{ url: "/" }],
   paths: {
     "/v1/stats": { get: { summary: "Platform stats (getStats)", responses: ok(ref("PlatformStats")) } },
+    "/v1/status": {
+      get: {
+        summary: "Backend health: indexer lag, keeper last-sample age, vanity mint pool, deployed versions (getStatus)",
+        responses: ok(ref("SystemStatus")),
+      },
+    },
     "/v1/params": { get: { summary: "Global.params in display units (getParams)", responses: ok(ref("ProtocolParams")) } },
     "/v1/sol-usd": { get: { summary: "SOL/USD from Pyth (getSolUsd)", responses: ok({ type: "object", properties: { solUsd: { type: "number" } }, required: ["solUsd"] }) } },
     "/v1/coins": {

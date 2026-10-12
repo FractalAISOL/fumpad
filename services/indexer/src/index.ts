@@ -11,3 +11,4 @@ export * from "./params.js";
 export * from "./replay.js";
 export * from "./sources/push.js";
 export * from "./sources/rpc.js";
+export * from "./version.js";

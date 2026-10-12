@@ -30,6 +30,7 @@ import type {
   Side,
   Ticket,
   TradeQuote,
+  SystemStatus,
   TradeRow,
   WalletPosition,
 } from "./types";
@@ -233,6 +234,9 @@ export class ApiFumpadData implements FumpadData {
   }
   getBalances(wallet: Address, mint: Address): Promise<{ sol: number; tokens: number; maturedTokens: number }> {
     return this.get(`/v1/wallets/${wallet}/balances/${mint}`);
+  }
+  getStatus(): Promise<SystemStatus> {
+    return this.get("/v1/status");
   }
 }
 
