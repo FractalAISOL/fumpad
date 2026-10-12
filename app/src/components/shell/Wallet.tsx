@@ -9,6 +9,7 @@ import {
   setInstantSettings,
   setPreferredSigner,
   useInstantSettings,
+  useInstantSpentSol,
   useWallet,
   walletActions,
 } from "@/components/wallet/store";
@@ -35,6 +36,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
   const w = useWallet();
   const toast = useToast();
   const instant = useInstantSettings();
+  const spentSol = useInstantSpentSol();
   const [open, setOpen] = useState(false);
   const [sheet, setSheet] = useState<"deposit" | "withdraw" | "export" | null>(null);
   const active = w.active;
@@ -140,7 +142,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
         <p className={s.acctVia}>
           {isTrading
             ? instant.enabled
-              ? `Signs FUMPAD trades instantly, no popup. Above ${f.sol(instant.maxSol)} SOL it asks first.`
+              ? `Signs FUMPAD trades instantly, no popup. Above ${f.sol(instant.maxSol)} SOL a transaction, or ${f.sol(instant.sessionCapSol)} SOL this session, it asks first.`
               : "Instant trading is off: Privy asks you to approve each transaction."
             : `${active.name} asks you to approve every transaction.`}
           {!isTrading && trading && tradingBal !== null && <> Trading wallet: {balText(tradingBal)}.</>}
@@ -176,12 +178,21 @@ export function WalletButton({ compact }: { compact?: boolean }) {
             </div>
             <label className={s.limit}>
               <span>Ask first above</span>
-              <LimitInput value={instant.maxSol} onChange={(maxSol) => setInstantSettings({ maxSol })} />
+              <LimitInput value={instant.maxSol} onChange={(maxSol) => setInstantSettings({ maxSol })} label="Ask first above this many SOL per transaction" />
+              <span className={s.limitUnit}>SOL</span>
+            </label>
+            <label className={s.limit}>
+              <span>Session cap</span>
+              <LimitInput value={instant.sessionCapSol} onChange={(sessionCapSol) => setInstantSettings({ sessionCapSol })} label="Session cap for instant trading, SOL" />
               <span className={s.limitUnit}>SOL</span>
             </label>
             <p className={s.fine}>
-              Buys, sells, claims and launches from the Trading wallet sign without a popup, and only if they are FUMPAD transactions. Withdrawals and key export
-              always ask.
+              Spent instantly this session: <span className="num">{f.sol(spentSol)}</span> of {f.sol(instant.sessionCapSol)} SOL.
+              {spentSol >= instant.sessionCapSol ? " The cap is reached, so every transaction asks first until you close this tab." : ""}
+            </p>
+            <p className={s.fine}>
+              Buys, sells, claims and launches from the Trading wallet sign without a popup, and only if they are FUMPAD transactions. The per-transaction limit counts the
+              1% fee, network fees and first-time account rent. Withdrawals and key export always ask.
             </p>
           </section>
         )}
@@ -244,7 +255,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
 }
 
 /** The per-trade limit, committed on blur so typing "0.5" doesn't pass through "0". */
-function LimitInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+function LimitInput({ value, onChange, label }: { value: number; onChange: (v: number) => void; label: string }) {
   const [raw, setRaw] = useState<string | null>(null);
   const bad = raw !== null && !(Number(raw) > 0 && Number(raw) <= 1000);
   return (
@@ -252,7 +263,7 @@ function LimitInput({ value, onChange }: { value: number; onChange: (v: number) 
       className={cx("num", s.limitInput)}
       inputMode="decimal"
       autoComplete="off"
-      aria-label="Ask first above this many SOL"
+      aria-label={label}
       aria-invalid={bad || undefined}
       value={raw ?? String(value)}
       onChange={(e) => {
