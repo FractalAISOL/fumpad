@@ -80,7 +80,8 @@ describe("app/src/chain/program.ts stays in sync with the IDL", () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../app/src/chain/program.ts"), "utf8");
     expect(src).toContain(`new PublicKey("${FUMPAD_PROGRAM_ID.toBase58()}")`);
     expect(src).toContain(`VANITY_SUFFIX = "${FUMPAD_VANITY_SUFFIX}"`);
-    for (const [name, constName] of [["create_coin", "CREATE_COIN"], ["buy", "BUY"], ["set_auto_claim", "SET_AUTO_CLAIM"]]) {
+    // Only the launch check's discriminators live in the app; every builder comes from @fumpad/sdk.
+    for (const [name, constName] of [["create_coin", "CREATE_COIN"], ["buy", "BUY"]]) {
       expect(src).toContain(`const ${constName} = [${idlInstruction(FUMPAD_IDL, name).discriminator.join(", ")}];`);
     }
     expect(idlInstruction(FUMPAD_IDL, "set_auto_claim").accounts.map((a) => a.name)).toEqual(["wallet", "position", "event_authority", "program"]);

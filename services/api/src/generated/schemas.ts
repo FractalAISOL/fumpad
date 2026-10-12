@@ -950,6 +950,111 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "LiveMessage": {
+    "anyOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/FeedEvent"
+          },
+          "type": {
+            "const": "feed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "event"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "mints": {
+            "items": {
+              "$ref": "#/components/schemas/Address"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "coins",
+            "type": "string"
+          },
+          "wallets": {
+            "items": {
+              "$ref": "#/components/schemas/Address"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "mints"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "coin": {
+            "$ref": "#/components/schemas/CoinDetail"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/PricePoint"
+            },
+            "type": "array"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/TradeRow"
+            },
+            "type": "array"
+          },
+          "type": {
+            "const": "coin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "coin",
+          "trades",
+          "points"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "params",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "resync",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      }
+    ],
+    "description": "What the WebSocket (`/v1/ws`) pushes. Every indexed transaction produces one `coins` message (mints and wallets it touched) and, per touched coin, a `coin` message with the coin's fresh state, its new trades and the chart points they add. `resync` is local: the client emits it after a reconnect so views catch up on what they missed."
+  },
   "Millis": {
     "type": "number"
   },
@@ -1067,6 +1172,103 @@ export const SCHEMAS: Record<string, unknown> = {
       "claimedSol",
       "flagged",
       "achievements"
+    ],
+    "type": "object"
+  },
+  "ProtocolParams": {
+    "additionalProperties": false,
+    "description": "`Global.params` in display units (SOL, whole tokens, seconds, USD). Mainnet runs the program defaults; devnet runs a scaled-down curve and short windows (e.g. 30 s hold, 0.85 SOL graduation). Copy that quotes a rule reads it from here, never a literal.",
+    "properties": {
+      "claimBps": {
+        "type": "number"
+      },
+      "claimWindowSecs": {
+        "type": "number"
+      },
+      "curveSupply": {
+        "type": "number"
+      },
+      "feeBps": {
+        "type": "number"
+      },
+      "feeCreatorShareBps": {
+        "type": "number"
+      },
+      "feePlatformShareBps": {
+        "type": "number"
+      },
+      "feePoolShareBps": {
+        "type": "number"
+      },
+      "graduationSol": {
+        "type": "number"
+      },
+      "initialVirtualSol": {
+        "type": "number"
+      },
+      "initialVirtualTokens": {
+        "type": "number"
+      },
+      "lpSupply": {
+        "type": "number"
+      },
+      "maxClaimPoolBps": {
+        "type": "number"
+      },
+      "maxOpenTickets": {
+        "type": "number"
+      },
+      "minHoldSecs": {
+        "description": "Tokens must sit this long in a wallet before a sell of them counts.",
+        "type": "number"
+      },
+      "minSellUsd": {
+        "description": "Smallest sell (USD) that files a ticket.",
+        "type": "number"
+      },
+      "oracleMinSamples": {
+        "type": "number"
+      },
+      "oracleWindowSecs": {
+        "description": "The claim median's window.",
+        "type": "number"
+      },
+      "rebuyWindowSecs": {
+        "type": "number"
+      },
+      "rewardPoolSupply": {
+        "type": "number"
+      },
+      "totalSupply": {
+        "type": "number"
+      },
+      "triggerMultiple": {
+        "description": "10 = 10×.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "totalSupply",
+      "rewardPoolSupply",
+      "curveSupply",
+      "lpSupply",
+      "initialVirtualSol",
+      "initialVirtualTokens",
+      "graduationSol",
+      "feeBps",
+      "feePoolShareBps",
+      "feePlatformShareBps",
+      "feeCreatorShareBps",
+      "triggerMultiple",
+      "claimBps",
+      "maxClaimPoolBps",
+      "minSellUsd",
+      "minHoldSecs",
+      "rebuyWindowSecs",
+      "claimWindowSecs",
+      "maxOpenTickets",
+      "oracleWindowSecs",
+      "oracleMinSamples"
     ],
     "type": "object"
   },
@@ -1471,6 +1673,49 @@ export const SCHEMAS: Record<string, unknown> = {
       "execPrice",
       "priceImpact",
       "venue"
+    ],
+    "type": "object"
+  },
+  "TradeRow": {
+    "additionalProperties": false,
+    "description": "One FUMPAD trade on a coin (curve or PumpSwap via the router).",
+    "properties": {
+      "mint": {
+        "$ref": "#/components/schemas/Address"
+      },
+      "price": {
+        "description": "Spot after the trade, SOL per token.",
+        "type": "number"
+      },
+      "side": {
+        "$ref": "#/components/schemas/Side"
+      },
+      "signature": {
+        "type": "string"
+      },
+      "sol": {
+        "description": "SOL in (buys) or out (sells), before the fee.",
+        "type": "number"
+      },
+      "tokens": {
+        "type": "number"
+      },
+      "ts": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "wallet": {
+        "$ref": "#/components/schemas/Address"
+      }
+    },
+    "required": [
+      "signature",
+      "mint",
+      "wallet",
+      "side",
+      "tokens",
+      "sol",
+      "price",
+      "ts"
     ],
     "type": "object"
   }

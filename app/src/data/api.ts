@@ -19,13 +19,16 @@ import type {
   FumbleRow,
   Holder,
   LeaderRow,
+  LiveMessage,
   PlatformStats,
   PricePoint,
   Profile,
+  ProtocolParams,
   QueueEntry,
   Side,
   Ticket,
   TradeQuote,
+  TradeRow,
 } from "./types";
 
 class ApiError extends Error {
@@ -112,41 +115,90 @@ export class ApiFumpadData implements FumpadData {
     return this.get("/v1/feed", { kind: opts.kind, before: opts.before === Infinity ? undefined : opts.before, limit: opts.limit });
   }
 
-  /** One shared socket per subscriber; reconnects with backoff. Browser only (no-op on the server). */
-  subscribeFeed(cb: (e: FeedEvent) => void): Unsubscribe {
+  getRecentTrades(mint: Address, limit?: number): Promise<TradeRow[]> {
+    return this.get(`/v1/coins/${mint}/trades`, { limit });
+  }
+  getParams(): Promise<ProtocolParams> {
+    return this.get("/v1/params");
+  }
+
+  /* ── Live: one socket for the whole tab, shared by every subscriber ─────── */
+
+  private listeners = new Set<(m: LiveMessage) => void>();
+  private ws: WebSocket | null = null;
+  private wsAttempt = 0;
+  private wsTimer: ReturnType<typeof setTimeout> | undefined;
+  private wsIdle: ReturnType<typeof setTimeout> | undefined;
+  private wsEverOpened = false;
+
+  private dispatch(m: LiveMessage) {
+    for (const l of [...this.listeners]) {
+      try {
+        l(m);
+      } catch (e) {
+        console.warn("[fumpad] live listener failed:", e);
+      }
+    }
+  }
+
+  private connect() {
+    if (this.ws || !this.listeners.size) return;
+    const ws = new WebSocket(this.wsUrl);
+    this.ws = ws;
+    ws.onopen = () => {
+      this.wsAttempt = 0;
+      // After a drop, views refetch what they missed while the socket was down.
+      if (this.wsEverOpened) this.dispatch({ type: "resync" });
+      this.wsEverOpened = true;
+    };
+    ws.onmessage = (m) => {
+      let msg: LiveMessage | { type: "hello"; serverTime?: number };
+      try {
+        msg = JSON.parse(String(m.data));
+      } catch {
+        return; // ignore malformed
+      }
+      if (msg.type === "hello") {
+        if (msg.serverTime) this.skew = msg.serverTime - Date.now();
+        return;
+      }
+      this.dispatch(msg);
+    };
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      if (!this.listeners.size) return;
+      const delay = Math.min(30_000, 500 * 2 ** this.wsAttempt++);
+      this.wsTimer = setTimeout(() => this.connect(), delay);
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  /** Browser only (no-op on the server). Reconnects with backoff; closes 5 s after the last subscriber leaves. */
+  subscribeLive(cb: (m: LiveMessage) => void): Unsubscribe {
     if (typeof WebSocket === "undefined") return () => {};
-    let ws: WebSocket | null = null;
-    let stopped = false;
-    let attempt = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const connect = () => {
-      if (stopped) return;
-      ws = new WebSocket(this.wsUrl);
-      ws.onopen = () => {
-        attempt = 0;
-      };
-      ws.onmessage = (m) => {
-        try {
-          const msg = JSON.parse(String(m.data)) as { type: string; event?: FeedEvent; serverTime?: number };
-          if (msg.type === "hello" && msg.serverTime) this.skew = msg.serverTime - Date.now();
-          if (msg.type === "feed" && msg.event) cb(msg.event);
-        } catch {
-          /* ignore malformed */
-        }
-      };
-      ws.onclose = () => {
-        if (stopped) return;
-        const delay = Math.min(30_000, 500 * 2 ** attempt++);
-        timer = setTimeout(connect, delay);
-      };
-      ws.onerror = () => ws?.close();
-    };
-    connect();
+    this.listeners.add(cb);
+    if (this.wsIdle) clearTimeout(this.wsIdle);
+    this.wsIdle = undefined;
+    this.connect();
     return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      ws?.close();
+      this.listeners.delete(cb);
+      if (this.listeners.size) return;
+      // Navigation unmounts one view and mounts the next: keep the socket across that gap.
+      this.wsIdle = setTimeout(() => {
+        if (this.listeners.size) return;
+        if (this.wsTimer) clearTimeout(this.wsTimer);
+        const ws = this.ws;
+        this.ws = null;
+        ws?.close();
+      }, 5_000);
     };
+  }
+
+  subscribeFeed(cb: (e: FeedEvent) => void): Unsubscribe {
+    return this.subscribeLive((m) => {
+      if (m.type === "feed") cb(m.event);
+    });
   }
 
   getClosestTo10x(limit?: number, viewer?: Address): Promise<CloseCall[]> {

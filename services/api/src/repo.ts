@@ -21,9 +21,11 @@ import type {
   PlatformStats,
   PricePoint,
   Profile,
+  ProtocolParams,
   QueueEntry,
   Ticket,
   TicketState,
+  TradeRow,
 } from "./generated/app-types.js";
 import type { CoinSort } from "./generated/app-interface.js";
 
@@ -243,6 +245,79 @@ export class Repo {
     const out = new Map<number, { t: number; p: number }>();
     for (const x of all) out.set(Math.floor((x.t - since) / bucket), x);
     return [...out.values()].map((x) => ({ t: x.t * 1000, p: x.p }));
+  }
+
+  /** Global.params in display units (getParams). */
+  async getParams(): Promise<ProtocolParams> {
+    const p = await this.params();
+    return {
+      totalSupply: tok(p.totalSupply),
+      rewardPoolSupply: tok(p.rewardPoolSupply),
+      curveSupply: tok(p.curveSupply),
+      lpSupply: tok(p.lpSupply),
+      initialVirtualSol: lam(p.initialVirtualSol),
+      initialVirtualTokens: tok(p.initialVirtualToken),
+      graduationSol: lam(p.graduationLamports),
+      feeBps: p.feeBps,
+      feePoolShareBps: p.feePoolShareBps,
+      feePlatformShareBps: p.feePlatformShareBps,
+      feeCreatorShareBps: p.feeCreatorShareBps,
+      triggerMultiple: p.triggerMultipleBps / 10_000,
+      claimBps: p.claimBps,
+      maxClaimPoolBps: p.maxClaimPoolBps,
+      minSellUsd: Number(p.minSellUsdCents) / 100,
+      minHoldSecs: Number(p.minHoldSecs),
+      rebuyWindowSecs: Number(p.rebuyWindowSecs),
+      claimWindowSecs: Number(p.claimWindowSecs),
+      maxOpenTickets: p.maxOpenTickets,
+      oracleWindowSecs: Number(p.oracleWindowSecs),
+      oracleMinSamples: p.oracleMinSamples,
+    };
+  }
+
+  private tradeRows(r: { signature: string; mint: string; wallet: string; is_buy: boolean; token_amount: string; sol_amount: string; virtual_sol: string; virtual_tokens: string; ts: string }[]): TradeRow[] {
+    return r.map((x) => ({
+      signature: x.signature,
+      mint: x.mint,
+      wallet: x.wallet,
+      side: x.is_buy ? "buy" : "sell",
+      tokens: tok(x.token_amount),
+      sol: lam(x.sol_amount),
+      price: px(spotQ64(x.virtual_sol, x.virtual_tokens)),
+      ts: Number(x.ts) * 1000,
+    }));
+  }
+
+  /** Latest FUMPAD trades on a coin, newest first (getRecentTrades). */
+  async getRecentTrades(mint: string, limit = 30): Promise<TradeRow[]> {
+    const r = await this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
+      `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts FROM trades
+       WHERE mint = $1 ORDER BY ts DESC, slot DESC, idx DESC LIMIT $2`,
+      [mint, Math.min(Math.max(limit, 1), 100)],
+    );
+    return this.tradeRows(r.rows);
+  }
+
+  /**
+   * The live `coin` message for one touched mint: fresh detail, the trades of transaction
+   * `sig` on it, and the chart points they add (same rule as getPriceSeries: trade spots
+   * and keeper samples).
+   */
+  async liveCoin(mint: string, sig?: string): Promise<{ coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] } | null> {
+    const coin = await this.getCoin(mint);
+    if (!coin) return null;
+    if (!sig) return { coin, trades: [], points: [] };
+    const [tr, sm] = await Promise.all([
+      this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
+        `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts FROM trades
+         WHERE signature = $1 AND mint = $2 ORDER BY idx`,
+        [sig, mint],
+      ),
+      this.db.query<{ ts: string; price_q64: string }>("SELECT ts, price_q64 FROM samples WHERE signature = $1 AND mint = $2 AND NOT fallback ORDER BY idx", [sig, mint]),
+    ]);
+    const trades = this.tradeRows(tr.rows);
+    const points = [...trades.map((t) => ({ t: t.ts, p: t.price })), ...sm.rows.map((x) => ({ t: Number(x.ts) * 1000, p: px(x.price_q64) }))].sort((a, b) => a.t - b.t);
+    return { coin, trades: trades.reverse(), points };
   }
 
   async getHolders(mint: string, viewer?: string): Promise<{ total: number; top: Holder[] }> {

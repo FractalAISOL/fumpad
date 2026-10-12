@@ -82,6 +82,7 @@ export class Ingestor {
     }
     const kind = events.length ? "fumpad" : external.length ? "external" : "none";
     const touched = new Set<string>();
+    const wallets = new Set<string>();
     const params = this.d.params();
     let paramsChanged = false;
 
@@ -106,7 +107,7 @@ export class Ingestor {
           [signature, e.index, e.program, e.name, mint, tx.slot, ts !== undefined ? ts.toString() : tx.blockTime ?? null, JSON.stringify(jsonify(e.data)), e.raw],
         );
       }
-      const ctx: TxCtx = { c, signature, slot: tx.slot, blockTime: tx.blockTime ?? null, params, touched };
+      const ctx: TxCtx = { c, signature, slot: tx.slot, blockTime: tx.blockTime ?? null, params, touched, wallets };
       await applyEvents(ctx, events);
       if (ctx.paramsChanged) paramsChanged = true;
       for (const x of external) {
@@ -116,8 +117,11 @@ export class Ingestor {
         );
         if (x.base > 0n) await flagRebuyElsewhere(c, x.wallet, x.mint, x.base, tx.blockTime ?? Math.floor(Date.now() / 1000), signature, params);
         touched.add(x.mint);
+        wallets.add(x.wallet);
       }
-      if (touched.size) await c.query("SELECT pg_notify($1, $2)", [NOTIFY_CHANNEL, JSON.stringify({ type: "coins", mints: [...touched] })]);
+      // `sig` lets the API attach this transaction's trades/samples to its live `coin` messages.
+      if (touched.size)
+        await c.query("SELECT pg_notify($1, $2)", [NOTIFY_CHANNEL, JSON.stringify({ type: "coins", mints: [...touched], wallets: [...wallets].slice(0, 50), sig: signature })]);
       return "applied" as const;
     });
 

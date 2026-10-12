@@ -1,4 +1,4 @@
-import { PARAMS, cpOut } from "../chain";
+import { PARAMS, cpOut, curvePriceAt } from "../chain";
 import type { CoinSort, FumpadData, Unsubscribe } from "../interface";
 import type {
   Achievement,
@@ -13,14 +13,17 @@ import type {
   FumbleRow,
   Holder,
   LeaderRow,
+  LiveMessage,
   PlatformStats,
   PricePoint,
   Profile,
+  ProtocolParams,
   QueueEntry,
   Side,
   Ticket,
   TicketChainStatus,
   TradeQuote,
+  TradeRow,
 } from "../types";
 import { mintAddress, signature } from "./rng";
 import {
@@ -44,6 +47,7 @@ import {
   anon,
   between,
   creatorOf,
+  gauss,
   generatedTickets,
   lastHour,
   medianOf,
@@ -75,12 +79,43 @@ function spark(symbol: string): number[] {
   return out;
 }
 
+/* ── Live simulation (client only) ────────────────────────────────────────── */
+
+/**
+ * The mock's live layer: while something subscribes, coins the UI is looking at (and one
+ * random coin) trade every few seconds. Prices drift, curve coins raise SOL, ticket
+ * multiples follow, and each tick goes out as the same `coins` + `coin` messages the API
+ * sends, so mock mode exercises the exact live code paths. Nothing changes until a
+ * subscriber starts the ticker, so server renders stay deterministic.
+ */
+const sim = {
+  drift: new Map<string, number>(),
+  raised: new Map<string, number>(),
+  points: new Map<string, PricePoint[]>(),
+  trades: new Map<string, TradeRow[]>(),
+  /** symbol → last time the UI read it (getCoin / series / tickets). */
+  watched: new Map<string, number>(),
+};
+const watch = (c: CoinSpec | undefined) => {
+  if (c) sim.watched.set(c.symbol, Date.now());
+};
+function curveRaised(c: CoinSpec): number {
+  if (c.status !== "curve") return PARAMS.graduationSol;
+  return Math.min(PARAMS.graduationSol * 0.995, Math.max(0, (c.raised ?? 0) + (sim.raised.get(c.symbol) ?? 0)));
+}
+function liveSpot(c: CoinSpec): number {
+  return c.status === "curve" ? curvePriceAt(curveRaised(c)) : spotOf(c) * (sim.drift.get(c.symbol) ?? 1);
+}
+function liveMedian(c: CoinSpec): number {
+  return medianOf(c) * (sim.drift.get(c.symbol) ?? 1);
+}
+
 function ticketsOpenOn(c: CoinSpec): number {
   return 40 + (Math.round(c.volume24hUsd / 900) % 2600) + Math.round(c.holders / 9);
 }
 
 function summary(c: CoinSpec): CoinSummary {
-  const price = spotOf(c);
+  const price = liveSpot(c);
   return {
     mint: mintAddress(c.symbol),
     symbol: c.symbol,
@@ -91,16 +126,16 @@ function summary(c: CoinSpec): CoinSummary {
     createdAt: c.createdAt,
     graduatedAt: c.graduatedAt,
     price,
-    median: c.status === "graduated" ? medianOf(c) : undefined,
+    median: c.status === "graduated" ? liveMedian(c) : undefined,
     change24h: c.change24h,
     volume24hSol: c.volume24hUsd / SOL_USD,
     marketCapSol: price * SUPPLY,
     holders: c.holders,
-    curveSol: c.status === "curve" ? (c.raised ?? 0) : PARAMS.graduationSol,
+    curveSol: curveRaised(c),
     graduationSol: PARAMS.graduationSol,
     poolTokens: c.poolTokens,
     ticketsOpen: ticketsOpenOn(c),
-    spark: spark(c.symbol),
+    spark: [...spark(c.symbol).slice(0, -1), price],
   };
 }
 
@@ -114,7 +149,7 @@ function detail(c: CoinSpec): CoinDetail {
   const r = rng("detail:" + c.symbol);
   const price = s.price;
   const k = PARAMS.initialVirtualSol * PARAMS.initialVirtualTokens;
-  const vSol = PARAMS.initialVirtualSol + (c.raised ?? PARAMS.graduationSol);
+  const vSol = PARAMS.initialVirtualSol + curveRaised(c);
   const vTok = k / vSol;
   const grad = c.status === "graduated";
   const ratio = price / P_GRAD;
@@ -146,7 +181,7 @@ function detail(c: CoinSpec): CoinDetail {
 /* ── Price series ─────────────────────────────────────────────────────────── */
 
 function series(c: CoinSpec, range: ChartRange): PricePoint[] {
-  if (range === "1h") return lastHour(c.symbol).map(({ t, p }) => ({ t, p }));
+  if (range === "1h") return [...lastHour(c.symbol).map(({ t, p }) => ({ t, p })), ...(sim.points.get(c.symbol) ?? [])];
   const path = pricePath(c.symbol);
   const from = range === "1d" ? EPOCH - DAY : range === "7d" ? EPOCH - 7 * DAY : c.createdAt;
   const step = range === "1d" ? 15 * MINUTE : range === "7d" ? HOUR : Math.max(HOUR, (EPOCH - c.createdAt) / 240);
@@ -159,7 +194,7 @@ function series(c: CoinSpec, range: ChartRange): PricePoint[] {
   }
   const last = path[path.length - 1];
   if (out[out.length - 1]?.t !== last.t) out.push({ t: last.t, p: last.p });
-  return out;
+  return [...out, ...(sim.points.get(c.symbol) ?? [])];
 }
 
 /* ── Tickets ──────────────────────────────────────────────────────────────── */
@@ -179,7 +214,7 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
   const sellPrice = owner === DEMO_WALLET ? ticketSellPrice(t) : medianOf(c) / t.multiple;
   const execPrice = t.floorApplied ? sellPrice * 0.94 : sellPrice;
   const claimAmount = Math.round(t.tokens * (PARAMS.claimBps / 10_000));
-  const median = c.status === "graduated" ? medianOf(c) : spotOf(c);
+  const median = c.status === "graduated" ? liveMedian(c) : liveSpot(c);
   const chainStatus: TicketChainStatus =
     t.state === "queued" ? "queued" : t.state === "claimed" ? "claimed" : t.state === "expired" ? "expired" : t.state === "voided" ? "voided" : "open";
   const queued = t.state === "queued";
@@ -223,7 +258,13 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
 
 function ticketsFor(owner: Address): Ticket[] {
   const specs = owner === DEMO_WALLET ? DEMO_TICKETS : generatedTickets(owner);
-  return specs.map((s) => buildTicket(owner, s));
+  const filed = (filedTickets.get(owner) ?? []).map((t) => {
+    const c = SPEC_BY_SYMBOL.get(t.symbol)!;
+    const now = c.status === "graduated" ? liveMedian(c) : liveSpot(c);
+    const multiple = now / t.sellPrice;
+    return { ...t, multiple, peakMultiple: Math.max(t.peakMultiple, multiple), claimValueSol: t.claimAmount * now, autoClaim: !autoClaimOff.has(`${owner}:${t.mint}`) };
+  });
+  return [...filed, ...specs.map((s) => buildTicket(owner, s))];
 }
 
 /* ── Queue, holders, fumbles ──────────────────────────────────────────────── */
@@ -306,7 +347,7 @@ function holdersFor(c: CoinSpec, viewer?: Address): { total: number; top: Holder
 function fumblesFor(c: CoinSpec, viewer?: Address): FumbleRow[] {
   const r = rng("fumbles:" + c.symbol);
   const rows: FumbleRow[] = [];
-  const median = c.status === "graduated" ? medianOf(c) : spotOf(c);
+  const median = c.status === "graduated" ? liveMedian(c) : liveSpot(c);
   let ts = EPOCH - between(r, 2, 6) * MINUTE;
   for (let i = 0; i < 6; i++) {
     const p = priceAt(c.symbol, ts);
@@ -515,8 +556,167 @@ function profileOf(addr: Address): Profile {
 
 const bootedAt = typeof performance !== "undefined" ? performance.timeOrigin : 0;
 
+/** Deterministic recent trades for a coin (from its last-hour path), newest first. */
+function tradesFor(c: CoinSpec): TradeRow[] {
+  const r = rng("trades:" + c.symbol);
+  const hour = lastHour(c.symbol);
+  const out: TradeRow[] = [];
+  for (let i = hour.length - 1, n = 0; i > 0 && n < 24; i -= 1 + Math.floor(r() * 4), n++) {
+    const { t, p } = hour[i];
+    const side = hour[i].p >= hour[i - 1].p ? "buy" : "sell";
+    const sol = Math.exp(between(r, Math.log(0.05), Math.log(c.status === "curve" ? 3 : 25)));
+    const name = r() < 0.5 ? pick(r, USERS) : null;
+    out.push({ signature: signature(`tr:${c.symbol}:${i}`), mint: mintAddress(c.symbol), wallet: name ? name.address : anon(`tr:${c.symbol}:${i}`), side, tokens: sol / p, sol, price: p, ts: t - Math.floor(r() * 50_000) });
+  }
+  return out;
+}
+
+type Listener = (m: LiveMessage) => void;
+const listeners = new Set<Listener>();
+let tickTimer: ReturnType<typeof setTimeout> | undefined;
+let feedTimer: ReturnType<typeof setTimeout> | undefined;
+let tickN = 0;
+
+const emit = (m: LiveMessage) => {
+  for (const l of [...listeners]) l(m);
+};
+
+/** One simulated trade on `c` at `ts`: moves price/curve, records the point + trade, emits coins + coin. */
+function simTrade(c: CoinSpec, ts: number, opts: { buy?: boolean; sol?: number; wallet?: Address } = {}): TradeRow {
+  const r = rng(`tick:${c.symbol}:${tickN++}`);
+  const mint = mintAddress(c.symbol);
+  const before = liveSpot(c);
+  const buy = opts.buy ?? r() < 0.55;
+  let sol = opts.sol ?? Math.exp(between(r, Math.log(0.05), Math.log(c.status === "curve" ? 1.5 : 12)));
+  if (c.status === "curve") {
+    if (!buy) sol = Math.min(sol, Math.max(0, curveRaised(c) - 0.01));
+    sim.raised.set(c.symbol, (sim.raised.get(c.symbol) ?? 0) + (buy ? sol : -sol));
+  } else {
+    const d = sim.drift.get(c.symbol) ?? 1;
+    const move = opts.sol !== undefined ? Math.min(0.2, opts.sol / 400) : Math.abs(0.012 * gauss(r));
+    sim.drift.set(c.symbol, Math.max(0.2, Math.min(5, d * Math.exp((buy ? 1 : -1) * move))));
+  }
+  const price = liveSpot(c);
+  const who = opts.wallet ?? (r() < 0.5 ? pick(r, USERS).address : anon(`live:${c.symbol}:${tickN}`));
+  const trade: TradeRow = { signature: signature(`live:${c.symbol}:${tickN}`), mint, wallet: who, side: buy ? "buy" : "sell", tokens: sol / ((before + price) / 2), sol, price, ts };
+  const point = { t: ts, p: price };
+  sim.points.set(c.symbol, [...(sim.points.get(c.symbol) ?? []), point].slice(-500));
+  sim.trades.set(c.symbol, [trade, ...(sim.trades.get(c.symbol) ?? [])].slice(0, 100));
+  emit({ type: "coins", mints: [mint], wallets: [who] });
+  emit({ type: "coin", coin: detail(c), trades: [trade], points: [point] });
+  return trade;
+}
+
+/** Simulated wallet changes from mock-mode transactions, `${owner}:${mint}`. */
+const balDelta = new Map<string, { sol: number; tokens: number }>();
+/** Tickets filed by mock-mode sells this session. */
+const filedTickets = new Map<Address, Ticket[]>();
+
+/**
+ * Mock side of a buy/sell (the simulated tx calls this, like the indexer would): the coin
+ * trades, the wallet's balances move, and a sell worth the minimum files a ticket.
+ */
+export function mockRecordTrade(owner: Address, mintOrSymbol: string, side: Side, amountIn: number, amountOut: number) {
+  const c = specOf(mintOrSymbol);
+  if (!c || amountIn <= 0) return;
+  const mint = mintAddress(c.symbol);
+  const key = `${owner}:${mint}`;
+  const d = balDelta.get(key) ?? { sol: 0, tokens: 0 };
+  if (side === "buy") {
+    d.sol -= amountIn;
+    d.tokens += amountOut;
+  } else {
+    d.tokens -= amountIn;
+    d.sol += amountOut;
+  }
+  balDelta.set(key, d);
+  const sellPrice = liveSpot(c);
+  const ts = mockData.now();
+  if (side === "sell" && amountOut * SOL_USD >= PARAMS.minSellUsd && owner !== creatorOf(c)) {
+    const mine = filedTickets.get(owner) ?? [];
+    const seq = mine.length + 100;
+    const tokens = amountIn;
+    const claimAmount = Math.round(tokens * (PARAMS.claimBps / 10_000));
+    mine.unshift({
+      id: address(`filed:${owner}:${c.symbol}:${seq}`),
+      seq,
+      owner,
+      mint,
+      symbol: c.symbol,
+      coinName: c.name,
+      tile: c.tile,
+      coinStatus: c.status,
+      tokens,
+      originalTokens: tokens,
+      sellPrice,
+      execPrice: sellPrice,
+      sellSol: amountOut,
+      sellUsd: amountOut * SOL_USD,
+      sellTs: ts,
+      expiresAt: ts + PARAMS.claimWindowSecs * 1000,
+      chainStatus: "open",
+      state: c.status === "graduated" ? "tracking" : "awaiting-graduation",
+      multiple: 1,
+      peakMultiple: 1,
+      claimAmount,
+      claimValueSol: claimAmount * sellPrice,
+      rebuyDebited: 0,
+      autoClaim: !autoClaimOff.has(`${owner}:${mint}`),
+    });
+    filedTickets.set(owner, mine);
+  }
+  simTrade(c, ts, { buy: side === "buy", sol: side === "buy" ? amountIn : amountOut, wallet: owner });
+}
+
 export class MockFumpadData implements FumpadData {
   private live = 0;
+
+  private startTicker() {
+    if (tickTimer || typeof window === "undefined") return;
+    const tick = () => {
+      // Coins the UI read in the last 5 minutes trade every tick; one random coin keeps lists moving.
+      const cutoff = Date.now() - 5 * 60_000;
+      const hot = COIN_SPECS.filter((c) => (sim.watched.get(c.symbol) ?? 0) > cutoff);
+      const r = rng("tickpick:" + tickN);
+      const extra = pick(r, COIN_SPECS);
+      for (const c of new Set([...hot, extra])) simTrade(c, this.now());
+      tickTimer = setTimeout(tick, between(r, 2200, 3800));
+    };
+    tickTimer = setTimeout(tick, 1500);
+    const feed = () => {
+      const i = this.live++;
+      const r = rng("live:" + i);
+      let kind = weightedKind(r);
+      if (kind === "launch" || kind === "graduation") kind = "fumble";
+      emit({ type: "feed", event: makeEvent(kind, "live" + i, this.now()) });
+      feedTimer = setTimeout(feed, between(r, 4500, 9000));
+    };
+    feedTimer = setTimeout(feed, 4000);
+  }
+
+  subscribeLive(cb: (m: LiveMessage) => void): Unsubscribe {
+    if (typeof window === "undefined") return () => {};
+    listeners.add(cb);
+    this.startTicker();
+    return () => {
+      listeners.delete(cb);
+      if (listeners.size) return;
+      clearTimeout(tickTimer);
+      clearTimeout(feedTimer);
+      tickTimer = feedTimer = undefined;
+    };
+  }
+
+  async getParams(): Promise<ProtocolParams> {
+    return { ...PARAMS };
+  }
+
+  async getRecentTrades(mint: Address, limit = 30): Promise<TradeRow[]> {
+    const c = specOf(mint);
+    if (!c) return [];
+    watch(c);
+    return [...(sim.trades.get(c.symbol) ?? []), ...tradesFor(c)].slice(0, limit);
+  }
 
   now(): number {
     if (typeof window === "undefined") return EPOCH;
@@ -547,11 +747,13 @@ export class MockFumpadData implements FumpadData {
 
   async getCoin(symbolOrMint: string) {
     const c = specOf(symbolOrMint);
+    watch(c);
     return c ? detail(c) : null;
   }
 
   async getPriceSeries(mint: Address, range: ChartRange) {
     const c = specOf(mint);
+    watch(c);
     return c ? series(c, range) : [];
   }
 
@@ -580,22 +782,9 @@ export class MockFumpadData implements FumpadData {
   }
 
   subscribeFeed(cb: (e: FeedEvent) => void): Unsubscribe {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const tick = () => {
-      if (stopped) return;
-      const i = this.live++;
-      const r = rng("live:" + i);
-      let kind = weightedKind(r);
-      if (kind === "launch" || kind === "graduation") kind = "fumble";
-      cb(makeEvent(kind, "live" + i, this.now()));
-      timer = setTimeout(tick, between(r, 4500, 9000));
-    };
-    timer = setTimeout(tick, 4000);
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
+    return this.subscribeLive((m) => {
+      if (m.type === "feed") cb(m.event);
+    });
   }
 
   async getClosestTo10x(limit = 5, viewer?: Address): Promise<CloseCall[]> {
@@ -623,7 +812,9 @@ export class MockFumpadData implements FumpadData {
   }
 
   async getTickets(owner: Address) {
-    return ticketsFor(owner);
+    const ts = ticketsFor(owner);
+    for (const t of ts) if (t.state !== "claimed" && t.state !== "expired" && t.state !== "voided") watch(SPEC_BY_SYMBOL.get(t.symbol));
+    return ts;
   }
 
   async getTicket(id: Address) {
@@ -655,7 +846,10 @@ export class MockFumpadData implements FumpadData {
     if (!c) return { sol: 0, tokens: 0, maturedTokens: 0 };
     const tokens = wallet === DEMO_WALLET && c.symbol === "MIDC" ? 6_120_000 : Math.round(between(r, 0, 8) * 1e5) * 10;
     const matured = c.symbol === "PIGN" ? Math.round(tokens * 0.6) : tokens;
-    return { sol: wallet === DEMO_WALLET ? 24.8 : Math.round(between(r, 0.2, 40) * 100) / 100, tokens, maturedTokens: matured };
+    const sol = wallet === DEMO_WALLET ? 24.8 : Math.round(between(r, 0.2, 40) * 100) / 100;
+    // Session trades: bought tokens haven't been held long enough to count yet.
+    const d = balDelta.get(`${wallet}:${mintAddress(c.symbol)}`) ?? { sol: 0, tokens: 0 };
+    return { sol: Math.max(0, sol + d.sol), tokens: Math.max(0, tokens + d.tokens), maturedTokens: Math.max(0, matured + Math.min(0, d.tokens)) };
   }
 
   async quoteTrade({ mint, side, amount, wallet }: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote> {

@@ -19,6 +19,8 @@ export type ContractCheck = [
   Assert<Same<Awaited<ReturnType<Repo["getHolders"]>>, R<"getHolders">>>,
   Assert<Same<Awaited<ReturnType<Repo["getRecentFumbles"]>>, R<"getRecentFumbles">>>,
   Assert<Same<Awaited<ReturnType<Repo["getClaimQueue"]>>, R<"getClaimQueue">>>,
+  Assert<Same<Awaited<ReturnType<Repo["getRecentTrades"]>>, R<"getRecentTrades">>>,
+  Assert<Same<Awaited<ReturnType<Repo["getParams"]>>, R<"getParams">>>,
   Assert<Same<Awaited<ReturnType<Repo["getFeed"]>>, R<"getFeed">>>,
   Assert<Same<Awaited<ReturnType<Repo["getClosestTo10x"]>>, R<"getClosestTo10x">>>,
   Assert<Same<Awaited<ReturnType<Repo["getTickets"]>>, R<"getTickets">>>,

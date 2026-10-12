@@ -76,7 +76,12 @@ export async function buildServer(
   const chain = deps?.chain ?? new ChainReader(conn, cache, { solUsdFallback: cfg.solUsdFallback, pythAccount: cfg.pythAccount });
   const live =
     deps?.live ??
-    new LiveHub(cfg.databaseUrl, (id) => repo.feedById(id), (mints) => cache.invalidate(mints ? [...mints, "list", "feed", "stats", "board", "closest", "tickets"] : undefined), app.log);
+    new LiveHub(
+      cfg.databaseUrl,
+      { feed: (id) => repo.feedById(id), coin: (mint, sig) => repo.liveCoin(mint, sig) },
+      (mints, wallets) => cache.invalidate(mints ? [...mints, ...(wallets ?? []), "list", "feed", "stats", "board", "closest", "tickets", "profile"] : undefined),
+      app.log,
+    );
   const pool =
     deps?.pool !== undefined
       ? deps.pool
@@ -102,6 +107,7 @@ export async function buildServer(
   // ── REST (one route per FumpadData method) ──────────────────────────────────
   app.get("/v1/stats", async () => cached("stats", 5_000, async () => repo.getStats(await chain.solUsd())));
   app.get("/v1/sol-usd", async () => ({ solUsd: await chain.solUsd() }));
+  app.get("/v1/params", async () => cached("params", 30_000, () => repo.getParams()));
   app.get("/v1/coins", async (req) => {
     const qs = req.query as Record<string, string>;
     const sort = oneOf<CoinSort>(qs.sort, ["trending", "new", "mcap", "closest", "graduating"], "sort", "trending");
@@ -135,6 +141,11 @@ export async function buildServer(
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const viewer = optAddr((req.query as Record<string, string>).viewer, "viewer");
     return cached(`queue:${mint}:${viewer ?? ""}`, 3_000, () => repo.getClaimQueue(mint, viewer));
+  });
+  app.get("/v1/coins/:mint/trades", async (req) => {
+    const mint = addr((req.params as { mint: string }).mint, "mint");
+    const limit = Math.min(int((req.query as Record<string, string>).limit, 30), 100);
+    return cached(`trades:${mint}:${limit}`, 2_000, () => repo.getRecentTrades(mint, limit));
   });
   app.get("/v1/feed", async (req) => {
     const qs = req.query as Record<string, string>;

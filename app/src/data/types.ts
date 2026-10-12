@@ -361,3 +361,67 @@ export interface LaunchDraft {
   /** Optional first buy in SOL, made in the same transaction. */
   initialBuySol: number;
 }
+
+/* ── Protocol params ───────────────────────────────────────────────────────── */
+
+/**
+ * `Global.params` in display units (SOL, whole tokens, seconds, USD). Mainnet runs the
+ * program defaults; devnet runs a scaled-down curve and short windows (e.g. 30 s hold,
+ * 0.85 SOL graduation). Copy that quotes a rule reads it from here, never a literal.
+ */
+export interface ProtocolParams {
+  totalSupply: number;
+  rewardPoolSupply: number;
+  curveSupply: number;
+  lpSupply: number;
+  initialVirtualSol: number;
+  initialVirtualTokens: number;
+  graduationSol: number;
+  feeBps: number;
+  feePoolShareBps: number;
+  feePlatformShareBps: number;
+  feeCreatorShareBps: number;
+  /** 10 = 10×. */
+  triggerMultiple: number;
+  claimBps: number;
+  maxClaimPoolBps: number;
+  /** Smallest sell (USD) that files a ticket. */
+  minSellUsd: number;
+  /** Tokens must sit this long in a wallet before a sell of them counts. */
+  minHoldSecs: number;
+  rebuyWindowSecs: number;
+  claimWindowSecs: number;
+  maxOpenTickets: number;
+  /** The claim median's window. */
+  oracleWindowSecs: number;
+  oracleMinSamples: number;
+}
+
+/* ── Trades & live updates ─────────────────────────────────────────────────── */
+
+/** One FUMPAD trade on a coin (curve or PumpSwap via the router). */
+export interface TradeRow {
+  signature: string;
+  mint: Address;
+  wallet: Address;
+  side: Side;
+  tokens: number;
+  /** SOL in (buys) or out (sells), before the fee. */
+  sol: number;
+  /** Spot after the trade, SOL per token. */
+  price: number;
+  ts: Millis;
+}
+
+/**
+ * What the WebSocket (`/v1/ws`) pushes. Every indexed transaction produces one `coins`
+ * message (mints and wallets it touched) and, per touched coin, a `coin` message with the
+ * coin's fresh state, its new trades and the chart points they add. `resync` is local:
+ * the client emits it after a reconnect so views catch up on what they missed.
+ */
+export type LiveMessage =
+  | { type: "feed"; event: FeedEvent }
+  | { type: "coins"; mints: Address[]; wallets?: Address[] }
+  | { type: "coin"; coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] }
+  | { type: "params" }
+  | { type: "resync" };

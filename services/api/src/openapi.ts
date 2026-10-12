@@ -20,6 +20,7 @@ export const OPENAPI = {
   servers: [{ url: "/" }],
   paths: {
     "/v1/stats": { get: { summary: "Platform stats (getStats)", responses: ok(ref("PlatformStats")) } },
+    "/v1/params": { get: { summary: "Global.params in display units (getParams)", responses: ok(ref("ProtocolParams")) } },
     "/v1/sol-usd": { get: { summary: "SOL/USD from Pyth (getSolUsd)", responses: ok({ type: "object", properties: { solUsd: { type: "number" } }, required: ["solUsd"] }) } },
     "/v1/coins": {
       get: {
@@ -51,6 +52,9 @@ export const OPENAPI = {
         responses: ok({ type: "object", properties: { pool: { type: "number" }, owed: { type: "number" }, entries: arr("QueueEntry") }, required: ["pool", "owed", "entries"] }),
       },
     },
+    "/v1/coins/{mint}/trades": {
+      get: { summary: "Recent trades, newest first (getRecentTrades)", parameters: [p("mint"), q("limit", { type: "integer", minimum: 1, maximum: 100 })], responses: ok(arr("TradeRow")) },
+    },
     "/v1/feed": {
       get: {
         summary: "Feed (getFeed)",
@@ -79,7 +83,8 @@ export const OPENAPI = {
     },
     "/v1/ws": {
       get: {
-        summary: "WebSocket (subscribeFeed). Server → client messages: {type:'feed', event: FeedEvent} | {type:'coins', mints: string[]} | {type:'hello', serverTime}",
+        summary:
+          "WebSocket (subscribeFeed, subscribeLive). Server → client messages (LiveMessage): {type:'feed', event: FeedEvent} | {type:'coins', mints: string[], wallets: string[]} (one per indexed tx) | {type:'coin', coin: CoinDetail, trades: TradeRow[], points: PricePoint[]} (per touched mint) | {type:'params'} | {type:'hello', serverTime}",
         responses: { "101": { description: "Switching protocols" } },
       },
     },

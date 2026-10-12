@@ -31,11 +31,16 @@ export interface TxCtx {
   params: Params;
   /** Mints whose current state changed (for chain sync + API cache invalidation). */
   touched: Set<string>;
+  /** Wallets whose tickets/positions/balances changed (live updates to their views). */
+  wallets?: Set<string>;
   /** A Params* event was seen: reload Global. */
   paramsChanged?: boolean;
 }
 
 const s = (v: bigint | number) => v.toString();
+const touchWallet = (ctx: TxCtx, w: string | undefined | null) => {
+  if (w) ctx.wallets?.add(w);
+};
 const b58 = (k: PublicKey) => k.toBase58();
 
 /** JSON-safe copy of an event payload (bigint → string, PublicKey → base58). */
@@ -157,6 +162,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           [mint, ctx.signature],
         );
         await upsertUser(ctx, b58(d.creator), d.ts);
+        touchWallet(ctx, b58(d.creator));
         await feed(ctx, `${id}:launch`, "launch", d.ts, mint, b58(d.creator), { poolTokens: baseToTokens(p.rewardPoolSupply) });
         ctx.touched.add(mint);
         break;
@@ -197,6 +203,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           : { balance: -d.tokenAmount, sold: d.tokenAmount, solOut: d.solAmount - d.feePool - d.feePlatform - d.feeCreator, sells: 1 });
         await upsertUser(ctx, wallet, d.ts);
         if (d.onAmm) await trackMultiples(ctx, mint, spot, d.ts, false);
+        touchWallet(ctx, wallet);
         ctx.touched.add(mint);
         break;
       }
@@ -254,6 +261,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         );
         if (!ins.rowCount) break;
         await c.query("UPDATE coins SET tickets_created = tickets_created + 1, tickets_open = tickets_open + 1 WHERE mint = $1", [mint]);
+        touchWallet(ctx, owner);
         await feed(ctx, `${id}:fumble`, "fumble", d.ts, mint, owner, {
           ticket: b58(d.ticket),
           tokens: baseToTokens(d.tokens),
@@ -266,8 +274,9 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
       case "TicketDebited": {
         const d = e.data;
         const ticket = b58(d.ticket);
-        const t = await c.query<{ mint: string; status: string }>("SELECT mint, status FROM tickets WHERE ticket = $1", [ticket]);
+        const t = await c.query<{ mint: string; status: string; owner: string }>("SELECT mint, status, owner FROM tickets WHERE ticket = $1", [ticket]);
         const mint = t.rows[0]?.mint ?? null;
+        touchWallet(ctx, t.rows[0]?.owner);
         await c.query(
           "INSERT INTO ticket_debits (signature, idx, ticket, mint, debited, remaining, voided, ts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
           [ctx.signature, e.index, ticket, mint, s(d.debited), s(d.remaining), d.voided, s(d.ts)],
@@ -299,6 +308,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const t = await c.query<{ sell_ts: string }>("SELECT sell_ts FROM tickets WHERE ticket = $1", [ticket]);
         const by = b58(d.triggeredBy);
         const auto = by !== b58(d.owner);
+        touchWallet(ctx, b58(d.owner));
         await c.query("UPDATE tickets SET status = 'queued', queued_at = $2, claim_amount = $3, auto_claimed = $4, crossed_at = COALESCE(crossed_at, $2) WHERE ticket = $1", [ticket, s(d.ts), s(d.amount), auto]);
         const ins = await c.query(
           "INSERT INTO queue_entries (ticket, mint, owner, amount, sell_ts, queued_at, triggered_by) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (ticket) DO NOTHING",
@@ -353,14 +363,16 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           auto,
         });
         await upsertUser(ctx, owner, d.ts);
+        touchWallet(ctx, owner);
         ctx.touched.add(mint);
         break;
       }
       case "TicketClosed": {
         const d = e.data;
         const ticket = b58(d.ticket);
-        const t = await c.query<{ mint: string; status: string }>("SELECT mint, status FROM tickets WHERE ticket = $1", [ticket]);
+        const t = await c.query<{ mint: string; status: string; owner: string }>("SELECT mint, status, owner FROM tickets WHERE ticket = $1", [ticket]);
         if (!t.rows[0]) break;
+        touchWallet(ctx, t.rows[0].owner);
         const status = TICKET_STATUS_NAMES[d.finalStatus] ?? "expired";
         await c.query("UPDATE tickets SET status = $2, closed_at = $3 WHERE ticket = $1", [ticket, status, s(d.ts)]);
         await removeFromQueue(ctx, ticket, t.rows[0].mint);
@@ -401,6 +413,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
           "INSERT INTO fee_withdrawals (signature, idx, mint, recipient, lamports, is_creator, ts) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
           [ctx.signature, e.index, b58(d.mint), b58(d.recipient), s(d.lamports), d.creator, s(d.ts)],
         );
+        touchWallet(ctx, b58(d.recipient));
         ctx.touched.add(b58(d.mint));
         break;
       }
@@ -434,6 +447,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const mint = b58(d.mint);
         const ticket = b58(d.ticket);
         const owner = b58(d.owner);
+        touchWallet(ctx, owner);
         const t = await c.query<{ sell_price_q64: string; status: string }>("SELECT sell_price_q64, status FROM tickets WHERE ticket = $1", [ticket]);
         const ins = await c.query(
           `INSERT INTO claims (signature, idx, mint, ticket, owner, amount, from_queue, escrowed, median_q64, sell_price_q64, ts, triggered_by)
@@ -460,6 +474,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
            ON CONFLICT (mint, wallet) DO UPDATE SET auto_claim_opt_out = EXCLUDED.auto_claim_opt_out`,
           [mint, b58(d.wallet), !d.enabled, s(d.ts)],
         );
+        touchWallet(ctx, b58(d.wallet));
         ctx.touched.add(mint);
         break;
       }
@@ -468,6 +483,7 @@ export async function applyEvents(ctx: TxCtx, events: FumpadEvent[]): Promise<vo
         const mint = b58(d.mint);
         await c.query("UPDATE tickets SET status = 'claimed' WHERE ticket = $1", [b58(d.ticket)]);
         await position(ctx, mint, b58(d.owner), d.ts, { balance: d.amount, claimed: d.amount });
+        touchWallet(ctx, b58(d.owner));
         ctx.touched.add(mint);
         break;
       }

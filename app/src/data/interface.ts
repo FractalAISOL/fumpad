@@ -10,13 +10,16 @@ import type {
   FumbleRow,
   Holder,
   LeaderRow,
+  LiveMessage,
   PlatformStats,
   PricePoint,
   Profile,
+  ProtocolParams,
   QueueEntry,
   Side,
   Ticket,
   TradeQuote,
+  TradeRow,
 } from "./types";
 
 export type Unsubscribe = () => void;
@@ -34,6 +37,8 @@ export interface FumpadData {
 
   getStats(): Promise<PlatformStats>;
   getSolUsd(): Promise<number>;
+  /** Global.params in display units (the hold time, graduation target, windows quoted in copy). */
+  getParams(): Promise<ProtocolParams>;
 
   listCoins(opts?: { sort?: CoinSort; status?: "curve" | "graduated" | "all"; limit?: number }): Promise<CoinSummary[]>;
   getCoin(symbolOrMint: string): Promise<CoinDetail | null>;
@@ -41,10 +46,14 @@ export interface FumpadData {
   getHolders(mint: Address, viewer?: Address): Promise<{ total: number; top: Holder[] }>;
   getRecentFumbles(mint: Address, viewer?: Address): Promise<FumbleRow[]>;
   getClaimQueue(mint: Address, viewer?: Address): Promise<{ pool: number; owed: number; entries: QueueEntry[] }>;
+  /** Latest FUMPAD trades on a coin, newest first. */
+  getRecentTrades(mint: Address, limit?: number): Promise<TradeRow[]>;
 
   getFeed(opts?: { kind?: FeedKind | "all"; before?: number; limit?: number }): Promise<FeedEvent[]>;
   /** Live events (indexer WebSocket). Calls back with each new event. */
   subscribeFeed(cb: (e: FeedEvent) => void): Unsubscribe;
+  /** Every live message (feed, touched coins/wallets, per-coin state + trades, params). One shared socket. */
+  subscribeLive(cb: (m: LiveMessage) => void): Unsubscribe;
   getClosestTo10x(limit?: number, viewer?: Address): Promise<CloseCall[]>;
 
   getTickets(owner: Address): Promise<Ticket[]>;
