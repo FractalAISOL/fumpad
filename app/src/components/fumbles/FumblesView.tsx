@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
-import { keepSnapshot, DEMO_WALLET, type Ticket, getFumpadData } from "@/data";
+import { keepSnapshot, type ProtocolParams, type Ticket, getFumpadData } from "@/data";
 import { Button, EmptyState, Loading, Multiple, Panel, PanelHead, Segmented, Skeleton, TicketCard, cx, useToast } from "@/design";
 import * as f from "@/design/format";
 import { ClaimMoment, type ClaimResult } from "../moment/ClaimMoment";
-import { useNow, useViewer } from "../shell/Providers";
+import { useRefresh } from "../shell/live";
+import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Fumbles.module.css";
 
 type Filter = "all" | "claimable" | "tracking" | "waiting" | "queued" | "closed" | "flagged";
@@ -24,7 +25,9 @@ const MATCH: Record<Filter, (t: Ticket) => boolean> = {
 const ORDER: Record<Ticket["state"], number> = { claimable: 0, queued: 1, tracking: 2, "awaiting-graduation": 3, claimed: 4, expired: 5, voided: 6 };
 
 /** One sentence for any ticket state that needs explaining. */
-function note(t: Ticket): React.ReactNode {
+function note(t: Ticket, p: ProtocolParams): React.ReactNode {
+  const median = `${f.durationShort(p.oracleWindowSecs)} median`;
+  const rebuy = f.duration(p.rebuyWindowSecs);
   const parts: React.ReactNode[] = [];
   if (t.state === "queued" && t.queueNeedsPool) {
     parts.push(
@@ -38,7 +41,9 @@ function note(t: Ticket): React.ReactNode {
   if (t.state === "awaiting-graduation") {
     parts.push(
       t.multiple >= 10 ? (
-        <>Already past 10×. ${t.symbol} is still on the curve; claiming opens when it graduates and the 30-min median holds 10× there.</>
+        <>
+          Already past 10×. ${t.symbol} is still on the curve; claiming opens when it graduates and the {median} holds 10× there.
+        </>
       ) : (
         <>${t.symbol} is still on the bonding curve. Your ticket counts toward 10× now; claiming opens when it graduates.</>
       ),
@@ -47,7 +52,7 @@ function note(t: Ticket): React.ReactNode {
   if (t.rebuyDebited > 0 && t.state !== "expired") {
     parts.push(
       <>
-        You rebought {f.int(t.rebuyDebited)} {t.symbol} within 7 days of this sell, so the claim shrank from {f.int(t.originalTokens * 0.1)} to{" "}
+        You rebought {f.int(t.rebuyDebited)} {t.symbol} within {rebuy} of this sell, so the claim shrank from {f.int(t.originalTokens * 0.1)} to{" "}
         {f.int(t.claimAmount)}.
       </>,
     );
@@ -56,9 +61,13 @@ function note(t: Ticket): React.ReactNode {
     parts.push(<>Priced at the recent-average floor, above your fill of {f.priceText(t.execPrice)} SOL, because the price had just dropped.</>);
   }
   if (t.state === "expired") {
-    parts.push(<>Expired 90 days after the sell. It peaked at {f.multiple(t.peakMultiple)}. Sometimes selling was right.</>);
+    parts.push(
+      <>
+        Expired {f.duration(p.claimWindowSecs)} after the sell. It peaked at {f.multiple(t.peakMultiple)}. Sometimes selling was right.
+      </>,
+    );
   }
-  if (t.state === "voided") parts.push(<>Rebuys within 7 days brought this ticket to zero.</>);
+  if (t.state === "voided") parts.push(<>Rebuys within {rebuy} brought this ticket to zero.</>);
   if (t.autoClaimed && (t.state === "claimed" || t.state === "queued")) parts.push(<>Auto-claimed: the keeper claimed it for you, straight to your wallet.</>);
   if (!parts.length) return undefined;
   return parts.map((p, i) => (
@@ -75,26 +84,57 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
   const now = useNow();
   const toast = useToast();
   const tx = useFumpadTx();
+  const params = useProtocolParams();
   const [tickets, setTickets] = useState<Ticket[] | null>(initial);
   const [filter, setFilter] = useState<Filter>("all");
   const [moment, setMoment] = useState<Ticket | null>(null);
-  const [loadedFor, setLoadedFor] = useState<string | null>(DEMO_WALLET);
 
+  /**
+   * Local results of the viewer's own actions (claimed, queued, auto-claim) layered on top
+   * of fetched tickets until the indexer reports the same change, so a refetch that lands
+   * before the indexer can't flip a claimed ticket back to "claimable" for a moment.
+   */
+  const overrides = useRef(new Map<string, { patch: Partial<Ticket>; from: Ticket["state"]; fromAuto: boolean; until: number }>());
+  const applyOverrides = useCallback((ts: Ticket[]) => {
+    const now = Date.now();
+    return ts.map((t) => {
+      const o = overrides.current.get(t.id);
+      if (!o) return t;
+      const settled = now > o.until || t.state !== o.from || ("autoClaim" in o.patch && t.autoClaim !== o.fromAuto);
+      if (settled) {
+        overrides.current.delete(t.id);
+        return t;
+      }
+      return { ...t, ...o.patch };
+    });
+  }, []);
+  const override = useCallback((t: Ticket, patch: Partial<Ticket>) => {
+    overrides.current.set(t.id, { patch, from: t.state, fromAuto: t.autoClaim, until: Date.now() + 30_000 });
+  }, []);
+
+  // Tickets move when this wallet transacts, when anything touches it (a keeper auto-claim,
+  // a queue payout) and when the coins it holds tickets in move (progress toward 10×).
+  const current = useRef(address);
   useEffect(() => {
-    if (loadedFor === address) return;
-    let live = true;
+    current.current = address;
+  }, [address]);
+  const load = useCallback(() => {
+    const want = address;
     data
-      .getTickets(address)
+      .getTickets(want)
       .then((ts) => {
-        if (!live) return;
-        setTickets(ts);
-        setLoadedFor(address);
+        if (want !== current.current) return;
+        const next = applyOverrides(ts);
+        setTickets(next);
+        setClaimable(next.filter((t) => t.state === "claimable").length);
       })
       .catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
-  }, [data, address, loadedFor]);
+  }, [data, address, applyOverrides, setClaimable]);
+  const watchMints = useMemo(
+    () => [...new Set((tickets ?? []).filter((t) => ["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)).map((t) => t.mint))].sort(),
+    [tickets],
+  );
+  useRefresh(load, { wallets: [address], mints: watchMints, pollMs: 30_000, debounceMs: 1_000 });
 
   const list = useMemo(() => {
     if (!tickets) return [];
@@ -137,10 +177,17 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
         toast(tx.error ?? "Auto-claim didn't change. Try again.");
         return;
       }
-      setTickets((ts) => ts?.map((t) => (t.mint === mint ? { ...t, autoClaim: enabled } : t)) ?? ts);
+      setTickets(
+        (ts) =>
+          ts?.map((t) => {
+            if (t.mint !== mint) return t;
+            override(t, { autoClaim: enabled });
+            return { ...t, autoClaim: enabled };
+          }) ?? ts,
+      );
       toast(enabled ? `Auto-claim on for $${symbol}.` : `Auto-claim off for $${symbol}. You'll claim by hand.`);
     },
-    [tx, address, toast],
+    [tx, address, toast, override],
   );
 
   const onClaim = useCallback(async (): Promise<ClaimResult> => {
@@ -152,27 +199,19 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
     if (!fits) {
       const q = await data.getClaimQueue(moment.mint, address);
       const position = q.entries.length + 1;
-      setTickets(
-        (ts) =>
-          ts?.map((t) =>
-            t.id === moment.id
-              ? { ...t, state: "queued", chainStatus: "queued", queuePosition: position, queueNeedsPool: t.claimAmount * 10, expiresAt: undefined }
-              : t,
-          ) ?? ts,
-      );
+      const patch: Partial<Ticket> = { state: "queued", chainStatus: "queued", queuePosition: position, queueNeedsPool: moment.claimAmount * 10, expiresAt: undefined };
+      override(moment, patch);
+      setTickets((ts) => ts?.map((t) => (t.id === moment.id ? { ...t, ...patch } : t)) ?? ts);
       return { status: "queued", position, needsPool: moment.claimAmount * 10 };
     }
     const at = data.now();
-    setTickets(
-      (ts) =>
-        ts?.map((t) =>
-          t.id === moment.id ? { ...t, state: "claimed", chainStatus: "claimed", claimedAt: at, claimTx: res.signature, expiresAt: undefined } : t,
-        ) ?? ts,
-    );
+    const patch: Partial<Ticket> = { state: "claimed", chainStatus: "claimed", claimedAt: at, claimTx: res.signature, expiresAt: undefined };
+    override(moment, patch);
+    setTickets((ts) => ts?.map((t) => (t.id === moment.id ? { ...t, ...patch } : t)) ?? ts);
     setClaimable(Math.max(0, (tickets?.filter((t) => t.state === "claimable").length ?? 1) - 1));
     toast(`Claimed ${f.int(moment.claimAmount)} ${moment.symbol}.`, "money");
     return { status: "paid", signature: res.signature, at };
-  }, [moment, data, tx, address, setClaimable, tickets, toast]);
+  }, [moment, data, tx, address, setClaimable, tickets, toast, override]);
 
   const FILTERS: { value: Filter; label: string; count: number }[] = [
     { value: "all", label: "All", count: counts.all },
@@ -189,7 +228,8 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
       <div className={s.pageHead}>
         <h1 className={s.h1}>My fumbles</h1>
         <p className={s.lede}>
-          Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the 30-minute median holds there.
+          Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the {f.durationAdj(params.oracleWindowSecs)}{" "}
+          median holds there.
         </p>
         {isDemo && <p className={s.demo}>Showing a demo wallet. Connect yours to see your own tickets.</p>}
       </div>
@@ -231,7 +271,8 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
         <Panel className={s.auto} aria-label="Auto-claim">
           <PanelHead title="Auto-claim" aside="per coin" />
           <p className={s.autoLede}>
-            When a ticket&apos;s 30-minute median holds 10×, the keeper claims it for you and the tokens land in your wallet. Turn it off to claim by hand.
+            When a ticket&apos;s {f.durationAdj(params.oracleWindowSecs)} median holds 10×, the keeper claims it for you and the tokens land in your wallet.
+            Turn it off to claim by hand.
           </p>
           <ul className={s.autoList}>
             {autoCoins.map((c) => (
@@ -283,7 +324,7 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
                 as="li"
                 ticket={t}
                 now={now}
-                note={note(t)}
+                note={note(t, params)}
                 action={
                   t.state === "claimable" ? (
                     <Button variant="flare" onClick={() => setMoment(t)}>
@@ -307,11 +348,11 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
               </Button>
             }
           >
-            Your wallet is clean, which is rarer than a 10×. Rebuys elsewhere within 7 days or linked wallets would show up here.
+            Your wallet is clean, which is rarer than a 10×. Rebuys elsewhere within {f.duration(params.rebuyWindowSecs)} or linked wallets would show up here.
           </EmptyState>
         ) : tickets.length === 0 ? (
           <EmptyState title="No fumbles yet" action={<Button href="/coins">Find a coin</Button>}>
-            Sell $50 or more of any coin through FUMPAD and the ticket shows up here, measured against 10× of your price.
+            Sell {f.usdRule(params.minSellUsd)} or more of any coin through FUMPAD and the ticket shows up here, measured against 10× of your price.
           </EmptyState>
         ) : (
           <EmptyState

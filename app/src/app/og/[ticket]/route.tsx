@@ -23,8 +23,9 @@ const fonts = Promise.all([
 export async function GET(req: Request, ctx: { params: Promise<{ ticket: string }> }) {
   const { ticket: id } = await ctx.params;
   const style = parseStyle(new URL(req.url).searchParams.get("style"));
-  const t = await getFumpadData().getTicket(id);
+  const [t, params] = await Promise.all([getFumpadData().getTicket(id), getFumpadData().getParams()]);
   if (!t) return new Response("Ticket not found", { status: 404 });
+  const median = `${f.durationShort(params.oracleWindowSecs)} median`;
   const [wide, body, monoBig, mono] = await fonts;
   const c = CARD_COLORS[style];
   const copy = cardCopy(t);
@@ -81,10 +82,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
           <div style={{ display: "flex", gap: 8, marginTop: 14, fontSize: 18, color: c.sub }}>
             <span>
               {t.claimedAt
-                ? `30-min median at claim, ${f.date(t.claimedAt)}`
+                ? `${median} at claim, ${f.date(t.claimedAt)}`
                 : t.state === "expired"
                   ? `peak ${f.multiple(t.peakMultiple)}, expired`
-                  : "30-min median now"}
+                  : `${median} now`}
             </span>
           </div>
         </div>

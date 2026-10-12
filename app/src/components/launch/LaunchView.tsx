@@ -3,7 +3,7 @@
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { splitVanity } from "@/chain/program";
 import { type PreparedLaunch, useFumpadTx } from "@/chain/tx";
-import { PARAMS, cpOut } from "@/data/chain";
+import { cpOut } from "@/data/chain";
 import {
   AmountInput,
   Button,
@@ -25,7 +25,7 @@ import {
   useToast,
 } from "@/design";
 import * as f from "@/design/format";
-import { useViewer } from "../shell/Providers";
+import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Launch.module.css";
 
 const MAX_IMG = 4 * 1024 * 1024;
@@ -57,6 +57,7 @@ function validate(v: { name: string; symbol: string; description: string; x: str
 
 export function LaunchView() {
   const { isDemo } = useViewer();
+  const PARAMS = useProtocolParams();
   const tx = useFumpadTx();
   const toast = useToast();
   const [name, setName] = useState("");
@@ -337,25 +338,25 @@ export function LaunchView() {
                 </div>
               </div>
               {description && <p className={s.pvDesc}>{description}</p>}
-              <CurveMeter raised={firstBuy > 0 ? Math.min(85, net) : 0} />
+              <CurveMeter raised={firstBuy > 0 ? Math.min(PARAMS.graduationSol, net) : 0} target={PARAMS.graduationSol} />
             </div>
             <div className={s.facts}>
               <KV
                 rows={[
                   { k: "Supply, mint authority revoked", v: <Tokens value={PARAMS.totalSupply} /> },
-                  { k: "Reward pool, 8%", v: <Tokens value={PARAMS.rewardPoolSupply} /> },
+                  { k: `Reward pool, ${f.fixed((PARAMS.rewardPoolSupply / PARAMS.totalSupply) * 100, 0)}%`, v: <Tokens value={PARAMS.rewardPoolSupply} /> },
                   { k: "On the bonding curve", v: <Tokens value={PARAMS.curveSupply} compact /> },
-                  { k: "Graduates at", v: <span className="num">85 SOL</span> },
+                  { k: "Graduates at", v: <span className="num">{f.fixed(PARAMS.graduationSol, PARAMS.graduationSol < 10 ? 2 : 0)} SOL</span> },
                   { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> },
                 ]}
               />
-              <p className={s.splitLabel}>Each 1% trade fee</p>
+              <p className={s.splitLabel}>Each {f.fixed(PARAMS.feeBps / 100, PARAMS.feeBps % 100 ? 1 : 0)}% trade fee</p>
               <SplitBar
                 label="Fee split"
                 parts={[
-                  { label: "pool", share: 50 },
-                  { label: "FUMPAD", share: 30 },
-                  { label: "you", share: 20 },
+                  { label: "pool", share: PARAMS.feePoolShareBps / 100 },
+                  { label: "FUMPAD", share: PARAMS.feePlatformShareBps / 100 },
+                  { label: "you", share: PARAMS.feeCreatorShareBps / 100 },
                 ]}
               />
               <p className={s.hint}>At graduation the liquidity moves to PumpSwap and is locked forever. Nobody can pull it, including you.</p>

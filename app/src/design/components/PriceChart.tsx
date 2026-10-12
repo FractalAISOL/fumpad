@@ -24,6 +24,7 @@ export function PriceChart({
   rangeLabel,
   symbol,
   height = 300,
+  live = false,
 }: {
   points: ChartPoint[];
   sell?: ChartPoint;
@@ -32,6 +33,8 @@ export function PriceChart({
   rangeLabel: string;
   symbol: string;
   height?: number;
+  /** Points arrive live: the last-point dot glides and pings once per new point. */
+  live?: boolean;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(800);
@@ -152,6 +155,7 @@ export function PriceChart({
           ))}
 
         {sellVisible && <circle cx={X(sell!.t)} cy={Y(sell!.p)} r={6.5} className={s.ring} />}
+        {live && <circle key={last.t} cx={X(last.t)} cy={Y(last.p)} r={4.5} className={cx(s.ping, hitNow && s.pingHit)} />}
         <circle cx={X(last.t)} cy={Y(last.p)} r={4.5} className={hitNow ? s.nowHit : s.now} />
 
         {cp && (

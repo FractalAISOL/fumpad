@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
 import { keepSnapshot, type CoinDetail, type Side, type Ticket, type TradeQuote, getFumpadData } from "@/data";
 import { AmountInput, Button, InfoTip, KV, Multiple, Price, Segmented, Sol, Tokens, cx, parseAmount, useToast } from "@/design";
 import * as f from "@/design/format";
-import { useNow, useViewer } from "../shell/Providers";
+import { useRefresh } from "../shell/live";
+import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 
 /**
@@ -21,46 +22,82 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
   const now = useNow();
   const [side, setSide] = useState<Side>("sell");
   const [raw, setRaw] = useState("2,000,000");
-  const [bal, setBal] = useState<{ sol: number; tokens: number; maturedTokens: number } | null>(null);
+  const params = useProtocolParams();
+  type Bal = { sol: number; tokens: number; maturedTokens: number };
+  const [bal, setBal] = useState<Bal | null>(null);
+  /** Balances after the viewer's confirmed trade, shown until the API reports the new ones. */
+  const [optimistic, setOptimistic] = useState<{ bal: Bal; before: Bal; until: number } | null>(null);
   const [quote, setQuote] = useState<TradeQuote | null>(null);
   const amount = parseAmount(raw);
+  const balReq = useRef(0);
 
-  useEffect(() => {
-    let live = true;
-    data.getBalances(address, coin.mint).then((b) => live && setBal(b)).catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
+  // Balances: on mount, after own transactions (with follow-ups while the RPC catches up),
+  // when a transaction touches this wallet, and every 15 s (held tokens mature with time).
+  const loadBal = useCallback(() => {
+    const id = ++balReq.current;
+    data
+      .getBalances(address, coin.mint)
+      .then((b) => {
+        if (id !== balReq.current) return;
+        setBal(b);
+        setOptimistic((o) => (o && (Date.now() > o.until || b.sol !== o.before.sol || b.tokens !== o.before.tokens) ? null : o));
+      })
+      .catch(keepSnapshot);
   }, [data, address, coin.mint]);
+  useRefresh(loadBal, { wallets: [address], mints: [], pollMs: 15_000, debounceMs: 300 });
+  const [balFor, setBalFor] = useState(address + coin.mint);
+  if (balFor !== address + coin.mint) {
+    setBalFor(address + coin.mint);
+    setBal(null);
+    setOptimistic(null);
+  }
 
+  // The quote follows the coin: price moves arrive with the pushed coin (reserves change).
+  const quoteKey = `${coin.price}:${coin.status}:${coin.curveSol}:${coin.ammSol ?? ""}`;
+  const balKey = bal ? `${bal.tokens}:${bal.maturedTokens}` : "";
   useEffect(() => {
     let live = true;
-    data.quoteTrade({ mint: coin.mint, side, amount, wallet: address }).then((q) => live && setQuote(q)).catch(keepSnapshot);
+    const t = setTimeout(() => {
+      data.quoteTrade({ mint: coin.mint, side, amount, wallet: address }).then((q) => live && setQuote(q)).catch(keepSnapshot);
+    }, 150);
     return () => {
       live = false;
+      clearTimeout(t);
     };
-  }, [data, coin.mint, side, amount, address]);
+  }, [data, coin.mint, side, amount, address, quoteKey, balKey]);
 
-  const balance = bal ? (side === "buy" ? bal.sol : bal.tokens) : undefined;
+  const shown = optimistic?.bal ?? bal;
+  const balance = shown ? (side === "buy" ? shown.sol : shown.tokens) : undefined;
   const over = balance !== undefined && amount > balance;
   const t = quote?.ticket;
   const files = side === "sell" && t?.files;
 
   const submit = async () => {
     if (!quote || amount <= 0 || over) return;
+    const before = bal;
     const res =
       side === "buy"
-        ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: quote.amountOut * 0.98, openTickets: [] })
-        : await tx.sell({ mint: coin.mint, tokensIn: amount, minSolOut: quote.amountOut * 0.98 });
+        ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: quote.amountOut * 0.98, openTickets: [], expectedOut: quote.amountOut })
+        : await tx.sell({ mint: coin.mint, tokensIn: amount, minSolOut: quote.amountOut * 0.98, expectedOut: quote.amountOut });
     if (!res) {
       toast(tx.error ?? "The transaction didn't go through.");
       return;
+    }
+    if (before) {
+      const next =
+        side === "buy"
+          ? { sol: Math.max(0, before.sol - amount), tokens: before.tokens + quote.amountOut, maturedTokens: before.maturedTokens }
+          : { sol: before.sol + quote.amountOut, tokens: Math.max(0, before.tokens - amount), maturedTokens: Math.max(0, before.maturedTokens - amount) };
+      setOptimistic({ bal: next, before, until: Date.now() + 20_000 });
     }
     if (side === "buy") toast(`Bought ${f.tokens(quote.amountOut)} ${coin.symbol}.`);
     else toast(files ? `Sold. Ticket filed for $${coin.symbol}, claimable at 10×.` : `Sold ${f.tokens(amount)} ${coin.symbol}.`, files ? "money" : "ink");
     tx.reset();
   };
 
+  const hold = f.duration(params.minHoldSecs);
+  const median = `${f.durationShort(params.oracleWindowSecs)} median`;
+  const rebuyWindow = f.duration(params.rebuyWindowSecs);
   const label = side === "buy" ? `Buy $${coin.symbol}` : files ? "Sell and file a ticket" : `Sell $${coin.symbol}`;
   const busy = tx.status === "building" || tx.status === "signing" || tx.status === "confirming";
 
@@ -171,9 +208,13 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
                   <>Priced at your fill. The recent-average floor is below it, so it doesn&apos;t apply.</>
                 )}{" "}
                 {coin.status === "graduated"
-                  ? "Claimable when the 30-min median holds 10× within 90 days."
+                  ? `Claimable when the ${median} holds 10× within ${f.duration(params.claimWindowSecs)}.`
                   : `Counts toward 10× now; claims on $${coin.symbol} open when it graduates.`}{" "}
-                {t.tokens < amount && <>Only {f.tokens(t.tokens)} of these tokens have been held 10 minutes; the ticket counts those. </>}
+                {t.tokens < amount && (
+                  <>
+                    Only {f.tokens(t.tokens)} of these tokens have been held {hold}; the ticket counts those.{" "}
+                  </>
+                )}
                 You&apos;ll have {t.openTickets + 1} of {t.maxOpenTickets} open tickets on this coin.
               </p>
             </>
@@ -181,12 +222,14 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
             <p className={s.pvNote}>
               {t.reason === "under-min" && (
                 <>
-                  Sells under $50 go through but don&apos;t file a ticket. This one is about <span className="num">{f.usd(t.usdValue)}</span>.
+                  Sells under {f.usdRule(params.minSellUsd)} go through but don&apos;t file a ticket. This one is about <span className="num">{f.usd(t.usdValue)}</span>.
                 </>
               )}
               {t.reason === "creator" && <>Creators can&apos;t file tickets on their own coin. The sell goes through without one.</>}
-              {t.reason === "max-open" && <>You already have 5 open tickets on this coin, the most allowed. This sell goes through without one.</>}
-              {t.reason === "not-matured" && <>Tokens need 10 minutes in your wallet before a sell counts. This sell goes through without a ticket.</>}
+              {t.reason === "max-open" && (
+                <>You already have {t.maxOpenTickets} open tickets on this coin, the most allowed. This sell goes through without one.</>
+              )}
+              {t.reason === "not-matured" && <>Tokens need {hold} in your wallet before a sell counts. This sell goes through without a ticket.</>}
               {t.reason === "no-oracle" && <>The SOL/USD price feed is stale right now, so this sell can&apos;t be valued. It goes through without a ticket.</>}
             </p>
           )}
@@ -197,13 +240,13 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
         <div className={s.preview} aria-live="polite">
           {quote.rebuyWarning && quote.rebuyWarning.totalDebit > 0 ? (
             <p className={s.pvNote}>
-              <b>Heads up.</b> You sold ${coin.symbol} {f.ago(now - quote.rebuyWarning.tickets[0].soldAgo, now)} ago. Buying back within 7 days shrinks that
+              <b>Heads up.</b> You sold ${coin.symbol} {f.ago(now - quote.rebuyWarning.tickets[0].soldAgo, now)} ago. Buying back within {rebuyWindow} shrinks that
               ticket by what you buy: −<span className="num">{f.tokens(quote.rebuyWarning.totalDebit)}</span> tokens.
             </p>
           ) : (
             <p className={s.pvNote}>
-              No ${coin.symbol} sells of yours in the last 7 days, so buying doesn&apos;t shrink any ticket. Tokens you buy count toward future tickets after 10
-              minutes.
+              No ${coin.symbol} sells of yours in the last {rebuyWindow}, so buying doesn&apos;t shrink any ticket. Tokens you buy count toward future
+              tickets after {hold}.
             </p>
           )}
           {quote.partialFill && <p className={s.pvNote}>This buy completes the curve. You&apos;re charged only for the tokens left.</p>}
@@ -213,6 +256,17 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
       <Button block size="lg" onClick={submit} disabled={amount <= 0 || over} loading={busy} className={s.go}>
         {label}
       </Button>
+      <p className={s.txStatus} role="status" aria-live="polite">
+        {tx.status === "building"
+          ? "Preparing the transaction…"
+          : tx.status === "signing"
+            ? "Approve it in your wallet."
+            : tx.status === "confirming"
+              ? "Confirming on Solana…"
+              : optimistic
+                ? "Confirmed. Updating your balance…"
+                : ""}
+      </p>
       {isDemo && <p className={s.demo}>Demo wallet. Trades are simulated until you connect.</p>}
     </section>
   );

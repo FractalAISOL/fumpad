@@ -16,22 +16,28 @@
 import { cacheLife } from "next/cache";
 import { getFumpadData } from ".";
 import type { CoinSort } from "./interface";
-import type { Address, Board, ChartRange, FeedKind } from "./types";
+import type { Address, Board, ChartRange, FeedKind, ProtocolParams } from "./types";
 
 /** Floor to the minute: the shell's clock must not churn the cache key or the HTML. */
 const minute = (ms: number) => Math.floor(ms / 60_000) * 60_000;
 
 /**
- * SOL/USD plus the data source's clock at render time, for the root layout. The clock
+ * SOL/USD, Global.params and the data source's clock at render time, for the root layout. The clock
  * seeds `useNow()` so relative times in the prerendered HTML ("4m") match hydration; the
  * client takes over with its own clock after mount.
  */
-export async function shellSnapshot(): Promise<{ solUsd: number; now: number }> {
+export async function shellSnapshot(): Promise<{ solUsd: number; now: number; params: ProtocolParams }> {
   "use cache";
   cacheLife("minutes");
   const data = getFumpadData();
-  const solUsd = await data.getSolUsd();
-  return { solUsd, now: minute(data.now()) };
+  const [solUsd, params] = await Promise.all([data.getSolUsd(), data.getParams()]);
+  return { solUsd, now: minute(data.now()), params };
+}
+
+export async function cachedParams() {
+  "use cache";
+  cacheLife("minutes");
+  return getFumpadData().getParams();
 }
 
 export async function cachedSolUsd() {

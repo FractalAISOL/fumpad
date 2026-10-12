@@ -57,11 +57,39 @@
   stroke: var(--ink);
   stroke-width: 2.5;
 }
-.now {
+.now,
+.nowHit {
   fill: var(--ink);
+  /* A live point glides the dot to the new price instead of jumping. */
+  transition:
+    cx var(--dur-base) var(--ease-out),
+    cy var(--dur-base) var(--ease-out);
 }
 .nowHit {
   fill: var(--flare);
+}
+/* One soft ring per new live point: the data arriving, nothing louder. */
+.ping {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ping var(--dur-slow) var(--ease-out);
+}
+.pingHit {
+  stroke: var(--flare);
+}
+@keyframes ping {
+  from {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
 }
 .xhair {
   stroke: var(--ink-3);

@@ -4,12 +4,14 @@ import * as f from "../format";
 import s from "./Meters.module.css";
 
 /**
- * Bonding-curve progress toward graduation (85 SOL). 17 cells of 5 SOL each; the
- * orange post at the end is graduation, the moment claims open.
+ * Bonding-curve progress toward graduation (Global.params: 85 SOL on mainnet, scaled down
+ * on devnet). 17 cells (5 SOL each at 85); the orange post at the end is graduation, the
+ * moment claims open.
  */
 export function CurveMeter({ raised, target = 85, size = "md", className }: { raised: number; target?: number; size?: "sm" | "md"; className?: string }) {
   const pct = Math.min(100, (raised / target) * 100);
-  const style = { "--pct": `${pct}%`, "--cells": Math.round(target / 5) } as CSSProperties;
+  const style = { "--pct": `${pct}%`, "--cells": 17 } as CSSProperties;
+  const sol = (n: number) => (target < 10 ? f.fixed(n, n === 0 ? 0 : 2) : f.fixed(n, Number.isInteger(n) ? 0 : 1));
   return (
     <div
       className={cx(s.curve, s[size], className)}
@@ -19,7 +21,7 @@ export function CurveMeter({ raised, target = 85, size = "md", className }: { ra
       aria-valuemin={0}
       aria-valuemax={target}
       aria-valuenow={Math.round(raised * 100) / 100}
-      aria-valuetext={`${f.fixed(raised, 2)} of ${target} SOL, ${f.fixed(pct, 1)}%`}
+      aria-valuetext={`${f.fixed(raised, 2)} of ${sol(target)} SOL, ${f.fixed(pct, 1)}%`}
     >
       <div className={s.cTrack} />
       <div className={s.cFill} />
@@ -30,10 +32,10 @@ export function CurveMeter({ raised, target = 85, size = "md", className }: { ra
             0
           </span>
           <span className={s.cLbl} style={{ left: "50%", transform: "translateX(-50%)" }}>
-            {target / 2}
+            {sol(target / 2)}
           </span>
           <span className={s.cLbl} style={{ right: 0 }}>
-            {target} SOL
+            {sol(target)} SOL
           </span>
         </div>
       )}

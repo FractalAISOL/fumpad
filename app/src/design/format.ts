@@ -56,6 +56,11 @@ export function usd(n: number): string {
   return "$" + fmt(n, 4);
 }
 
+/** A dollar threshold quoted in copy: "$50", "$5", "$2.50". */
+export function usdRule(n: number): string {
+  return Number.isInteger(n) ? "$" + int(n) : usd(n);
+}
+
 /** Token counts: full below 10M, compact above. */
 export function tokens(n: number): string {
   return Math.abs(n) >= 1e7 ? compact(n, 2) : int(n);
@@ -183,6 +188,30 @@ export function eta(ms: number): string {
   if (ms < HOUR) return `~${Math.max(1, Math.round(ms / MIN))} min`;
   if (ms < 2 * DAY) return `~${Math.round(ms / HOUR)} hours`;
   return `~${Math.round(ms / DAY)} days`;
+}
+
+/** A protocol window in its largest whole unit, e.g. seconds 30 → [30, "second"], 600 → [10, "minute"]. */
+function durationParts(secs: number): [number, string] {
+  const s = Math.max(0, Math.round(secs));
+  if (s >= 86_400 && s % 86_400 === 0) return [s / 86_400, "day"];
+  if (s >= 3_600 && s % 3_600 === 0) return [s / 3_600, "hour"];
+  if (s >= 60 && s % 60 === 0) return [s / 60, "minute"];
+  return [s, "second"];
+}
+/** "30 seconds", "1 minute", "10 minutes", "7 days" (protocol windows quoted in copy). */
+export function duration(secs: number): string {
+  const [n, unit] = durationParts(secs);
+  return `${int(n)} ${unit}${n === 1 ? "" : "s"}`;
+}
+/** As an adjective: "30-second", "10-minute", "30-minute". */
+export function durationAdj(secs: number): string {
+  const [n, unit] = durationParts(secs);
+  return `${int(n)}-${unit}`;
+}
+/** Short adjective for labels: "30-sec", "5-min", "30-min", "1-hour", "7-day". */
+export function durationShort(secs: number): string {
+  const [n, unit] = durationParts(secs);
+  return `${int(n)}-${unit === "second" ? "sec" : unit === "minute" ? "min" : unit}`;
 }
 
 /* ── Addresses ─────────────────────────────────────────────────────────────── */

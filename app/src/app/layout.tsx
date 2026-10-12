@@ -29,7 +29,7 @@ const TOKENS_CSS = tokensToCss();
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // Cached (data/server.ts) so the shell stays prerenderable against the live API.
-  const { solUsd, now } = await shellSnapshot();
+  const { solUsd, now, params } = await shellSnapshot();
   return (
     <html lang="en" className={`${archivo.variable} ${martian.variable}`} suppressHydrationWarning>
       <head>
@@ -39,7 +39,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <style dangerouslySetInnerHTML={{ __html: TOKENS_CSS }} />
       </head>
       <body>
-        <Providers now={now}>
+        <Providers now={now} params={params}>
           <Header solUsd={solUsd} />
           <main id="main" className={s.main}>
             {children}

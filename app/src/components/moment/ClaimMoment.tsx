@@ -6,7 +6,7 @@ import type { Ticket } from "@/data";
 import { cx } from "@/design";
 import * as f from "@/design/format";
 import { colorDark, colorLight, gauge as G } from "@/design/tokens";
-import { useNow } from "../shell/Providers";
+import { useNow, useProtocolParams } from "../shell/Providers";
 import s from "./ClaimMoment.module.css";
 
 export type ClaimResult =
@@ -35,6 +35,7 @@ export function ClaimMoment({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ClaimResult | null>(null);
   const now = useNow();
+  const params = useProtocolParams();
   const root = useRef<HTMLDivElement>(null);
   const claimBtn = useRef<HTMLButtonElement>(null);
   const finalX = ticket.multiple;
@@ -152,7 +153,9 @@ export function ClaimMoment({
           <span>
             ${ticket.symbol} ticket, sold {f.dateTime(ticket.sellTs)} at {f.priceSpoken(ticket.sellPrice)} SOL
           </span>
-          <span>30-min median, checked {f.clock(now)} UTC</span>
+          <span>
+            {f.durationShort(params.oracleWindowSecs)} median, checked {f.clock(now)} UTC
+          </span>
         </div>
         <div className={s.read} aria-hidden="true">
           {f.fixed(x, 1)}×

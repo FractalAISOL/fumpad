@@ -61,7 +61,7 @@ async function ProfileBody({ params }: { params: Promise<{ address: string }> })
         </Panel>
         <Panel aria-labelledby="pt-h">
           <PanelHead id="pt-h" title="Tickets" aside="public, like everything on-chain" />
-          <ProfileTickets tickets={tickets} />
+          <ProfileTickets key={p.address} tickets={tickets} owner={p.address} />
         </Panel>
       </div>
     </div>

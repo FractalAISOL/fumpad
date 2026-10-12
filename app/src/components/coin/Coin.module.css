@@ -302,6 +302,76 @@
 .holders li:last-child {
   border-bottom: 0;
 }
+.trades {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.trades li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 8px var(--s-4);
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-sm);
+}
+@media (min-width: 600px) {
+  .trades li {
+    grid-template-columns: 64px minmax(0, 1fr) 92px 92px 56px;
+  }
+}
+.trades li > :nth-child(n + 3) {
+  justify-self: end;
+}
+.trades li:last-child {
+  border-bottom: 0;
+}
+.tradesSkel {
+  display: grid;
+  gap: 14px;
+  padding: var(--s-4);
+}
+/* Direction without hue (DESIGN.md): glyph + weight; sells read quieter. */
+.side {
+  font-weight: var(--w-medium);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.sideSell {
+  font-weight: var(--w-regular);
+  color: var(--ink-3);
+}
+.tradeAgo {
+  display: none;
+}
+@media (min-width: 600px) {
+  .tradeAgo {
+    display: inline;
+  }
+}
+@media (max-width: 599px) {
+  .trades li > :nth-child(3) {
+    display: none;
+  }
+}
+/* A trade that just arrived: one grey fade, like new feed posts. */
+.fresh {
+  animation: fresh 1.2s var(--ease-out);
+}
+@keyframes fresh {
+  from {
+    background: var(--sunken);
+  }
+  to {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fresh {
+    animation: none;
+  }
+}
 .about {
   color: var(--ink-2);
   font-size: var(--fs-md);
@@ -329,4 +399,17 @@
   .leftCol {
     gap: var(--s-5);
   }
+}
+
+/* Transaction progress under the trade button; empty (no height) when idle. */
+.txStatus {
+  margin: 0;
+  min-height: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  text-align: center;
+}
+/* Stays in the tree (a live region must exist before it speaks) but takes no space when idle. */
+.txStatus:empty {
+  margin-top: calc(-1 * var(--s-3));
 }

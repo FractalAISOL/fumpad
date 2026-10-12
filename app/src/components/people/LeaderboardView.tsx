@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { keepSnapshot, type Board, type LeaderRow, type Profile, getFumpadData } from "@/data";
 import { Address, type Column, Multiple, Panel, PanelHead, PanelNote, Sol, Table, Tabs, cx, tabPanelId, tabId } from "@/design";
+import { useRefresh } from "../shell/live";
 import { useViewer } from "../shell/Providers";
 import s from "./People.module.css";
 import { ProfileCard } from "./ProfileCard";
@@ -77,14 +78,15 @@ export function LeaderboardView({ initial, profile: initialProfile }: { initial:
   const { address } = useViewer();
   const [board, setBoard] = useState<Board>("fumbles");
   const [profile, setProfile] = useState(initialProfile);
+  const [rows, setRows] = useState(initial);
 
-  useEffect(() => {
-    let live = true;
-    data.getProfile(address).then((p) => live && setProfile(p)).catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
+  // Boards rank 30-day totals: claims and fumbles move them, so follow the feed, the viewer's
+  // own transactions, and poll lightly.
+  const load = useCallback(() => {
+    data.getProfile(address).then(setProfile).catch(keepSnapshot);
+    for (const b of BOARDS) data.getLeaderboard(b.value, address).then((r) => setRows((x) => ({ ...x, [b.value]: r }))).catch(keepSnapshot);
   }, [data, address]);
+  useRefresh(load, { wallets: [address], onFeed: true, pollMs: 60_000, debounceMs: 3_000 });
 
   const meta = BOARDS.find((b) => b.value === board)!;
   return (
@@ -106,7 +108,7 @@ export function LeaderboardView({ initial, profile: initialProfile }: { initial:
               key={board}
               caption={meta.label}
               columns={columns(board, address)}
-              rows={initial[board]}
+              rows={rows[board]}
               rowKey={(r) => r.address + r.rank}
               highlight={(r) => r.address === address}
             />

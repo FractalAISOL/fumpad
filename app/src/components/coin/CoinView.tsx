@@ -1,7 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { keepSnapshot, type ChartRange, type CoinDetail, type FumbleRow, type Holder, type PricePoint, type QueueEntry, type Ticket, getFumpadData } from "@/data";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  keepSnapshot,
+  type ChartRange,
+  type CoinDetail,
+  type FumbleRow,
+  type Holder,
+  type PricePoint,
+  type QueueEntry,
+  type Ticket,
+  type TradeRow,
+  getFumpadData,
+} from "@/data";
 import { graduationSolOf } from "@/data/chain";
 import {
   Address,
@@ -13,6 +24,7 @@ import {
   EmptyState,
   Gauge,
   KV,
+  Loading,
   Multiple,
   Panel,
   PanelBody,
@@ -32,7 +44,8 @@ import {
   cx,
 } from "@/design";
 import * as f from "@/design/format";
-import { useNow, useViewer } from "../shell/Providers";
+import { useLiveMessages, useRefresh } from "../shell/live";
+import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 import { TradePanel } from "./TradePanel";
 
@@ -43,13 +56,33 @@ const RANGES: { value: ChartRange; label: string }[] = [
   { value: "all", label: "All" },
 ];
 const RANGE_LABEL: Record<ChartRange, string> = { "1h": "last hour", "1d": "last day", "7d": "last 7 days", all: "since launch" };
+const RANGE_MS: Record<ChartRange, number> = { "1h": 3_600_000, "1d": 86_400_000, "7d": 7 * 86_400_000, all: Infinity };
+/** Live points kept on top of a fetched series before the oldest are dropped. */
+const MAX_POINTS = 1_500;
+
+/** Append pushed points (strictly newer than the last; same timestamp replaces) and drop what fell out of the range. */
+function extend(points: PricePoint[], add: PricePoint[], range: ChartRange, now: number): PricePoint[] {
+  if (!add.length) return points;
+  const out = points.slice();
+  for (const p of add) {
+    const last = out[out.length - 1];
+    if (!last || p.t > last.t) out.push(p);
+    else if (p.t === last.t) out[out.length - 1] = p;
+  }
+  const from = now - RANGE_MS[range];
+  let cut = 0;
+  // Keep one point before the window so the line still starts at the left edge.
+  while (cut < out.length - 2 && out[cut + 1].t < from) cut++;
+  const trimmed = cut ? out.slice(cut) : out;
+  return trimmed.length > MAX_POINTS ? trimmed.slice(trimmed.length - MAX_POINTS) : trimmed;
+}
 
 export function CoinView({
-  coin,
+  coin: initialCoin,
   series: initialSeries,
-  holders,
-  fumbles,
-  queue,
+  holders: initialHolders,
+  fumbles: initialFumbles,
+  queue: initialQueue,
   solUsd,
 }: {
   coin: CoinDetail;
@@ -62,28 +95,75 @@ export function CoinView({
   const data = getFumpadData();
   const { address } = useViewer();
   const now = useNow();
+  const params = useProtocolParams();
+  const [coin, setCoin] = useState(initialCoin);
+  const [holders, setHolders] = useState(initialHolders);
+  const [fumbles, setFumbles] = useState(initialFumbles);
+  const [queue, setQueue] = useState(initialQueue);
+  const [trades, setTrades] = useState<TradeRow[] | null>(null);
+  const [freshTrades, setFreshTrades] = useState<Set<string>>(new Set());
   const [range, setRange] = useState<ChartRange>("7d");
   const [series, setSeries] = useState<{ range: ChartRange; points: PricePoint[] }>({ range: "7d", points: initialSeries });
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const grad = coin.status === "graduated";
   const target = graduationSolOf(coin);
-
+  const mint = coin.mint;
+  const rangeRef = useRef(range);
   useEffect(() => {
-    if (series.range === range) return;
-    let live = true;
-    data.getPriceSeries(coin.mint, range).then((points) => live && setSeries({ range, points })).catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
-  }, [data, coin.mint, range, series.range]);
+    rangeRef.current = range;
+  }, [range]);
 
+  // A new coin page (client navigation between coins) starts from its own server snapshot.
+  const [shownMint, setShownMint] = useState(initialCoin.mint);
+  if (shownMint !== initialCoin.mint) {
+    setShownMint(initialCoin.mint);
+    setCoin(initialCoin);
+    setHolders(initialHolders);
+    setFumbles(initialFumbles);
+    setQueue(initialQueue);
+    setTrades(null);
+    setSeries({ range: "7d", points: initialSeries });
+    setRange("7d");
+    setTickets([]);
+  }
+
+  /** (Re)load the series for the shown range: on mount (the server snapshot may be minutes old), on range change, after a reconnect. */
+  const loadSeries = useCallback(() => {
+    const want = rangeRef.current;
+    data
+      .getPriceSeries(mint, want)
+      .then((points) => {
+        if (rangeRef.current === want) setSeries({ range: want, points });
+      })
+      .catch(keepSnapshot);
+  }, [data, mint]);
   useEffect(() => {
-    let live = true;
-    data.getTickets(address).then((ts) => live && setTickets(ts.filter((t) => t.mint === coin.mint))).catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
-  }, [data, address, coin.mint]);
+    if (series.range !== range) loadSeries();
+  }, [range, series.range, loadSeries]);
+  useEffect(loadSeries, [loadSeries]);
+
+  // Panels that change when anything touches this coin or the viewer's wallet.
+  const loadPanels = useCallback(() => {
+    data.getCoin(mint).then((c) => c && c.mint === mint && setCoin(c)).catch(keepSnapshot);
+    data.getHolders(mint, address).then(setHolders).catch(keepSnapshot);
+    data.getRecentFumbles(mint, address).then(setFumbles).catch(keepSnapshot);
+    data.getClaimQueue(mint, address).then(setQueue).catch(keepSnapshot);
+    data.getRecentTrades(mint, 30).then((ts) => setTrades((prev) => mergeTrades(ts, prev))).catch(keepSnapshot);
+    data.getTickets(address).then((ts) => setTickets(ts.filter((t) => t.mint === mint))).catch(keepSnapshot);
+  }, [data, mint, address]);
+  useRefresh(loadPanels, { mints: [mint], wallets: [address], pollMs: 30_000, debounceMs: 800 });
+
+  // Pushed state: price, market cap, curve, pool and the chart move with every message.
+  useLiveMessages((m) => {
+    if (m.type === "resync") return loadSeries();
+    if (m.type !== "coin" || m.coin.mint !== mint) return;
+    setCoin(m.coin);
+    if (m.points.length) setSeries((sr) => (sr.range === rangeRef.current ? { ...sr, points: extend(sr.points, m.points, sr.range, data.now()) } : sr));
+    if (m.trades.length) {
+      setTrades((prev) => mergeTrades(m.trades, prev));
+      setFreshTrades(new Set(m.trades.map((t) => t.signature + t.wallet + t.ts)));
+    }
+  });
 
   const mine = useMemo(() => {
     const open = tickets.filter((t) => t.state !== "expired" && t.state !== "voided" && t.state !== "claimed");
@@ -112,7 +192,7 @@ export function CoinView({
         </div>
       </div>
       <div className={s.prices}>
-        <Stat label={grad ? "Price, 30-min median" : "Price"}>
+        <Stat label={grad ? `Price, ${f.durationShort(params.oracleWindowSecs)} median` : "Price"}>
           <Price value={coin.median ?? coin.price} unit size="xl" />
         </Stat>
         <Stat label="Market cap">
@@ -143,6 +223,7 @@ export function CoinView({
             others={others}
             rangeLabel={RANGE_LABEL[range]}
             symbol={coin.symbol}
+            live
           />
         )}
       </div>
@@ -260,8 +341,8 @@ export function CoinView({
                 <CurveMeter raised={coin.curveSol} target={target} />
               </div>
               <PanelNote>
-                Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the 30-min median holds
-                there.
+                Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the{" "}
+                {f.durationShort(params.oracleWindowSecs)} median holds there.
               </PanelNote>
             </Panel>
           )}
@@ -330,7 +411,7 @@ export function CoinView({
         )}
 
         <Panel className={s.span2} aria-labelledby="fumbles-h">
-          <PanelHead id="fumbles-h" title="Recent fumbles" aside="sells over $50 through FUMPAD" />
+          <PanelHead id="fumbles-h" title="Recent fumbles" aside={`sells over ${f.usd(params.minSellUsd)} through FUMPAD`} />
           <Table
             caption={`Recent ${coin.symbol} fumbles`}
             columns={fumbleCols}
@@ -339,10 +420,44 @@ export function CoinView({
             highlight={(r) => !!r.isYou || r.owner === address}
             empty={
               <EmptyState title="No fumbles yet" compact>
-                Nobody has sold ${coin.symbol} for $50 or more through FUMPAD. The first ticket starts the board.
+                Nobody has sold ${coin.symbol} for {f.usd(params.minSellUsd)} or more through FUMPAD. The first ticket starts the board.
               </EmptyState>
             }
           />
+        </Panel>
+
+        <Panel className={s.span2} aria-labelledby="trades-h">
+          <PanelHead id="trades-h" title="Recent trades" aside="through FUMPAD, live" />
+          {trades === null ? (
+            <Loading label="Loading trades">
+              <div className={s.tradesSkel}>
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} h={14} />
+                ))}
+              </div>
+            </Loading>
+          ) : trades.length ? (
+            <ul className={s.trades} aria-live="polite" aria-relevant="additions">
+              {trades.slice(0, 12).map((t) => {
+                const k = t.signature + t.wallet + t.ts;
+                return (
+                  <li key={k} className={cx(freshTrades.has(k) && s.fresh)}>
+                    <span className={cx(s.side, t.side === "sell" && s.sideSell)}>
+                      <span aria-hidden="true">{t.side === "buy" ? "▲" : "▼"}</span> {t.side === "buy" ? "Buy" : "Sell"}
+                    </span>
+                    <Address address={t.wallet} you={t.wallet === address} />
+                    <Tokens value={t.tokens} compact />
+                    <Sol value={t.sol} />
+                    <span className={cx("num muted", s.tradeAgo)}>{f.ago(t.ts, now)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <EmptyState title="No trades yet" compact>
+              The first buy of ${coin.symbol} shows up here as it happens.
+            </EmptyState>
+          )}
         </Panel>
 
         <Panel aria-labelledby="holders-h">
@@ -379,4 +494,17 @@ export function CoinView({
       </div>
     </div>
   );
+}
+
+/** Newest first, no duplicates (a pushed trade can also arrive in the next refetch). */
+function mergeTrades(add: TradeRow[], prev: TradeRow[] | null): TradeRow[] {
+  const seen = new Set<string>();
+  const out: TradeRow[] = [];
+  for (const t of [...add, ...(prev ?? [])]) {
+    const k = t.signature + t.wallet + t.ts;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out.sort((a, b) => b.ts - a.ts).slice(0, 50);
 }

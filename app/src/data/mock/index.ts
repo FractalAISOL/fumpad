@@ -97,7 +97,8 @@ const sim = {
   watched: new Map<string, number>(),
 };
 const watch = (c: CoinSpec | undefined) => {
-  if (c) sim.watched.set(c.symbol, Date.now());
+  // Client only: the server must not read the clock (prerender) and never ticks anyway.
+  if (c && typeof window !== "undefined") sim.watched.set(c.symbol, Date.now());
 };
 function curveRaised(c: CoinSpec): number {
   if (c.status !== "curve") return PARAMS.graduationSol;

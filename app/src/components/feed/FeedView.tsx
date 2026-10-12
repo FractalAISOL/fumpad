@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { keepSnapshot, type CloseCall, type CoinSummary, type FeedEvent, type FeedKind, type PlatformStats, getFumpadData } from "@/data";
+import { keepSnapshot, type CloseCall, type CoinDetail, type CoinSummary, type FeedEvent, type FeedKind, type PlatformStats, getFumpadData } from "@/data";
 import { Avatar, Button, Change, Chips, CoinTile, EmptyState, Gauge, Multiple, Panel, PanelHead, Sparkline, cx } from "@/design";
 import * as f from "@/design/format";
-import { useViewer } from "../shell/Providers";
+import { useLiveMessages, useRefresh } from "../shell/live";
+import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Feed.module.css";
 import { FeedPost } from "./FeedPost";
 
@@ -31,7 +32,7 @@ export function FeedView({
   initial,
   stats: initialStats,
   closest: initialClosest,
-  trending,
+  trending: initialTrending,
 }: {
   initial: FeedEvent[];
   stats: PlatformStats;
@@ -60,53 +61,61 @@ export function FeedView({
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  useEffect(() => {
-    let live = true;
-    data.getClosestTo10x(5, address).then((c) => live && setClosest(c)).catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
-  }, [data, address]);
+  const params = useProtocolParams();
+  const [trending, setTrending] = useState(initialTrending);
+  /** Every id shown or waiting, so a catch-up fetch and the socket never double-post. */
+  const seen = useRef(new Set(initial.map((e) => e.id)));
 
-  // The server snapshot is cached for up to a few minutes: catch up on what happened since,
-  // then the socket below carries everything newer.
-  useEffect(() => {
-    let live = true;
-    Promise.all([data.getFeed({ limit: 24 }), data.getStats()])
-      .then(([latest, st]) => {
-        if (!live) return;
-        setStats(st);
-        setEvents((xs) => {
-          const have = new Set(xs.map((x) => x.id));
-          const missed = latest.filter((e) => !have.has(e.id));
-          return missed.length ? [...missed, ...xs].sort((a, b) => b.ts - a.ts) : xs;
-        });
+  // The server snapshot is cached for up to a few minutes: catch up on what happened since
+  // (on mount and after a reconnect), then the socket carries everything newer.
+  const catchUp = useCallback(() => {
+    data
+      .getFeed({ limit: 24 })
+      .then((latest) => {
+        const missed = latest.filter((e) => !seen.current.has(e.id));
+        if (!missed.length) return;
+        missed.forEach((e) => seen.current.add(e.id));
+        setEvents((xs) => [...missed, ...xs].sort((a, b) => b.ts - a.ts));
       })
       // Keep the snapshot; the socket still delivers new events.
       .catch(keepSnapshot);
-    return () => {
-      live = false;
-    };
   }, [data]);
+  useEffect(catchUp, [catchUp]);
+
+  // Side panels: totals, closest to 10× and trending follow the feed and coin activity.
+  const loadSide = useCallback(() => {
+    data.getStats().then(setStats).catch(keepSnapshot);
+    data.getClosestTo10x(5, address).then(setClosest).catch(keepSnapshot);
+    data.listCoins({ sort: "trending", limit: 6 }).then(setTrending).catch(keepSnapshot);
+  }, [data, address]);
+  useRefresh(loadSide, { wallets: [address], onFeed: true, pollMs: 30_000, debounceMs: 2_000 });
 
   // Live events. Prepend while the reader is at the top; otherwise hold them behind a
   // "new posts" button so the page never jumps under someone's thumb.
-  useEffect(() => {
-    return data.subscribeFeed((e) => {
-      setStats((st) => ({
-        ...st,
-        paidBack24hSol: st.paidBack24hSol + (e.kind === "claim" ? e.sol : 0),
-        crossings24h: st.crossings24h + (e.kind === "cross" ? 1 : 0),
-        openTickets: st.openTickets + (e.kind === "fumble" ? 1 : 0),
-      }));
-      if (atTop.current) {
-        setEvents((xs) => [e, ...xs]);
-        setFresh((x) => new Set(x).add(e.id));
-      } else {
-        setPending((xs) => [e, ...xs]);
-      }
-    });
-  }, [data]);
+  useLiveMessages((m) => {
+    if (m.type === "resync") return catchUp();
+    if (m.type === "coin") {
+      // Trending rows move with their coins (price, market cap, 24h).
+      setTrending((ts) => (ts.some((c) => c.mint === m.coin.mint) ? ts.map((c) => (c.mint === m.coin.mint ? { ...c, ...summaryOf(m.coin) } : c)) : ts));
+      return;
+    }
+    if (m.type !== "feed") return;
+    const e = m.event;
+    if (seen.current.has(e.id)) return;
+    seen.current.add(e.id);
+    setStats((st) => ({
+      ...st,
+      paidBack24hSol: st.paidBack24hSol + (e.kind === "claim" ? e.sol : 0),
+      crossings24h: st.crossings24h + (e.kind === "cross" ? 1 : 0),
+      openTickets: st.openTickets + (e.kind === "fumble" ? 1 : 0),
+    }));
+    if (atTop.current) {
+      setEvents((xs) => [e, ...xs]);
+      setFresh((x) => new Set(x).add(e.id));
+    } else {
+      setPending((xs) => [e, ...xs]);
+    }
+  });
 
   const flush = useCallback(() => {
     setEvents((xs) => [...pending, ...xs]);
@@ -202,7 +211,7 @@ export function FeedView({
 
       <aside className={s.side} aria-label="Coins">
         <Panel aria-labelledby="closest-h">
-          <PanelHead id="closest-h" title="Closest to 10×" aside="open tickets, 30-min median" />
+          <PanelHead id="closest-h" title="Closest to 10×" aside={`open tickets, ${f.durationShort(params.oracleWindowSecs)} median`} />
           <ul className={s.list}>
             {closest.map((c) => (
               <li key={c.ticket} className={s.closeRow}>
@@ -252,4 +261,9 @@ export function FeedView({
       </aside>
     </div>
   );
+}
+
+/** The list fields of a pushed CoinDetail. */
+function summaryOf(c: CoinDetail): Partial<CoinSummary> {
+  return { price: c.price, median: c.median, change24h: c.change24h, marketCapSol: c.marketCapSol, volume24hSol: c.volume24hSol, spark: c.spark, status: c.status, curveSol: c.curveSol };
 }
