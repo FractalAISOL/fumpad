@@ -125,6 +125,17 @@ Tables (`migrations/001_init.sql`): raw `transactions`/`events` (with re-decodab
   each wallet; funders of > 25 wallets are hubs (exchanges) and ignored.
 - Levels/XP/achievements in `user_stats` (same achievement ids as the mock).
 
+### Performance at mainnet volume (migration 006, `scripts/loadtest.ts`)
+- Lists pick their page from plain columns, then build only those rows. 24 h volume = whole hours from
+  `coin_hourly` + the partial edge hour from `trades`; holder counts from `coin_holders`. Both tables are kept
+  exact by row triggers on `trades` / `positions` (so ingest, replay and rollback maintain them);
+  `SELECT fumpad_rebuild_aggregates()` recomputes them.
+- Sparklines are batched (quiet coins: one range scan; busy coins: 48 index probes) and memoized 15 s per coin;
+  the trending rank is shared for 5 s. Neither is dropped on every trade (the response cache is).
+- Live: every NOTIFY invalidates the cache at once; WebSocket clients get one `coins` + one `coin` message per
+  touched mint per 250 ms window, serialized once for all clients.
+- `/v1/status`: indexer lag (heartbeat in `meta`, every 15 s), keeper last-sample age, vanity pool, versions.
+
 ### API
 Routes map 1:1 to `FumpadData` (see `/openapi.json`; schemas generated from the app types). `api/src/contract-check.ts`
 fails `tsc` if any route payload type differs from the app interface; `api/test/contract.test.ts` fails if the copied
@@ -164,6 +175,9 @@ execute_buyback (median/±3% pre-checked), process_queue (owner ATAs created fir
 | `LAUNCH_RESERVATION_MINUTES` (10), `LAUNCH_SWEEP_SECS` (15), `LAUNCH_RATE_LIMIT_PER_MIN` (10/IP), `LAUNCH_WALLET_LIMIT_PER_MIN` (6), `LAUNCH_MAX_ACTIVE_PER_IP` (3), `LAUNCH_MAX_INITIAL_BUY_LAMPORTS` (100 SOL), `LAUNCH_MAX_PRIORITY_MICROLAMPORTS` | api | D18 prepare |
 | `POOL_TARGET` (200), `GRINDER_THREADS` (cores), `POOL_POLL_SECS` (30) | grinder | |
 | `JOB_AUTOCLAIM`, `AUTOCLAIM_INTERVAL_SECS` (15), `AUTOCLAIM_MAX_PER_RUN` (20) | keeper | D17 |
+| `LIVE_COALESCE_MS` (250), `WS_MAX_BUFFERED_BYTES` (4 MiB) | api | WebSocket: per-coin coalescing window; drop clients with this much unsent |
+| `STATUS_KEEPER_URL` | api | optional keeper `/health` (private network) probed by `/v1/status` |
+| `GIT_SHA` | api, indexer | build shown on `/v1/status` (else `RAILWAY_GIT_COMMIT_SHA`; Railway's deployment id is always shown) |
 | `LOG_LEVEL` | all | |
 
 ## Run locally
@@ -191,6 +205,8 @@ npm run validator          # long-running dev chain + Postgres; prints how to st
 npm run smoke              # SDK-only lifecycle on the validator (`-- --indexer` adds a backfill check)
 npm run sync-idl           # after `anchor build`: copy IDLs/types into the SDK
 npm run vectors            # regenerate math vectors from the Rust crate
+npx tsx scripts/loadtest.ts # seed a scratch Postgres at mainnet volume (5k coins, 2M trades, 200k tickets,
+                            # 50k wallets), p50/p95 per endpoint (cache off) + a 200 trades/s WebSocket burst
 ```
 The validator loads `fumpad` as upgradeable (authority = `.local/upgrade-authority.json`, needed by
 `initialize_global`), the locker **immutable**, PumpSwap + pump-fees + GlobalConfig + FeeConfig from
