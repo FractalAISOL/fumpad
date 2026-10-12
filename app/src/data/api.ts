@@ -12,8 +12,10 @@ import type {
   Board,
   ChartRange,
   CloseCall,
+  ClosedPosition,
   CoinDetail,
   CoinSummary,
+  CreatedCoin,
   FeedEvent,
   FeedKind,
   FumbleRow,
@@ -29,6 +31,7 @@ import type {
   Ticket,
   TradeQuote,
   TradeRow,
+  WalletPosition,
 } from "./types";
 
 class ApiError extends Error {
@@ -215,6 +218,15 @@ export class ApiFumpadData implements FumpadData {
   }
   getProfile(addressOrName: string): Promise<Profile | null> {
     return this.maybe(`/v1/profiles/${encodeURIComponent(addressOrName)}`);
+  }
+  getPositions(wallet: Address): Promise<WalletPosition[]> {
+    return this.get(`/v1/wallets/${wallet}/positions`);
+  }
+  getClosedPositions(wallet: Address): Promise<ClosedPosition[]> {
+    return this.get(`/v1/wallets/${wallet}/closed`);
+  }
+  getCreatedCoins(wallet: Address): Promise<CreatedCoin[]> {
+    return this.get(`/v1/wallets/${wallet}/created`);
   }
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote> {
     return this.get("/v1/quote", { mint: args.mint, side: args.side, amount: args.amount, wallet: args.wallet });

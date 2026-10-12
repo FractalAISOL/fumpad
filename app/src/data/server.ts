@@ -123,3 +123,21 @@ export async function cachedProfile(addressOrName: string) {
   cacheLife("minutes");
   return getFumpadData().getProfile(addressOrName);
 }
+
+export async function cachedPositions(wallet: Address) {
+  "use cache";
+  cacheLife("minutes");
+  return getFumpadData().getPositions(wallet);
+}
+
+export async function cachedClosedPositions(wallet: Address) {
+  "use cache";
+  cacheLife("minutes");
+  return getFumpadData().getClosedPositions(wallet);
+}
+
+export async function cachedCreatedCoins(wallet: Address) {
+  "use cache";
+  cacheLife("minutes");
+  return getFumpadData().getCreatedCoins(wallet);
+}

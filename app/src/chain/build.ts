@@ -41,3 +41,8 @@ export function buildClaimTx(client: FumpadClient, wallet: PublicKey, a: { mint:
 export function buildSetAutoClaimTx(client: FumpadClient, wallet: PublicKey, a: { mint: string; enabled: boolean }): BuiltTx {
   return client.buildSetAutoClaim({ wallet, mint: new PublicKey(a.mint), enabled: a.enabled });
 }
+
+/** `withdraw_creator_fees`: the coin's unclaimed creator fees to the creator (signer must be Coin.creator). */
+export function buildWithdrawCreatorFeesTx(client: FumpadClient, wallet: PublicKey, a: { mint: string }): BuiltTx {
+  return client.buildWithdrawCreatorFees({ creator: wallet, mint: new PublicKey(a.mint) });
+}

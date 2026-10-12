@@ -39,7 +39,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <style dangerouslySetInnerHTML={{ __html: TOKENS_CSS }} />
       </head>
       <body>
-        <Providers now={now} params={params}>
+        <Providers now={now} params={params} solUsd={solUsd}>
           <Header solUsd={solUsd} />
           <main id="main" className={s.main}>
             {children}

@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { ProfileTickets } from "@/components/people/ProfileTickets";
+import { Portfolio, PortfolioView } from "@/components/people/Portfolio";
 import { ProfileCard } from "@/components/people/ProfileCard";
 import s from "@/components/people/People.module.css";
 import { DEMO_WALLET } from "@/data";
-import { cachedProfile, cachedTickets } from "@/data/server";
-import { Loading, Panel, PanelHead, Skeleton } from "@/design";
+import { cachedClosedPositions, cachedCreatedCoins, cachedPositions, cachedProfile, cachedTickets } from "@/data/server";
+import { Loading, Panel, Skeleton } from "@/design";
 import * as f from "@/design/format";
 
 export async function generateStaticParams() {
@@ -52,16 +52,24 @@ async function ProfileBody({ params }: { params: Promise<{ address: string }> })
   const { address } = await params;
   const p = await cachedProfile(decodeURIComponent(address));
   if (!p) notFound();
-  const tickets = await cachedTickets(p.address);
+  const [tickets, positions, closed, created] = await Promise.all([
+    cachedTickets(p.address),
+    cachedPositions(p.address),
+    cachedClosedPositions(p.address),
+    cachedCreatedCoins(p.address),
+  ]);
+  const initial = { tickets, positions, closed, created };
   return (
     <div className="wrap">
       <div className={s.profileGrid}>
         <Panel>
           <ProfileCard p={p} headingLevel={1} />
         </Panel>
-        <Panel aria-labelledby="pt-h">
-          <PanelHead id="pt-h" title="Tickets" aside="public, like everything on-chain" />
-          <ProfileTickets key={p.address} tickets={tickets} owner={p.address} />
+        <Panel aria-label="Portfolio">
+          {/* `?tab=` is read on the client; a prerendered page starts on Positions until it hydrates. */}
+          <Suspense fallback={<PortfolioView key={p.address} owner={p.address} initial={initial} />}>
+            <Portfolio key={p.address} owner={p.address} initial={initial} />
+          </Suspense>
         </Panel>
       </div>
     </div>

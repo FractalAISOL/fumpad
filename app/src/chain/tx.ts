@@ -11,7 +11,7 @@
  * Program instructions (contracts/programs/fumpad/src/lib.rs):
  *   create_coin(name, symbol, uri) · buy(sol_in, min_tokens_out) · sell(tokens_in, min_sol_out)
  *   swap_buy / swap_sell (router, post-graduation) · claim(ticket) · close_ticket
- *   register_holdings
+ *   register_holdings · withdraw_creator_fees
  */
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -20,9 +20,9 @@ import { VersionedTransaction } from "@solana/web3.js";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { DEMO_WALLET } from "@/data";
 import { solToLamports } from "@/data/chain";
-import { mockRecordTrade, mockSetAutoClaim } from "@/data/mock";
+import { mockRecordTrade, mockSetAutoClaim, mockWithdrawCreatorFees } from "@/data/mock";
 import { announceOwnTx, type OwnTxKind } from "@/components/shell/live";
-import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, fumpadClient } from "./build";
+import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, fumpadClient } from "./build";
 import { checkPreparedLaunch, VANITY_SUFFIX } from "./program";
 
 export interface TxOk {
@@ -353,6 +353,23 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
     [run, live, publicKey, sendBuilt, client],
   );
 
+  /** Creator: move the coin's unclaimed creator fees to the wallet. */
+  const withdrawCreatorFees = useCallback(
+    (args: { mint: string }) =>
+      run(
+        async () => {
+          if (!live) {
+            mockWithdrawCreatorFees(args.mint);
+            return simulate(setStatus, 700);
+          }
+          return sendBuilt(() => buildWithdrawCreatorFeesTx(client, publicKey!, args), "The withdrawal failed on chain. Nothing but the network fee was spent.");
+        },
+        "withdraw",
+        args.mint,
+      ),
+    [run, live, sendBuilt, client, publicKey],
+  );
+
   const reset = useCallback(() => {
     setStatus("idle");
     setError(null);
@@ -360,5 +377,5 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   }, []);
   const lastError = useCallback(() => errorRef.current, []);
 
-  return { status, error, lastError, buy, sell, claim, prepareLaunch, launch, setAutoClaim, reset, live, wallet: publicKey?.toBase58() ?? null };
+  return { status, error, lastError, buy, sell, claim, prepareLaunch, launch, setAutoClaim, withdrawCreatorFees, reset, live, wallet: publicKey?.toBase58() ?? null };
 }

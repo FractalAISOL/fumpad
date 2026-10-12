@@ -424,7 +424,27 @@ export function medianOf(c: CoinSpec): number {
   const lag = Math.max(-0.02, Math.min(0.02, -c.change24h / 2400));
   return spotOf(c) * (1 + lag);
 }
+/**
+ * Who launched what. The demo wallet launched three coins (one graduated, two on the curve)
+ * so its profile has a Created tab; a few named traders launched the big ones. Everything
+ * else comes from an anonymous creator wallet per coin.
+ */
+const LAUNCHED_BY: Record<string, string> = {
+  DIPS: "demo",
+  SLIP: "demo",
+  SOUP: "demo",
+  MIDC: "degen_matt",
+  GOBT: "degen_matt",
+  COPE: "sol_sister",
+  CWCT: "quietcapital",
+  BAGS: "frogcpa",
+  RENT: "frogcpa",
+  HATS: "gm_accountant",
+};
 export function creatorOf(c: CoinSpec): string {
+  const who = LAUNCHED_BY[c.symbol];
+  if (who === "demo") return DEMO_WALLET;
+  if (who) return address("user:" + who);
   return address("creator:" + c.symbol);
 }
 
@@ -496,7 +516,8 @@ export const DEMO_TICKETS: TicketSpec[] = [
 export function generatedTickets(owner: string): TicketSpec[] {
   const r = rng("tickets:" + owner);
   const n = 3 + Math.floor(r() * 4);
-  const pool = [...COIN_SPECS];
+  // Creators can't file tickets on their own coins.
+  const pool = COIN_SPECS.filter((c) => creatorOf(c) !== owner);
   const out: TicketSpec[] = [];
   for (let i = 0; i < n && pool.length; i++) {
     const c = pool.splice(Math.floor(r() * pool.length), 1)[0];

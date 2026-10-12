@@ -1,0 +1,229 @@
+/* Wallet portfolio: a readout band, the tab rail, then dense tables. */
+
+/* ── Readout ── */
+.readout {
+  padding: var(--s-5) var(--s-4) var(--s-4);
+  border-bottom: 1px solid var(--rule);
+}
+.cells {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.cell {
+  min-width: 0;
+  padding: 0 var(--s-4);
+  border-left: 1px solid var(--rule);
+}
+.cell:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.cell dt {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.cell dd {
+  margin: 4px 0 0;
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+.big {
+  line-height: 1.05;
+}
+.sub {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.method {
+  margin-top: var(--s-4);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--ink-3);
+  max-width: 72ch;
+}
+@media (max-width: 599.98px) {
+  .cells {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: var(--s-4);
+  }
+  .cellValue {
+    grid-column: 1 / -1;
+    padding: 0 0 var(--s-4);
+    border-bottom: 1px solid var(--rule);
+  }
+  .cellValue + .cell {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .cell .big {
+    font-size: 22px;
+  }
+}
+
+/* ── Tabs ── */
+.tabsBar {
+  padding: 0 var(--s-4);
+}
+.panel {
+  min-width: 0;
+}
+.panel:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.panel > .method {
+  margin: 0;
+  max-width: none;
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--rule);
+}
+
+/* ── Cells ── */
+.table table td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.table table th,
+.table table td {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.table table th:first-child,
+.table table td:first-child {
+  padding-left: var(--s-4);
+}
+.table table th:last-child,
+.table table td:last-child {
+  padding-right: var(--s-4);
+}
+.lift {
+  position: relative;
+  z-index: 1;
+}
+.stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.subline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.coin {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.coinText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.coinTop {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.coinName {
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+  max-width: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.coinMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.earned {
+  color: var(--ink-3);
+}
+@media (max-width: 599.98px) {
+  .coinName {
+    display: none;
+  }
+  .miniGauge {
+    width: 34px;
+  }
+  .coinMeta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
+
+.ticketTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--r-1);
+}
+.miniGauge {
+  width: 44px;
+}
+.ticketN {
+  color: var(--ink-3);
+}
+
+.partial {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--ink-2);
+}
+
+/* Direction: glyph + sign + tone, as in Num's <Change>. Never red, green or orange. */
+.signed {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+}
+.glyph {
+  font-size: 0.6em;
+  transform: translateY(-0.12em);
+}
+.up {
+  color: var(--ink);
+  font-weight: 500;
+}
+.down,
+.flat {
+  color: var(--ink-3);
+}
+.sizeSm {
+  font-size: var(--fs-sm);
+}
+.sizeXl {
+  font-size: 26px;
+  letter-spacing: -0.04em;
+}
+.withdraw {
+  margin-top: 4px;
+}
+@media (max-width: 599.98px) {
+  .table table th,
+  .table table td {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .table table th:first-child,
+  .table table td:first-child {
+    padding-left: var(--s-3);
+  }
+  .table table th:last-child,
+  .table table td:last-child {
+    padding-right: var(--s-3);
+  }
+}

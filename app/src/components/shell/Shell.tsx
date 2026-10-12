@@ -4,19 +4,45 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { IconCoins, IconFeed, IconFumbles, IconMoon, IconPlus, IconRanks, IconSun, IconSystem, Mark, Wordmark, cx } from "@/design";
+import { DEMO_NAME } from "@/data";
 import { useViewer } from "./Providers";
 import s from "./Shell.module.css";
 import { WalletButton } from "./Wallet";
 
+/**
+ * `self` is the viewer's own profile path. A profile page highlights "My fumbles" when it is
+ * the viewer's own wallet and nothing otherwise (it isn't part of the leaderboard).
+ */
 const NAV = [
   { href: "/", label: "Feed", icon: IconFeed, match: (p: string) => p === "/" },
   { href: "/launches", label: "Launches", short: "Launches", icon: IconCoins, match: (p: string) => p.startsWith("/launches") || p.startsWith("/coin/") },
-  { href: "/fumbles", label: "My fumbles", short: "Fumbles", icon: IconFumbles, match: (p: string) => p.startsWith("/fumbles") || p.startsWith("/share") },
-  { href: "/leaderboard", label: "Leaderboard", short: "Ranks", icon: IconRanks, match: (p: string) => p.startsWith("/leaderboard") || p.startsWith("/u/") },
+  {
+    href: "/fumbles",
+    label: "My fumbles",
+    short: "Fumbles",
+    icon: IconFumbles,
+    match: (p: string, self: string) => p.startsWith("/fumbles") || p.startsWith("/share") || p === self,
+  },
+  { href: "/leaderboard", label: "Leaderboard", short: "Ranks", icon: IconRanks, match: (p: string) => p.startsWith("/leaderboard") },
 ];
 
-export function Header({ solUsd }: { solUsd: number }) {
+/** The pathname with an encoded profile segment decoded, and the viewer's own profile path. */
+function useNavPath(): [string, string] {
   const path = usePathname();
+  const { address, isDemo } = useViewer();
+  let p = path;
+  try {
+    p = decodeURIComponent(path);
+  } catch {
+    /* malformed: compare raw */
+  }
+  const clean = p.replace(/\/+$/, "") || "/";
+  // The demo profile is also reachable by its name.
+  return [isDemo && clean === `/u/${DEMO_NAME}` ? `/u/${address}` : clean, `/u/${address}`];
+}
+
+export function Header({ solUsd }: { solUsd: number }) {
+  const [path, self] = useNavPath();
   const { claimable } = useViewer();
   return (
     <header className={s.top}>
@@ -30,7 +56,7 @@ export function Header({ solUsd }: { solUsd: number }) {
         </Link>
         <nav className={s.nav} aria-label="Main">
           {NAV.map((n) => {
-            const on = n.match(path);
+            const on = n.match(path, self);
             return (
               <Link key={n.href} href={n.href} className={s.navLink} aria-current={on ? "page" : undefined}>
                 {n.label}
@@ -58,12 +84,12 @@ export function Header({ solUsd }: { solUsd: number }) {
 }
 
 export function TabBar() {
-  const path = usePathname();
+  const [path, self] = useNavPath();
   const { claimable } = useViewer();
   return (
     <nav className={s.tabbar} aria-label="Main">
       {NAV.map((n) => {
-        const on = n.match(path);
+        const on = n.match(path, self);
         const Icon = n.icon;
         return (
           <Link key={n.href} href={n.href} className={s.tab} aria-current={on ? "page" : undefined}>

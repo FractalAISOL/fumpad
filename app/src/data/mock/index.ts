@@ -6,8 +6,10 @@ import type {
   Board,
   ChartRange,
   CloseCall,
+  ClosedPosition,
   CoinDetail,
   CoinSummary,
+  CreatedCoin,
   FeedEvent,
   FeedKind,
   FumbleRow,
@@ -24,7 +26,9 @@ import type {
   TicketChainStatus,
   TradeQuote,
   TradeRow,
+  WalletPosition,
 } from "../types";
+import { type MockEntry, baseLedger, foldBooks, isClosedBook, mockCreatorFees } from "./portfolio";
 import { hash, mintAddress, signature } from "./rng";
 import {
   COIN_SPECS,
@@ -673,6 +677,111 @@ function simLaunch(ts: number): boolean {
 
 /** Simulated wallet changes from mock-mode transactions, `${owner}:${mint}`. */
 const balDelta = new Map<string, { sol: number; tokens: number }>();
+/** Trades made in mock mode this session, per wallet (on top of the authored ledger). */
+const sessionLedger = new Map<Address, MockEntry[]>();
+/** Creator fees withdrawn in mock mode this session, by mint. */
+const withdrawnNow = new Map<Address, number>();
+
+/** Mock side of `withdraw_creator_fees`: the coin's withdrawable creator fees go to zero. */
+export function mockWithdrawCreatorFees(mint: Address) {
+  const c = specOf(mint);
+  if (!c) return;
+  const f = mockCreatorFees(c);
+  withdrawnNow.set(mintAddress(c.symbol), f.earned - f.withdrawn);
+}
+
+function ledgerOf(owner: Address) {
+  const base = baseLedger(owner);
+  return { entries: [...base.entries, ...(sessionLedger.get(owner) ?? [])], external: base.external };
+}
+
+/** The mock's "chain" balance: what the ledger leaves plus tokens that arrived outside FUMPAD. */
+function chainBalances(owner: Address): Map<string, number> {
+  const { entries, external } = ledgerOf(owner);
+  const out = new Map<string, number>();
+  for (const [sym, b] of foldBooks(entries)) out.set(sym, b.held);
+  for (const [sym, n] of Object.entries(external)) out.set(sym, (out.get(sym) ?? 0) + n);
+  return out;
+}
+
+/** Open fumble tickets per coin and the best multiple among them (getTickets' view). */
+function ticketStats(owner: Address): Map<string, { earned: number; open: number; best?: number }> {
+  const out = new Map<string, { earned: number; open: number; best?: number }>();
+  for (const t of ticketsFor(owner)) {
+    const s = out.get(t.symbol) ?? { earned: 0, open: 0 };
+    s.earned++;
+    if (t.state === "claimable" || t.state === "tracking" || t.state === "awaiting-graduation" || t.state === "queued") {
+      s.open++;
+      s.best = Math.max(s.best ?? 0, t.multiple);
+    }
+    out.set(t.symbol, s);
+  }
+  return out;
+}
+
+function portfolioOf(owner: Address): { positions: WalletPosition[]; closed: ClosedPosition[] } {
+  const books = foldBooks(ledgerOf(owner).entries);
+  const balances = chainBalances(owner);
+  const tickets = ticketStats(owner);
+  const positions: WalletPosition[] = [];
+  const closed: ClosedPosition[] = [];
+  for (const sym of new Set([...books.keys(), ...balances.keys()])) {
+    const c = SPEC_BY_SYMBOL.get(sym);
+    if (!c) continue;
+    const b = books.get(sym);
+    const bal = balances.get(sym) ?? 0;
+    const t = tickets.get(sym);
+    watch(c);
+    const ref = { mint: mintAddress(c.symbol), symbol: c.symbol, name: c.name, tile: c.tile, status: c.status, curveSol: curveRaised(c), graduationSol: PARAMS.graduationSol };
+    if (b && isClosedBook(b, bal)) {
+      closed.push({
+        ...ref,
+        boughtTokens: b.bought,
+        boughtSol: b.boughtSol,
+        soldTokens: b.sold,
+        soldSol: b.soldSol,
+        payoutTokens: b.payout,
+        realizedSol: b.realized,
+        realizedPct: b.costOfSold > 0 ? (b.realized / b.costOfSold) * 100 : undefined,
+        partialBasis: b.oversold,
+        firstTs: b.firstTs,
+        lastTs: b.lastTs,
+        ticketsEarned: t?.earned ?? 0,
+      });
+      continue;
+    }
+    if (bal <= 0) continue;
+    const price = liveSpot(c);
+    const held = b?.held ?? 0;
+    const covered = Math.min(bal, held);
+    const cost = held > 0 ? (b!.cost * covered) / held : 0;
+    const unrealized = covered > 0 ? covered * price - cost : undefined;
+    positions.push({
+      ...ref,
+      balance: bal,
+      price,
+      valueSol: bal * price,
+      trackedTokens: held,
+      avgCost: held > 0 ? b!.cost / held : 0,
+      coveredTokens: covered,
+      costSol: cost,
+      unrealizedSol: unrealized,
+      unrealizedPct: unrealized !== undefined && cost > 0 ? (unrealized / cost) * 100 : undefined,
+      realizedSol: b?.realized ?? 0,
+      partialBasis: bal > held + 1e-6 || !!b?.oversold,
+      boughtTokens: b?.bought ?? 0,
+      payoutTokens: b?.payout ?? 0,
+      firstTs: b?.firstTs,
+      lastTs: b?.lastTs,
+      openTickets: t?.open ?? 0,
+      bestMultiple: t?.open ? t.best : undefined,
+    });
+  }
+  positions.sort((a, b) => b.valueSol - a.valueSol || a.symbol.localeCompare(b.symbol));
+  closed.sort((a, b) => b.lastTs - a.lastTs);
+  return { positions, closed };
+}
+
 /** Tickets filed by mock-mode sells this session. */
 const filedTickets = new Map<Address, Ticket[]>();
 
@@ -696,6 +805,9 @@ export function mockRecordTrade(owner: Address, mintOrSymbol: string, side: Side
   balDelta.set(key, d);
   const sellPrice = liveSpot(c);
   const ts = mockData.now();
+  const mine = sessionLedger.get(owner) ?? [];
+  mine.push({ kind: side, symbol: c.symbol, tokens: side === "buy" ? amountOut : amountIn, sol: side === "buy" ? amountIn : amountOut, ts });
+  sessionLedger.set(owner, mine);
   if (side === "sell" && amountOut * SOL_USD >= PARAMS.minSellUsd && owner !== creatorOf(c)) {
     const mine = filedTickets.get(owner) ?? [];
     const seq = mine.length + 100;
@@ -923,12 +1035,33 @@ export class MockFumpadData implements FumpadData {
     const c = specOf(mint);
     const r = rng(`bal:${wallet}:${mint}`);
     if (!c) return { sol: 0, tokens: 0, maturedTokens: 0 };
-    const tokens = wallet === DEMO_WALLET && c.symbol === "MIDC" ? 6_120_000 : Math.round(between(r, 0, 8) * 1e5) * 10;
-    const matured = c.symbol === "PIGN" ? Math.round(tokens * 0.6) : tokens;
+    // Tokens follow the wallet's ledger (portfolio tabs agree), session trades included.
+    const tokens = Math.max(0, chainBalances(wallet).get(c.symbol) ?? 0);
     const sol = wallet === DEMO_WALLET ? 24.8 : Math.round(between(r, 0.2, 40) * 100) / 100;
-    // Session trades: bought tokens haven't been held long enough to count yet.
+    // Session buys haven't been held long enough to count yet.
     const d = balDelta.get(`${wallet}:${mintAddress(c.symbol)}`) ?? { sol: 0, tokens: 0 };
-    return { sol: Math.max(0, sol + d.sol), tokens: Math.max(0, tokens + d.tokens), maturedTokens: Math.max(0, matured + Math.min(0, d.tokens)) };
+    const settled = tokens - Math.max(0, d.tokens);
+    const matured = c.symbol === "PIGN" ? Math.round(settled * 0.6) : settled;
+    return { sol: Math.max(0, sol + d.sol), tokens, maturedTokens: Math.max(0, Math.min(tokens, matured)) };
+  }
+
+  async getPositions(wallet: Address): Promise<WalletPosition[]> {
+    return portfolioOf(wallet).positions;
+  }
+
+  async getClosedPositions(wallet: Address): Promise<ClosedPosition[]> {
+    return portfolioOf(wallet).closed;
+  }
+
+  async getCreatedCoins(wallet: Address): Promise<CreatedCoin[]> {
+    return COIN_SPECS.filter((c) => creatorOf(c) === wallet && c.createdAt <= this.now())
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((c) => {
+        const f = mockCreatorFees(c);
+        const extra = withdrawnNow.get(mintAddress(c.symbol)) ?? 0;
+        const withdrawn = f.withdrawn + extra;
+        return { ...summary(c), feesEarnedSol: f.earned, feesWithdrawnSol: withdrawn, feesWithdrawableSol: Math.max(0, f.earned - withdrawn) };
+      });
   }
 
   async quoteTrade({ mint, side, amount, wallet }: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote> {

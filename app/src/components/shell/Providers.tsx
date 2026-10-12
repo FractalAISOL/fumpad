@@ -67,6 +67,14 @@ function ParamsProvider({ initial, children }: { initial: ProtocolParams; childr
   return <ParamsCtx.Provider value={params}>{children}</ParamsCtx.Provider>;
 }
 
+/* ── SOL/USD ──────────────────────────────────────────────────────────────── */
+
+/** The shell's SOL/USD (the header figure), for USD conversions in client views. */
+const SolUsdCtx = createContext<number>(0);
+export function useSolUsd() {
+  return useContext(SolUsdCtx);
+}
+
 /* ── Viewer ───────────────────────────────────────────────────────────────── */
 
 export interface Viewer {
@@ -113,7 +121,7 @@ function ViewerProvider({ children }: { children: ReactNode }) {
 
 /* ── Root ─────────────────────────────────────────────────────────────────── */
 
-export function Providers({ now, params, children }: { now: number; params: ProtocolParams; children: ReactNode }) {
+export function Providers({ now, params, solUsd, children }: { now: number; params: ProtocolParams; solUsd: number; children: ReactNode }) {
   // Wallet Standard auto-detects Phantom, Solflare and Backpack; no adapter bundles needed.
   const wallets = useMemo(() => [], []);
   return (
@@ -122,7 +130,9 @@ export function Providers({ now, params, children }: { now: number; params: Prot
         <ParamsProvider initial={params}>
           <ViewerProvider>
             <NowProvider initial={now}>
-              <ToastProvider>{children}</ToastProvider>
+              <SolUsdCtx.Provider value={solUsd}>
+                <ToastProvider>{children}</ToastProvider>
+              </SolUsdCtx.Provider>
             </NowProvider>
           </ViewerProvider>
         </ParamsProvider>
