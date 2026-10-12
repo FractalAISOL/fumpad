@@ -3,17 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "sdk": "tsc -b ../services/sdk",
+    "sdk": "tsc -b ../services/sdk && rm -f vendor/fumpad-sdk-*.tgz && npm pack ../services/sdk --pack-destination vendor && npm install --no-audit --no-fund",
     "dev": "next dev",
-    "prebuild": "npm run sdk",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "pretypecheck": "npm run sdk",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fumpad/sdk": "file:../services/sdk",
+    "@fumpad/sdk": "file:vendor/fumpad-sdk-0.1.0.tgz",
     "@solana/wallet-adapter-base": "^0.9.28",
     "@solana/wallet-adapter-react": "^0.15.40",
     "@solana/web3.js": "^1.99.0",
