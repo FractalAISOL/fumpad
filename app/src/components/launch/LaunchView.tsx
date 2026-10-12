@@ -341,7 +341,7 @@ export function LaunchView() {
             <PanelHead title="Preview" />
             <div className={s.preview}>
               <div className={s.pvHead}>
-                <CoinTile symbol={tick} size="lg" imageUrl={preview ?? undefined} />
+                <CoinTile symbol={tick} size="lg" imageUrl={preview ?? undefined} localPreview />
                 <div className={s.pvText}>
                   <div className={s.pvName}>{name || "Your coin"}</div>
                   <div className="ticker">${tick}</div>
@@ -395,7 +395,7 @@ export function LaunchView() {
         }
       >
         <div className={s.review}>
-          <CoinTile symbol={symbol} size="lg" imageUrl={preview ?? undefined} />
+          <CoinTile symbol={symbol} size="lg" imageUrl={preview ?? undefined} localPreview />
           <div>
             <div className={s.pvName}>{name}</div>
             <div className="ticker">${symbol}</div>
