@@ -577,6 +577,298 @@ export const FUMPAD_IDL: Idl = {
       "args": []
     },
     {
+      "name": "claim_for",
+      "docs": [
+        "D17 auto-claim: a keeper claims a ticket for its owner (payout to the owner's",
+        "canonical ATA, or its escrow). Same rules as `claim`; owner may opt out."
+      ],
+      "discriminator": [
+        245,
+        67,
+        97,
+        44,
+        59,
+        223,
+        144,
+        1
+      ],
+      "accounts": [
+        {
+          "name": "keeper",
+          "docs": [
+            "A registered keeper; pays the escrow rent when one is needed."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "global",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "coin",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  105,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": [
+            "coin",
+            "ticket"
+          ]
+        },
+        {
+          "name": "ticket",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  99,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              },
+              {
+                "kind": "account",
+                "path": "ticket.owner",
+                "account": "Ticket"
+              },
+              {
+                "kind": "account",
+                "path": "ticket.seq",
+                "account": "Ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              },
+              {
+                "kind": "account",
+                "path": "ticket.owner",
+                "account": "Ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claim_queue",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "observations",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  98,
+                  115,
+                  101,
+                  114,
+                  118,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pool_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  111,
+                  108,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "reward_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  119,
+                  97,
+                  114,
+                  100,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner_ata",
+          "docs": [
+            "may be missing, in which case a payout is escrowed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_ticket",
       "discriminator": [
         66,
@@ -2463,6 +2755,70 @@ export const FUMPAD_IDL: Idl = {
       ]
     },
     {
+      "name": "set_auto_claim",
+      "docs": [
+        "D17: the position's wallet opts out of / back into keeper auto-claim for this coin."
+      ],
+      "discriminator": [
+        135,
+        111,
+        55,
+        239,
+        20,
+        249,
+        33,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "wallet",
+          "signer": true
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position.mint",
+                "account": "Position"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "set_keepers",
       "discriminator": [
         135,
@@ -3555,6 +3911,19 @@ export const FUMPAD_IDL: Idl = {
   ],
   "events": [
     {
+      "name": "AutoClaimSet",
+      "discriminator": [
+        53,
+        185,
+        198,
+        116,
+        140,
+        142,
+        74,
+        156
+      ]
+    },
+    {
       "name": "BuybackExecuted",
       "discriminator": [
         150,
@@ -3990,9 +4359,41 @@ export const FUMPAD_IDL: Idl = {
       "code": 6034,
       "name": "QueueAccountRequired",
       "msg": "Claim queue account required: an open ticket is queued"
+    },
+    {
+      "code": 6035,
+      "name": "AutoClaimDisabled",
+      "msg": "The ticket owner opted out of auto-claim for this coin"
     }
   ],
   "types": [
+    {
+      "name": "AutoClaimSet",
+      "docs": [
+        "D17: a wallet opted out of (or back into) keeper auto-claim for one coin."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
     {
       "name": "BuybackExecuted",
       "type": {
@@ -4049,6 +4450,13 @@ export const FUMPAD_IDL: Idl = {
           {
             "name": "ts",
             "type": "i64"
+          },
+          {
+            "name": "triggered_by",
+            "docs": [
+              "D17: the `process_queue` cranker or the `claim_for` keeper (it also paid the escrow rent)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -4085,6 +4493,14 @@ export const FUMPAD_IDL: Idl = {
           {
             "name": "ts",
             "type": "i64"
+          },
+          {
+            "name": "triggered_by",
+            "docs": [
+              "D17: who triggered the payout — the owner (`claim`), a keeper (`claim_for`, auto-claim)",
+              "or the `process_queue` cranker (`from_queue`)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -4139,7 +4555,7 @@ export const FUMPAD_IDL: Idl = {
                     "name": "QueueEntry"
                   }
                 },
-                256
+                1024
               ]
             }
           }
@@ -4174,6 +4590,13 @@ export const FUMPAD_IDL: Idl = {
           {
             "name": "ts",
             "type": "i64"
+          },
+          {
+            "name": "triggered_by",
+            "docs": [
+              "D17: who sent the claim — the owner (`claim`) or a keeper (`claim_for`)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -5045,11 +5468,21 @@ export const FUMPAD_IDL: Idl = {
             "type": "u64"
           },
           {
+            "name": "auto_claim_opt_out",
+            "docs": [
+              "D17: 1 = the wallet opted out of keeper auto-claim (`claim_for`) for this coin;",
+              "0 (default) = keepers may claim its tickets on its behalf (payout always to the",
+              "wallet's canonical ATA, or its escrow). Set with `set_auto_claim`. Carved from",
+              "`reserved` (size unchanged)."
+            ],
+            "type": "u8"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                56
+                55
               ]
             }
           }

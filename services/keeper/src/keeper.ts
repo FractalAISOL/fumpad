@@ -5,11 +5,15 @@
  *            (15 s) for coins whose spot ≥ 50% of their lowest open trigger and coins with
  *            buyback_lamports ≥ threshold. ≤5 coins per legacy tx, 6–10 via v0 + ALT.
  *            Isolated tx (compute-budget ixs only besides record_samples).
- *  graduate  Complete coins → graduate (400k CU), then init_observations, 3× init_claim_queue
+ *  graduate  Complete coins → graduate (400k CU), then init_observations, 9× init_claim_queue (one tx)
  *            and (once) PumpSwap user_volume_accumulator for the pool authority.
  *  buyback   execute_buyback when buyback_lamports ≥ threshold, a keeper median exists and
  *            spot is within the program's ±deviation band (pre-checked → no failing txs).
  *  queue     process_queue when the head entries fit; creates missing owner ATAs first.
+ *  autoclaim (D17, v0.4) claim_for every Open ticket whose trigger holds on the covered
+ *            keeper median, unless its owner opted out (Position.auto_claim_opt_out); oldest
+ *            first; skips wallets at the D16 queue limit unless the claim pays now; the
+ *            owner's ATA is created (keeper-paid, idempotent) in the same tx. Respects pause.
  *  skim      create ATA(coin, WSOL) + skim + settle_lp_fees per graduated coin periodically
  *            (simulated first; NothingToSkim = skip).
  *  fees      withdraw_platform_fees above a threshold (permissionless, pays the treasury).
@@ -41,11 +45,17 @@ import {
   FUMPAD_ERROR,
   MAX_SAMPLE_COINS,
   MAX_SAMPLE_COINS_LEGACY,
+  MAX_QUEUED_PER_WALLET,
   medianPriceQ64,
+  meetsMultiple,
   type ObservationsAccount,
+  PAUSE_CLAIMS,
   type Params,
   type PoolReserves,
+  decodePosition,
+  positionPda,
   priceQ64,
+  type TicketAccount,
 } from "@fumpad/sdk";
 
 import { Alerter } from "./alerts.js";
@@ -64,8 +74,52 @@ interface CoinState {
   lastBuybackAt: number;
   lastFeesAt: number;
   lastQueueAt: number;
+  lastAutoClaimAt?: number;
   setupDone: boolean;
 }
+
+export interface AutoClaimCandidate {
+  key: PublicKey;
+  ticket: Pick<TicketAccount, "owner" | "tokens" | "sellPriceQ64" | "sellTs" | "status">;
+}
+
+/**
+ * Which open tickets the keeper should `claim_for` now (pure; mirrors claim.rs): Open,
+ * inside the claim window, covered median ≥ trigger, non-zero claim, owner not opted out,
+ * and not a wallet already at the D16 queue limit unless the claim would pay right away.
+ * Oldest sell first (the queue's own order).
+ */
+export function planAutoClaims(a: {
+  tickets: AutoClaimCandidate[];
+  optedOut: Set<string>;
+  queuedPerOwner: Map<string, number>;
+  medianQ64: bigint;
+  now: bigint;
+  params: Pick<Params, "claimWindowSecs" | "triggerMultipleBps" | "claimBps" | "maxClaimPoolBps">;
+  poolTokens: bigint;
+}): AutoClaimCandidate[] {
+  const p = a.params;
+  return a.tickets
+    .filter((t) => {
+      const owner = t.ticket.owner.toBase58();
+      if (t.ticket.status !== "open" || a.optedOut.has(owner)) return false;
+      if (t.ticket.sellTs + p.claimWindowSecs < a.now) return false;
+      if (!meetsMultiple(a.medianQ64, t.ticket.sellPriceQ64, p.triggerMultipleBps)) return false;
+      const amount = (t.ticket.tokens * BigInt(p.claimBps)) / BPS_DENOM;
+      if (amount === 0n) return false;
+      const fits = amount * BPS_DENOM <= a.poolTokens * BigInt(p.maxClaimPoolBps);
+      return fits || (a.queuedPerOwner.get(owner) ?? 0) < MAX_QUEUED_PER_WALLET;
+    })
+    .sort((x, y) => (x.ticket.sellTs < y.ticket.sellTs ? -1 : x.ticket.sellTs > y.ticket.sellTs ? 1 : 0));
+}
+
+/** claim_for outcomes that mean "not now" rather than a keeper fault. */
+const AUTOCLAIM_SKIP = () =>
+  new Set(
+    ["TriggerNotMet", "InsufficientSamples", "WalletQueueLimit", "AutoClaimDisabled", "TicketNotOpen", "TicketExpired", "Paused", "QueueFull", "ZeroAmount", "WrongCoinStatus"]
+      .map((n) => FUMPAD_ERROR[n])
+      .filter((c): c is number => c !== undefined),
+  );
 
 interface JobHealth {
   lastOkAt?: number;
@@ -85,6 +139,7 @@ export class Keeper {
   private coins = new Map<string, CoinState>();
   private params?: Params;
   private pendingEta = 0n;
+  private paused = 0;
   private lastScan = 0;
   private lastTicketScan = 0;
   private chainNow = 0n;
@@ -161,6 +216,7 @@ export class Keeper {
     if (j.sample) await this.job("sample", () => this.runSampling());
     if (j.graduate) await this.job("graduate", () => this.runGraduate());
     if (j.buyback) await this.job("buyback", () => this.runBuybacks());
+    if (j.autoclaim) await this.job("autoclaim", () => this.runAutoClaims());
     if (j.queue) await this.job("queue", () => this.runQueues());
     if (j.skim) await this.job("skim", () => this.runSkims());
     if (j.fees) await this.job("fees", () => this.runPlatformFees());
@@ -193,6 +249,7 @@ export class Keeper {
       const g = await this.client.global(0);
       this.params = g.params;
       this.pendingEta = g.pendingEta;
+      this.paused = g.paused;
       const all = await this.client.scanCoins();
       for (const c of all) {
         const k = c.mint.toBase58();
@@ -421,6 +478,47 @@ export class Keeper {
         if (!r.ok) throw new Error(`process_queue failed: ${r.error}`);
         return 1;
       });
+    }
+    return n;
+  }
+
+  // ── auto-claim (D17) ─────────────────────────────────────────────────────
+
+  async runAutoClaims(): Promise<number> {
+    const p = this.params!;
+    if (this.paused & PAUSE_CLAIMS) return 0;
+    const skip = AUTOCLAIM_SKIP();
+    let n = 0;
+    for (const c of this.coins.values()) {
+      if (c.coin.status !== "graduated" || !c.setupDone || !c.openTickets || !c.obs) continue;
+      if (Date.now() - (c.lastAutoClaimAt ?? 0) < this.cfg.autoClaimIntervalSecs * 1000) continue;
+      const median = medianPriceQ64(c.obs.samples, this.chainNow, p.oracleWindowSecs, p.oracleMinSamples);
+      // Cheap pre-filter: nothing can trigger below the lowest open trigger.
+      if (!median || (c.minTriggerQ64 !== undefined && median < c.minTriggerQ64)) continue;
+      c.lastAutoClaimAt = Date.now();
+      const [open, queue, pool] = await Promise.all([
+        this.client.scanOpenTickets(c.mint),
+        this.client.claimQueue(c.mint),
+        this.client.tokenBalance(coinAddresses(c.mint).rewardVault),
+      ]);
+      if (!queue || !open.length) continue;
+      const owners = [...new Set(open.map((t) => t.ticket.owner.toBase58()))].map((o) => new PublicKey(o));
+      const infos = await this.conn.getMultipleAccountsInfo(owners.map((o) => positionPda(c.mint, o)));
+      const optedOut = new Set(owners.filter((_, i) => infos[i] && decodePosition(new Uint8Array(infos[i]!.data)).autoClaimOptOut === 1).map((o) => o.toBase58()));
+      const queuedPerOwner = new Map<string, number>();
+      for (const e of queue.entries) queuedPerOwner.set(e.owner.toBase58(), (queuedPerOwner.get(e.owner.toBase58()) ?? 0) + 1);
+      const picks = planAutoClaims({ tickets: open, optedOut, queuedPerOwner, medianQ64: median, now: this.chainNow, params: p, poolTokens: pool });
+      for (const t of picks.slice(0, this.cfg.autoClaimMaxPerRun)) {
+        n += await this.guard(`autoclaim:${t.key.toBase58()}`, async () => {
+          const r = await this.sender.send("claim_for", this.client.buildClaimFor({ keeper: this.keeperKey, mint: c.mint, ticket: t.key, owner: t.ticket.owner }));
+          if (!r.ok) {
+            if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
+            throw new Error(`claim_for failed: ${r.error}`);
+          }
+          this.log.info({ mint: c.mint.toBase58(), ticket: t.key.toBase58(), owner: t.ticket.owner.toBase58(), simulated: r.simulated }, "auto-claimed");
+          return 1;
+        });
+      }
     }
     return n;
   }

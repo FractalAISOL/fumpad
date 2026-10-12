@@ -1,16 +1,17 @@
 # FUMPAD off-chain services
 
-TypeScript (Node 22, strict, ESM), npm workspaces. Built against contract **v0.3**
-(`contracts/target/idl`, synced into `sdk/src/idl`).
+TypeScript (Node 22, strict, ESM), npm workspaces, plus one Rust binary. Built against contract **v0.4**
+(D17: 8% pool, 1024-entry queue, keeper auto-claim; `contracts/target/idl`, synced into `sdk/src/idl`).
 
 ```
 services/
   sdk/       @fumpad/sdk      typed client: PDAs, instruction builders, PumpSwap pass-through, math, quotes, events
   indexer/   @fumpad/indexer  chain → Postgres (events, current state, derived game/safety layer)
-  api/       @fumpad/api      REST + WebSocket implementing the app's FumpadData contract
-  keeper/    @fumpad/keeper   cranks per SPEC §5.4/§7
+  api/       @fumpad/api      REST + WebSocket implementing the app's FumpadData contract (+ D18 launch prepare)
+  keeper/    @fumpad/keeper   cranks per SPEC §5.4/§7 (+ D17 auto-claim)
+  grinder/   fumpad-grinder   Rust: pre-grinds `…fmbL` vanity mint keypairs into Postgres (D18)
   scripts/   local validator harness, e2e, IDL/vector/type generators
-  test/integration/           indexer↔db↔api (no chain) and the full local e2e
+  test/integration/           indexer↔db↔api (no chain), vanity pool (grinder↔db↔api), and the full local e2e
 ```
 
 ## Architecture
@@ -26,8 +27,53 @@ services/
     │  NOTIFY fumpad_live
     ▼
  api (Fastify) ── REST /v1/* + WS /v1/ws ──► app (app/src/data/api.ts)
+     └─ POST /v1/launch/prepare ◄── vanity_mints ◄── grinder (Rust, all cores, AES-256-GCM at rest)
  keeper ── reads chain only (gPA + batched account reads), sends cranks
 ```
+
+### D18 vanity mints (`…fmbL`)
+Every coin launched from the app gets a mint address ending in **`fmbL`** (case-sensitive; app-level only, the
+program accepts any fresh mint, like pump.fun's `pump`).
+
+- **grinder** keeps `vanity_mints` topped up to `POOL_TARGET` (200) available keys and sleeps when full. Each match
+  needs ~58⁴ = 11.3M random ed25519 keys; the suffix is tested as `n mod 58⁴` on the raw 32-byte key (no base58 encode
+  per try) and confirmed with a real encode. The 32-byte seed is stored **AES-256-GCM** encrypted under
+  `MINT_POOL_KEY` (nonce ‖ ct ‖ tag, AAD = pubkey so ciphertexts can't be swapped between rows) with a key
+  fingerprint so the API only reserves rows it can decrypt (key rotation). `--once N` (tests/seeding), `--bench SECS`.
+  Benchmark on an 8-core M1 (4P+4E): **~400k keys/s → ~28 s per `fmbL` key** on a quiet machine (190k–350k/s,
+  33–59 s, while other jobs shared the CPU)
+  (single thread ~45–67k/s); filling 200 keys ≈ 1.5–3 h, then it only replaces what launches use.
+- **API `POST /v1/launch/prepare`** `{creator, name, symbol, uri, initialBuyLamports?, slippageBps?, priorityMicroLamports?}`
+  → `{mint, transaction (base64 v0), lastValidBlockHeight, expiresAt, suffix, firstBuy?}`. The server reserves one
+  mint (`FOR UPDATE SKIP LOCKED` inside a per-creator advisory lock: concurrent prepares never share a mint, a wallet
+  holds at most one), builds `[compute budget] create_coin [+ creator's first buy]` with the creator as fee payer,
+  and signs **only as the mint**. The secret is decrypted into an opaque node `KeyObject` for that one signature and
+  never returned or logged. Preparing again (e.g. the blockhash expired in the review dialog) returns the same mint.
+  Validation mirrors the program (UTF-8 bytes: name ≤ 32, symbol ≤ 10, uri ≤ 200, non-empty) + https/ipfs/ar URIs, no
+  control chars, creator must be an on-curve wallet. Limits: per-IP route limit, per-wallet window, max active
+  reservations per IP. Pool empty → `503` + `Retry-After`. Disabled (503) when `MINT_POOL_KEY` is unset.
+  - *Why prepare (server-built) and not cosign (client-built)?* The server only ever signs bytes it assembled, so
+    there is no transaction parser to get wrong (smuggled instructions, lookup tables, a different fee payer or extra
+    writable accounts riding on the mint signature). The mint signature also pins the message: neither the client nor
+    a wallet can alter it afterwards. The app still checks the returned tx (`app/src/chain/program.ts`
+    `checkPreparedLaunch`: fee payer = wallet, only ComputeBudget + FUMPAD create_coin[+buy], advertised `…fmbL` mint)
+    before asking the wallet to sign, so a compromised API can't get anything else signed.
+- **Lifecycle**: `available → reserved → used`. The indexer marks a mint `used` (and wipes its secret) on
+  `CoinCreated`. The API sweeper (`LAUNCH_SWEEP_SECS`) returns a reservation to the pool only when it is older than
+  `LAUNCH_RESERVATION_MINUTES` (10) **and** the chain is past the `lastValidBlockHeight` of every tx co-signed for it
+  **and** the mint account doesn't exist (if it does, it becomes `used`). `/health` reports `vanityPool` counts.
+- SDK: `isFumpadVanityMint(pubkey, suffix = "fmbL")`, `launchMetadataError`, `inspectLaunchTx`; `buildLaunch` accepts a
+  mint `PublicKey` (co-signed elsewhere) as well as a `Keypair`.
+
+### D17 auto-claim (v0.4)
+Keeper job `autoclaim` (`JOB_AUTOCLAIM`, on): for each graduated coin whose covered keeper median reaches its lowest
+open trigger, `claim_for` every Open ticket that triggers, oldest sell first, unless the owner opted out
+(`Position.auto_claim_opt_out`, `set_auto_claim`), skipping wallets at the D16 limit unless the claim pays now; each tx
+first creates the owner's ATA (keeper-paid, idempotent) so payouts don't escrow. Respects the claims pause. "Not now"
+errors (TriggerNotMet, InsufficientSamples, WalletQueueLimit, AutoClaimDisabled, …) are skips, not failures. Indexer:
+`claims.triggered_by` + generated `auto`, `queue_entries.triggered_by`, `tickets.auto_claimed`,
+`positions.auto_claim_opt_out` (AutoClaimSet); the feed's claim posts carry `auto` ("Auto-claimed …"), tickets carry
+`autoClaim` / `autoClaimed` (app: per-coin toggle on My Fumbles).
 
 ### Stack choices
 - **@solana/web3.js v1** (not @solana/kit): the app's wallet adapter and Anchor's TS client both speak v1
@@ -79,7 +125,7 @@ cache cleared by the indexer's NOTIFY. Per-IP rate limits (quote stricter), WS c
 
 ### Keeper
 Jobs: sampling (heartbeat every graduated coin, full rate near triggers / pending buybacks, batches ≤5 legacy,
-6–10 v0 + lookup table it manages, coins past half their interval ride along), graduate + post-graduation setup,
+6–10 v0 + lookup table it manages, coins past half their interval ride along), graduate + post-graduation setup (init_observations, then 9× init_claim_queue in one tx: 1024-entry queue, 81,976 bytes, ~69k CU), auto-claim (D17),
 execute_buyback (median/±3% pre-checked), process_queue (owner ATAs created first, ≤13 entries), skim+settle
 (NothingToSkim = skip), withdraw_platform_fees, execute_params after the 48 h timelock. Dynamic priority fee
 (percentile of recent fees on written accounts, clamped), retries on expiry, in-flight guards, `DRY_RUN=true`
@@ -101,12 +147,27 @@ execute_buyback (median/±3% pre-checked), process_queue (owner ATAs created fir
 | `FULL_RATE_SECS` (15), `HEARTBEAT_SECS` (480), `BUYBACK_MIN_LAMPORTS`, `SKIM_INTERVAL_SECS`, `PLATFORM_FEES_MIN_LAMPORTS`, `PRIORITY_*`, `USE_LOOKUP_TABLE`, `JOB_*` (=false to disable), `MIN_KEEPER_LAMPORTS` | keeper | policy |
 | `PORT` | all | health (indexer/keeper; indexer also serves `/helius`) / HTTP (api) |
 | `CORS_ORIGINS`, `RATE_LIMIT_PER_MIN`, `QUOTE_RATE_LIMIT_PER_MIN`, `RATE_LIMIT_ALLOW`, `MAX_WS_PER_IP`, `PYTH_SOL_USD_ACCOUNT`, `SOL_USD_FALLBACK` | api | |
+| `MINT_POOL_KEY` | grinder, api | 32 bytes (64 hex or base64), **sealed**; same value in both. Unset on the API = launches disabled |
+| `VANITY_SUFFIX` (`fmbL`) | grinder, api | must match |
+| `LAUNCH_RESERVATION_MINUTES` (10), `LAUNCH_SWEEP_SECS` (15), `LAUNCH_RATE_LIMIT_PER_MIN` (10/IP), `LAUNCH_WALLET_LIMIT_PER_MIN` (6), `LAUNCH_MAX_ACTIVE_PER_IP` (3), `LAUNCH_MAX_INITIAL_BUY_LAMPORTS` (100 SOL), `LAUNCH_MAX_PRIORITY_MICROLAMPORTS` | api | D18 prepare |
+| `POOL_TARGET` (200), `GRINDER_THREADS` (cores), `POOL_POLL_SECS` (30) | grinder | |
+| `JOB_AUTOCLAIM`, `AUTOCLAIM_INTERVAL_SECS` (15), `AUTOCLAIM_MAX_PER_RUN` (20) | keeper | D17 |
 | `LOG_LEVEL` | all | |
 
 ## Run locally
 
-Prereqs: `anchor build` in `contracts/`, Solana CLI (`solana-test-validator`), Postgres (`DATABASE_URL`, or
-`docker compose up -d postgres`, or Homebrew `initdb`/`pg_ctl` which the scripts use automatically).
+Prereqs: `anchor build` in `contracts/`, Solana CLI (`solana-test-validator`), Rust (`cargo`, for the grinder),
+Postgres (`DATABASE_URL`, or `docker compose up -d postgres`, or Homebrew `initdb`/`pg_ctl` which the scripts use
+automatically). `npm run local` builds and starts the grinder (pool target 2) first, then launches the scenario's coin
+through `POST /v1/launch/prepare` and checks the mint ends in `fmbL`; alice is auto-claimed by the keeper while eve
+opts out and claims by hand.
+
+```
+cargo build --release --manifest-path grinder/Cargo.toml
+grinder/target/release/fumpad-grinder --bench 30            # keys/s on this machine
+DATABASE_URL=… MINT_POOL_KEY=$(openssl rand -hex 32) grinder/target/release/fumpad-grinder --once 5
+cargo test --release --manifest-path grinder/Cargo.toml    # suffix fast path vs bs58, crypto format vector
+```
 
 ```
 npm install
@@ -125,22 +186,26 @@ The validator loads `fumpad` as upgradeable (authority = `.local/upgrade-authori
 2 s hold, 60 s oracle window, 3 min samples, 2 s spacing (`scripts/local/actors.ts`).
 
 ## Railway deployment plan (not deployed)
-One Railway project, one Postgres plugin, three services from this monorepo (root directory `services/`):
+One Railway project, one Postgres plugin, four services from this monorepo (root directory `services/`):
 
 | service | build | start | env | notes |
 |---|---|---|---|---|
 | `indexer` | `npm ci && npm run build` | `node indexer/dist/main.js` | `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `HELIUS_API_KEY`, `HELIUS_WEBHOOK_SECRET`, `PORT` | 1 replica (cursors); health `/health`; public URL for the Helius webhook (`/helius`, raw type, accounts = fumpad, locker, + pools: re-sync from `SELECT amm_pool FROM coins`) |
-| `api` | same | `node api/dist/main.js` | `DATABASE_URL`, `HELIUS_API_KEY`, `CORS_ORIGINS=https://fumpad.fun`, `PORT` | horizontal OK (cache per instance); health `/health`; custom domain `api.fumpad.fun` |
-| `keeper` | same | `node keeper/dist/main.js` | `HELIUS_API_KEY` (or dedicated RPC), `KEEPER_SECRET_KEY` (sealed variable), `TELEGRAM_*`, `PORT` | **exactly 1 replica**; health `/health` with restart policy; fund the keeper and register it via `set_keepers` (multisig) |
+| `api` | same | `node api/dist/main.js` | `DATABASE_URL`, `HELIUS_API_KEY`, `CORS_ORIGINS=https://fumpad.fun`, `MINT_POOL_KEY` (sealed), `PORT` | horizontal OK (cache per instance; reservations are DB-atomic); health `/health` (incl. `vanityPool`); custom domain `api.fumpad.fun` |
+| `keeper` | same | `node keeper/dist/main.js` | `HELIUS_API_KEY` (or dedicated RPC), `KEEPER_SECRET_KEY` (sealed variable), `TELEGRAM_*`, `PORT` | **exactly 1 replica**; health `/health` with restart policy; fund the keeper and register it via `set_keepers` (multisig); budget SOL for owner-ATA rent on auto-claims |
+| `grinder` | Dockerfile/Nixpacks with Rust: `cargo build --release --manifest-path grinder/Cargo.toml` | `grinder/target/release/fumpad-grinder` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (private network: the binary connects without TLS), `MINT_POOL_KEY` (sealed, same as api), `POOL_TARGET=200`, `GRINDER_THREADS` = vCPUs | worker, no port; 1 replica (more just fill faster); CPU-bound only while topping up, then sleeps. Use a CPU-heavy plan briefly to fill the first 200, then scale down |
 
-Migrations run on indexer start (advisory-locked). No volumes needed (state is Postgres + chain). Run the keeper
-first with `DRY_RUN=true` against mainnet to review its plan. Backups: Railway Postgres snapshots; the DB can always be
-rebuilt from chain (`BACKFILL_FROM_SLOT` = program deploy slot).
+Migrations run on indexer start (advisory-locked; the grinder waits for `vanity_mints`). No volumes needed (state is
+Postgres + chain). Run the keeper first with `DRY_RUN=true` against mainnet to review its plan. Backups: Railway Postgres
+snapshots; the DB can always be rebuilt from chain (`BACKFILL_FROM_SLOT` = program deploy slot) — except the vanity
+pool, which is just regrown. Rotating `MINT_POOL_KEY`: deploy the new key to grinder + api together; rows under the
+old key fingerprint are ignored (delete them once no reservation uses them).
 
 ## Known gaps
-- **D17** (8% pool, queue capacity 1024, keeper auto-claim) is spec-only on main; no contract interface yet.
-  Curve constants come from `Global` so they need no SDK change; `CLAIM_QUEUE_CAPACITY` (256) is a constant in the
-  SDK decoders / `buildPostGraduation` and must follow the contract; auto-claim needs the new instruction/account.
+- Vanity pool drain: someone with many IPs + wallets can reserve the pool faster than it regrows (rate limits, 1
+  reservation per wallet, 3 per IP, 10-min expiry bound it). If the pool is empty the app shows "try again in a
+  minute"; a fallback to a random (non-`fmbL`) mint is deliberately not offered.
+- Coin metadata JSON upload is still a placeholder in the app (`uri: ipfs://pending`).
 - `escrowed` tickets map to the app's `claimed` state (the app types have no escrow state / withdraw action yet).
 - Holders are FUMPAD-observed balances (trades + claims), not full SPL holder lists.
 - Funding-graph heuristic is first-funder only; no exchange allow-list.

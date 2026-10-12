@@ -177,7 +177,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "poolSeeded": {
-        "description": "Tokens seeded to the pool at launch (5% of supply).",
+        "description": "Tokens seeded to the pool at launch (8% of supply).",
         "type": "number"
       },
       "poolTokens": {
@@ -384,6 +384,10 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "actorName": {
         "type": "string"
+      },
+      "auto": {
+        "description": "D17: paid by the keeper's auto-claim, not a click.",
+        "type": "boolean"
       },
       "coinName": {
         "type": "string"
@@ -1159,6 +1163,14 @@ export const SCHEMAS: Record<string, unknown> = {
   "Ticket": {
     "additionalProperties": false,
     "properties": {
+      "autoClaim": {
+        "description": "D17: the keeper may claim this coin's tickets for the owner (per coin; on unless opted out).",
+        "type": "boolean"
+      },
+      "autoClaimed": {
+        "description": "The keeper claimed (or queued) this ticket on the owner's behalf.",
+        "type": "boolean"
+      },
       "chainStatus": {
         "$ref": "#/components/schemas/TicketChainStatus"
       },
@@ -1284,7 +1296,8 @@ export const SCHEMAS: Record<string, unknown> = {
       "peakMultiple",
       "claimAmount",
       "claimValueSol",
-      "rebuyDebited"
+      "rebuyDebited",
+      "autoClaim"
     ],
     "type": "object"
   },

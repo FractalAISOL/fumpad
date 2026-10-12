@@ -37,6 +37,7 @@ import {
   type TicketAccount,
 } from "./accounts.js";
 import {
+  CLAIM_QUEUE_ACCOUNT_SIZE,
   CU,
   FUMPAD_PROGRAM_ID,
   MAX_QUEUE_ENTRIES_PER_TX,
@@ -50,8 +51,10 @@ import {
 } from "./constants.js";
 import {
   buyIx,
+  claimForIx,
   claimIx,
   closeTicketIx,
+  setAutoClaimIx,
   createCoinIx,
   executeBuybackIx,
   executeParamsIx,
@@ -151,7 +154,7 @@ export class FumpadClient {
   async claimQueue(mint: PublicKey): Promise<ClaimQueueAccount | null> {
     const d = await this.data(coinAddresses(mint).claimQueue);
     // Header is written only once the account reaches full size.
-    return d && d.length >= 56 + 256 * 80 ? decodeClaimQueue(d) : null;
+    return d && d.length >= CLAIM_QUEUE_ACCOUNT_SIZE ? decodeClaimQueue(d) : null;
   }
   async tokenBalance(account: PublicKey): Promise<bigint> {
     const d = await this.data(account);
@@ -221,18 +224,24 @@ export class FumpadClient {
     return computeBudgetIxs(units, this.priorityMicroLamports);
   }
 
-  /** create_coin (+ optional first buy in the same tx). `mint` must sign. */
-  async buildLaunch(a: { creator: PublicKey; mint: Keypair; name: string; symbol: string; uri: string; initialBuyLamports?: bigint; slippageBps?: number }): Promise<BuiltTx & { quote?: BuyQuoteRaw }> {
-    const ixs = [createCoinIx({ creator: a.creator, mint: a.mint.publicKey, name: a.name, symbol: a.symbol, uri: a.uri })];
+  /**
+   * create_coin (+ optional first buy in the same tx). The mint must sign: pass its
+   * Keypair, or just its PublicKey when someone else co-signs (D18 vanity mints: the API
+   * signs as the mint, the creator's wallet as fee payer).
+   */
+  async buildLaunch(a: { creator: PublicKey; mint: Keypair | PublicKey; name: string; symbol: string; uri: string; initialBuyLamports?: bigint; slippageBps?: number }): Promise<BuiltTx & { quote?: BuyQuoteRaw }> {
+    const mintKp = "secretKey" in a.mint ? a.mint : null;
+    const mint = mintKp ? mintKp.publicKey : (a.mint as PublicKey);
+    const ixs = [createCoinIx({ creator: a.creator, mint, name: a.name, symbol: a.symbol, uri: a.uri })];
     let quote: BuyQuoteRaw | undefined;
     if (a.initialBuyLamports && a.initialBuyLamports > 0n) {
       const g = await this.global();
       const p = g.params;
       // New coin: its fee snapshot will be the current Global.params (D14).
       quote = quoteCurveBuy({ virtualSol: p.initialVirtualSol, virtualToken: p.initialVirtualToken, realSol: 0n, realToken: p.curveSupply }, p, a.initialBuyLamports)!;
-      ixs.push(buyIx({ user: a.creator, mint: a.mint.publicKey, solIn: quote.solIn, minTokensOut: withSlippage(quote.tokensOut, a.slippageBps ?? 100), openTickets: [] }));
+      ixs.push(buyIx({ user: a.creator, mint, solIn: quote.solIn, minTokensOut: withSlippage(quote.tokensOut, a.slippageBps ?? 100), openTickets: [] }));
     }
-    return { instructions: [...this.cb(quote ? CU.createCoinAndBuy : CU.createCoin), ...ixs], signers: [a.mint], quote };
+    return { instructions: [...this.cb(quote ? CU.createCoinAndBuy : CU.createCoin), ...ixs], signers: mintKp ? [mintKp] : [], quote };
   }
 
   /** Buy for a total SOL budget (fee included); routes curve vs PumpSwap by coin status. */
@@ -299,6 +308,25 @@ export class FumpadClient {
     };
   }
 
+  /**
+   * D17 auto-claim (registered keeper): idempotent owner-ATA create paid by the keeper (so
+   * the payout lands directly instead of in escrow), then `claim_for`.
+   */
+  buildClaimFor(a: { keeper: PublicKey; mint: PublicKey; ticket: PublicKey; owner: PublicKey }): BuiltTx {
+    return {
+      instructions: [
+        ...this.cb(CU.claimFor),
+        createAtaIdempotentIx(a.keeper, a.owner, a.mint, TOKEN_2022_PROGRAM_ID),
+        claimForIx(a),
+      ],
+    };
+  }
+
+  /** Opt this wallet in/out of keeper auto-claim on one coin (needs an existing Position). */
+  buildSetAutoClaim(a: { wallet: PublicKey; mint: PublicKey; enabled: boolean }): BuiltTx {
+    return { instructions: [...this.cb(CU.setAutoClaim), setAutoClaimIx(a)] };
+  }
+
   async buildRegisterHoldings(a: { user: PublicKey; mint: PublicKey }): Promise<BuiltTx> {
     const open = await this.openTickets(a.mint, a.user);
     return { instructions: [...this.cb(CU.default), registerHoldingsIx({ ...a, openTickets: open.keys, anyQueued: open.anyQueued })] };
@@ -342,9 +370,9 @@ export class FumpadClient {
   }
 
   /**
-   * After graduation: [init_observations], [3× init_claim_queue], and (once, globally)
-   * PumpSwap init_user_volume_accumulator for the pool authority — each its own tx.
-   * Already-done steps are skipped.
+   * After graduation: [init_observations], [9× init_claim_queue in one tx (v0.4, 1024
+   * entries, ~69k CU)], and (once, globally) PumpSwap init_user_volume_accumulator for the
+   * pool authority — each its own tx. Already-done steps are skipped.
    */
   async buildPostGraduation(a: { payer: PublicKey; mint: PublicKey }): Promise<BuiltTx[]> {
     const c = coinAddresses(a.mint);
@@ -352,7 +380,7 @@ export class FumpadClient {
     const [obs, queue, uva] = await this.connection.getMultipleAccountsInfo([c.observations, c.claimQueue, userVolumeAccumulatorPda(pa)], this.commitment);
     const out: BuiltTx[] = [];
     if (!obs) out.push({ instructions: [...this.cb(CU.initObservations), initObservationsIx(a)] });
-    const full = 8 + 48 + 256 * 80;
+    const full = CLAIM_QUEUE_ACCOUNT_SIZE;
     if (!queue || queue.data.length < full) {
       const have = queue?.data.length ?? 0;
       const calls = Math.max(1, Math.ceil((full - have) / 10_240));

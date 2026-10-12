@@ -36,11 +36,12 @@ export interface Params {
 /** `Params::default()` (constants.rs). */
 export const DEFAULT_PARAMS: Params = {
   totalSupply: 1_000_000_000_000_000n,
-  rewardPoolSupply: 50_000_000_000_000n,
-  curveSupply: 753_448_275_862_069n,
-  lpSupply: 196_551_724_137_931n,
+  // D17 (v0.4): 8% reward pool; curve re-derived (contracts constants.rs).
+  rewardPoolSupply: 80_000_000_000_000n,
+  curveSupply: 729_655_172_413_793n,
+  lpSupply: 190_344_827_586_207n,
   initialVirtualSol: 30_000_000_000n,
-  initialVirtualToken: 1_019_371_196_754_564n,
+  initialVirtualToken: 987_180_527_383_367n,
   graduationLamports: 85_000_000_000n,
   graduationFeeLamports: 0n,
   feeBps: 100,

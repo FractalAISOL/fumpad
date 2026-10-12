@@ -1,12 +1,14 @@
 "use client";
 
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
-import { useFumpadTx } from "@/chain/tx";
+import { splitVanity } from "@/chain/program";
+import { type PreparedLaunch, useFumpadTx } from "@/chain/tx";
 import { PARAMS, cpOut } from "@/data/chain";
 import {
   AmountInput,
   Button,
   CoinTile,
+  CopyButton,
   CurveMeter,
   Dialog,
   EmptyState,
@@ -70,7 +72,8 @@ export function LaunchView() {
   const [drag, setDrag] = useState(false);
   const [tried, setTried] = useState(false);
   const [review, setReview] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState<{ symbol: string; mint: string; suffix: string } | null>(null);
+  const [prepared, setPrepared] = useState<PreparedLaunch | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgId = useId();
 
@@ -105,14 +108,32 @@ export function LaunchView() {
   const firstTokens = firstBuy > 0 ? cpOut(PARAMS.initialVirtualSol, PARAMS.initialVirtualTokens, net) : 0;
   const tick = symbol || "TICKER";
 
+  // D18 step 1: reserve the coin's `…fmbL` address (server-side vanity mint) for the review.
+  const openReview = async () => {
+    const p = await tx.prepareLaunch({ name, symbol, uri: "ipfs://pending", initialBuySol: firstBuy });
+    if (!p) {
+      toast(tx.error ?? "Couldn't prepare the launch. Nothing was charged.");
+      tx.reset();
+      return;
+    }
+    setPrepared(p);
+    setReview(true);
+  };
+  const closeReview = () => {
+    setReview(false);
+    setPrepared(null);
+  };
+
   const launch = async () => {
-    const res = await tx.launch({ name, symbol, uri: "ipfs://pending", initialBuySol: firstBuy });
+    if (!prepared) return;
+    const res = await tx.launch(prepared);
     setReview(false);
     if (!res) {
       toast(tx.error ?? "The launch didn't go through. Nothing was charged.");
       return;
     }
-    setDone(symbol);
+    setDone({ symbol, mint: prepared.mint, suffix: prepared.suffix });
+    setPrepared(null);
     toast(`Launched $${symbol}.`);
     tx.reset();
   };
@@ -122,7 +143,7 @@ export function LaunchView() {
       <div className="wrap">
         <Panel className={s.done}>
           <EmptyState
-            title={`$${done} is live`}
+            title={`$${done.symbol} is live`}
             action={
               <>
                 <Button href="/coins">See it with the other coins</Button>
@@ -132,8 +153,9 @@ export function LaunchView() {
               </>
             }
           >
-            50,000,000 {done} sit in its reward pool already. The first person to sell it too early will be glad.
+            80,000,000 {done.symbol} sit in its reward pool already. The first person to sell it too early will be glad.
           </EmptyState>
+          <MintAddress mint={done.mint} suffix={done.suffix} />
         </Panel>
       </div>
     );
@@ -144,7 +166,7 @@ export function LaunchView() {
       <div className={s.head}>
         <h1 className={s.h1}>Launch a coin</h1>
         <p className={s.lede}>
-          Every coin on FUMPAD starts with 5% of its supply in a reward pool, so people who sell too early get paid back. Takes about a minute.
+          Every coin on FUMPAD starts with 8% of its supply in a reward pool, so people who sell too early get paid back. Takes about a minute.
         </p>
       </div>
 
@@ -156,7 +178,7 @@ export function LaunchView() {
             e.preventDefault();
             const form = e.currentTarget;
             setTried(true);
-            if (valid) setReview(true);
+            if (valid) void openReview();
             else requestAnimationFrame(() => (form.querySelector("[aria-invalid=true]") as HTMLElement | null)?.focus());
           }}
         >
@@ -292,7 +314,7 @@ export function LaunchView() {
           </Panel>
 
           <div className={s.submit}>
-            <Button type="submit" size="lg" block>
+            <Button type="submit" size="lg" block loading={!review && tx.status === "building"}>
               Review launch
             </Button>
             {tried && !valid && (
@@ -321,7 +343,7 @@ export function LaunchView() {
               <KV
                 rows={[
                   { k: "Supply, mint authority revoked", v: <Tokens value={PARAMS.totalSupply} /> },
-                  { k: "Reward pool, 5%", v: <Tokens value={PARAMS.rewardPoolSupply} /> },
+                  { k: "Reward pool, 8%", v: <Tokens value={PARAMS.rewardPoolSupply} /> },
                   { k: "On the bonding curve", v: <Tokens value={PARAMS.curveSupply} compact /> },
                   { k: "Graduates at", v: <span className="num">85 SOL</span> },
                   { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> },
@@ -344,15 +366,15 @@ export function LaunchView() {
 
       <Dialog
         open={review}
-        onClose={() => setReview(false)}
+        onClose={closeReview}
         title={`Launch $${symbol}?`}
         description="Launching is permanent. The name, ticker and image can't be changed later."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setReview(false)}>
+            <Button variant="ghost" onClick={closeReview}>
               Keep editing
             </Button>
-            <Button onClick={launch} loading={tx.status !== "idle" && tx.status !== "error" && tx.status !== "done"}>
+            <Button onClick={launch} disabled={!prepared} loading={tx.status !== "idle" && tx.status !== "error" && tx.status !== "done"}>
               Launch ${symbol}
             </Button>
           </>
@@ -365,6 +387,7 @@ export function LaunchView() {
             <div className="ticker">${symbol}</div>
           </div>
         </div>
+        {prepared && <MintAddress mint={prepared.mint} suffix={prepared.suffix} />}
         <KV
           rows={[
             { k: "First buy", v: firstBuy > 0 ? <span className="num">{f.sol(firstBuy)} SOL</span> : <span className="muted">None</span> },
@@ -375,6 +398,24 @@ export function LaunchView() {
         />
         {isDemo && <p className={s.hint}>Demo wallet: the launch is simulated.</p>}
       </Dialog>
+    </div>
+  );
+}
+
+/** The coin's mint address with its FUMPAD `…fmbL` ending set apart (weight + underline, not color). */
+function MintAddress({ mint, suffix }: { mint: string; suffix: string }) {
+  const { head, tail } = splitVanity(mint, suffix);
+  return (
+    <div className={s.mintBox}>
+      <div className={s.mintLabel}>
+        <span>Coin address</span>
+        <CopyButton value={mint} label="Copy coin address" />
+      </div>
+      <div className={cx("num", s.mintAddr)} aria-label={`Coin address ${mint}`}>
+        {head}
+        {tail && <span className={s.mintSuffix}>{tail}</span>}
+      </div>
+      {tail && <p className={s.hint}>Every coin launched on FUMPAD ends in {tail}, so fakes are easy to spot.</p>}
     </div>
   );
 }

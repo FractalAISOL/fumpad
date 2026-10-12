@@ -198,6 +198,42 @@ export function startService(name: string, entry: string, env: Record<string, st
   };
 }
 
+/** `cargo build --release` the D18 vanity grinder (no-op when up to date); returns the binary path. */
+export function buildGrinder(): string {
+  const env = { ...process.env, PATH: `${join(homedir(), ".cargo/bin")}:${PATH}` };
+  execFileSync("cargo", ["build", "--release", "--quiet", "--manifest-path", join(SERVICES, "grinder/Cargo.toml")], { env, stdio: ["ignore", "ignore", "inherit"] });
+  return join(SERVICES, "grinder/target/release/fumpad-grinder");
+}
+
+/** Run a native binary as a child process (logs captured like `startService`). */
+export function startBinary(name: string, bin: string, args: string[], env: Record<string, string>): Service {
+  const logs: string[] = [];
+  const proc = spawn(bin, args, { env: { ...process.env, PATH, ...env }, stdio: ["ignore", "pipe", "pipe"], cwd: SERVICES });
+  const onData = (d: Buffer) => {
+    for (const line of d.toString().split("\n")) if (line.trim()) logs.push(line);
+    if (logs.length > 5000) logs.splice(0, logs.length - 5000);
+  };
+  proc.stdout?.on("data", onData);
+  proc.stderr?.on("data", onData);
+  return {
+    name,
+    proc,
+    logs,
+    async stop() {
+      if (proc.exitCode === null && proc.signalCode === null) {
+        proc.kill("SIGTERM");
+        for (let i = 0; i < 30 && proc.exitCode === null && proc.signalCode === null; i++) await sleep(100);
+        if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+      }
+    },
+  };
+}
+
+/** Run a binary to completion, returning its combined output (throws on non-zero exit). */
+export function runBinary(bin: string, args: string[], env: Record<string, string>): string {
+  return execFileSync(bin, args, { env: { ...process.env, PATH, ...env }, cwd: SERVICES, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function waitFor<T>(what: string, fn: () => Promise<T | null | undefined | false>, timeoutMs = 60_000, everyMs = 500): Promise<T> {

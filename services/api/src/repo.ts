@@ -441,6 +441,8 @@ export class Repo {
       claimedAt: ms(t.claimed_at),
       claimTx: t.claim_sig ?? undefined,
       rebuyDebited: tok(t.debited),
+      autoClaim: !t.auto_claim_opt_out,
+      autoClaimed: t.auto_claimed || undefined,
     };
   }
 
@@ -587,10 +589,12 @@ interface TicketRow {
   median_q64: string | null;
   price_q64: string;
   pool_tokens: string;
+  auto_claimed: boolean;
+  auto_claim_opt_out: boolean | null;
 }
 const TICKET_SELECT = `
-  SELECT t.*, c.symbol, c.name AS coin_name, c.status AS coin_status, c.median_q64, c.price_q64, c.pool_tokens
-    FROM tickets t JOIN coins c USING (mint)`;
+  SELECT t.*, c.symbol, c.name AS coin_name, c.status AS coin_status, c.median_q64, c.price_q64, c.pool_tokens, p.auto_claim_opt_out
+    FROM tickets t JOIN coins c USING (mint) LEFT JOIN positions p ON p.mint = t.mint AND p.wallet = t.owner`;
 
 interface FeedRow {
   id: string;
@@ -631,7 +635,7 @@ function feedEvent(r: FeedRow): FeedEvent {
     case "graduation":
       return { ...base, kind: "graduation", raisedSol: p.raisedSol, ticketsUnlocked: p.ticketsUnlocked };
     case "claim":
-      return { ...base, kind: "claim", multiple: p.multiple, tokens: p.tokens, sol: p.sol, fromQueue: p.fromQueue, skippedAhead: p.skippedAhead };
+      return { ...base, kind: "claim", multiple: p.multiple, tokens: p.tokens, sol: p.sol, fromQueue: p.fromQueue, skippedAhead: p.skippedAhead, auto: p.auto === true || undefined };
   }
 }
 

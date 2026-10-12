@@ -280,6 +280,34 @@ export function claimIx(a: { owner: PublicKey; mint: PublicKey; ticket: PublicKe
 }
 
 /**
+ * D17 `claim_for` (registered keeper only): claims `ticket` on its owner's behalf. Payout
+ * always goes to the owner's canonical Token-2022 ATA (or escrow if it can't receive);
+ * the keeper pays escrow rent. Fails `AutoClaimDisabled` if the owner opted out.
+ */
+export function claimForIx(a: { keeper: PublicKey; mint: PublicKey; ticket: PublicKey; owner: PublicKey }): TransactionInstruction {
+  const c = coinAddresses(a.mint);
+  return ix("claim_for", {
+    keeper: a.keeper,
+    global: globalPda(),
+    coin: c.coin,
+    mint: a.mint,
+    ticket: a.ticket,
+    position: positionPda(a.mint, a.owner),
+    claimQueue: c.claimQueue,
+    observations: c.observations,
+    poolAuthority: poolAuthorityPda(),
+    rewardVault: c.rewardVault,
+    ownerAta: coinAta(a.owner, a.mint),
+    escrow: escrowPda(a.ticket),
+  });
+}
+
+/** D17 `set_auto_claim(enabled)`: the wallet's Position on `mint` must exist. */
+export function setAutoClaimIx(a: { wallet: PublicKey; mint: PublicKey; enabled: boolean }): TransactionInstruction {
+  return ix("set_auto_claim", { wallet: a.wallet, position: positionPda(a.mint, a.wallet) }, { enabled: a.enabled });
+}
+
+/**
  * `process_queue`. `entries` = (ticket, owner) for a subsequence of the queue, IN QUEUE
  * ORDER, ≤ 13 per tx. Remaining = quadruples [ticket, position, owner ATA, escrow PDA]; a
  * missing/refusing ATA escrows the payout (D16), so create owner ATAs first.
@@ -369,7 +397,7 @@ export function withdrawEscrowIx(a: {
   });
 }
 
-/** Grows the queue by ≤10 KiB per call; send 3 in one tx after graduation. */
+/** Grows the queue by ≤10 KiB per call; send CLAIM_QUEUE_INIT_CALLS (9) in one tx after graduation. */
 export function initClaimQueueIx(a: { payer: PublicKey; mint: PublicKey }): TransactionInstruction {
   const c = coinAddresses(a.mint);
   return ix("init_claim_queue", { payer: a.payer, coin: c.coin, claimQueue: c.claimQueue });

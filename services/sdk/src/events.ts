@@ -31,8 +31,9 @@ export interface GraduatedEvent { mint: PublicKey; pool: PublicKey; solDeposited
 export interface LpFeesSettledEvent { mint: PublicKey; lamports: bigint; platform: bigint; creator: bigint; ts: bigint }
 export interface TicketCreatedEvent { mint: PublicKey; owner: PublicKey; ticket: PublicKey; tokens: bigint; sellPriceQ64: bigint; sellUsdCents: bigint; ts: bigint }
 export interface TicketDebitedEvent { ticket: PublicKey; debited: bigint; remaining: bigint; voided: boolean; ts: bigint }
-export interface ClaimQueuedEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; amount: bigint; queueLen: number; ts: bigint }
-export interface ClaimPaidEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; amount: bigint; fromQueue: boolean; medianPriceQ64: bigint; ts: bigint }
+/** v0.4: `triggeredBy` = owner (claim), keeper (claim_for) or cranker (process_queue). */
+export interface ClaimQueuedEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; amount: bigint; queueLen: number; ts: bigint; triggeredBy: PublicKey }
+export interface ClaimPaidEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; amount: bigint; fromQueue: boolean; medianPriceQ64: bigint; ts: bigint; triggeredBy: PublicKey }
 export interface TicketClosedEvent { ticket: PublicKey; owner: PublicKey; finalStatus: number; ts: bigint }
 export interface SampleRecordedEvent { mint: PublicKey; priceQ64: bigint; fallback: boolean; ts: bigint }
 export interface BuybackExecutedEvent { mint: PublicKey; lamportsIn: bigint; tokensOut: bigint; ts: bigint }
@@ -43,7 +44,9 @@ export interface ParamsQueuedEvent { params: Record<string, unknown>; eta: bigin
 export interface ParamsUpdatedEvent { params: Record<string, unknown>; ts: bigint }
 export interface ParamsCancelledEvent { ts: bigint }
 export interface CurveReopenedEvent { mint: PublicKey; completedAt: bigint; ts: bigint }
-export interface ClaimEscrowedEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; escrow: PublicKey; amount: bigint; ts: bigint }
+export interface ClaimEscrowedEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; escrow: PublicKey; amount: bigint; ts: bigint; triggeredBy: PublicKey }
+// v0.4
+export interface AutoClaimSetEvent { mint: PublicKey; wallet: PublicKey; enabled: boolean; ts: bigint }
 export interface EscrowWithdrawnEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; destination: PublicKey; amount: bigint; ts: bigint }
 // locker
 export interface LockedEvent { pool: PublicKey; mint: PublicKey; lpLocked: bigint; lpSupply: bigint; sqrtK: bigint }
@@ -70,6 +73,7 @@ export interface EventMap {
   CurveReopened: CurveReopenedEvent;
   ClaimEscrowed: ClaimEscrowedEvent;
   EscrowWithdrawn: EscrowWithdrawnEvent;
+  AutoClaimSet: AutoClaimSetEvent;
   Locked: LockedEvent;
   Skimmed: SkimmedEvent;
 }

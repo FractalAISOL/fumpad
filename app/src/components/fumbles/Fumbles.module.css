@@ -101,6 +101,74 @@
 .tickets {
   margin-top: var(--s-4);
 }
+
+/* D17 auto-claim toggles (neutral ink; orange stays reserved for money moments). */
+.auto {
+  margin-top: var(--s-5);
+}
+.autoLede {
+  padding: 0 var(--s-4);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  max-width: 70ch;
+}
+.autoList {
+  list-style: none;
+  padding: var(--s-2) var(--s-4) var(--s-4);
+  display: grid;
+  gap: var(--s-2);
+}
+.autoRow {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.autoCount {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  flex: 1;
+}
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-semibold);
+  cursor: pointer;
+  min-width: 64px;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.switch:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+.knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--rule-2);
+  transition: transform var(--dur-fast), background var(--dur-fast);
+}
+.switch[aria-checked="true"] {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+.switch[aria-checked="true"] .knob {
+  background: var(--ink);
+}
+.switch:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.switchText {
+  min-width: 2ch;
+}
 .list {
   list-style: none;
   margin: 0;

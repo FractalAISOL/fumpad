@@ -4,3 +4,4 @@ dist/
 sdk/test-vectors/target/
 sdk/test-vectors/Cargo.lock
 .local/
+grinder/target/

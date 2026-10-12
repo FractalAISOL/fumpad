@@ -171,7 +171,8 @@ fn position(matured: u64, pending: u64, pending_since: i64, open_count: u8, last
         open_tickets: [Pubkey::default(); 5],
         open_count,
         last_balance,
-        reserved: [0; 56],
+        auto_claim_opt_out: 0,
+        reserved: [0; 55],
     }
 }
 

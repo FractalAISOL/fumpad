@@ -164,6 +164,13 @@ function series(c: CoinSpec, range: ChartRange): PricePoint[] {
 /* ── Tickets ──────────────────────────────────────────────────────────────── */
 
 const ticketOverrides = new Map<string, Partial<Ticket>>();
+/** D17 auto-claim opt-outs, `${owner}:${mint}` (on by default). */
+const autoClaimOff = new Set<string>();
+/** Mock side of `set_auto_claim` (the simulated tx updates this so refetches agree). */
+export function mockSetAutoClaim(owner: Address, mint: Address, enabled: boolean) {
+  if (enabled) autoClaimOff.delete(`${owner}:${mint}`);
+  else autoClaimOff.add(`${owner}:${mint}`);
+}
 
 function buildTicket(owner: Address, t: TicketSpec): Ticket {
   const c = SPEC_BY_SYMBOL.get(t.symbol)!;
@@ -207,6 +214,8 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
     claimedAt: t.claimedAt,
     claimTx: t.claimedAt ? signature(id) : undefined,
     rebuyDebited: t.originalTokens - t.tokens,
+    autoClaim: !autoClaimOff.has(`${owner}:${mintAddress(c.symbol)}`),
+    autoClaimed: t.state === "claimed" && t.seq % 2 === 0 ? true : undefined,
   };
   return { ...base, ...ticketOverrides.get(id) };
 }
@@ -372,7 +381,7 @@ function makeEvent(kind: FeedKind, seed: string, ts: number, coin?: CoinSpec): F
       const p = medianOf(c);
       const tokens = Math.min(c.poolTokens * 0.1, Math.round((between(r, 0.3, 8) * 1e5) / 1e3) * 1e3);
       const fromQueue = r() < 0.25;
-      return { ...base, ...coinBits(c), kind, multiple, tokens, sol: tokens * p, fromQueue, skippedAhead: fromQueue && r() < 0.5 };
+      return { ...base, ...coinBits(c), kind, multiple, tokens, sol: tokens * p, fromQueue, skippedAhead: fromQueue && r() < 0.5, auto: !fromQueue && r() < 0.4 };
     }
   }
 }
