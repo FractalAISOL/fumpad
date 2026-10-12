@@ -169,6 +169,14 @@ export interface Ticket {
   queueEta?: number; // ms
   claimedAt?: Millis;
   claimTx?: string;
+  /** When the median first held 10× (crossing detected, or the claim/queue entry that proved it). */
+  crossedAt?: Millis;
+  /** Multiple at the crossing sample, when the indexer saw it (absent if only the claim proved it). */
+  crossedMultiple?: number;
+  /** Median ÷ ticket price at payout (claimed tickets). */
+  claimMultiple?: number;
+  /** D16: the payout went to the ticket's escrow (owner's token account refused it) and waits to be withdrawn. */
+  escrowed?: boolean;
   /** Debits applied by rebuys within 7 days. */
   rebuyDebited: number;
   /** D17: the keeper may claim this coin's tickets for the owner (per coin; on unless opted out). */

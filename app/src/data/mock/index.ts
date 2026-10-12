@@ -340,12 +340,19 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
     queueEta: queued && queueNeedsPool ? Math.max(HOUR, ((queueNeedsPool - c.poolTokens) / Math.max(1, bought)) * DAY) : undefined,
     claimedAt: t.claimedAt,
     claimTx: t.claimedAt ? signature(id) : undefined,
+    // The first sample at or past 10× (mock: a little over the line, never above the peak).
+    crossedAt: t.peak >= 10 && t.state !== "expired" && t.state !== "voided" ? (t.queuedAt ?? t.claimedAt ?? EPOCH) - 6 * HOUR : undefined,
+    crossedMultiple: t.peak >= 10 && t.state !== "expired" && t.state !== "voided" ? Math.min(t.peak, 10 + (t.seq + t.symbol.length) / 10) : undefined,
+    claimMultiple: t.state === "claimed" ? (t.claimedMultiple ?? t.multiple) : undefined,
     rebuyDebited: t.originalTokens - t.tokens,
     autoClaim: !autoClaimOff.has(`${owner}:${mintAddress(c.symbol)}`),
     autoClaimed: t.state === "claimed" && t.seq % 2 === 0 ? true : undefined,
   };
   return { ...base, ...ticketOverrides.get(id) };
 }
+
+/** Ticket id → owner for every ticket list built so far (mock getTicket can't invert the id hash). */
+const ticketOwners = new Map<Address, Address>();
 
 function ticketsFor(owner: Address): Ticket[] {
   const specs = owner === DEMO_WALLET ? DEMO_TICKETS : generatedTickets(owner);
@@ -355,7 +362,9 @@ function ticketsFor(owner: Address): Ticket[] {
     const multiple = now / t.sellPrice;
     return { ...t, multiple, peakMultiple: Math.max(t.peakMultiple, multiple), claimValueSol: t.claimAmount * now, autoClaim: !autoClaimOff.has(`${owner}:${t.mint}`) };
   });
-  return [...filed, ...specs.map((s) => buildTicket(owner, s))];
+  const all = [...filed, ...specs.map((s) => buildTicket(owner, s))];
+  for (const t of all) ticketOwners.set(t.id, owner);
+  return all;
 }
 
 /* ── Queue, holders, fumbles ──────────────────────────────────────────────── */
@@ -1090,7 +1099,10 @@ export class MockFumpadData implements FumpadData {
   }
 
   async getTicket(id: Address) {
-    for (const owner of [DEMO_WALLET]) {
+    // Any wallet whose tickets this process has built (a profile, a connected wallet), then
+    // the demo wallet and the named users, so share links work for every ticket the UI shows.
+    const known = ticketOwners.get(id);
+    for (const owner of [...(known ? [known] : []), DEMO_WALLET, ...USERS.map((u) => u.address)]) {
       const t = ticketsFor(owner).find((x) => x.id === id);
       if (t) return t;
     }

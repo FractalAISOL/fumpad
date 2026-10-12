@@ -1753,6 +1753,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "10% of tokens, fixed at queue entry or payout.",
         "type": "number"
       },
+      "claimMultiple": {
+        "description": "Median ÷ ticket price at payout (claimed tickets).",
+        "type": "number"
+      },
       "claimTx": {
         "type": "string"
       },
@@ -1768,6 +1772,18 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "coinStatus": {
         "$ref": "#/components/schemas/CoinStatus"
+      },
+      "crossedAt": {
+        "$ref": "#/components/schemas/Millis",
+        "description": "When the median first held 10× (crossing detected, or the claim/queue entry that proved it)."
+      },
+      "crossedMultiple": {
+        "description": "Multiple at the crossing sample, when the indexer saw it (absent if only the claim proved it).",
+        "type": "number"
+      },
+      "escrowed": {
+        "description": "D16: the payout went to the ticket's escrow (owner's token account refused it) and waits to be withdrawn.",
+        "type": "boolean"
       },
       "execPrice": {
         "description": "What the sell actually filled at. Differs from sellPrice when the floor applied.",

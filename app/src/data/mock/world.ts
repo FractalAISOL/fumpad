@@ -542,6 +542,10 @@ export function generatedTickets(owner: string): TicketSpec[] {
       queuedAt: state === "queued" ? EPOCH - Math.floor(between(r, 1, 6) * DAY) : undefined,
     });
   }
+  // Busy wallets rebought one coin inside the window until its ticket hit zero (no draws, so
+  // the rest of the world doesn't shift).
+  const v = out.length >= 5 ? out.findIndex((t) => t.state === "tracking") : -1;
+  if (v >= 0) out[v] = { ...out[v], tokens: 0, state: "voided" };
   return out;
 }
 

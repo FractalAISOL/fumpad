@@ -564,6 +564,10 @@ export class Repo {
       queueEta: eta,
       claimedAt: ms(t.claimed_at),
       claimTx: t.claim_sig ?? undefined,
+      crossedAt: ms(t.crossed_at),
+      crossedMultiple: t.crossed_multiple ?? undefined,
+      claimMultiple: t.paid_median_q64 ? mult(BigInt(t.paid_median_q64), sell) : undefined,
+      escrowed: t.status === "escrowed" || undefined,
       rebuyDebited: tok(t.debited),
       autoClaim: !t.auto_claim_opt_out,
       autoClaimed: t.auto_claimed || undefined,
@@ -816,9 +820,15 @@ interface TicketRow {
   pool_tokens: string;
   auto_claimed: boolean;
   auto_claim_opt_out: boolean | null;
+  crossed_at: string | null;
+  crossed_multiple: number | null;
+  /** Median at payout: the ticket's own column, or the claim row (escrowed payouts don't set the column). */
+  paid_median_q64: string | null;
 }
 const TICKET_SELECT = `
-  SELECT t.*, c.symbol, c.name AS coin_name, c.status AS coin_status, c.median_q64, c.price_q64, c.pool_tokens, p.auto_claim_opt_out
+  SELECT t.*, c.symbol, c.name AS coin_name, c.status AS coin_status, c.median_q64, c.price_q64, c.pool_tokens, p.auto_claim_opt_out,
+         CASE WHEN t.status IN ('claimed','escrowed') THEN COALESCE(t.claim_median_q64,
+           (SELECT cl.median_q64 FROM claims cl WHERE cl.ticket = t.ticket ORDER BY cl.ts DESC LIMIT 1)) END AS paid_median_q64
     FROM tickets t JOIN coins c USING (mint) LEFT JOIN positions p ON p.mint = t.mint AND p.wallet = t.owner`;
 
 interface FeedRow {
