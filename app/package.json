@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fumpad/sdk": "file:vendor/fumpad-sdk-0.1.0.tgz",
+    "@noble/curves": "^1.9.7",
     "@privy-io/react-auth": "^3.48.1",
     "@solana-program/memo": "^0.15.0",
     "@solana-program/system": "^0.15.0",
