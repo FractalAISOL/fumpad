@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Transaction hooks. The UI calls these. Launch (D18, via the API) and set_auto_claim (D17)
- * are live when NEXT_PUBLIC_FUMPAD_API is set and a wallet is connected; everything else
- * still simulates (delay + fake signature) so
- * every flow can be exercised end to end. Each TODO marks where the real Anchor
- * instruction is built. Amounts arrive in display units and MUST be converted with
- * `@/data/chain` (tokensToBase / solToLamports), never rounded through floats twice.
+ * Transaction hooks. The UI calls these. Every action is live when NEXT_PUBLIC_FUMPAD_API is
+ * set and a wallet is connected: buy / sell / claim / set_auto_claim are built by
+ * `./build` (via @fumpad/sdk) against the cluster in NEXT_PUBLIC_SOLANA_RPC, launch is
+ * prepared by the API (D18). Otherwise (mock, or the demo wallet) they simulate (delay +
+ * fake signature) so every flow can be exercised end to end. Amounts arrive in display
+ * units and are converted with `@/data/chain` (tokensToBase / solToLamports) in `./build`.
  *
  * Program instructions (contracts/programs/fumpad/src/lib.rs):
  *   create_coin(name, symbol, uri) · buy(sol_in, min_tokens_out) · sell(tokens_in, min_sol_out)
@@ -15,11 +15,13 @@
  */
 
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
-import { useCallback, useState } from "react";
+import { type BuiltTx, customErrorCode, FUMPAD_IDL } from "@fumpad/sdk";
+import { VersionedTransaction } from "@solana/web3.js";
+import { useCallback, useMemo, useState } from "react";
 import { solToLamports } from "@/data/chain";
 import { mockSetAutoClaim } from "@/data/mock";
-import { checkPreparedLaunch, setAutoClaimIx, VANITY_SUFFIX } from "./program";
+import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, fumpadClient } from "./build";
+import { checkPreparedLaunch, VANITY_SUFFIX } from "./program";
 
 export interface TxOk {
   signature: string;
@@ -102,6 +104,8 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** The live API base when configured (same switch as the data layer). */
 const API = process.env.NEXT_PUBLIC_FUMPAD_API?.replace(/\/+$/, "");
+/** Pyth SOL/USD PriceUpdateV2 account for sells (SDK default: the sponsored feed, on mainnet and devnet). */
+const PYTH_SOL_USD = process.env.NEXT_PUBLIC_PYTH_SOL_USD || undefined;
 
 async function postPrepare(body: Record<string, unknown>): Promise<{ mint: string; transaction: string; lastValidBlockHeight: number; suffix: string }> {
   const res = await fetch(`${API}/v1/launch/prepare`, {
@@ -120,6 +124,16 @@ async function postPrepare(body: Record<string, unknown>): Promise<{ mint: strin
     throw new Error(msg);
   }
   return res.json();
+}
+
+/** Program errors (preflight / confirmation) → the IDL's message, e.g. "Price has not held 10x the sell price." */
+function txErrorMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e ?? "");
+  const logs = (e as { logs?: unknown } | null)?.logs;
+  const code = customErrorCode(raw + (logs ? JSON.stringify(logs) : ""));
+  const known = code === null ? undefined : ((FUMPAD_IDL.errors ?? []) as { code: number; msg?: string }[]).find((x) => x.code === code);
+  if (known?.msg) return known.msg.endsWith(".") ? known.msg : `${known.msg}.`;
+  return raw || "Transaction failed.";
 }
 
 async function simulate(setStatus: (s: TxStatus) => void, ms = 900): Promise<TxOk> {
@@ -151,51 +165,66 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         return await fn();
       } catch (e) {
         setStatus("error");
-        setError(e instanceof Error ? e.message : "Transaction failed.");
+        setError(txErrorMessage(e));
         return null;
       }
     },
     [publicKey, requireWallet],
   );
 
+  /** Live = the API is configured and a real wallet is connected; otherwise simulate. */
+  const live = !!API && !!publicKey;
+  const client = useMemo(() => fumpadClient(connection, { solUsdAccount: PYTH_SOL_USD }), [connection]);
+
+  /** Build → wallet signs and sends (v0) → confirm. Program errors surface from preflight. */
+  const sendBuilt = useCallback(
+    async (build: () => Promise<BuiltTx> | BuiltTx, failed: string): Promise<TxOk> => {
+      setStatus("building");
+      const built = await build();
+      const { tx, blockhash, lastValidBlockHeight } = await client.toTransaction(publicKey!, built);
+      if (built.signers?.length) tx.sign(built.signers);
+      setStatus("signing");
+      const signature = await sendTransaction(tx, connection);
+      setStatus("confirming");
+      const res = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+      if (res.value.err) throw new Error(failed);
+      setStatus("done");
+      return { signature, simulated: false };
+    },
+    [client, publicKey, sendTransaction, connection],
+  );
+
   const buy = useCallback(
     (args: BuyArgs) =>
       run(async () => {
-        void args;
-        // TODO(tx): curve → program.methods.buy(solToLamports(args.solIn), tokensToBase(args.minTokensOut))
-        //   .remainingAccounts(args.openTickets.map(pubkey => ({ pubkey, isWritable: true, isSigner: false })))
-        // graduated → swap_buy via router with PumpSwap accounts in remaining_accounts; wrap/unwrap WSOL in the same tx.
-        return simulate(setStatus);
+        if (!live) return simulate(setStatus);
+        // Curve → buy; graduated → swap_buy (WSOL wrap/unwrap inside the program). Open
+        // tickets for the rebuy rule are read from the wallet's Position on chain.
+        return sendBuilt(() => buildBuyTx(client, publicKey!, args), "The buy failed on chain. Nothing but the network fee was spent.");
       }),
-    [run],
+    [run, live, sendBuilt, client, publicKey],
   );
 
   const sell = useCallback(
     (args: SellArgs) =>
       run(async () => {
-        void args;
-        // TODO(tx): curve → program.methods.sell(tokensToBase(args.tokensIn), solToLamports(args.minSolOut))
-        // graduated → swap_sell. Include the Pyth SOL/USD price update account (ticket ≥ $50 check);
-        // a missing/stale price never blocks the sell, it just files no ticket.
-        return simulate(setStatus);
+        if (!live) return simulate(setStatus);
+        // Curve → sell; graduated → swap_sell. Carries the Pyth SOL/USD account for the $50
+        // ticket check (a stale price never blocks the sell, it just files no ticket).
+        return sendBuilt(() => buildSellTx(client, publicKey!, args), "The sell failed on chain. Nothing but the network fee was spent.");
       }),
-    [run],
+    [run, live, sendBuilt, client, publicKey],
   );
 
   const claim = useCallback(
     (args: ClaimArgs) =>
       run(async () => {
-        void args;
-        // TODO(tx): program.methods.claim() with ticket, coin, observations ["observations", mint],
-        //   claim_queue ["claim_queue", mint], reward_vault ["reward_vault", mint], user ATA.
-        // Result is either ClaimPaid (same tx) or ClaimQueued — read the event from the tx logs.
-        return simulate(setStatus, 650);
+        if (!live) return simulate(setStatus, 650);
+        // Pays in the same tx (ClaimPaid) or joins the queue (ClaimQueued); the UI re-reads.
+        return sendBuilt(() => buildClaimTx(client, publicKey!, args), "The claim failed on chain. Nothing but the network fee was spent.");
       }),
-    [run],
+    [run, live, sendBuilt, client, publicKey],
   );
-
-  /** Live = the API is configured and a real wallet is connected; otherwise simulate. */
-  const live = !!API && !!publicKey;
 
   /**
    * D18 step 1 (review): reserve a `…fmbL` mint. Live: `POST /v1/launch/prepare` returns the
@@ -282,18 +311,9 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           if (owner) mockSetAutoClaim(owner, args.mint, args.enabled);
           return simulate(setStatus, 600);
         }
-        setStatus("building");
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-        const tx = new Transaction({ feePayer: publicKey!, blockhash, lastValidBlockHeight }).add(setAutoClaimIx(publicKey!, new PublicKey(args.mint), args.enabled));
-        setStatus("signing");
-        const signature = await sendTransaction(tx, connection);
-        setStatus("confirming");
-        const res = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-        if (res.value.err) throw new Error("The change didn't go through.");
-        setStatus("done");
-        return { signature, simulated: false };
+        return sendBuilt(() => buildSetAutoClaimTx(client, publicKey!, args), "The change didn't go through.");
       }),
-    [run, live, publicKey, sendTransaction, connection],
+    [run, live, publicKey, sendBuilt, client],
   );
 
   const reset = useCallback(() => {

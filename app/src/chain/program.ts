@@ -1,10 +1,10 @@
 /**
  * The little on-chain knowledge the app needs without the SDK: the FUMPAD program id,
  * D18 vanity-mint helpers (mirror of services/sdk/src/vanity.ts), a check of the API's
- * prepared launch transaction before the wallet signs it, and the D17 `set_auto_claim`
- * instruction (two accounts + a bool).
+ * prepared launch transaction before the wallet signs it. Instruction builders come from
+ * @fumpad/sdk (see ./build.ts).
  */
-import { ComputeBudgetProgram, PublicKey, TransactionInstruction, type VersionedTransaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, PublicKey, type VersionedTransaction } from "@solana/web3.js";
 
 export const FUMPAD_PROGRAM_ID = new PublicKey("ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv");
 
@@ -51,23 +51,4 @@ export function checkPreparedLaunch(tx: VersionedTransaction, wallet: PublicKey,
   if (!startsWith(create.data, CREATE_COIN)) fail("first instruction isn't create_coin");
   if (!keys[create.accountKeyIndexes[0]].equals(wallet) || keys[create.accountKeyIndexes[2]].toBase58() !== mint) fail("wrong creator or mint");
   if (rest[1] && !startsWith(rest[1].data, BUY)) fail("second instruction isn't your first buy");
-}
-
-const enc = (s: string) => new TextEncoder().encode(s);
-const SET_AUTO_CLAIM = [135, 111, 55, 239, 20, 249, 33, 144];
-
-/** D17 `set_auto_claim(enabled)`: the wallet's Position on `mint` must exist (it does once they traded). */
-export function setAutoClaimIx(wallet: PublicKey, mint: PublicKey, enabled: boolean): TransactionInstruction {
-  const [position] = PublicKey.findProgramAddressSync([enc("position"), mint.toBytes(), wallet.toBytes()], FUMPAD_PROGRAM_ID);
-  const [eventAuthority] = PublicKey.findProgramAddressSync([enc("__event_authority")], FUMPAD_PROGRAM_ID);
-  return new TransactionInstruction({
-    programId: FUMPAD_PROGRAM_ID,
-    keys: [
-      { pubkey: wallet, isSigner: true, isWritable: false },
-      { pubkey: position, isSigner: false, isWritable: true },
-      { pubkey: eventAuthority, isSigner: false, isWritable: false },
-      { pubkey: FUMPAD_PROGRAM_ID, isSigner: false, isWritable: false },
-    ],
-    data: Uint8Array.from([...SET_AUTO_CLAIM, enabled ? 1 : 0]) as Buffer,
-  });
 }
