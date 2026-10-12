@@ -128,6 +128,7 @@ export class Repo {
       marketCapSol: price * tok(p.totalSupply),
       holders: Number(c.holders ?? 0),
       curveSol: c.status === "graduated" ? lam(c.raised_lamports) : lam(c.real_sol),
+      graduationSol: lam(p.graduationLamports),
       poolTokens: tok(c.pool_tokens),
       ticketsOpen: Number(c.tickets_open),
       spark: spark ?? (await this.spark(c)),

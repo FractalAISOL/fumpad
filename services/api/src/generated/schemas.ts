@@ -132,6 +132,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "graduatedAt": {
         "$ref": "#/components/schemas/Millis"
       },
+      "graduationSol": {
+        "description": "SOL the curve must raise to graduate (Global.params; 85 on mainnet, scaled down on devnet).",
+        "type": "number"
+      },
       "holders": {
         "type": "number"
       },
@@ -299,6 +303,10 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "graduatedAt": {
         "$ref": "#/components/schemas/Millis"
+      },
+      "graduationSol": {
+        "description": "SOL the curve must raise to graduate (Global.params; 85 on mainnet, scaled down on devnet).",
+        "type": "number"
       },
       "holders": {
         "type": "number"

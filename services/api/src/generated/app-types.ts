@@ -44,6 +44,8 @@ export interface CoinSummary {
   holders: number;
   /** Real SOL raised on the curve (pre-graduation). */
   curveSol: number;
+  /** SOL the curve must raise to graduate (Global.params; 85 on mainnet, scaled down on devnet). */
+  graduationSol?: number;
   /** Reward pool balance, tokens. */
   poolTokens: number;
   ticketsOpen: number;

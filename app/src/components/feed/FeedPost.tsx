@@ -84,7 +84,7 @@ function body(e: FeedEvent): ReactNode {
     case "graduation":
       return (
         <>
-          <Tick e={e} /> graduated. 85 SOL on the curve, liquidity now on PumpSwap and locked for good. {f.int(e.ticketsUnlocked)} fumble tickets can claim at
+          <Tick e={e} /> graduated. {raisedSol(e.raisedSol)} SOL on the curve, liquidity now on PumpSwap and locked for good. {f.int(e.ticketsUnlocked)} fumble tickets can claim at
           10×.
         </>
       );
@@ -147,13 +147,20 @@ function Embed({ e }: { e: FeedEvent }) {
             <div className="ticker">${e.symbol}</div>
             <div className={s.meta}>bonding curve complete</div>
           </div>
-          <span className="num">85 / 85 SOL</span>
+          <span className="num">
+            {raisedSol(e.raisedSol)} / {raisedSol(e.raisedSol)} SOL
+          </span>
         </div>
-        <CurveMeter raised={85} size="sm" />
+        <CurveMeter raised={e.raisedSol} target={e.raisedSol} size="sm" />
       </div>
     );
   }
   return null;
+}
+
+/** Graduation raise: "85" on the mainnet curve, "0.850" on devnet's scaled-down one. */
+function raisedSol(n: number): string {
+  return Number.isInteger(n) ? f.int(n) : f.sol(n);
 }
 
 export function FeedPost({ e, fresh }: { e: FeedEvent; fresh?: boolean }) {

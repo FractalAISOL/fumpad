@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { keepSnapshot, type ChartRange, type CoinDetail, type FumbleRow, type Holder, type PricePoint, type QueueEntry, type Ticket, getFumpadData } from "@/data";
+import { graduationSolOf } from "@/data/chain";
 import {
   Address,
   Badge,
@@ -65,6 +66,7 @@ export function CoinView({
   const [series, setSeries] = useState<{ range: ChartRange; points: PricePoint[] }>({ range: "7d", points: initialSeries });
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const grad = coin.status === "graduated";
+  const target = graduationSolOf(coin);
 
   useEffect(() => {
     if (series.range === range) return;
@@ -102,7 +104,11 @@ export function CoinView({
             by <Address address={coin.creator} avatar={false} />
           </span>
           <span>launched {f.date(coin.createdAt)}</span>
-          <span>{grad ? `graduated ${f.date(coin.graduatedAt!)}, PumpSwap` : `on the bonding curve, ${f.fixed((coin.curveSol / 85) * 100, 1)}%`}</span>
+          <span>
+            {grad
+              ? `graduated${coin.graduatedAt ? ` ${f.date(coin.graduatedAt)}` : ""}, PumpSwap`
+              : `on the bonding curve, ${f.fixed((coin.curveSol / target) * 100, 1)}%`}
+          </span>
         </div>
       </div>
       <div className={s.prices}>
@@ -239,19 +245,19 @@ export function CoinView({
             </Panel>
           ) : (
             <Panel aria-labelledby="curve-h">
-              <PanelHead id="curve-h" title="Bonding curve" aside="graduates at 85 SOL, then moves to PumpSwap" />
+              <PanelHead id="curve-h" title="Bonding curve" aside={`graduates at ${f.fixed(target, target < 10 ? 2 : 0)} SOL, then moves to PumpSwap`} />
               <div className={s.curveBox}>
                 <div className={s.curveStats}>
-                  <Stat label={`${f.fixed(85 - coin.curveSol, 2)} SOL to go. Claims on this coin open at graduation.`}>
+                  <Stat label={`${f.fixed(Math.max(0, target - coin.curveSol), 2)} SOL to go. Claims on this coin open at graduation.`}>
                     <span className={s.curveBig}>
-                      <Sol value={coin.curveSol} unit={false} size="xl" /> <span className="muted">of 85 SOL</span>
+                      <Sol value={coin.curveSol} unit={false} size="xl" /> <span className="muted">of {f.fixed(target, target < 10 ? 2 : 0)} SOL</span>
                     </span>
                   </Stat>
                   <Stat label={`+${f.fixed(coin.curveSol1h, 1)} SOL in the last hour`} align="end">
-                    <span className="num">{f.fixed((coin.curveSol / 85) * 100, 1)}%</span>
+                    <span className="num">{f.fixed((coin.curveSol / target) * 100, 1)}%</span>
                   </Stat>
                 </div>
-                <CurveMeter raised={coin.curveSol} />
+                <CurveMeter raised={coin.curveSol} target={target} />
               </div>
               <PanelNote>
                 Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the 30-min median holds

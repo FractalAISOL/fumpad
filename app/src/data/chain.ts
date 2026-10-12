@@ -33,6 +33,11 @@ export const PARAMS = {
   oracleMinSamples: 84,
 } as const;
 
+/** A coin's graduation target in SOL: from the data source when it has one (devnet runs a scaled-down curve). */
+export function graduationSolOf(c: { graduationSol?: number }): number {
+  return c.graduationSol ?? PARAMS.graduationSol;
+}
+
 export function lamportsToSol(l: bigint | number): number {
   return Number(l) / LAMPORTS_PER_SOL;
 }

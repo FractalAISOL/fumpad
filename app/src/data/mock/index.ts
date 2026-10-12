@@ -97,6 +97,7 @@ function summary(c: CoinSpec): CoinSummary {
     marketCapSol: price * SUPPLY,
     holders: c.holders,
     curveSol: c.status === "curve" ? (c.raised ?? 0) : PARAMS.graduationSol,
+    graduationSol: PARAMS.graduationSol,
     poolTokens: c.poolTokens,
     ticketsOpen: ticketsOpenOn(c),
     spark: spark(c.symbol),

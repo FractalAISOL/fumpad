@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { CoinSummary } from "@/data";
+import { graduationSolOf } from "@/data/chain";
 import { Badge, Change, CoinTile, type Column, CurveMeter, EmptyState, Panel, Price, Segmented, Sparkline, Table, Tokens, Usd } from "@/design";
 import * as f from "@/design/format";
 import { useNow } from "../shell/Providers";
@@ -39,11 +40,11 @@ export function CoinsView({ coins, solUsd }: { coins: CoinSummary[]; solUsd: num
           <Badge tone="ink">Graduated</Badge>
         ) : (
           <span className={s.stage}>
-            <CurveMeter raised={c.curveSol} size="sm" />
-            <span className="num">{f.fixed((c.curveSol / 85) * 100, 0)}%</span>
+            <CurveMeter raised={c.curveSol} target={graduationSolOf(c)} size="sm" />
+            <span className="num">{f.fixed((c.curveSol / graduationSolOf(c)) * 100, 0)}%</span>
           </span>
         ),
-      sortValue: (c) => (c.status === "graduated" ? 100 : (c.curveSol / 85) * 99),
+      sortValue: (c) => (c.status === "graduated" ? 100 : (c.curveSol / graduationSolOf(c)) * 99),
     },
     { key: "price", header: "Price, SOL", align: "end", hideBelow: "lg", render: (c) => <Price value={c.median ?? c.price} />, sortValue: (c) => c.price },
     { key: "chg", header: "24h", align: "end", render: (c) => <Change pct={c.change24h} />, sortValue: (c) => c.change24h },
