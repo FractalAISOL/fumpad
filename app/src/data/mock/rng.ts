@@ -47,9 +47,9 @@ export function address(seed: string, suffix = ""): string {
   for (let i = 0; i < n; i++) s += B58[Math.floor(r() * 58)];
   return s + suffix;
 }
-/** Mints on FUMPAD are ground to end in "fum" (vanity, like pump's "pump"). */
+/** Mints on FUMPAD are ground to end in "fmbL" (vanity, like pump's "pump"; chain/program.ts VANITY_SUFFIX). */
 export function mintAddress(symbol: string): string {
-  return address("mint:" + symbol, "fum");
+  return address("mint:" + symbol, "fmbL");
 }
 /** 88-char base58 signature. */
 export function signature(seed: string): string {

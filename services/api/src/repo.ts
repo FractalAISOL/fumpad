@@ -73,19 +73,48 @@ export interface CoinRow {
   tickets_open: string;
   metadata: Record<string, string | undefined> | null;
   vol24: string | null;
+  trades24: string | null;
   price24: string | null;
   holders: string | null;
+  creator_flagged: boolean;
+  closest_multiple: number | null;
 }
 
-const COIN_SELECT = `
-  SELECT c.*,
-    (SELECT COALESCE(sum(sol_amount),0) FROM trades t WHERE t.mint = c.mint AND t.ts > $1 - 86400) AS vol24,
+/**
+ * One coin row plus its 24 h activity, holders, creator flag and the open ticket nearest the
+ * trigger. Every subquery is an index lookup on the coin (trades_mint_ts, positions PK,
+ * wallet_flags PK, tickets_mint_status). `trigBps` comes from Global.params (an integer).
+ */
+const coinSelect = (trigBps: number) => `
+  SELECT c.*, act.vol24, act.trades24,
     (SELECT x.p FROM (
         SELECT ts, (virtual_sol * 18446744073709551616 / NULLIF(virtual_tokens,0))::numeric(40,0) AS p FROM trades WHERE mint = c.mint AND ts <= $1 - 86400
         UNION ALL SELECT ts, price_q64 FROM samples WHERE mint = c.mint AND ts <= $1 - 86400 AND NOT fallback
       ) x ORDER BY x.ts DESC LIMIT 1) AS price24,
-    (SELECT count(*) FROM positions p WHERE p.mint = c.mint AND p.balance > 0) AS holders
-  FROM coins c`;
+    (SELECT count(*) FROM positions p WHERE p.mint = c.mint AND p.balance > 0) AS holders,
+    EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = c.creator) AS creator_flagged,
+    (SELECT (cur.q / min(t.sell_price_q64))::float8 FROM tickets t
+      WHERE t.mint = c.mint AND t.status = 'open' AND cur.q * 10000 < t.sell_price_q64 * ${Math.trunc(trigBps)}) AS closest_multiple
+  FROM coins c
+  CROSS JOIN LATERAL (SELECT CASE WHEN c.status = 'graduated' AND c.median_q64 IS NOT NULL THEN c.median_q64 ELSE c.price_q64 END AS q) cur
+  CROSS JOIN LATERAL (SELECT COALESCE(sum(sol_amount),0) AS vol24, count(*) AS trades24 FROM trades t WHERE t.mint = c.mint AND t.ts > $1 - 86400) act`;
+
+/** Creator links from the metadata JSON: http(s) only, so a crafted `javascript:` never reaches an href. */
+export function socialsOf(md: Record<string, unknown> | null): CoinSummary["socials"] {
+  if (!md) return undefined;
+  const ok = (v: unknown) => {
+    if (typeof v !== "string" || v.length > 300) return undefined;
+    try {
+      const u = new URL(v.trim());
+      return u.protocol === "https:" || u.protocol === "http:" ? u.toString() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const handle = (v: unknown, base: string) => (typeof v === "string" && /^@?[A-Za-z0-9_]{1,32}$/.test(v.trim()) ? base + v.trim().replace(/^@/, "") : ok(v));
+  const out = { x: handle(md.twitter ?? md.x, "https://x.com/"), telegram: handle(md.telegram, "https://t.me/"), website: ok(md.website) };
+  return out.x || out.telegram || out.website ? Object.fromEntries(Object.entries(out).filter(([, v]) => v)) : undefined;
+}
 
 export class Repo {
   private paramsCache?: { at: number; p: Params };
@@ -134,6 +163,10 @@ export class Repo {
       poolTokens: tok(c.pool_tokens),
       ticketsOpen: Number(c.tickets_open),
       spark: spark ?? (await this.spark(c)),
+      trades24h: Number(c.trades24 ?? 0),
+      socials: socialsOf(c.metadata),
+      closestMultiple: c.closest_multiple ?? undefined,
+      creatorFlagged: !!c.creator_flagged,
     };
   }
 
@@ -173,13 +206,15 @@ export class Repo {
       closest: "c.tickets_open DESC, c.created_at DESC",
       graduating: "(CASE WHEN c.status = 'curve' THEN c.real_sol ELSE -1 END) DESC",
     }[sort];
-    const r = await this.db.query<CoinRow>(`SELECT * FROM (${COIN_SELECT} ${where}) c ORDER BY ${order} LIMIT $2`, [nowSecs(), limit]);
+    const trig = (await this.params()).triggerMultipleBps;
+    const r = await this.db.query<CoinRow>(`SELECT * FROM (${coinSelect(trig)} ${where}) c ORDER BY ${order} LIMIT $2`, [nowSecs(), limit]);
     return Promise.all(r.rows.map((c) => this.summary(c)));
   }
 
   async coinRow(symbolOrMint: string): Promise<CoinRow | null> {
+    const trig = (await this.params()).triggerMultipleBps;
     const r = await this.db.query<CoinRow>(
-      `${COIN_SELECT} WHERE c.mint = $2 OR upper(c.symbol) = upper($2) ORDER BY (c.mint = $2) DESC, c.created_at ASC LIMIT 1`,
+      `${coinSelect(trig)} WHERE c.mint = $2 OR upper(c.symbol) = upper($2) ORDER BY (c.mint = $2) DESC, c.created_at ASC LIMIT 1`,
       [nowSecs(), symbolOrMint.replace(/^\$/, "")],
     );
     return r.rows[0] ?? null;
@@ -204,9 +239,9 @@ export class Repo {
     ]);
     const md = c.metadata ?? {};
     const links: { label: string; href: string }[] = [];
-    if (md.website) links.push({ label: "Website", href: md.website });
-    if (md.twitter) links.push({ label: "X", href: md.twitter });
-    if (md.telegram) links.push({ label: "Telegram", href: md.telegram });
+    if (s.socials?.website) links.push({ label: "Website", href: s.socials.website });
+    if (s.socials?.x) links.push({ label: "X", href: s.socials.x });
+    if (s.socials?.telegram) links.push({ label: "Telegram", href: s.socials.telegram });
     const e = extra.rows[0];
     return {
       ...s,

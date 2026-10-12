@@ -25,7 +25,7 @@ import type {
   TradeQuote,
   TradeRow,
 } from "../types";
-import { mintAddress, signature } from "./rng";
+import { hash, mintAddress, signature } from "./rng";
 import {
   COIN_SPECS,
   type CoinSpec,
@@ -36,6 +36,8 @@ import {
   EPOCH,
   HOUR,
   MINUTE,
+  P0,
+  PENDING_LAUNCHES,
   P_GRAD,
   SOL_USD,
   SPEC_BY_MINT,
@@ -95,14 +97,19 @@ const sim = {
   trades: new Map<string, TradeRow[]>(),
   /** symbol → last time the UI read it (getCoin / series / tickets). */
   watched: new Map<string, number>(),
+  /** Simulated activity on top of the spec's 24 h numbers. */
+  count: new Map<string, number>(),
+  volume: new Map<string, number>(),
+  holders: new Map<string, number>(),
 };
+const bump = (m: Map<string, number>, k: string, by: number) => m.set(k, (m.get(k) ?? 0) + by);
 const watch = (c: CoinSpec | undefined) => {
   // Client only: the server must not read the clock (prerender) and never ticks anyway.
   if (c && typeof window !== "undefined") sim.watched.set(c.symbol, Date.now());
 };
 function curveRaised(c: CoinSpec): number {
   if (c.status !== "curve") return PARAMS.graduationSol;
-  return Math.min(PARAMS.graduationSol * 0.995, Math.max(0, (c.raised ?? 0) + (sim.raised.get(c.symbol) ?? 0)));
+  return Math.min(PARAMS.graduationSol, Math.max(0, (c.raised ?? 0) + (sim.raised.get(c.symbol) ?? 0)));
 }
 function liveSpot(c: CoinSpec): number {
   return c.status === "curve" ? curvePriceAt(curveRaised(c)) : spotOf(c) * (sim.drift.get(c.symbol) ?? 1);
@@ -112,6 +119,8 @@ function liveMedian(c: CoinSpec): number {
 }
 
 function ticketsOpenOn(c: CoinSpec): number {
+  // Young curve coins (the board's New column) have only a handful of sellers yet.
+  if (c.status === "curve" && c.createdAt > EPOCH - DAY) return Math.round(curveRaised(c) * 0.35);
   return 40 + (Math.round(c.volume24hUsd / 900) % 2600) + Math.round(c.holders / 9);
 }
 
@@ -129,14 +138,37 @@ function summary(c: CoinSpec): CoinSummary {
     price,
     median: c.status === "graduated" ? liveMedian(c) : undefined,
     change24h: c.change24h,
-    volume24hSol: c.volume24hUsd / SOL_USD,
     marketCapSol: price * SUPPLY,
-    holders: c.holders,
     curveSol: curveRaised(c),
     graduationSol: PARAMS.graduationSol,
     poolTokens: c.poolTokens,
     ticketsOpen: ticketsOpenOn(c),
     spark: [...spark(c.symbol).slice(0, -1), price],
+    ...boardExtras(c),
+  };
+}
+
+/** Deterministic board fields: tx count, socials, the ticket nearest 10×, creator flag. */
+function boardExtras(c: CoinSpec): Pick<CoinSummary, "trades24h" | "socials" | "closestMultiple" | "creatorFlagged" | "volume24hSol" | "holders"> {
+  const r = rng("extra:" + c.symbol);
+  const vol = c.volume24hUsd / SOL_USD;
+  const avgTrade = between(r, 0.25, c.status === "graduated" ? 3 : 0.9);
+  const sym = c.symbol.toLowerCase();
+  const socials = {
+    x: r() < 0.8 ? `https://x.com/${sym}onsol` : undefined,
+    telegram: r() < 0.55 ? `https://t.me/${sym}portal` : undefined,
+    website: r() < 0.35 ? `https://${sym}.fun` : undefined,
+  };
+  const tickets = ticketsOpenOn(c);
+  const base = between(r, 1.3, 9.7);
+  const drift = sim.drift.get(c.symbol) ?? 1;
+  return {
+    trades24h: Math.round(vol / avgTrade) + (sim.count.get(c.symbol) ?? 0),
+    volume24hSol: vol + (sim.volume.get(c.symbol) ?? 0),
+    holders: c.holders + (sim.holders.get(c.symbol) ?? 0),
+    socials: socials.x || socials.telegram || socials.website ? socials : undefined,
+    closestMultiple: tickets > 0 ? Math.min(9.97, base * (c.status === "graduated" ? drift : liveSpot(c) / Math.max(P0, spotOf(c)))) : undefined,
+    creatorFlagged: c.symbol === "RUGZ" || hash("flag:" + c.symbol) % 11 === 0,
   };
 }
 
@@ -576,6 +608,7 @@ type Listener = (m: LiveMessage) => void;
 const listeners = new Set<Listener>();
 let tickTimer: ReturnType<typeof setTimeout> | undefined;
 let feedTimer: ReturnType<typeof setTimeout> | undefined;
+let launchTimer: ReturnType<typeof setTimeout> | undefined;
 let tickN = 0;
 
 const emit = (m: LiveMessage) => {
@@ -589,13 +622,28 @@ function simTrade(c: CoinSpec, ts: number, opts: { buy?: boolean; sol?: number; 
   const before = liveSpot(c);
   const buy = opts.buy ?? r() < 0.55;
   let sol = opts.sol ?? Math.exp(between(r, Math.log(0.05), Math.log(c.status === "curve" ? 1.5 : 12)));
+  let graduates = false;
   if (c.status === "curve") {
     if (!buy) sol = Math.min(sol, Math.max(0, curveRaised(c) - 0.01));
+    // A buy that fills the curve is partially filled and graduates the coin (as on chain).
+    else if (curveRaised(c) + sol >= PARAMS.graduationSol) {
+      sol = Math.max(0, PARAMS.graduationSol - curveRaised(c));
+      graduates = true;
+    }
     sim.raised.set(c.symbol, (sim.raised.get(c.symbol) ?? 0) + (buy ? sol : -sol));
   } else {
     const d = sim.drift.get(c.symbol) ?? 1;
     const move = opts.sol !== undefined ? Math.min(0.2, opts.sol / 400) : Math.abs(0.012 * gauss(r));
     sim.drift.set(c.symbol, Math.max(0.2, Math.min(5, d * Math.exp((buy ? 1 : -1) * move))));
+  }
+  bump(sim.count, c.symbol, 1);
+  bump(sim.volume, c.symbol, sol);
+  if (buy && r() < 0.6) bump(sim.holders, c.symbol, 1);
+  if (graduates) {
+    c.status = "graduated";
+    c.graduatedAt = ts;
+    c.mcapUsd = P_GRAD * SUPPLY * SOL_USD;
+    sim.drift.set(c.symbol, 1);
   }
   const price = liveSpot(c);
   const who = opts.wallet ?? (r() < 0.5 ? pick(r, USERS).address : anon(`live:${c.symbol}:${tickN}`));
@@ -605,7 +653,22 @@ function simTrade(c: CoinSpec, ts: number, opts: { buy?: boolean; sol?: number; 
   sim.trades.set(c.symbol, [trade, ...(sim.trades.get(c.symbol) ?? [])].slice(0, 100));
   emit({ type: "coins", mints: [mint], wallets: [who] });
   emit({ type: "coin", coin: detail(c), trades: [trade], points: [point] });
+  if (graduates) emit({ type: "feed", event: makeEvent("graduation", `live-grad:${c.symbol}`, ts, c) });
   return trade;
+}
+
+/** Release the next pending launch (client only): it joins the world and goes out like the indexer's launch. */
+let launchN = 0;
+function simLaunch(ts: number): boolean {
+  const c = PENDING_LAUNCHES[launchN++];
+  if (!c) return false;
+  c.createdAt = ts;
+  COIN_SPECS.push(c);
+  const mint = mintAddress(c.symbol);
+  emit({ type: "feed", event: makeEvent("launch", `live-launch:${c.symbol}`, ts, c) });
+  emit({ type: "coins", mints: [mint], wallets: [creatorOf(c)] });
+  emit({ type: "coin", coin: detail(c), trades: [], points: [{ t: ts, p: liveSpot(c) }] });
+  return true;
 }
 
 /** Simulated wallet changes from mock-mode transactions, `${owner}:${mint}`. */
@@ -681,9 +744,23 @@ export class MockFumpadData implements FumpadData {
       const r = rng("tickpick:" + tickN);
       const extra = pick(r, COIN_SPECS);
       for (const c of new Set([...hot, extra])) simTrade(c, this.now());
+      // Keep the curve moving so the Launches board shows coins crossing 50% and graduating.
+      const curve = COIN_SPECS.filter((c) => c.status === "curve" && c.createdAt <= this.now());
+      // Half the picks go to coins past half the curve, so graduations happen within minutes.
+      const late = curve.filter((c) => curveRaised(c) >= PARAMS.graduationSol / 2);
+      for (let i = 0; i < 3 && curve.length; i++) {
+        const c = pick(r, late.length && r() < 0.5 ? late : curve);
+        const g = PARAMS.graduationSol;
+        simTrade(c, this.now(), { buy: r() < 0.72, sol: Math.exp(between(r, Math.log(0.003 * g), Math.log(0.04 * g))) });
+      }
       tickTimer = setTimeout(tick, between(r, 2200, 3800));
     };
     tickTimer = setTimeout(tick, 1500);
+    const launch = () => {
+      if (!simLaunch(this.now())) return;
+      launchTimer = setTimeout(launch, between(rng("launchgap:" + launchN), 9_000, 18_000));
+    };
+    launchTimer = setTimeout(launch, 5_000);
     const feed = () => {
       const i = this.live++;
       const r = rng("live:" + i);
@@ -704,7 +781,8 @@ export class MockFumpadData implements FumpadData {
       if (listeners.size) return;
       clearTimeout(tickTimer);
       clearTimeout(feedTimer);
-      tickTimer = feedTimer = undefined;
+      clearTimeout(launchTimer);
+      tickTimer = feedTimer = launchTimer = undefined;
     };
   }
 

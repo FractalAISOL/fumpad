@@ -51,6 +51,20 @@ export interface CoinSummary {
   ticketsOpen: number;
   /** Last 24 points of price, oldest first, for sparklines. */
   spark: number[];
+  /** FUMPAD trades (curve + router) in the last 24 hours. */
+  trades24h: number;
+  /** Creator-supplied links from the metadata (http/https only). */
+  socials?: CoinSocials;
+  /** The open ticket nearest to 10×: the highest multiple still below the trigger. */
+  closestMultiple?: number;
+  /** The creator's wallet carries an indexer flag (linked wallets, rebuys elsewhere). */
+  creatorFlagged: boolean;
+}
+
+export interface CoinSocials {
+  x?: string;
+  telegram?: string;
+  website?: string;
 }
 
 export interface CoinDetail extends CoinSummary {

@@ -314,8 +314,106 @@ export const COIN_SPECS: CoinSpec[] = [
   },
 ];
 
+/*
+ * The Launches board needs a fuller world than the hand-authored coins: a stream of young
+ * curve coins, a final stretch and a few fresh graduates. Ages are relative to EPOCH; the
+ * rest is seeded from the symbol so server and client agree.
+ */
+const SEC = 1000;
+function boardSpec(symbol: string, name: string, description: string, ageMs: number, o: { raised?: number; gradAgoMs?: number; mcapUsd?: number }): CoinSpec {
+  const r = rng("board:" + symbol);
+  const grad = o.gradAgoMs !== undefined;
+  const raised = o.raised ?? 0;
+  const young = 1 - Math.exp(-ageMs / (2 * HOUR));
+  return {
+    symbol,
+    name,
+    tile: (hash(symbol) % 3) as 0 | 1 | 2,
+    description,
+    status: grad ? "graduated" : "curve",
+    createdAt: EPOCH - ageMs,
+    graduatedAt: grad ? EPOCH - o.gradAgoMs! : undefined,
+    mcapUsd: grad ? o.mcapUsd : undefined,
+    raised: grad ? undefined : raised,
+    raised1h: grad ? undefined : Math.min(raised, raised * between(r, 0.2, 1) + 0.2),
+    change24h: grad ? between(r, -18, 140) : ((curvePriceAt(raised) / P0 - 1) * 100),
+    holders: grad ? Math.round(between(r, 260, 900)) : Math.max(1, Math.round(raised * between(r, 2.2, 4.5) + young * 8)),
+    poolTokens: Math.round(80_000_000 + raised * between(r, 9_000, 14_000) + (grad ? between(r, 1, 4) * 1e6 : 0)),
+    volume24hUsd: Math.round((grad ? (o.mcapUsd ?? 0) * between(r, 0.3, 0.9) : raised * SOL_USD * between(r, 1.3, 2.4)) + 40),
+    refRatio: 1,
+  };
+}
+
+const M = 60 * SEC;
+const H = 60 * M;
+COIN_SPECS.push(
+  boardSpec("WAGE", "Minimum Wage Wizard", "Casts one spell per shift. The spell is overtime.", 40 * SEC, { raised: 0.6 }),
+  boardSpec("NAPS", "Nap Syndicate", "Organised sleeping. Dues are paid in yawns.", 2 * M, { raised: 2.1 }),
+  boardSpec("BRKE", "Broke Bureau", "A government agency for people who checked their balance.", 5 * M, { raised: 6.8 }),
+  boardSpec("OOPS", "Oops All Exits", "Every door in this building is an exit. None of them are good.", 9 * M, { raised: 12.4 }),
+  boardSpec("FOMO", "Fomo Ferret", "Arrives late to everything, at full speed.", 14 * M, { raised: 3.3 }),
+  boardSpec("CHAD", "Chad Receipts", "Keeps every receipt. Shows nobody.", 22 * M, { raised: 19.0 }),
+  boardSpec("DUCK", "Duck Dynasty Fund", "Calm on the surface. Paddling like mad underneath.", 26 * M, { raised: 46.1 }),
+  boardSpec("LATE", "Fashionably Late", "Showed up after the top. Looks great, though.", 31 * M, { raised: 27.5 }),
+  boardSpec("HODL", "Hodl Hostage", "Can't sell. Won't sell. Has forgotten the password.", 48 * M, { raised: 9.9 }),
+  boardSpec("PLNK", "Plankton Partners", "Small fish, big plans, smaller balance sheet.", 55 * M, { raised: 52.8 }),
+  boardSpec("MOAI", "Moai Bag", "Stares at the chart. Does not blink.", 70 * M, { raised: 33.0 }),
+  boardSpec("SNAX", "Snack Reserve", "A treasury of crisps. Audited by a hungry intern.", 85 * M, { raised: 58.4 }),
+  boardSpec("RUGZ", "Definitely Not A Rug", "The name is doing a lot of work.", 100 * M, { raised: 1.2 }),
+  boardSpec("SOUP", "Soup Kitchen Capital", "Ladles out liquidity, one bowl at a time.", 2 * H, { raised: 15.7 }),
+  boardSpec("GRIT", "True Grit Coin", "Holds through everything. Mostly out of stubbornness.", 3 * H, { raised: 66.2 }),
+  boardSpec("MOON", "Moonwalk Accountant", "Books balanced while walking backwards.", 4 * H, { raised: 71.5 }),
+  boardSpec("BELL", "Closing Bell", "Rings at 4pm. Nobody on Solana knows what that means.", 5 * H, { raised: 80.3 }),
+  boardSpec("EXIT", "Exit Interview", "Asks why you sold. Writes it down. Nods.", 7 * H, { raised: 83.6 }),
+  boardSpec("GRAD", "Graduation Cap", "Threw the cap in the air. Still waiting for it to come down.", 10 * H, { gradAgoMs: 25 * M, mcapUsd: 92_000 }),
+  boardSpec("HATS", "Hat Stack", "One hat per all-time high.", 14 * H, { gradAgoMs: 110 * M, mcapUsd: 140_000 }),
+  boardSpec("ZOOM", "Zoom Call Zealots", "You're on mute. You've been on mute the whole cycle.", 20 * H, { gradAgoMs: 4 * H, mcapUsd: 61_000 }),
+);
+
+/**
+ * Launches the live mock releases one by one while a page is subscribed (client only), so
+ * the New column fills in. They are resolvable by symbol everywhere (a coin page renders on
+ * the server too) but listed only once launched.
+ */
+export const PENDING_LAUNCHES: CoinSpec[] = (
+  [
+    ["KNEE", "Knee Deep", "In it up to here. Here is rising."],
+    ["FLIP", "Flip Flop Fund", "Changes its mind every block."],
+    ["BAGL", "Bagel Index", "Tracks the price of a bagel. The bagel is winning."],
+    ["CRAB", "Crab Market", "Sideways since launch. Proudly."],
+    ["WOKE", "Woke Up Late", "Missed the launch of its own coin."],
+    ["SNIP", "Sniper Nap", "Bought block zero, then fell asleep."],
+    ["MALL", "Mall Walker", "Laps the food court at dawn. Steady gains."],
+    ["TAXX", "Tax Season", "Every sell is a form. Every form is a fumble."],
+    ["PAWN", "Pawn Shop Pete", "Will give you 40% of what it's worth. Every time."],
+    ["LOAF", "Bread Loaf DAO", "Governance by slice."],
+    ["GLUE", "Glue Factory", "Holds anything together, except a bag."],
+    ["YAWN", "Yawn Capital", "Low volatility. Lower energy."],
+    ["DRIP", "Faucet Drip", "One drop at a time, forever."],
+    ["PEEL", "Banana Peel", "Slipped on the way up. And down."],
+    ["FIZZ", "Flat Soda", "Opened at the top. Left on the counter."],
+    ["KELP", "Kelp Forest", "Grows a foot a day. Mostly sideways."],
+    ["NEON", "Neon Pigeon", "Glows at night. Steals your chips."],
+    ["OATS", "Overnight Oats", "Prepared in advance. Still soggy."],
+    ["RAKE", "Rake Fees", "Takes a little from everyone. Gives it to the pool."],
+    ["SOCK", "Lost Sock", "Went into the dryer. Came out at a lower price."],
+    ["TUBA", "Tuba Section", "Loud, low and in the back."],
+    ["VEST", "Unvested", "Cliff in 12 months. Nerves in 12 minutes."],
+    ["WICK", "Long Wick", "Touched the top for one candle. Has the screenshot."],
+    ["YOLK", "Double Yolk", "Twice the upside. Twice the cholesterol."],
+    ["ZEST", "Lemon Zest", "Adds flavour to a sour portfolio."],
+    ["BUNK", "Bunk Bed Bank", "Top bunk for whales, bottom bunk for you."],
+    ["CORK", "Cork Board", "Pins every chart. Connects them with string."],
+    ["DENT", "Fender Dent", "Minor damage. Major feelings."],
+  ] as const
+).map(([sym, name, desc], i) => ({ ...boardSpec(sym, name, desc, 0, { raised: Math.round(between(rng("dev:" + sym), 0, 1.6) * 100) / 100 }), createdAt: EPOCH + (i + 1) * 20 * SEC }));
+
 export const SPEC_BY_SYMBOL = new Map(COIN_SPECS.map((c) => [c.symbol, c]));
 export const SPEC_BY_MINT = new Map(COIN_SPECS.map((c) => [mintAddress(c.symbol), c]));
+for (const c of PENDING_LAUNCHES) {
+  SPEC_BY_SYMBOL.set(c.symbol, c);
+  SPEC_BY_MINT.set(mintAddress(c.symbol), c);
+}
 
 export function spotOf(c: CoinSpec): number {
   if (c.status === "curve") return curvePriceAt(c.raised ?? 0);

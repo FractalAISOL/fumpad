@@ -109,11 +109,19 @@ export const SCHEMAS: Record<string, unknown> = {
       "change24h": {
         "type": "number"
       },
+      "closestMultiple": {
+        "description": "The open ticket nearest to 10×: the highest multiple still below the trigger.",
+        "type": "number"
+      },
       "createdAt": {
         "$ref": "#/components/schemas/Millis"
       },
       "creator": {
         "$ref": "#/components/schemas/Address"
+      },
+      "creatorFlagged": {
+        "description": "The creator's wallet carries an indexer flag (linked wallets, rebuys elsewhere).",
+        "type": "boolean"
       },
       "curveSol": {
         "description": "Real SOL raised on the curve (pre-graduation).",
@@ -200,6 +208,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "D10 reference average (10-min TWAP), SOL per token. Used only as the ticket floor.",
         "type": "number"
       },
+      "socials": {
+        "$ref": "#/components/schemas/CoinSocials",
+        "description": "Creator-supplied links from the metadata (http/https only)."
+      },
       "spark": {
         "description": "Last 24 points of price, oldest first, for sparklines.",
         "items": {
@@ -232,6 +244,10 @@ export const SCHEMAS: Record<string, unknown> = {
         ],
         "type": "number"
       },
+      "trades24h": {
+        "description": "FUMPAD trades (curve + router) in the last 24 hours.",
+        "type": "number"
+      },
       "virtualSol": {
         "description": "Virtual reserves, for curve quotes.",
         "type": "number"
@@ -247,6 +263,7 @@ export const SCHEMAS: Record<string, unknown> = {
       "change24h",
       "createdAt",
       "creator",
+      "creatorFlagged",
       "curveSol",
       "curveSol1h",
       "curveTokensLeft",
@@ -270,10 +287,26 @@ export const SCHEMAS: Record<string, unknown> = {
       "ticketsOpen",
       "ticketsPast10x",
       "tile",
+      "trades24h",
       "virtualSol",
       "virtualTokens",
       "volume24hSol"
     ],
+    "type": "object"
+  },
+  "CoinSocials": {
+    "additionalProperties": false,
+    "properties": {
+      "telegram": {
+        "type": "string"
+      },
+      "website": {
+        "type": "string"
+      },
+      "x": {
+        "type": "string"
+      }
+    },
     "type": "object"
   },
   "CoinStatus": {
@@ -291,11 +324,19 @@ export const SCHEMAS: Record<string, unknown> = {
       "change24h": {
         "type": "number"
       },
+      "closestMultiple": {
+        "description": "The open ticket nearest to 10×: the highest multiple still below the trigger.",
+        "type": "number"
+      },
       "createdAt": {
         "$ref": "#/components/schemas/Millis"
       },
       "creator": {
         "$ref": "#/components/schemas/Address"
+      },
+      "creatorFlagged": {
+        "description": "The creator's wallet carries an indexer flag (linked wallets, rebuys elsewhere).",
+        "type": "boolean"
       },
       "curveSol": {
         "description": "Real SOL raised on the curve (pre-graduation).",
@@ -335,6 +376,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "Spot, SOL per token.",
         "type": "number"
       },
+      "socials": {
+        "$ref": "#/components/schemas/CoinSocials",
+        "description": "Creator-supplied links from the metadata (http/https only)."
+      },
       "spark": {
         "description": "Last 24 points of price, oldest first, for sparklines.",
         "items": {
@@ -360,6 +405,10 @@ export const SCHEMAS: Record<string, unknown> = {
         ],
         "type": "number"
       },
+      "trades24h": {
+        "description": "FUMPAD trades (curve + router) in the last 24 hours.",
+        "type": "number"
+      },
       "volume24hSol": {
         "type": "number"
       }
@@ -380,7 +429,9 @@ export const SCHEMAS: Record<string, unknown> = {
       "curveSol",
       "poolTokens",
       "ticketsOpen",
-      "spark"
+      "spark",
+      "trades24h",
+      "creatorFlagged"
     ],
     "type": "object"
   },
