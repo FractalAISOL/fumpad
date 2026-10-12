@@ -93,6 +93,13 @@
 .drop:focus-within {
   border-color: var(--ink);
 }
+.drop :focus-visible {
+  outline: none;
+}
+.drop:has(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 .dropIcon {
   width: 56px;
   height: 56px;

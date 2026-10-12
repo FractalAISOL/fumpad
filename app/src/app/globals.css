@@ -67,10 +67,12 @@ svg {
 table {
   border-collapse: collapse;
 }
+/* One focus ring everywhere: a 2 px high-contrast (ink) outline 2 px off the element's own
+   edge, so it follows the element's radius. Composite controls (text fields) draw it on the
+   field box instead of the bare <input> (Input.module.css). */
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-  border-radius: 2px;
 }
 ::selection {
   background: var(--ink);
@@ -109,10 +111,11 @@ table {
   white-space: nowrap;
   border: 0;
 }
+/* Horizontal only: a page's own vertical spacing (often on the same element) must not be reset. */
 .wrap {
   max-width: var(--max-w);
-  margin: 0 auto;
-  padding: 0 var(--gut);
+  margin-inline: auto;
+  padding-inline: var(--gut);
 }
 
 @media (prefers-reduced-motion: reduce) {

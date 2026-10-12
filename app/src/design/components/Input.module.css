@@ -51,6 +51,16 @@
   box-shadow: inset 0 0 0 1.5px var(--ink);
   background: var(--surface);
 }
+/* The ring belongs to the field box (same radius), never to the bare input inside it. */
+.box .input:focus,
+.box .input:focus-visible {
+  outline: none;
+}
+/* Text fields show the ring on any focus (typing goes here either way). */
+.box:has(.input:focus) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 .invalid .box {
   box-shadow: inset 0 0 0 1.5px var(--ink);
   background: repeating-linear-gradient(-45deg, var(--sunken) 0 6px, var(--surface) 6px 7px);

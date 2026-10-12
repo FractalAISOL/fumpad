@@ -4,7 +4,7 @@ Direction C, "Signal" (`design/direction-c-signal/`), built for production. Ever
 
 ## Principles
 
-1. **One signal.** International Orange (`--flare`) means money: a 10× crossing, a claim, a payout, the claim queue fitting. It is never decoration, never a brand wash, never price direction. If something orange doesn't involve money, it's a bug. The one exception is the keyboard focus ring, inherited from the prototype, because focus must be impossible to miss.
+1. **One signal.** International Orange (`--flare`) means money: a 10× crossing, a claim, a payout, the claim queue fitting. It is never decoration, never a brand wash, never price direction. If something orange doesn't involve money, it's a bug, with no exceptions: the keyboard focus ring is ink (`--focus`, black on light, near-white on dark), not orange.
 2. **The gauge is the brand.** The log ruler from 1× to 30×, hatched past 10×, appears wherever a ticket appears: feed embeds, coin tables, My Fumbles, the claim moment, the share card. The mark (ring, dotted run, orange dot) is the same chart in miniature.
 3. **Instrument, not casino.** Hairline rules carry structure; panels are flat paper on instrument grey; shadows only float overlays. Numbers are Martian Mono with tabular figures so columns line up like a readout.
 4. **Serious UI, funny copy.** The interface never jokes in its layout. The humour lives in sentences, and only where nobody needs to act.
@@ -91,7 +91,7 @@ Dry, exact, a little sorry for you. Sentence case, plain verbs, numbers in full 
 
 ## Accessibility checklist
 
-Visible 2 px orange focus ring everywhere; skip link; landmarks and one `h1` per page; roving focus in tab/segmented/chip groups; tables with captions and `aria-sort`; meters with `aria-valuetext`; charts with a text summary and keyboard readout; modal focus trap and Escape (dialog and claim moment); toasts and live feed announced politely; reduced motion honoured; text contrast ≥ 4.5:1 in both themes (`--ink-3` 5.6:1 on paper, 6.3:1 on night).
+Visible 2 px ink focus ring everywhere (`--focus`, 2 px outline at 2 px offset that follows the control's radius; text fields draw it on the field box); skip link; landmarks and one `h1` per page; roving focus in tab/segmented/chip groups; tables with captions and `aria-sort`; meters with `aria-valuetext`; charts with a text summary and keyboard readout; modal focus trap and Escape (dialog and claim moment); toasts and live feed announced politely; reduced motion honoured; text contrast ≥ 4.5:1 in both themes (`--ink-3` 5.6:1 on paper, 6.3:1 on night).
 
 ## Data layer
 

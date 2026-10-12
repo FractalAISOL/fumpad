@@ -47,7 +47,7 @@ export const colorLight: Record<ColorToken, string> = {
   "on-flare": "#000000",
   hatch: "rgba(0,0,0,.07)",
   scrim: "rgba(0,0,0,.55)",
-  focus: "#FF4F00",
+  focus: "#000000", // keyboard focus ring: ink, not orange (orange is money only)
 };
 
 /** Dark is pure black, not a tinted near-black. */
@@ -67,7 +67,7 @@ export const colorDark: Record<ColorToken, string> = {
   "on-flare": "#000000",
   hatch: "rgba(255,255,255,.06)",
   scrim: "rgba(0,0,0,.7)",
-  focus: "#FF5A14",
+  focus: "#F2F2EF",
 };
 
 /* ── Type ───────────────────────────────────────────────────────────────────── */
