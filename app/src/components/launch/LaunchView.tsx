@@ -147,7 +147,7 @@ export function LaunchView() {
             title={`$${done.symbol} is live`}
             action={
               <>
-                <Button href="/coins">See it with the other coins</Button>
+                <Button href="/launches">See it with the other launches</Button>
                 <Button variant="line" onClick={() => location.reload()}>
                   Launch another
                 </Button>

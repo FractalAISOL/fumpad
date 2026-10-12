@@ -351,7 +351,7 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
             Your wallet is clean, which is rarer than a 10×. Rebuys elsewhere within {f.duration(params.rebuyWindowSecs)} or linked wallets would show up here.
           </EmptyState>
         ) : tickets.length === 0 ? (
-          <EmptyState title="No fumbles yet" action={<Button href="/coins">Find a coin</Button>}>
+          <EmptyState title="No fumbles yet" action={<Button href="/launches">Browse launches</Button>}>
             Sell {f.usdRule(params.minSellUsd)} or more of any coin through FUMPAD and the ticket shows up here, measured against 10× of your price.
           </EmptyState>
         ) : (

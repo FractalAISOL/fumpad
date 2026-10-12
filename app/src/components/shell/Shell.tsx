@@ -10,7 +10,7 @@ import { WalletButton } from "./Wallet";
 
 const NAV = [
   { href: "/", label: "Feed", icon: IconFeed, match: (p: string) => p === "/" },
-  { href: "/coins", label: "Coins", short: "Coins", icon: IconCoins, match: (p: string) => p.startsWith("/coins") || p.startsWith("/coin/") },
+  { href: "/launches", label: "Launches", short: "Launches", icon: IconCoins, match: (p: string) => p.startsWith("/launches") || p.startsWith("/coin/") },
   { href: "/fumbles", label: "My fumbles", short: "Fumbles", icon: IconFumbles, match: (p: string) => p.startsWith("/fumbles") || p.startsWith("/share") },
   { href: "/leaderboard", label: "Leaderboard", short: "Ranks", icon: IconRanks, match: (p: string) => p.startsWith("/leaderboard") || p.startsWith("/u/") },
 ];

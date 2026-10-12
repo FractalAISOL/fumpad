@@ -128,7 +128,7 @@ export function CoinsView({ coins: initialCoins, solUsd }: { coins: CoinSummary[
     <div className="wrap">
       <div className={s.head}>
         <div>
-          <h1 className={s.h1}>Coins</h1>
+          <h1 className={s.h1}>Launches</h1>
           <p className={s.lede}>Every coin launched on FUMPAD. Each one keeps its own reward pool for the people who sell it too early.</p>
         </div>
         <Segmented
@@ -144,14 +144,14 @@ export function CoinsView({ coins: initialCoins, solUsd }: { coins: CoinSummary[
       </div>
       <Panel>
         <Table
-          caption="Coins"
+          caption="Launches"
           columns={cols}
           rows={rows}
           rowKey={(c) => c.mint}
           rowHref={(c) => `/coin/${c.symbol}`}
           rowLabel={(c) => `${c.name}, $${c.symbol}`}
           initialSort={{ key: "mcap", dir: "desc" }}
-          empty={<EmptyState title="No coins here yet">Launch one and it shows up here.</EmptyState>}
+          empty={<EmptyState title="No launches here yet">Launch one and it shows up here.</EmptyState>}
         />
       </Panel>
     </div>

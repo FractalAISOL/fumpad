@@ -209,7 +209,7 @@ export function FeedView({
         </Panel>
       </div>
 
-      <aside className={s.side} aria-label="Coins">
+      <aside className={s.side} aria-label="Launches">
         <Panel aria-labelledby="closest-h">
           <PanelHead id="closest-h" title="Closest to 10×" aside={`open tickets, ${f.durationShort(params.oracleWindowSecs)} median`} />
           <ul className={s.list}>
@@ -253,8 +253,8 @@ export function FeedView({
             ))}
           </ul>
           <div className={s.sideFoot}>
-            <Button variant="quiet" href="/coins">
-              All coins
+            <Button variant="quiet" href="/launches">
+              All launches
             </Button>
           </div>
         </Panel>
