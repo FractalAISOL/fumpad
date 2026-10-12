@@ -1,13 +1,18 @@
 "use client";
 
-import { ConnectionProvider, WalletProvider, useWallet } from "@solana/wallet-adapter-react";
+import dynamic from "next/dynamic";
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { keepSnapshot, DEMO_WALLET, type ProtocolParams, getFumpadData } from "@/data";
 import { PARAMS } from "@/data/chain";
 import { ToastProvider } from "@/design";
+import { WALLET_MODE, useWallet } from "../wallet/store";
 import { useLiveMessages, useRefresh } from "./live";
 
-const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.mainnet-beta.solana.com";
+/**
+ * Privy (login + embedded Trading wallet) loads on the client only, after the page, and
+ * only against the live API. It renders no app UI; it publishes into `wallet/store`.
+ */
+const PrivyIsland = dynamic(() => import("../wallet/PrivyIsland"), { ssr: false });
 
 /* ── Clock ────────────────────────────────────────────────────────────────── */
 
@@ -78,7 +83,7 @@ export function useSolUsd() {
 /* ── Viewer ───────────────────────────────────────────────────────────────── */
 
 export interface Viewer {
-  /** Connected wallet, or the demo wallet while disconnected. */
+  /** The active signing wallet (Trading wallet or external), or the demo wallet while logged out. */
   address: string;
   connected: boolean;
   isDemo: boolean;
@@ -92,8 +97,9 @@ export function useViewer() {
 }
 
 function ViewerProvider({ children }: { children: ReactNode }) {
-  const { publicKey, connected } = useWallet();
-  const address = connected && publicKey ? publicKey.toBase58() : DEMO_WALLET;
+  const { active } = useWallet();
+  const connected = !!active;
+  const address = active?.address ?? DEMO_WALLET;
   const [claimable, setClaimable] = useState(0);
   // The nav badge follows the wallet's tickets: its own transactions, anything that touches
   // the wallet, and price moves on the coins it holds tickets in.
@@ -115,28 +121,25 @@ function ViewerProvider({ children }: { children: ReactNode }) {
       .catch(keepSnapshot);
   }, [address]);
   useRefresh(load, { wallets: [address], mints: ticketMints, pollMs: 60_000, debounceMs: 1_500 });
-  const value = useMemo(() => ({ address, connected, isDemo: !connected, claimable, setClaimable }), [address, connected, claimable]);
+  // The mock's simulated Trading wallet is the demo wallet: still a demo.
+  const isDemo = address === DEMO_WALLET;
+  const value = useMemo(() => ({ address, connected, isDemo, claimable, setClaimable }), [address, connected, isDemo, claimable]);
   return <ViewerCtx.Provider value={value}>{children}</ViewerCtx.Provider>;
 }
 
 /* ── Root ─────────────────────────────────────────────────────────────────── */
 
 export function Providers({ now, params, solUsd, children }: { now: number; params: ProtocolParams; solUsd: number; children: ReactNode }) {
-  // Wallet Standard auto-detects Phantom, Solflare and Backpack; no adapter bundles needed.
-  const wallets = useMemo(() => [], []);
   return (
-    <ConnectionProvider endpoint={RPC}>
-      <WalletProvider wallets={wallets} autoConnect localStorageKey="fumpad-wallet">
-        <ParamsProvider initial={params}>
-          <ViewerProvider>
-            <NowProvider initial={now}>
-              <SolUsdCtx.Provider value={solUsd}>
-                <ToastProvider>{children}</ToastProvider>
-              </SolUsdCtx.Provider>
-            </NowProvider>
-          </ViewerProvider>
-        </ParamsProvider>
-      </WalletProvider>
-    </ConnectionProvider>
+    <ParamsProvider initial={params}>
+      <ViewerProvider>
+        <NowProvider initial={now}>
+          <SolUsdCtx.Provider value={solUsd}>
+            <ToastProvider>{children}</ToastProvider>
+          </SolUsdCtx.Provider>
+        </NowProvider>
+      </ViewerProvider>
+      {WALLET_MODE === "privy" && <PrivyIsland />}
+    </ParamsProvider>
   );
 }

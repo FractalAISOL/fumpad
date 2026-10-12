@@ -254,7 +254,7 @@ export function DesignView({ tickets, series }: { tickets: Ticket[]; series: Pri
             <div className={s.stack}>
               <AmountInput label="You sell" value={amt} onChange={setAmt} unit="MIDC" balance={6_120_000} decimals={0} />
               <AmountInput label="You pay" value={amtOver} onChange={setAmtOver} unit="SOL" balance={24.8} />
-              <AmountInput label="No balance yet" value="" onChange={() => {}} unit="SOL" hint="Connect a wallet to see your balance." />
+              <AmountInput label="No balance yet" value="" onChange={() => {}} unit="SOL" hint="Log in to see your balance." />
             </div>
           </div>
         )}

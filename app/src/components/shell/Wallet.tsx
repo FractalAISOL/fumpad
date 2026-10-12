@@ -1,160 +1,264 @@
 "use client";
 
-import { WalletReadyState } from "@solana/wallet-adapter-base";
-import { useWallet } from "@solana/wallet-adapter-react";
-import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Avatar, Button, CopyButton, Dialog, IconExternal, cx } from "@/design";
-import { shortAddr } from "@/design/format";
+import { CLUSTER_LABEL } from "@/chain/connection";
+import { useSolBalance } from "@/components/wallet/balance";
+import { ConfirmHost, DepositDialog, ExportDialog, WithdrawDialog } from "@/components/wallet/Dialogs";
+import {
+  type WalletKind,
+  setInstantSettings,
+  setPreferredSigner,
+  useInstantSettings,
+  useWallet,
+  walletActions,
+} from "@/components/wallet/store";
+import { Avatar, Button, CopyButton, Dialog, IconBolt, Segmented, cx, useToast } from "@/design";
+import * as f from "@/design/format";
 import s from "./Wallet.module.css";
-
-/** The three wallets we name in the UI. Anything else Wallet Standard finds is listed too. */
-const KNOWN = [
-  { name: "Phantom", url: "https://phantom.com/download" },
-  { name: "Solflare", url: "https://solflare.com/download" },
-  { name: "Backpack", url: "https://backpack.app/download" },
-] as const;
 
 const CONNECT_EVENT = "fumpad:connect-wallet";
 
-/** Open the header's connect dialog from anywhere (e.g. a quick-buy without a wallet). */
+/** Open login (or the wallet menu when logged in) from anywhere, e.g. a quick-buy without a wallet. */
 export function requestWalletConnect() {
   window.dispatchEvent(new Event(CONNECT_EVENT));
 }
 
+/** "12.40 SOL", or a dash while the balance loads. */
+const balText = (n: number | null) => (n === null ? "– SOL" : `${f.sol(n)} SOL`);
+
 /**
- * Connect UI only: pick a wallet, connect, show the address, disconnect. No signing yet;
- * transaction builders live in `@/chain/tx`.
+ * The header wallet: Log in, then the active signer with its SOL balance. The menu
+ * switches signer (Trading wallet ⇄ external), deposits, withdraws, exports the key, sets
+ * instant trading, and logs out.
  */
 export function WalletButton({ compact }: { compact?: boolean }) {
-  const { publicKey, connected, connecting, wallets, wallet, select, connect, disconnect } = useWallet();
+  const w = useWallet();
+  const toast = useToast();
+  const instant = useInstantSettings();
   const [open, setOpen] = useState(false);
-  const [pending, setPending] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<"deposit" | "withdraw" | "export" | null>(null);
+  const active = w.active;
+  const bal = useSolBalance(active?.address);
+  const tradingBal = useSolBalance(open && w.embedded && active?.kind !== "embedded" ? w.embedded.address : null);
+
+  const login = () => {
+    walletActions().login();
+    if (w.mode === "mock") toast("Demo: a simulated Trading wallet. Trades are simulated.");
+  };
 
   useEffect(() => {
-    const open = () => setOpen(true);
-    window.addEventListener(CONNECT_EVENT, open);
-    return () => window.removeEventListener(CONNECT_EVENT, open);
-  }, []);
+    const on = () => {
+      const st = w.authenticated;
+      if (st) setOpen(true);
+      else login();
+    };
+    window.addEventListener(CONNECT_EVENT, on);
+    return () => window.removeEventListener(CONNECT_EVENT, on);
+  });
 
-  // After `select`, connect once the adapter is in place.
-  useEffect(() => {
-    if (!pending || !wallet || wallet.adapter.name !== pending || connected || connecting) return;
-    connect()
-      .then(() => {
-        setPending(null);
-        setOpen(false);
-      })
-      .catch((e: unknown) => {
-        setPending(null);
-        setErr(e instanceof Error && e.message ? e.message : "The wallet didn't connect. Try again.");
-      });
-  }, [pending, wallet, connected, connecting, connect]);
-
-  const installed = wallets.filter((w) => w.readyState === WalletReadyState.Installed || w.readyState === WalletReadyState.Loadable);
-  const missing = KNOWN.filter((k) => !installed.some((w) => w.adapter.name === k.name));
-  const addr = publicKey?.toBase58();
-
-  if (connected && addr) {
+  if (!w.authenticated || !active) {
+    const creating = w.authenticated && w.creating;
     return (
       <>
-        <button type="button" className={s.chip} onClick={() => setOpen(true)} aria-label={`Wallet ${shortAddr(addr)}`}>
-          <Avatar address={addr} size="sm" />
-          <span className={cx("num", compact && "sr-only")}>{shortAddr(addr)}</span>
-        </button>
-        <Dialog open={open} onClose={() => setOpen(false)} title="Your wallet" size="sm">
-          <div className={s.acct}>
-            <Avatar address={addr} size="lg" />
-            <div className={s.acctText}>
-              <div className={cx("num", s.acctAddr)}>{shortAddr(addr, 6, 6)}</div>
-              <div className={s.acctVia}>Connected with {wallet?.adapter.name}</div>
-            </div>
-            <CopyButton value={addr} label="Copy address" />
-          </div>
-          <div className={s.acctActions}>
-            <Button variant="line" href={`/u/${addr}`} onClick={() => setOpen(false)} block>
-              View profile
-            </Button>
-            <Button
-              variant="ghost"
-              block
-              onClick={() => {
-                void disconnect();
-                setOpen(false);
-              }}
-            >
-              Disconnect
-            </Button>
-          </div>
-        </Dialog>
+        <Button variant="line" size={compact ? "sm" : "md"} onClick={login} loading={!w.ready || creating} aria-label={creating ? "Creating your Trading wallet" : "Log in"}>
+          <span className={s.short}>Log in</span>
+          <span className={s.long}>{creating ? "Setting up wallet" : "Log in"}</span>
+        </Button>
+        <ConfirmHost />
       </>
     );
   }
 
+  const isTrading = active.kind === "embedded";
+  const instantOn = isTrading && instant.enabled;
+  const trading = w.embedded;
+  const close = () => setOpen(false);
+  const openSheet = (k: "deposit" | "withdraw" | "export") => {
+    setOpen(false);
+    setSheet(k);
+  };
+
   return (
     <>
-      <Button variant="line" size={compact ? "sm" : "md"} onClick={() => setOpen(true)} loading={connecting} aria-label="Connect wallet">
-        <span className={s.short}>Connect</span>
-        <span className={s.long}>Connect wallet</span>
-      </Button>
-      <Dialog
-        open={open}
-        onClose={() => {
-          setOpen(false);
-          setErr(null);
-        }}
-        title="Connect a wallet"
-        description="FUMPAD never moves funds without your signature. Until you connect, screens show a demo wallet."
-        size="sm"
+      <button
+        type="button"
+        className={s.chip}
+        onClick={() => setOpen(true)}
+        aria-label={`Wallet: ${active.name} ${f.shortAddr(active.address)}, ${balText(bal)}${instantOn ? ", instant trading on" : ""}`}
       >
-        <ul className={s.list}>
-          {installed.map((w) => (
-            <li key={w.adapter.name}>
-              <button
-                type="button"
-                className={s.row}
-                onClick={() => {
-                  setErr(null);
-                  setPending(w.adapter.name);
-                  select(w.adapter.name);
-                }}
-                aria-busy={pending === w.adapter.name || undefined}
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element -- wallet-provided data URI icon */}
-                <img src={w.adapter.icon} alt="" width={28} height={28} className={s.icon} />
-                <span className={s.name}>{w.adapter.name}</span>
-                <span className={s.state}>{pending === w.adapter.name ? "Connecting…" : "Detected"}</span>
-              </button>
-            </li>
-          ))}
-          {missing.map((k) => (
-            <li key={k.name}>
-              <a className={s.row} href={k.url} target="_blank" rel="noreferrer">
-                <span className={s.iconPh} aria-hidden="true">
-                  {k.name[0]}
-                </span>
-                <span className={s.name}>{k.name}</span>
-                <span className={s.state}>
-                  Install <IconExternal width={14} height={14} />
-                </span>
-              </a>
-            </li>
-          ))}
-        </ul>
-        {err && (
-          <p className={s.err} role="alert">
-            {err}
+        <Avatar address={active.address} size="sm" />
+        <span className={cx(s.chipText, compact && "sr-only")}>
+          <span className={cx("num", s.chipAddr)}>{f.shortAddr(active.address)}</span>
+          <span className={cx("num", s.chipBal)}>
+            {instantOn && <IconBolt width={11} height={11} aria-hidden="true" />}
+            {balText(bal)}
+          </span>
+        </span>
+        {CLUSTER_LABEL && <span className={s.chipNet}>{CLUSTER_LABEL}</span>}
+      </button>
+
+      <Dialog open={open} onClose={close} title="Wallet" size="sm">
+        {CLUSTER_LABEL && (
+          <p className={s.netNote}>
+            <span className={s.netTag}>{CLUSTER_LABEL}</span> FUMPAD is on Solana {CLUSTER_LABEL}. Test SOL only; nothing here is worth money.
           </p>
         )}
-        <p className={s.fine}>
-          New to Solana wallets?{" "}
-          <Link href="https://phantom.com/learn" target="_blank" rel="noreferrer">
-            Start with Phantom
-          </Link>
-          .
+
+        {trading && w.external && (
+          <div className={s.signerPick}>
+            <span className={s.kicker} id="signer-label">
+              Sign with
+            </span>
+            <Segmented<WalletKind>
+              block
+              size="sm"
+              label="Sign with"
+              value={active.kind}
+              onChange={setPreferredSigner}
+              items={[
+                { value: "embedded", label: "Trading wallet" },
+                { value: "external", label: w.external.name },
+              ]}
+            />
+          </div>
+        )}
+
+        <div className={s.acct}>
+          <Avatar address={active.address} size="lg" />
+          <div className={s.acctText}>
+            <div className={s.acctName}>{active.name}</div>
+            <div className={cx("num", s.acctAddr)}>{f.shortAddr(active.address, 6, 6)}</div>
+          </div>
+          <CopyButton value={active.address} label={`Copy ${active.name} address`} />
+        </div>
+        <div className={s.balance}>
+          <span className={cx("num", s.balNum)}>{bal === null ? "–" : f.sol(bal)}</span>
+          <span className={s.balUnit}>SOL</span>
+        </div>
+        <p className={s.acctVia}>
+          {isTrading
+            ? instant.enabled
+              ? `Signs FUMPAD trades instantly, no popup. Above ${f.sol(instant.maxSol)} SOL it asks first.`
+              : "Instant trading is off: Privy asks you to approve each transaction."
+            : `${active.name} asks you to approve every transaction.`}
+          {!isTrading && trading && tradingBal !== null && <> Trading wallet: {balText(tradingBal)}.</>}
         </p>
+
+        {trading && (
+          <div className={s.moneyRow}>
+            <Button variant="line" onClick={() => openSheet("deposit")} block>
+              Deposit
+            </Button>
+            <Button variant="line" onClick={() => openSheet("withdraw")} block>
+              Withdraw
+            </Button>
+          </div>
+        )}
+
+        {trading && (
+          <section className={s.instant} aria-labelledby="instant-h">
+            <div className={s.instantHead}>
+              <h3 id="instant-h" className={s.instantH}>
+                <IconBolt width={14} height={14} aria-hidden="true" /> Instant trading
+              </h3>
+              <Segmented<"on" | "off">
+                size="sm"
+                label="Instant trading"
+                value={instant.enabled ? "on" : "off"}
+                onChange={(v) => setInstantSettings({ enabled: v === "on" })}
+                items={[
+                  { value: "on", label: "On" },
+                  { value: "off", label: "Off" },
+                ]}
+              />
+            </div>
+            <label className={s.limit}>
+              <span>Ask first above</span>
+              <LimitInput value={instant.maxSol} onChange={(maxSol) => setInstantSettings({ maxSol })} />
+              <span className={s.limitUnit}>SOL</span>
+            </label>
+            <p className={s.fine}>
+              Buys, sells, claims and launches from the Trading wallet sign without a popup, and only if they are FUMPAD transactions. Withdrawals and key export
+              always ask.
+            </p>
+          </section>
+        )}
+
+        <ul className={s.menu}>
+          <li>
+            <Button variant="ghost" href={`/u/${active.address}`} onClick={close} block className={s.menuBtn}>
+              View profile
+            </Button>
+          </li>
+          {trading && (
+            <li>
+              <Button variant="ghost" onClick={() => openSheet("export")} block className={s.menuBtn}>
+                Export Trading wallet key
+              </Button>
+            </li>
+          )}
+          {!w.external && w.mode === "privy" && (
+            <li>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  close();
+                  walletActions().connectExternal();
+                }}
+                block
+                className={s.menuBtn}
+              >
+                Connect Phantom, Solflare or Backpack
+              </Button>
+            </li>
+          )}
+          <li>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                close();
+                void walletActions().logout();
+              }}
+              block
+              className={s.menuBtn}
+            >
+              Log out
+            </Button>
+          </li>
+        </ul>
+        {w.userLabel && <p className={s.fine}>Logged in as {w.userLabel}.</p>}
       </Dialog>
+
+      {trading && (
+        <>
+          <DepositDialog open={sheet === "deposit"} onClose={() => setSheet(null)} trading={trading} external={w.external} />
+          <WithdrawDialog open={sheet === "withdraw"} onClose={() => setSheet(null)} trading={trading} external={w.external} />
+          <ExportDialog open={sheet === "export"} onClose={() => setSheet(null)} trading={trading} />
+        </>
+      )}
+      <ConfirmHost />
     </>
+  );
+}
+
+/** The per-trade limit, committed on blur so typing "0.5" doesn't pass through "0". */
+function LimitInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [raw, setRaw] = useState<string | null>(null);
+  const bad = raw !== null && !(Number(raw) > 0 && Number(raw) <= 1000);
+  return (
+    <input
+      className={cx("num", s.limitInput)}
+      inputMode="decimal"
+      autoComplete="off"
+      aria-label="Ask first above this many SOL"
+      aria-invalid={bad || undefined}
+      value={raw ?? String(value)}
+      onChange={(e) => {
+        const v = e.target.value.replace(/[^\d.]/g, "");
+        setRaw(v);
+        if (Number(v) > 0 && Number(v) <= 1000) onChange(Number(v));
+      }}
+      onBlur={() => setRaw(null)}
+    />
   );
 }

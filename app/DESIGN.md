@@ -20,7 +20,7 @@ Direction C, "Signal" (`design/direction-c-signal/`), built for production. Ever
 | Native `<dialog>` | Focus trap, Escape, inert background and top layer for free. Becomes a bottom sheet under 600 px. |
 | next/font (Google) | Archivo and Martian Mono self-hosted with their width axes, `display: swap`, size-adjusted fallbacks. |
 | next/og | Share card is a real 1200×630 PNG at `/og/<ticket>?style=flare|paper|night`. Satori can't read variable woff2, so static TTF instances live in `src/assets/og/` (OFL). |
-| Wallet Standard via `@solana/wallet-adapter-react` | Phantom, Solflare and Backpack are detected without bundling adapters. Connect UI is ours. Transactions are typed stubs in `src/chain/tx.ts`. |
+| Privy (`@privy-io/react-auth`) with an embedded Solana Trading wallet | Login by email, X, Google or a Solana wallet (Phantom, Solflare, Backpack via Wallet Standard connectors). Every account gets a non-custodial Trading wallet that signs vetted FUMPAD transactions with no popup (Instant trading, `src/chain/allowlist.ts`); external wallets always prompt. Privy loads lazily, client-only, and only against the live API (`components/wallet/PrivyIsland.tsx` publishes into `components/wallet/store.ts`); the mock build uses a simulated Trading wallet and never loads it. The wallet menu, deposit, withdraw and export confirm are ours; the login and key-export windows are Privy's. |
 
 ## Tokens — `src/design/tokens.ts`
 
@@ -70,7 +70,7 @@ Sparklines follow the same rule (ink if the period closed up, graphite if down).
 | `TicketCard` | claimable, queued, tracking, waiting for graduation, rebuy-reduced (note), claimed, expired, voided. Lays out by its own width (container query). |
 | `Mark`, `Wordmark` | the chart-as-logo; Archivo 850 at width 125. |
 
-Feature pieces built on these: `ClaimMoment` (the cinematic unlock), `TradePanel` (ticket preview with the D10/D12 floor), `FeedPost`, `ProfileCard`, the share card renderer, and the Launches board (`components/launches/`: three live lanes under a curve ruler, New / Final stretch / Graduated, each row's curve bar marked at the same 50% as the lane boundary; ⚡ quick-buy uses the trade panel's transaction flow).
+Feature pieces built on these: `ClaimMoment` (the cinematic unlock), `TradePanel` (ticket preview with the D10/D12 floor), `FeedPost`, `ProfileCard`, the share card renderer, and the Launches board (`components/launches/`: three live lanes under a curve ruler, New / Final stretch / Graduated, each row's curve bar marked at the same 50% as the lane boundary; ⚡ quick-buy uses the trade panel's transaction flow and shows an Instant tag when the Trading wallet will sign it with no popup).
 
 ## Motion rules
 

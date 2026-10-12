@@ -18,7 +18,7 @@ import { type LiveMessage, getFumpadData } from "@/data";
 
 /* ── Own transactions (a tab-local bus) ───────────────────────────────────── */
 
-export type OwnTxKind = "buy" | "sell" | "claim" | "launch" | "auto-claim" | "withdraw";
+export type OwnTxKind = "buy" | "sell" | "claim" | "launch" | "auto-claim" | "withdraw" | "transfer";
 export interface OwnTx {
   kind: OwnTxKind;
   wallet: string;
