@@ -164,6 +164,22 @@ describe("indexer → db → api (synthetic events)", () => {
     expect((await db.query("SELECT count(*)::int AS n FROM claims")).rows[0].n).toBe(0);
   });
 
+  it("trigger-maintained aggregates (migration 006) match a recount after replay and rollback", async () => {
+    const r = await db.query(`SELECT
+      (SELECT json_agg(x ORDER BY mint, hour) FROM (SELECT mint, hour, volume::text AS v, trades AS n FROM coin_hourly WHERE trades <> 0) x) AS hourly,
+      (SELECT json_agg(x ORDER BY mint, hour) FROM (SELECT mint, ts / 3600 AS hour, sum(sol_amount)::bigint::text AS v, count(*)::int AS n FROM trades GROUP BY 1, 2) x) AS hourly_recount,
+      (SELECT json_agg(x ORDER BY mint) FROM (SELECT mint, n FROM coin_holders WHERE n <> 0) x) AS holders,
+      (SELECT json_agg(x ORDER BY mint) FROM (SELECT mint, count(*)::int AS n FROM positions WHERE balance > 0 GROUP BY mint) x) AS holders_recount`);
+    const x = r.rows[0];
+    expect(x.hourly).not.toBeNull();
+    expect(x.hourly).toEqual(x.hourly_recount);
+    expect(x.holders).toEqual(x.holders_recount);
+    // The repair function rebuilds the same thing.
+    await db.query("SELECT fumpad_rebuild_aggregates()");
+    const again = await db.query("SELECT json_agg(x ORDER BY mint, hour) AS h FROM (SELECT mint, hour, volume::text AS v, trades AS n FROM coin_hourly) x");
+    expect(again.rows[0].h).toEqual(x.hourly_recount);
+  });
+
   it("API repo maps rows to the app's types", async () => {
     const repo = new Repo(db);
     const c = await repo.getCoin("FUMB");
