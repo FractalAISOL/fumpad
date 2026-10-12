@@ -22,6 +22,7 @@ import {
   accountDiscriminator,
   type ClaimQueueAccount,
   type CoinAccount,
+  coinRewardParams,
   decodeClaimQueue,
   decodeCoin,
   decodeGlobal,
@@ -34,6 +35,7 @@ import {
   type GlobalAccount,
   type ObservationsAccount,
   type PositionAccount,
+  type QueueEntry,
   type TicketAccount,
 } from "./accounts.js";
 import {
@@ -79,6 +81,7 @@ import { skimIxs } from "./instructions/locker.js";
 import { buybackFeeRecipientAta, initUserVolumeAccumulatorIx, parseBuybackFeeRecipients, parseFeeConfigFlatFees, parseGlobalConfigFees } from "./instructions/pumpswap.js";
 import { computeBudgetIxs, createAtaIdempotentIx } from "./instructions/spl.js";
 import { isCreatorLaunchBuy, snipeTaxBps } from "./math/fees.js";
+import { planQueuePayments } from "./math/rewards.js";
 import type { PoolReserves } from "./math/pumpswap.js";
 import {
   coinAddresses,
@@ -426,17 +429,38 @@ export class FumpadClient {
   }
 
   /**
-   * process_queue over the first `maxEntries` (≤ 13) queue entries, in queue order. Create
-   * missing owner ATAs first with `buildCreateAtas` (separate tx: 13 quadruples + owners
-   * would exceed 64 account locks) so payouts land directly instead of in escrow (D16).
+   * process_queue for exactly the entries the program's skip-ahead walk will pay right now
+   * (≤ `maxEntries`, ≤ 13), planned with `planQueuePayments` against the reward-vault balance
+   * and the coin's per-claim cap — services review H-4: passing the first 13 entries paid
+   * nothing whenever those didn't fit, however many later entries did. `null` = nothing
+   * payable. `pool` / `maxClaimPoolBps` override the chain reads (tests, callers that already
+   * have them). An owner whose ATA is missing/closed is paid into the ticket's escrow (D16,
+   * rent refunded to the cranker by `withdraw_escrow`); `buildCreateAtas(owners)` first lands
+   * payouts directly, but don't pay ATA rent for untrusted owners on a schedule (they can
+   * close it and farm the rent).
    */
-  async buildProcessQueue(a: { cranker: PublicKey; mint: PublicKey; maxEntries?: number }): Promise<(BuiltTx & { owners: PublicKey[] }) | null> {
+  async buildProcessQueue(a: {
+    cranker: PublicKey;
+    mint: PublicKey;
+    maxEntries?: number;
+    pool?: bigint;
+    maxClaimPoolBps?: number;
+  }): Promise<(BuiltTx & { owners: PublicKey[]; entries: QueueEntry[] }) | null> {
     const q = await this.claimQueue(a.mint);
     if (!q || q.len === 0) return null;
-    const entries = q.entries.slice(0, Math.min(a.maxEntries ?? MAX_QUEUE_ENTRIES_PER_TX, MAX_QUEUE_ENTRIES_PER_TX));
+    const pool = a.pool ?? (await this.tokenBalance(coinAddresses(a.mint).rewardVault));
+    let bps = a.maxClaimPoolBps;
+    if (bps === undefined) {
+      const coin = await this.coin(a.mint);
+      if (!coin) return null;
+      bps = coinRewardParams(coin, (await this.global()).params).maxClaimPoolBps;
+    }
+    const { pay } = planQueuePayments(q.entries, pool, bps, Math.min(a.maxEntries ?? MAX_QUEUE_ENTRIES_PER_TX, MAX_QUEUE_ENTRIES_PER_TX));
+    if (!pay.length) return null;
     return {
-      owners: [...new Map(entries.map((e) => [e.owner.toBase58(), e.owner])).values()],
-      instructions: [...this.cb(CU.processQueue), processQueueIx({ cranker: a.cranker, mint: a.mint, maxEntries: entries.length, entries })],
+      entries: pay,
+      owners: [...new Map(pay.map((e) => [e.owner.toBase58(), e.owner])).values()],
+      instructions: [...this.cb(CU.processQueue), processQueueIx({ cranker: a.cranker, mint: a.mint, maxEntries: pay.length, entries: pay })],
     };
   }
 

@@ -1,5 +1,5 @@
 // Port of instructions/rewards/logic.rs + hooks.rs::evaluate_sell (pure parts).
-import { BPS_DENOM } from "../constants.js";
+import { BPS_DENOM, MAX_QUEUE_ENTRIES_PER_TX } from "../constants.js";
 import { priceQ64 } from "./price.js";
 import { ticketPriceQ64 } from "./reference.js";
 
@@ -101,6 +101,34 @@ export const claimAmount = (tokens: bigint, claimBps: number | bigint) => (token
 export const claimCap = (pool: bigint, maxClaimPoolBps: number | bigint) => (pool * BigInt(maxClaimPoolBps)) / BPS_DENOM;
 export const fits = (amount: bigint, pool: bigint, maxClaimPoolBps: number | bigint) =>
   amount > 0n && amount <= claimCap(pool, maxClaimPoolBps) && amount <= pool;
+
+/**
+ * Services review H-4 (ported from the keeper into the SDK): simulate `process_queue`'s
+ * skip-ahead walk (process_queue.rs) and return exactly the entries it will pay, in queue
+ * order, up to the per-tx limit. The program pays an entry that fits the current (shrinking)
+ * pool, skips one that doesn't, and HALTS at a fitting entry that has no account quadruple —
+ * so passing quadruples for the first 13 entries paid nothing whenever those didn't fit,
+ * however many later entries did. Passing exactly the planned entries means every quadruple
+ * is consumed and every planned entry is paid (an entry the program finds voided/smaller only
+ * pays less; a halt can then only happen AFTER the planned payments). `maxClaimPoolBps` = the
+ * coin's (v0.6: snapshotted, `coinRewardParams`) per-claim cap.
+ */
+export function planQueuePayments<E extends { amount: bigint }>(
+  entries: E[],
+  pool: bigint,
+  maxClaimPoolBps: number | bigint,
+  maxPayments = MAX_QUEUE_ENTRIES_PER_TX,
+): { pay: E[]; poolAfter: bigint } {
+  const pay: E[] = [];
+  let p = pool;
+  for (const e of entries) {
+    if (pay.length >= Math.min(maxPayments, MAX_QUEUE_ENTRIES_PER_TX)) break;
+    if (!fits(e.amount, p, maxClaimPoolBps)) continue; // skipped by the program too
+    pay.push(e);
+    p -= e.amount;
+  }
+  return { pay, poolAfter: p };
+}
 
 /** Smallest pool balance at which `amount` fits (amount ≤ pool × bps / 10_000). */
 export function poolNeededFor(amount: bigint, maxClaimPoolBps: number | bigint): bigint {
