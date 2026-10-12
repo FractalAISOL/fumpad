@@ -125,7 +125,7 @@ export async function runE2E(
     services.push(startService("indexer", "indexer/src/main.ts", { ...common, WS_URL: v.wsUrl, PORT: String(indexerPort), POLL_INTERVAL_MS: "1000", FINALIZE_INTERVAL_MS: "5000", DERIVE_INTERVAL_MS: "2000", RECONCILE_INTERVAL_MS: "15000", FETCH_METADATA: "false" }));
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${indexerPort}/health`)).ok, 60_000);
     services.push(
-      startService("api", "api/src/main.ts", { ...common, LOG_LEVEL: "info", PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", MINT_POOL_KEY: mintPoolKey, LAUNCH_SWEEP_SECS: "5" }),
+      startService("api", "api/src/main.ts", { ...common, LOG_LEVEL: "info", PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SWEEP_SECS: "5" }),
     );
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
