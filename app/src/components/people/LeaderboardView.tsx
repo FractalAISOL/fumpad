@@ -8,7 +8,7 @@ import { useRefresh } from "../shell/live";
 import { useViewer } from "../shell/Providers";
 import s from "./People.module.css";
 import { ProfileCard } from "./ProfileCard";
-import { coinHref } from "@/components/coin/ident";
+import { coinHref, isMintAddress } from "@/components/coin/ident";
 
 const BOARDS: { value: Board; label: string; aside: string }[] = [
   { value: "fumbles", label: "Biggest fumbles", aside: "what the sold tokens are worth today" },
@@ -31,11 +31,15 @@ const coin: Column<LeaderRow> = {
   key: "coin",
   header: "Coin",
   hideBelow: "md",
-  render: (r) => (
-    <Link href={coinHref(r)} className="ticker">
-      ${r.symbol}
-    </Link>
-  ),
+  // By mint only: a symbol can belong to several coins (H-3), so a row without one isn't a link.
+  render: (r) =>
+    r.mint && isMintAddress(r.mint) ? (
+      <Link href={coinHref({ mint: r.mint })} className="ticker">
+        ${r.symbol}
+      </Link>
+    ) : r.symbol ? (
+      <span className="ticker">${r.symbol}</span>
+    ) : null,
 };
 
 function columns(board: Board, address: string): Column<LeaderRow>[] {

@@ -8,11 +8,10 @@ const MINT_B = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtfmbL";
 const MINT_C = "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gfmbL";
 
 describe("coin identity", () => {
-  it("links by mint, never by symbol when the mint is known", () => {
-    assert.equal(coinHref({ mint: MINT_A, symbol: "PIGN" }), `/coin/${MINT_A}`);
-    // Legacy rows without a mint fall back to the symbol lookup (chooser), encoded.
-    assert.equal(coinHref({ symbol: "$PIGN" }), "/coin/PIGN");
-    assert.equal(coinHref({ mint: "not a mint", symbol: "A/B?" }), "/coin/A%2FB%3F");
+  it("links by mint only (no symbol fallback)", () => {
+    assert.equal(coinHref({ mint: MINT_A }), `/coin/${MINT_A}`);
+    // A garbage id is encoded, never spliced raw (the page then 404s).
+    assert.equal(coinHref({ mint: "A/B?" }), "/coin/A%2FB%3F");
   });
 
   it("tells mints from symbols", () => {

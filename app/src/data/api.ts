@@ -34,7 +34,7 @@ import type {
   TradeRow,
   WalletPosition,
 } from "./types";
-import { mergeCoins, normalizeSymbol } from "../components/coin/ident";
+import { isMintAddress, mergeCoins, normalizeSymbol } from "../components/coin/ident";
 
 class ApiError extends Error {
   constructor(
@@ -88,12 +88,15 @@ export class ApiFumpadData implements FumpadData {
     return (await res.json()) as T;
   }
 
-  /** GET that maps 404 (and 400, a malformed id from a hand-edited link) to null. */
+  /**
+   * GET that maps 404 (and 400, a malformed id from a hand-edited link) to null, and 300 (a
+   * legacy per-coin route asked with a symbol several coins share) too: never a silent pick.
+   */
   private async maybe<T>(path: string, query: Query = {}): Promise<T | null> {
     try {
       return await this.get<T>(path, query);
     } catch (e) {
-      if (e instanceof ApiError && (e.status === 404 || e.status === 400)) return null;
+      if (e instanceof ApiError && (e.status === 404 || e.status === 400 || e.status === 300)) return null;
       throw e;
     }
   }
@@ -108,21 +111,24 @@ export class ApiFumpadData implements FumpadData {
     return this.get("/v1/coins", { sort: opts.sort, status: opts.status, limit: opts.limit });
   }
   /**
-   * Every coin answering to `symbol`, newest first (H-3). Asks `/v1/coins?symbol=` (the API can
-   * filter server-side; until it does, the newest 200 are filtered here) and adds the API's own
-   * symbol match (`/v1/coins/:symbol`, the oldest), so a squatter and the newer coin both show.
+   * Every coin answering to `symbol`, newest first (H-3): `/v1/coins/by-symbol/:symbol`, which
+   * never picks one. `mergeCoins` re-checks the match and the order client-side. The legacy
+   * `/v1/coins/:symbol` isn't used: it answers 300 for a shared symbol.
    */
   async findCoinsBySymbol(symbol: string): Promise<CoinSummary[]> {
     const sym = normalizeSymbol(symbol);
     if (!sym) return [];
-    const [list, one] = await Promise.all([
-      this.get<CoinSummary[]>("/v1/coins", { symbol: sym, sort: "new", status: "all", limit: 200 }),
-      this.maybe<CoinDetail>(`/v1/coins/${seg(sym)}`),
-    ]);
-    return mergeCoins(sym, list, one);
+    const list = await this.maybe<CoinSummary[]>(`/v1/coins/by-symbol/${seg(sym)}`, { limit: 50 });
+    return mergeCoins(sym, list ?? []);
   }
-  getCoin(symbolOrMint: string): Promise<CoinDetail | null> {
-    return this.maybe(`/v1/coins/${seg(symbolOrMint)}`);
+  /**
+   * A coin by mint (`/v1/coins/by-mint/:mint`). A symbol resolves only when exactly one coin
+   * has it; a shared symbol is null (callers route bare symbols to the chooser instead).
+   */
+  async getCoin(symbolOrMint: string): Promise<CoinDetail | null> {
+    if (isMintAddress(symbolOrMint)) return this.maybe<CoinDetail>(`/v1/coins/by-mint/${seg(symbolOrMint)}`);
+    const list = await this.findCoinsBySymbol(symbolOrMint);
+    return list.length === 1 ? this.maybe<CoinDetail>(`/v1/coins/by-mint/${seg(list[0].mint)}`) : null;
   }
   getPriceSeries(mint: Address, range: ChartRange): Promise<PricePoint[]> {
     return this.get(`/v1/coins/${seg(mint)}/prices`, { range });

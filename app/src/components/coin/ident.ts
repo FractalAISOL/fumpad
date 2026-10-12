@@ -16,10 +16,9 @@ export function isAddress(s: string): boolean {
 /** A mint-shaped id. Symbols are ≤ 10 bytes, so they never look like one. */
 export const isMintAddress = isAddress;
 
-/** The coin page for a coin. Always by mint; `symbol` only when the mint is unknown (legacy rows). */
-export function coinHref(c: { mint?: string | null; symbol?: string | null }): string {
-  if (c.mint && isMintAddress(c.mint)) return `/coin/${c.mint}`;
-  return `/coin/${encodeURIComponent((c.symbol ?? "").replace(/^\$/, ""))}`;
+/** The coin page for a coin: always by mint (every API row carries one, leaderboards included). */
+export function coinHref(c: { mint: string }): string {
+  return `/coin/${encodeURIComponent(c.mint)}`;
 }
 
 /** Symbol comparison the API uses (`upper(symbol)`), without a leading `$`. */
