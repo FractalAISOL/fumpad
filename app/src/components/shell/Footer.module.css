@@ -1,0 +1,117 @@
+/*
+ * Site footer: flat on the canvas under one hairline, like the rest of the instrument.
+ * Below 900 px the tab bar is fixed over the page bottom, so the footer pads past it.
+ */
+.foot {
+  border-top: 1px solid var(--rule);
+  background: var(--canvas);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  padding: var(--s-8) 0 calc(var(--tabbar-h) + var(--s-6) + env(safe-area-inset-bottom));
+}
+@media (min-width: 900px) {
+  .foot {
+    padding-bottom: var(--s-8);
+  }
+}
+
+.inner {
+  display: grid;
+  gap: var(--s-7) var(--s-5);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 600px) {
+  .inner {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1000px) {
+  .inner {
+    grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(0, 1fr));
+  }
+}
+
+.brand {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: var(--s-3);
+  align-content: start;
+}
+@media (min-width: 1000px) {
+  .brand {
+    grid-column: auto;
+  }
+}
+.brandLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  justify-self: start;
+  border-radius: var(--r-2);
+}
+.tagline {
+  margin: 0;
+  max-width: 36ch;
+  color: var(--ink-3);
+}
+
+.group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.title {
+  margin: 0 0 var(--s-3);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--w-semibold);
+  color: var(--ink);
+}
+.group a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  border-radius: var(--r-1);
+}
+.group a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--rule-2);
+}
+.ext {
+  color: var(--ink-3);
+}
+.status {
+  margin-top: 2px;
+}
+
+.base {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-6);
+  justify-content: space-between;
+  align-items: baseline;
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--rule);
+}
+.disclaimer {
+  margin: 0;
+  max-width: 78ch;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-xs);
+  color: var(--ink-3);
+}
+.copy {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+}

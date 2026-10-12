@@ -1,5 +1,7 @@
+/* The footer pads past the fixed tab bar on mobile, so main only keeps breathing room. */
 .main {
-  padding-bottom: calc(var(--tabbar-h) + 40px + env(safe-area-inset-bottom));
+  flex: 1 0 auto;
+  padding-bottom: var(--s-12);
 }
 @media (min-width: 900px) {
   .main {

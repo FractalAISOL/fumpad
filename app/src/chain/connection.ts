@@ -1,20 +1,14 @@
 /**
- * The cluster the app trades on, from NEXT_PUBLIC_SOLANA_RPC (mainnet when unset). One
- * shared `Connection` for transactions and wallet balances.
+ * One shared `Connection` for transactions and wallet balances, on the cluster in
+ * NEXT_PUBLIC_SOLANA_RPC (see ./cluster).
  */
 import { Connection } from "@solana/web3.js";
+import { CLUSTER, RPC } from "./cluster";
 
-export const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+export { CLUSTER, CLUSTER_LABEL, RPC, type Cluster } from "./cluster";
 
-export type Cluster = "mainnet" | "devnet" | "testnet";
-
-/** Inferred from the RPC URL: anything that names devnet/testnet is that cluster. */
-export const CLUSTER: Cluster = /devnet/i.test(RPC) ? "devnet" : /testnet/i.test(RPC) ? "testnet" : "mainnet";
 /** Wallet Standard chain id for signing (`solana:devnet` …). */
 export const SOLANA_CHAIN = `solana:${CLUSTER}` as const;
-/** "Devnet" / "Testnet"; null on mainnet (nothing to warn about). */
-export const CLUSTER_LABEL: string | null = CLUSTER === "mainnet" ? null : CLUSTER === "devnet" ? "Devnet" : "Testnet";
-
 /** WebSocket endpoint for the same RPC (http→ws, https→wss). */
 export const RPC_WS = RPC.replace(/^http/, "ws");
 

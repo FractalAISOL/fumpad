@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import { Providers } from "@/components/shell/Providers";
+import { Footer } from "@/components/shell/Footer";
 import { Header, TabBar, THEME_SCRIPT } from "@/components/shell/Shell";
 import { shellSnapshot } from "@/data/server";
 import { archivo, martian } from "@/design/fonts";
@@ -44,6 +45,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <main id="main" className={s.main}>
             {children}
           </main>
+          <Footer />
           <TabBar />
         </Providers>
       </body>

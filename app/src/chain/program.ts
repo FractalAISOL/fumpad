@@ -5,8 +5,9 @@
  * @fumpad/sdk (see ./build.ts).
  */
 import { ComputeBudgetProgram, PublicKey, type VersionedTransaction } from "@solana/web3.js";
+import { FUMPAD_PROGRAM_ADDRESS } from "./cluster";
 
-export const FUMPAD_PROGRAM_ID = new PublicKey("ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv");
+export const FUMPAD_PROGRAM_ID = new PublicKey(FUMPAD_PROGRAM_ADDRESS);
 
 /** D18: FUMPAD-launched mints end in `fmbL` (case-sensitive base58; `fmbl` can't exist). */
 export const VANITY_SUFFIX = "fmbL";
