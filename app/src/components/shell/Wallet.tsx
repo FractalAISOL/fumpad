@@ -15,6 +15,13 @@ const KNOWN = [
   { name: "Backpack", url: "https://backpack.app/download" },
 ] as const;
 
+const CONNECT_EVENT = "fumpad:connect-wallet";
+
+/** Open the header's connect dialog from anywhere (e.g. a quick-buy without a wallet). */
+export function requestWalletConnect() {
+  window.dispatchEvent(new Event(CONNECT_EVENT));
+}
+
 /**
  * Connect UI only: pick a wallet, connect, show the address, disconnect. No signing yet;
  * transaction builders live in `@/chain/tx`.
@@ -24,6 +31,12 @@ export function WalletButton({ compact }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const open = () => setOpen(true);
+    window.addEventListener(CONNECT_EVENT, open);
+    return () => window.removeEventListener(CONNECT_EVENT, open);
+  }, []);
 
   // After `select`, connect once the adapter is in place.
   useEffect(() => {

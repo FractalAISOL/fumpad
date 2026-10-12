@@ -17,7 +17,7 @@
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { type BuiltTx, customErrorCode, FUMPAD_IDL } from "@fumpad/sdk";
 import { VersionedTransaction } from "@solana/web3.js";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { DEMO_WALLET } from "@/data";
 import { solToLamports } from "@/data/chain";
 import { mockRecordTrade, mockSetAutoClaim } from "@/data/mock";
@@ -162,10 +162,13 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   const { connection } = useConnection();
   const [status, setStatus] = useState<TxStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  /** The latest error without waiting for a re-render (callers read it right after `await`). */
+  const errorRef = useRef<string | null>(null);
 
   const run = useCallback(
     async (fn: () => Promise<TxOk>, kind: OwnTxKind, mint?: string): Promise<TxOk | null> => {
       setError(null);
+      errorRef.current = null;
       try {
         if (requireWallet && !publicKey) throw new WalletRequiredError();
         const ok = await fn();
@@ -174,7 +177,8 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         return ok;
       } catch (e) {
         setStatus("error");
-        setError(txErrorMessage(e));
+        errorRef.current = txErrorMessage(e);
+        setError(errorRef.current);
         return null;
       }
     },
@@ -352,7 +356,9 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   const reset = useCallback(() => {
     setStatus("idle");
     setError(null);
+    errorRef.current = null;
   }, []);
+  const lastError = useCallback(() => errorRef.current, []);
 
-  return { status, error, buy, sell, claim, prepareLaunch, launch, setAutoClaim, reset, live, wallet: publicKey?.toBase58() ?? null };
+  return { status, error, lastError, buy, sell, claim, prepareLaunch, launch, setAutoClaim, reset, live, wallet: publicKey?.toBase58() ?? null };
 }

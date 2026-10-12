@@ -70,7 +70,7 @@ Sparklines follow the same rule (ink if the period closed up, graphite if down).
 | `TicketCard` | claimable, queued, tracking, waiting for graduation, rebuy-reduced (note), claimed, expired, voided. Lays out by its own width (container query). |
 | `Mark`, `Wordmark` | the chart-as-logo; Archivo 850 at width 125. |
 
-Feature pieces built on these: `ClaimMoment` (the cinematic unlock), `TradePanel` (ticket preview with the D10/D12 floor), `FeedPost`, `ProfileCard`, the share card renderer.
+Feature pieces built on these: `ClaimMoment` (the cinematic unlock), `TradePanel` (ticket preview with the D10/D12 floor), `FeedPost`, `ProfileCard`, the share card renderer, and the Launches board (`components/launches/`: three live lanes under a curve ruler, New / Final stretch / Graduated, each row's curve bar marked at the same 50% as the lane boundary; ⚡ quick-buy uses the trade panel's transaction flow).
 
 ## Motion rules
 

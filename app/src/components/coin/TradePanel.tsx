@@ -80,7 +80,7 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
         ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: quote.amountOut * 0.98, openTickets: [], expectedOut: quote.amountOut })
         : await tx.sell({ mint: coin.mint, tokensIn: amount, minSolOut: quote.amountOut * 0.98, expectedOut: quote.amountOut });
     if (!res) {
-      toast(tx.error ?? "The transaction didn't go through.");
+      toast(tx.lastError() ?? "The transaction didn't go through.");
       return;
     }
     if (before) {

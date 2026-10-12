@@ -126,3 +126,30 @@ export const IconSort = ({ dir, ...p }: P & { dir?: "asc" | "desc" | false }) =>
     <path d="M2.5 6L5 8.5 7.5 6" opacity={dir === "desc" ? 1 : 0.35} />
   </svg>
 );
+export const IconBolt = (p: P) => (
+  <svg {...base(p)} strokeWidth={0} fill="currentColor">
+    <path d="M11.4 1.8 3.6 11.2h5.1l-1.1 7 7.8-9.4h-5.1z" />
+  </svg>
+);
+export const IconTelegram = (p: P) => (
+  <svg {...base(p)} strokeWidth={0} fill="currentColor">
+    <path d="M17.6 3.3 2.4 9.2c-.9.4-.9 1.1 0 1.3l3.9 1.2 1.5 4.6c.2.5.4.6.8.6.3 0 .5-.1.7-.3l1.9-1.8 3.9 2.9c.7.4 1.2.2 1.4-.7l2.6-12.1c.3-1.1-.4-1.6-1.5-1.6Zm-2.7 3.2-7 6.3-.3 3-1.3-4.2 8.2-5.2c.4-.2.7.1.4.1Z" />
+  </svg>
+);
+export const IconGlobe = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="10" cy="10" r="7.2" />
+    <path d="M2.8 10h14.4M10 2.8c2 2 3 4.4 3 7.2s-1 5.2-3 7.2c-2-2-3-4.4-3-7.2s1-5.2 3-7.2Z" />
+  </svg>
+);
+export const IconFilter = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M3 5h14M5.5 10h9M8 15h4" />
+  </svg>
+);
+export const IconSearch = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="8.6" cy="8.6" r="5.4" />
+    <path d="m12.6 12.6 4.4 4.4" />
+  </svg>
+);

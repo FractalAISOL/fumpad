@@ -1,0 +1,747 @@
+/*
+ * Launches board. Three lanes on one track: the ruler above them is the bonding curve,
+ * 0% → 50% across New, 50% → graduation across Final stretch, then PumpSwap. Each row's
+ * curve bar carries the same 50% mark, so a coin's bar and its column agree.
+ * Breakpoints repeated literally: 769 (lanes vs tabs), 900 (header tools beside the title).
+ */
+
+.page {
+  padding-bottom: var(--s-10);
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.head {
+  display: grid;
+  gap: var(--s-3) var(--s-6);
+  padding: var(--s-7) 0 var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 900px) {
+  .head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+  .note {
+    grid-column: 1 / -1;
+  }
+}
+.intro {
+  min-width: 0;
+}
+.h1 {
+  font-weight: var(--w-heavy);
+  font-variation-settings: "wdth" var(--wdth-title);
+  letter-spacing: var(--tr-title);
+  font-size: 30px;
+  line-height: 1.02;
+}
+@media (min-width: 760px) {
+  .h1 {
+    font-size: 40px;
+  }
+}
+.lede {
+  color: var(--ink-2);
+  max-width: 62ch;
+  margin-top: var(--s-2);
+}
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.search,
+.quick {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  height: 40px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--rule-2);
+  color: var(--ink-3);
+  min-width: 0;
+  transition: box-shadow var(--dur-fast) var(--ease-out);
+}
+.search:hover,
+.quick:hover {
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.search:focus-within,
+.quick:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.search input,
+.quick input {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  min-width: 0;
+  outline: none;
+}
+.search {
+  flex: 1 1 200px;
+}
+.search input {
+  width: 100%;
+  font-size: var(--fs-md);
+}
+.search input::placeholder {
+  color: var(--ink-3);
+}
+.quick {
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+.quickLabel {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  white-space: nowrap;
+}
+.quick input {
+  width: 6ch;
+  text-align: right;
+  font-size: var(--fs-md);
+  padding: 4px 6px;
+  border-radius: var(--r-1);
+  background: var(--sunken);
+}
+.quickUnit {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+.quickBad,
+.quickBad:hover {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--hatch) 4px 5px), var(--surface);
+}
+@media (max-width: 899px) {
+  .tools {
+    width: 100%;
+  }
+}
+@media (max-width: 420px) {
+  .search {
+    flex-basis: 100%;
+  }
+  .quick {
+    flex: 1 1 auto;
+  }
+  .quick input {
+    margin-left: auto;
+  }
+}
+.note {
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  min-height: 16px;
+  color: var(--ink-3);
+}
+.busyNote {
+  color: var(--ink);
+  font-weight: var(--w-medium);
+}
+
+/* ── Mobile tabs / desktop ruler ────────────────────────────────────────── */
+
+.tabs {
+  margin-bottom: var(--s-3);
+}
+@media (min-width: 769px) {
+  .tabs {
+    display: none;
+  }
+}
+
+.ruler {
+  display: none;
+}
+@media (min-width: 769px) {
+  .ruler {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--s-3);
+    margin-bottom: var(--s-2);
+    font-family: var(--f-num);
+    font-variation-settings: "wdth" var(--wdth-numTight, 80);
+    font-size: var(--fs-2xs);
+    color: var(--ink-3);
+  }
+  .ruler > span {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    padding-bottom: 9px;
+  }
+  /* The track: minor ticks every 10% of the curve under New and Final stretch. */
+  .ruler > span::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 6px;
+    border-bottom: 1px solid var(--ink-3);
+    background: repeating-linear-gradient(90deg, var(--rule-2) 0 1px, transparent 1px 20%);
+  }
+  .ruler b {
+    font-weight: 400;
+    white-space: nowrap;
+  }
+  /* 50% sits on the gutter between New and Final stretch; graduation on the next one. */
+  .rNew b:last-child,
+  .rFinal b:last-child {
+    transform: translateX(calc(50% + var(--s-3) / 2));
+    color: var(--ink);
+  }
+  .rNew::before,
+  .rFinal::before {
+    content: "";
+    position: absolute;
+    right: calc(-1 * var(--s-3) / 2 - 1px);
+    bottom: 0;
+    width: 2px;
+    height: 10px;
+    background: var(--ink);
+  }
+  .rGrad::after {
+    background: none;
+    border-bottom-style: solid;
+  }
+  .rGrad b:last-child {
+    color: var(--ink-3);
+  }
+}
+
+/* ── Lanes ──────────────────────────────────────────────────────────────── */
+
+.board {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 769px) {
+  .board {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.lane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-3);
+  container-type: inline-size;
+}
+@media (max-width: 768px) {
+  .lane:not(.laneOn) {
+    display: none;
+  }
+}
+@media (min-width: 769px) {
+  .lane {
+    height: clamp(520px, calc(100dvh - var(--header-h) - 48px), 1200px);
+  }
+}
+
+.laneHead {
+  position: relative;
+  padding: 12px var(--s-3) 10px var(--s-4);
+  border-bottom: 1px solid var(--rule);
+}
+.laneTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 30px;
+}
+.laneH {
+  font-size: var(--fs-lg);
+  line-height: 1.1;
+  font-weight: var(--w-bold);
+  font-variation-settings: "wdth" var(--wdth-ticker);
+  letter-spacing: var(--tr-tight);
+  white-space: nowrap;
+}
+.count {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+.sort {
+  margin-left: auto;
+}
+.filterBtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 7px;
+  margin-left: auto;
+  border-radius: var(--r-2);
+  color: var(--ink-2);
+}
+.sort + .filterBtn {
+  margin-left: 0;
+}
+.filterBtn:hover,
+.filterBtn[aria-expanded="true"] {
+  background: var(--sunken);
+  color: var(--ink);
+}
+.filterOn {
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.filterN {
+  font-size: var(--fs-2xs);
+}
+.laneHint {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+}
+@media (min-width: 769px) {
+  .list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule-2) transparent;
+    border-radius: 0 0 var(--r-3) var(--r-3);
+  }
+}
+.list > li + li {
+  border-top: 1px solid var(--rule);
+}
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: var(--s-6) var(--s-4);
+}
+
+/* ── Filter popover ─────────────────────────────────────────────────────── */
+
+.pop {
+  position: absolute;
+  z-index: var(--z-raised);
+  top: calc(100% - 4px);
+  left: var(--s-2);
+  right: var(--s-2);
+  padding: var(--s-3);
+  background: var(--surface);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-3);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+.popGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2) var(--s-3);
+}
+.popField {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.popLabel {
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  color: var(--ink-2);
+}
+.popBox {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-2);
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--rule-2);
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+.popBox:focus-within {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: var(--surface);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.popBad {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--hatch) 4px 5px), var(--sunken);
+}
+.popInput {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--fs-md);
+  outline: none;
+}
+.popInput::placeholder {
+  color: var(--ink-3);
+}
+.popAffix {
+  flex: none;
+}
+.popCheck {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+.popCheck input {
+  margin-top: 3px;
+  accent-color: var(--ink);
+  width: 16px;
+  height: 16px;
+}
+.popCheck small {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: var(--w-regular);
+  color: var(--ink-3);
+}
+.popFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+/* ── Row ────────────────────────────────────────────────────────────────── */
+
+.row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "tile top buy"
+    "tile meta buy"
+    ". stats stats"
+    ". meter meter";
+  column-gap: var(--s-3);
+  row-gap: 4px;
+  padding: 12px var(--s-3) 12px var(--s-4);
+  transition: background-color var(--dur-fast);
+}
+.row:hover {
+  background: var(--sunken);
+}
+/* The row is one link (its name stretched over it); the copy, social and buy controls sit above. */
+.row:has(.name:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: -3px;
+  border-radius: var(--r-2);
+}
+.name:focus-visible {
+  outline: none;
+}
+.name::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.row .tile {
+  grid-area: tile;
+  width: 44px;
+  height: 44px;
+  font-size: 16px;
+  border-radius: var(--r-2);
+}
+
+.top {
+  grid-area: top;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink);
+  text-decoration: none;
+}
+.tk {
+  font-size: 15px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.full {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.age {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.tag {
+  flex: none;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: var(--r-1);
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+.buy {
+  grid-area: buy;
+  position: relative;
+  z-index: 1;
+  align-self: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 58px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--rule-2);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  transition:
+    background-color var(--dur-fast),
+    color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+.buy:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--on-ink);
+  box-shadow: none;
+}
+.buy:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.buy:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+}
+.buy[aria-busy="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+  box-shadow: none;
+}
+@media (pointer: coarse) {
+  .buy {
+    height: 40px;
+    min-width: 64px;
+  }
+}
+.dots {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    -9px 0 0 currentColor,
+    9px 0 0 currentColor;
+  animation: dots 900ms var(--ease-inOut) infinite;
+}
+@keyframes dots {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.meta {
+  grid-area: meta;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  min-width: 0;
+  color: var(--ink-3);
+}
+.meta > * {
+  position: relative;
+  z-index: 1;
+}
+.addr {
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.social {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-1);
+  color: var(--ink-3);
+}
+.social:hover {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.flag {
+  margin-left: 4px;
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: var(--r-1);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+  background: repeating-linear-gradient(-45deg, transparent 0 3px, var(--hatch) 3px 4px);
+}
+
+.stats {
+  grid-area: stats;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px var(--s-3);
+  margin: 4px 0 0;
+  font-size: var(--fs-xs);
+}
+.stats > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.stats dt {
+  color: var(--ink-3);
+}
+.stats dd {
+  margin: 0;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (max-width: 360px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (max-width: 300px) {
+  .row {
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    padding-left: var(--s-3);
+  }
+  .row .tile {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+  }
+  .full {
+    display: none;
+  }
+}
+
+.meter {
+  grid-area: meter;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+}
+/* The curve bar: ink fill, a 50% mark that matches the column boundary, the end post. */
+.curve {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.curveFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pct);
+  background: var(--ink);
+  border-radius: 1px;
+  transition: width var(--dur-slow) var(--ease-out);
+}
+.curveHalf {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--ink-3);
+}
+.curve::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--ink-3);
+}
+.gauge {
+  flex: 1 1 auto;
+  min-width: 60px;
+  max-width: 180px;
+}
+.meterVal {
+  flex: none;
+  color: var(--ink);
+  min-width: 4ch;
+  text-align: right;
+}
+.meterOf {
+  color: var(--ink-3);
+}
+.meterNote {
+  flex: none;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* A coin that just crossed into this lane: a short grey wash, then quiet. */
+.arrived {
+  animation: arrive 2.4s var(--ease-out);
+}
+@keyframes arrive {
+  0%,
+  30% {
+    background: color-mix(in srgb, var(--ink) 9%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
+}
