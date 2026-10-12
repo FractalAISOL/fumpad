@@ -217,6 +217,19 @@ impl Env {
         self.svm.set_sysvar(&c);
     }
 
+    /// Advance the slot only (clock time unchanged).
+    pub fn advance_slots(&mut self, n: u64) {
+        let mut c = self.svm.get_sysvar::<litesvm_clock::Clock>();
+        c.slot += n;
+        self.svm.set_sysvar(&c);
+    }
+
+    /// D19: step past any just-created coin's snipe window (slot only, time unchanged) so
+    /// tests that aren't about the snipe tax trade at the normal fee.
+    pub fn skip_snipe_window(&mut self) {
+        self.advance_slots(fumpad::MAX_SNIPE_WINDOW_SLOTS as u64);
+    }
+
     pub fn new_user(&mut self, sol: u64) -> Keypair {
         let k = Keypair::new();
         self.svm.airdrop(&k.pubkey(), sol * SOL).unwrap();

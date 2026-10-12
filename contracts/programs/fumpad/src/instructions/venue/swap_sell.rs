@@ -181,6 +181,8 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
         virtual_sol_reserves: after.quote,
         virtual_token_reserves: after.base,
         ts: now,
+        snipe_tax: 0,
+        snipe_tax_bps: 0,
     };
     emit_cpi!(ev);
     Ok(())

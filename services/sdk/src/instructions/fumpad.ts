@@ -236,6 +236,9 @@ export function graduateIx(a: { payer: PublicKey; mint: PublicKey; extra?: Accou
       lpVault: c.lpVault,
       tokenProgram: TOKEN_2022_PROGRAM_ID,
       quoteTokenProgram: TOKEN_PROGRAM_ID,
+      // D20 (v0.5): pre-funded with their rent out of the graduation fee.
+      observations: c.observations,
+      claimQueue: c.claimQueue,
     },
     {},
     a.extra ?? [],

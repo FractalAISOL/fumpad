@@ -212,6 +212,8 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
         virtual_sol_reserves: r.virtual_sol,
         virtual_token_reserves: r.virtual_token,
         ts: now,
+        snipe_tax: 0,
+        snipe_tax_bps: 0,
     });
     if completed {
         emit_cpi!(CurveCompleted { mint, ts: now });

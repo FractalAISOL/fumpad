@@ -36,18 +36,25 @@ pub const TOKEN_DECIMALS: u8 = 6;
 
 // ── Defaults (all live in Global and are admin-tunable) ──────────────────────
 // Curve re-derived from pump.fun's so that, with 8% of supply set aside for the
-// reward pool (D17), the curve's final price equals the PumpSwap LP opening price:
-// with N = 920M non-pool tokens, 30 SOL initial virtual and 85 SOL raised,
-// T1 = N·3450/12325 (virtual tokens left at completion), virtual tokens = T1·115/30,
-// curve = T1·85/30, LP = T1·85/115 — each rounded to the nearest base unit (curve + LP
-// == N exactly). See docs/SPEC.md §3.
+// reward pool (D17) and the graduation fee F taken out of the raised SOL (D20), the
+// curve's final price equals the PumpSwap LP opening price: with N = 920M non-pool
+// tokens, V0 = 30 SOL initial virtual, R = 85 SOL raised, V1 = V0 + R and
+// F = 0.65 SOL: T1 = N·V0·V1 / (R·V1 + (R−F)·V0) (virtual tokens left at completion),
+// virtual tokens T0 = T1·V1/V0, curve = T1·R/V0, LP = T1·(R−F)/V1 — each rounded to
+// the nearest base unit (curve + LP == N exactly). See docs/SPEC.md §3.
 pub const DEFAULT_TOTAL_SUPPLY: u64 = 1_000_000_000_000_000; // 1B * 10^6
 pub const DEFAULT_REWARD_POOL_SUPPLY: u64 = 80_000_000_000_000; // 8% (D17)
-pub const DEFAULT_CURVE_SUPPLY: u64 = 729_655_172_413_793; // real tokens sold on the curve
-pub const DEFAULT_LP_SUPPLY: u64 = 190_344_827_586_207; // tokens deposited into PumpSwap at graduation
+pub const DEFAULT_CURVE_SUPPLY: u64 = 730_811_425_785_218; // real tokens sold on the curve
+pub const DEFAULT_LP_SUPPLY: u64 = 189_188_574_214_782; // tokens deposited into PumpSwap at graduation
 pub const DEFAULT_INITIAL_VIRTUAL_SOL: u64 = 30_000_000_000; // 30 SOL
-pub const DEFAULT_INITIAL_VIRTUAL_TOKEN: u64 = 987_180_527_383_367;
+pub const DEFAULT_INITIAL_VIRTUAL_TOKEN: u64 = 988_744_870_180_001;
 pub const DEFAULT_GRADUATION_LAMPORTS: u64 = 85_000_000_000; // 85 SOL real
+/// D20: taken from the raised SOL at graduation and spent by `graduate` on the coin's
+/// post-graduation setup rent — the graduate caller's net rent (~0.0097 SOL), the
+/// observations ring (~0.0585 SOL) and the 1024-entry claim queue (~0.5714 SOL), together
+/// ~0.6397 SOL — the rest (~0.01 SOL) to platform fees. 0.6 SOL would leave the keeper
+/// ~0.04 SOL short per coin, hence 0.65. The curve constants above are derived with it.
+pub const DEFAULT_GRADUATION_FEE_LAMPORTS: u64 = 650_000_000;
 
 pub const DEFAULT_FEE_BPS: u16 = 100; // 1% of the SOL side
 pub const DEFAULT_FEE_POOL_SHARE_BPS: u16 = 5_000;
@@ -71,6 +78,17 @@ pub const DEFAULT_ORACLE_MIN_SAMPLES: u16 = 84; // 70% of 120 expected @15s
 pub const DEFAULT_KEEPER_STALE_SECS: i64 = 600; // permissionless fallback after 10 min w/o keeper sample
 pub const DEFAULT_BUYBACK_MAX_DEVIATION_BPS: u16 = 300; // spot within ±3% of median
 pub const DEFAULT_BUYBACK_MAX_POOL_BPS: u16 = 50; // slice ≤ 0.5% of pool quote depth
+
+/// D19 snipe protection: curve buys in the first `snipe_window_slots` slots after the launch
+/// slot pay an extra tax (all of it to the reward pool) of
+/// min(`snipe_start_bps`, ⌈10_000 × (window − offset) / window⌉) bps of what they spend
+/// on the curve + tax. Defaults: 4 slots, 99% → 99 / 75 / 50 / 25 %, normal fee from slot 4.
+pub const DEFAULT_SNIPE_WINDOW_SLOTS: u16 = 4;
+pub const DEFAULT_SNIPE_START_BPS: u16 = 9_900;
+/// D19 caps (`Params::is_valid`): a buy always gets ≥ 1% of its spend onto the curve, and
+/// the window is at most 50 slots (~20 s).
+pub const MAX_SNIPE_START_BPS: u16 = 9_900;
+pub const MAX_SNIPE_WINDOW_SLOTS: u16 = 50;
 
 /// D14: hard caps enforced by `Params::is_valid` (a timelocked change can't exceed them).
 pub const MAX_GRADUATION_FEE_LAMPORTS: u64 = 1_000_000_000; // 1 SOL

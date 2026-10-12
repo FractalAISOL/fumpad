@@ -51,7 +51,11 @@ pub struct Coin {
     /// retroactive changes). Occupies 16 bytes of the former 88-byte `reserved`.
     pub fees: CoinFees,
 
-    pub reserved: [u8; 72],
+    /// D19: launch slot + snipe-tax schedule snapshotted at `create_coin`. Occupies 12 bytes
+    /// of the former 72-byte `reserved` (coins created before v0.5 read zeros = no tax).
+    pub snipe: SnipeConfig,
+
+    pub reserved: [u8; 60],
 }
 
 /// D14: per-coin snapshot of the fee parameters, taken from `Global.params` at
@@ -65,6 +69,17 @@ pub struct CoinFees {
     pub fee_pool_share_bps: u16,
     pub fee_platform_share_bps: u16,
     pub fee_creator_share_bps: u16,
+}
+
+/// D19: per-coin snapshot of the snipe protection, taken at `create_coin`.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct SnipeConfig {
+    /// Clock slot of `create_coin`.
+    pub launch_slot: u64,
+    /// Buys at slot offsets 0..window_slots pay the tax (0 = disabled).
+    pub window_slots: u16,
+    /// Tax at offset 0, bps (≤ `MAX_SNIPE_START_BPS`).
+    pub start_bps: u16,
 }
 
 impl Coin {
@@ -88,10 +103,11 @@ pub enum CoinStatus {
 mod tests {
     use super::*;
 
-    /// D10 (`reference`) and D14 (`fees`) were carved out of `reserved`: the account size must not change.
+    /// D10 (`reference`), D14 (`fees`) and D19 (`snipe`) were carved out of `reserved`: the
+    /// account size must not change.
     #[test]
     fn account_size_unchanged() {
         assert_eq!(Coin::INIT_SPACE, 338);
-        assert_eq!(ReferencePrice::INIT_SPACE + CoinFees::INIT_SPACE + 72, 128);
+        assert_eq!(ReferencePrice::INIT_SPACE + CoinFees::INIT_SPACE + SnipeConfig::INIT_SPACE + 60, 128);
     }
 }

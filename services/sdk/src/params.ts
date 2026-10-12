@@ -31,19 +31,24 @@ export interface Params {
   /** 32 bytes, hex. */
   solUsdFeedId: string;
   maxPriceAgeSecs: bigint;
+  /** D19 (v0.5): curve buys within this many slots after launch pay the snipe tax (0 = off, ≤ 50). */
+  snipeWindowSlots: number;
+  /** D19: tax at the launch slot, bps (≤ 9900); schedule min(this, ⌈10_000·(W − d)/W⌉). */
+  snipeStartBps: number;
 }
 
 /** `Params::default()` (constants.rs). */
 export const DEFAULT_PARAMS: Params = {
   totalSupply: 1_000_000_000_000_000n,
-  // D17 (v0.4): 8% reward pool; curve re-derived (contracts constants.rs).
+  // D17 (v0.4): 8% reward pool; D20 (v0.5): 0.65 SOL graduation fee kept out of the LP,
+  // curve re-derived for price continuity (contracts constants.rs, SPEC §3).
   rewardPoolSupply: 80_000_000_000_000n,
-  curveSupply: 729_655_172_413_793n,
-  lpSupply: 190_344_827_586_207n,
+  curveSupply: 730_811_425_785_218n,
+  lpSupply: 189_188_574_214_782n,
   initialVirtualSol: 30_000_000_000n,
-  initialVirtualToken: 987_180_527_383_367n,
+  initialVirtualToken: 988_744_870_180_001n,
   graduationLamports: 85_000_000_000n,
-  graduationFeeLamports: 0n,
+  graduationFeeLamports: 650_000_000n,
   feeBps: 100,
   feePoolShareBps: 5_000,
   feePlatformShareBps: 3_000,
@@ -64,6 +69,8 @@ export const DEFAULT_PARAMS: Params = {
   buybackMaxPoolBps: 50,
   solUsdFeedId: PYTH_SOL_USD_FEED_ID,
   maxPriceAgeSecs: 60n,
+  snipeWindowSlots: 4,
+  snipeStartBps: 9_900,
 };
 
 /** Mirror of `Params::is_valid` (initialize / queue / execute), incl. the D14 caps. */
@@ -83,6 +90,8 @@ export function paramsValid(p: Params): boolean {
     p.maxOpenTickets <= 5 &&
     p.oracleMinSpacingSecs > 0n &&
     p.oracleWindowSecs > p.oracleMinSpacingSecs &&
-    p.oracleMinSamples <= 256
+    p.oracleMinSamples <= 256 &&
+    p.snipeWindowSlots <= 50 &&
+    p.snipeStartBps <= 9_900
   );
 }

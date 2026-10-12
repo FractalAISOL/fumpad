@@ -542,6 +542,8 @@ fn graduate_and_skim_fit_a_legacy_transaction() {
             quote_token_program: TOKEN,
             associated_token_program: ATA_PROGRAM,
             system_program: SYSTEM,
+            observations: f.observations,
+            claim_queue: f.queue,
             event_authority: event_authority(),
             program: fumpad::ID,
         },

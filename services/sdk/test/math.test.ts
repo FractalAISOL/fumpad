@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_PARAMS } from "../src/params.js";
+import { quoteCurveBuy } from "../src/quote.js";
 import {
   claimAmount,
   claimCap,
@@ -28,6 +29,9 @@ import {
   ticketPriceQ64,
   touchReference,
   medianPriceQ64,
+  snipeCurveOffer,
+  snipeTax,
+  snipeTaxBps,
   type Touch,
   curveSpotQ64,
   type CurveReserves,
@@ -156,5 +160,35 @@ describe("rewards (instructions/rewards/logic.rs)", () => {
   });
   it("lamports_to_usd_cents (pyth.rs)", () => {
     for (const c of V.rewards.usdCents) expect(lamportsToUsdCents(BigInt(c.lamports), BigInt(c.price), c.exponent)).toBe(B(c.cents));
+  });
+});
+
+describe("snipe tax (math/fees.rs, D19)", () => {
+  it("schedule by slot", () => {
+    for (const c of V.snipe.schedule) {
+      const cfg = { launchSlot: BigInt(c.launchSlot), windowSlots: c.windowSlots, startBps: c.startBps };
+      expect(snipeTaxBps(cfg, BigInt(c.slot))).toBe(c.bps);
+    }
+    const def = { launchSlot: 100n, windowSlots: DEFAULT_PARAMS.snipeWindowSlots, startBps: DEFAULT_PARAMS.snipeStartBps };
+    expect([100n, 101n, 102n, 103n, 104n].map((s) => snipeTaxBps(def, s))).toEqual([9_900, 7_500, 5_000, 2_500, 0]);
+  });
+  it("sol_in split and tax", () => {
+    for (const c of V.snipe.split) {
+      expect(snipeCurveOffer(BigInt(c.solIn), c.bps)).toBe(BigInt(c.offer));
+      expect(snipeTax(BigInt(c.used), c.bps)).toBe(B(c.tax));
+    }
+  });
+  it("taxed curve buys (quoteCurveBuy) match the program", () => {
+    for (const c of V.snipe.buys) {
+      const r = res(c.reserves);
+      // A budget whose solInForBudget is exactly c.solIn: solIn + fee(solIn).
+      const budget = BigInt(c.solIn) + computeFee(BigInt(c.solIn), DEFAULT_PARAMS).total;
+      const q = quoteCurveBuy(r, DEFAULT_PARAMS, budget, c.bps)!;
+      expect(q.solIn).toBe(BigInt(c.solIn));
+      expect([q.solUsed, q.tokensOut, q.fee.total, q.snipeTax, q.poolTokensBought]).toEqual(
+        [c.solUsed, c.tokensOut, c.feeTotal, c.tax, c.poolTokensBought].map(BigInt),
+      );
+      expect(q.totalCost).toBeLessThanOrEqual(budget);
+    }
   });
 });

@@ -172,6 +172,8 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
         virtual_sol_reserves: after.quote,
         virtual_token_reserves: after.base,
         ts: now,
+        snipe_tax: 0,
+        snipe_tax_bps: 0,
     };
     emit_cpi!(ev);
     Ok(())

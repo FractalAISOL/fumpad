@@ -7,6 +7,11 @@
  *            Isolated tx (compute-budget ixs only besides record_samples).
  *  graduate  Complete coins → graduate (400k CU), then init_observations, 9× init_claim_queue (one tx)
  *            and (once) PumpSwap user_volume_accumulator for the pool authority.
+ *            D20 (v0.5): graduate refunds the caller's rent and pre-funds the observations +
+ *            claim-queue PDAs out of the coin's graduation fee (default 0.65 SOL), so this
+ *            whole step costs the keeper only tx fees (it still advances graduate's 0.05 SOL
+ *            rent loan, returned in-instruction). Coins whose snapshotted fee is lower
+ *            (devnet scaled params, pre-v0.5 coins) leave the shortfall to the keeper.
  *  buyback   execute_buyback when buyback_lamports ≥ threshold, a keeper median exists and
  *            spot is within the program's ±deviation band (pre-checked → no failing txs).
  *  queue     process_queue when the head entries fit; creates missing owner ATAs first.

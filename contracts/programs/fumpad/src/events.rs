@@ -32,6 +32,12 @@ pub struct Trade {
     pub virtual_sol_reserves: u64,
     pub virtual_token_reserves: u64,
     pub ts: i64,
+    /// D19 (v0.5): snipe tax paid on top of the normal fee (curve buys in the launch window;
+    /// 0 otherwise). All of it went to the reward pool (included in `pool_tokens_bought`).
+    /// Total charged = sol_amount + fee_pool + fee_platform + fee_creator + snipe_tax.
+    pub snipe_tax: u64,
+    /// D19: the tax rate applied, bps of (sol_amount + snipe_tax); 0 outside the window.
+    pub snipe_tax_bps: u16,
 }
 
 #[event]
@@ -49,6 +55,12 @@ pub struct Graduated {
     /// LP tokens moved into the immutable `fumpad_lp_locker` (D11).
     pub lp_locked: u64,
     pub ts: i64,
+    /// D20 (v0.5): how the coin's graduation fee was spent. `caller_refund` = the graduate
+    /// caller's net rent, reimbursed; `setup_prefunded` = rent pre-funded into the
+    /// observations + claim-queue PDAs; `platform_fee` = the remainder (to platform fees).
+    pub caller_refund: u64,
+    pub setup_prefunded: u64,
+    pub platform_fee: u64,
 }
 
 /// D11: skimmed LP-fee SOL unwrapped from ATA(coin, WSOL) and credited to the Coin.

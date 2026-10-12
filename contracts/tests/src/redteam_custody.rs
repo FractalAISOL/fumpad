@@ -84,11 +84,16 @@ fn regression_admin_cannot_retroactively_take_raised_sol() {
     f.env.set_params_timelocked(max);
     let g: fumpad::state::Global = f.env.fetch(&f.env.global_pda());
     assert_eq!((g.params, g.pending_eta), (max, 0));
-    // …but this coin keeps its snapshot (fee 0, 1%): the whole raise goes into the pool.
+    // …but this coin keeps its snapshot (D20 default 0.65 SOL fee, 1%): only that fee stays
+    // out of the pool, and it is spent on the setup rent, not swept.
     assert_eq!(f.coin_state().fees, Params::default().coin_fees());
+    let snap = f.coin_state().fees.graduation_fee_lamports;
+    assert_eq!(snap, fumpad::DEFAULT_GRADUATION_FEE_LAMPORTS);
     ok(f.graduate());
-    assert_eq!(token_balance(&f.env, &f.pool_quote), raised, "pool seeded with every raised lamport");
-    assert_eq!(f.coin_state().platform_fees_unclaimed, platform_before, "no graduation fee taken");
+    assert_eq!(token_balance(&f.env, &f.pool_quote), raised - snap, "pool seeded with the raise minus the snapshot fee");
+    let platform_gain = f.coin_state().platform_fees_unclaimed - platform_before;
+    let prefunded = f.env.lamports(&f.observations) + f.env.lamports(&f.queue);
+    assert!(prefunded > 0 && platform_gain + prefunded <= snap, "fee spent on setup first, remainder {platform_gain}");
     f.assert_invariant();
 }
 
@@ -237,6 +242,7 @@ fn create_coin_in(f: &mut Flow) {
         fumpad::instruction::CreateCoin { name: "B".into(), symbol: "B".into(), uri: "".into() },
     );
     ok(f.env.send(&[i], &[&creator, &mint_kp]));
+    f.env.skip_snipe_window();
 }
 
 fn graduate_ixs(f: &Flow, payer: &Pubkey) -> Vec<solana_instruction::Instruction> {
@@ -272,6 +278,8 @@ fn graduate_ixs(f: &Flow, payer: &Pubkey) -> Vec<solana_instruction::Instruction
                 quote_token_program: TOKEN,
                 associated_token_program: ATA_PROGRAM,
                 system_program: SYSTEM,
+                observations: f.observations,
+                claim_queue: f.queue,
                 event_authority: event_authority(),
                 program: fumpad::ID,
             },

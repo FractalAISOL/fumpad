@@ -6,6 +6,7 @@ import { fumpadCoder, lockerCoder } from "./coder.js";
 import { CLAIM_QUEUE_CAPACITY, OBSERVATION_CAPACITY, PUMPSWAP_POOL_DISCRIMINATOR } from "./constants.js";
 import { paramsFromIdl } from "./instructions/fumpad.js";
 import type { Params } from "./params.js";
+import type { SnipeConfig } from "./math/fees.js";
 import type { ReferencePrice } from "./math/reference.js";
 
 export type CoinStatus = "curve" | "complete" | "graduated";
@@ -43,6 +44,8 @@ export interface CoinAccount {
   reference: ReferencePrice;
   /** D14: fee params snapshotted at create_coin — use these, not Global.params. */
   fees: CoinFees;
+  /** D19 (v0.5): launch slot + snipe-tax schedule snapshotted at create_coin (zeros = none). */
+  snipe: SnipeConfig;
 }
 
 export interface GlobalAccount {

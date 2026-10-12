@@ -25,9 +25,9 @@ pub struct RegisterHoldings<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(seeds = [GLOBAL_SEED], bump = global.bump)]
-    pub global: Account<'info, Global>,
+    pub global: Box<Account<'info, Global>>,
     #[account(seeds = [COIN_SEED, mint.key().as_ref()], bump = coin.bump, has_one = mint)]
-    pub coin: Account<'info, Coin>,
+    pub coin: Box<Account<'info, Coin>>,
     #[account(mint::token_program = token_program)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(

@@ -352,27 +352,30 @@ mod tests {
         }
     }
 
-    /// D17 defaults are exactly the SPEC §3 derivation (8% pool, 920M non-pool supply,
-    /// 30 SOL initial virtual, 85 SOL raised), each rounded to the nearest base unit, and
-    /// the three allocations sum to the total supply exactly.
+    /// D17 + D20 defaults are exactly the SPEC §3 derivation (8% pool, 920M non-pool
+    /// supply, 30 SOL initial virtual, 85 SOL raised, 0.65 SOL graduation fee kept out of
+    /// the LP), each rounded to the nearest base unit, and the three allocations sum to the
+    /// total supply exactly.
     #[test]
     fn default_curve_constants_match_spec_derivation() {
         let p = Params::default();
         assert_eq!(p.reward_pool_supply, p.total_supply / 100 * 8);
         let n = (p.total_supply - p.reward_pool_supply) as u128; // 920M × 10^6
         let (v0, raised) = (p.initial_virtual_sol as u128, p.graduation_lamports as u128);
+        let deposited = raised - p.graduation_fee_lamports as u128; // SOL that reaches the LP
         let v1 = v0 + raised;
-        // Completion: T1 virtual tokens left, price v1/T1 == LP price raised/L, and
-        // curve C = T0 − T1 = T1·raised/v0, L = T1·raised/v1, C + L = n
-        // ⇒ T1 = n·v0·v1 / (raised·(v0 + v1)).
-        let den = raised * (v0 + v1);
+        // Completion: T1 virtual tokens left, curve price v1/T1 == LP price deposited/L, and
+        // curve C = T0 − T1 = T1·raised/v0, L = T1·deposited/v1, C + L = n
+        // ⇒ T1 = n·v0·v1 / (raised·v1 + deposited·v0).
+        let den = raised * v1 + deposited * v0;
         let nearest = |num: u128| ((2 * num + den) / (2 * den)) as u64;
         assert_eq!(p.initial_virtual_token, nearest(n * v1 * v1)); // T0 = T1·v1/v0
         assert_eq!(p.curve_supply, nearest(n * v1 * raised));
-        assert_eq!(p.lp_supply, nearest(n * v0 * raised));
-        assert_eq!(p.initial_virtual_token, 987_180_527_383_367);
-        assert_eq!(p.curve_supply, 729_655_172_413_793);
-        assert_eq!(p.lp_supply, 190_344_827_586_207);
+        assert_eq!(p.lp_supply, nearest(n * v0 * deposited));
+        assert_eq!(p.graduation_fee_lamports, 650_000_000);
+        assert_eq!(p.initial_virtual_token, 988_744_870_180_001);
+        assert_eq!(p.curve_supply, 730_811_425_785_218);
+        assert_eq!(p.lp_supply, 189_188_574_214_782);
         assert_eq!(p.reward_pool_supply + p.curve_supply + p.lp_supply, p.total_supply);
         assert!(p.is_valid());
     }

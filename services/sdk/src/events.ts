@@ -25,9 +25,17 @@ export interface TradeEvent {
   mint: PublicKey; user: PublicKey; isBuy: boolean; onAmm: boolean; tokenAmount: bigint; solAmount: bigint;
   feePool: bigint; feePlatform: bigint; feeCreator: bigint; poolTokensBought: bigint; priceQ64: bigint;
   virtualSolReserves: bigint; virtualTokenReserves: bigint; ts: bigint;
+  /** D19 (v0.5): snipe tax (lamports, to the reward pool, on top of the normal fee); 0 outside the launch window. */
+  snipeTax: bigint;
+  /** D19: tax rate applied, bps of (solAmount + snipeTax). Total charged = solAmount + fees + snipeTax. */
+  snipeTaxBps: number;
 }
 export interface CurveCompletedEvent { mint: PublicKey; ts: bigint }
-export interface GraduatedEvent { mint: PublicKey; pool: PublicKey; solDeposited: bigint; tokensDeposited: bigint; lpLocked: bigint; ts: bigint }
+/** v0.5 D20: the graduation fee = callerRefund + setupPrefunded (observations + claim-queue rent) + platformFee. */
+export interface GraduatedEvent {
+  mint: PublicKey; pool: PublicKey; solDeposited: bigint; tokensDeposited: bigint; lpLocked: bigint; ts: bigint;
+  callerRefund: bigint; setupPrefunded: bigint; platformFee: bigint;
+}
 export interface LpFeesSettledEvent { mint: PublicKey; lamports: bigint; platform: bigint; creator: bigint; ts: bigint }
 export interface TicketCreatedEvent { mint: PublicKey; owner: PublicKey; ticket: PublicKey; tokens: bigint; sellPriceQ64: bigint; sellUsdCents: bigint; ts: bigint }
 export interface TicketDebitedEvent { ticket: PublicKey; debited: bigint; remaining: bigint; voided: boolean; ts: bigint }

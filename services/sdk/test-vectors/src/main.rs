@@ -7,11 +7,11 @@ use fumpad::{
     instructions::rewards::logic,
     math::{
         curve::{initial_reserves, quote_buy, quote_sell, sol_for_tokens, CurveReserves},
-        fees::compute_fee,
+        fees::{compute_fee, snipe_curve_offer, snipe_tax, snipe_tax_bps},
         price::{lamports_for, meets_multiple, mul_div_ceil, price_q64},
         reference::{ticket_price_q64, ReferencePrice, Touch},
     },
-    state::{Observations, Params, Position, TicketStatus},
+    state::{Observations, Params, Position, SnipeConfig, TicketStatus},
 };
 use serde_json::{json, Value};
 
@@ -261,6 +261,49 @@ fn median(rng: &mut Rng) -> Value {
     Value::Array(cases)
 }
 
+/// D19: schedule by slot, sol_in split, tax, and whole taxed curve buys (as `buy` does them).
+fn snipe(rng: &mut Rng) -> Value {
+    let p = Params::default();
+    let mut schedule = vec![];
+    let configs = [
+        p.snipe_config(1_000),
+        SnipeConfig { launch_slot: 0, window_slots: 3, start_bps: 9_900 },
+        SnipeConfig { launch_slot: 5, window_slots: 5, start_bps: 5_000 },
+        SnipeConfig { launch_slot: 7, window_slots: 50, start_bps: 9_900 },
+        SnipeConfig { launch_slot: 9, window_slots: 0, start_bps: 9_900 },
+    ];
+    for c in configs {
+        for d in 0..(c.window_slots as u64 + 3) {
+            let slot = (c.launch_slot + d).saturating_sub(1); // includes one slot before launch
+            schedule.push(json!({ "launchSlot": s(c.launch_slot), "windowSlots": c.window_slots, "startBps": c.start_bps, "slot": s(slot), "bps": snipe_tax_bps(&c, slot) }));
+        }
+    }
+    let mut split = vec![];
+    for _ in 0..200 {
+        let sol_in = rng.amount(u64::MAX / 10_000);
+        let bps = (rng.next() % 9_901) as u16;
+        let offer = snipe_curve_offer(sol_in, bps).unwrap();
+        let used = offer - rng.next() % (offer / 3 + 1);
+        split.push(json!({ "solIn": s(sol_in), "bps": bps, "offer": s(offer), "used": s(used), "tax": opt(snipe_tax(used, bps)) }));
+    }
+    let mut buys = vec![];
+    let fresh = initial_reserves(p.initial_virtual_sol, p.initial_virtual_token, p.curve_supply);
+    let fees = p.coin_fees();
+    for &bps in &[9_900u16, 7_500, 5_000, 2_500, 0] {
+        for sol_in in [1u64, 10_000_000, 1_000_000_000, 7_777_777_777, 400_000_000_000] {
+            let offer = snipe_curve_offer(sol_in, bps).unwrap();
+            let q = quote_buy(&fresh, offer).unwrap();
+            let fee = compute_fee(q.sol_used, &fees).unwrap();
+            let tax = snipe_tax(q.sol_used, bps).unwrap();
+            let mut after = fresh;
+            after.apply_buy(&q).unwrap();
+            let bb = quote_buy(&after, fee.pool + tax).unwrap();
+            buys.push(json!({ "reserves": res(&fresh), "solIn": s(sol_in), "bps": bps, "solUsed": s(q.sol_used), "tokensOut": s(q.tokens_out), "feeTotal": s(fee.total), "tax": s(tax), "poolTokensBought": s(bb.tokens_out) }));
+        }
+    }
+    json!({ "schedule": schedule, "split": split, "buys": buys })
+}
+
 fn main() {
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let out = json!({
@@ -272,6 +315,7 @@ fn main() {
         "reference": reference(&mut rng),
         "rewards": rewards(&mut rng),
         "median": median(&mut rng),
+        "snipe": snipe(&mut rng),
     });
     println!("{}", serde_json::to_string(&out).unwrap());
 }
