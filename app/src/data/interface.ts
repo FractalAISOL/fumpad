@@ -45,7 +45,10 @@ export interface FumpadData {
   getParams(): Promise<ProtocolParams>;
 
   listCoins(opts?: { sort?: CoinSort; status?: "curve" | "graduated" | "all"; limit?: number }): Promise<CoinSummary[]>;
+  /** One coin by mint (preferred) or by symbol (the API's oldest match: links must use the mint). */
   getCoin(symbolOrMint: string): Promise<CoinDetail | null>;
+  /** Every coin whose symbol matches (case-insensitive), newest first. For `/coin/<SYMBOL>` lookups. */
+  findCoinsBySymbol(symbol: string): Promise<CoinSummary[]>;
   getPriceSeries(mint: Address, range: ChartRange): Promise<PricePoint[]>;
   getHolders(mint: Address, viewer?: Address): Promise<{ total: number; top: Holder[] }>;
   getRecentFumbles(mint: Address, viewer?: Address): Promise<FumbleRow[]>;

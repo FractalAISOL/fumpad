@@ -41,6 +41,7 @@ import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useSolUsd, useViewer } from "../shell/Providers";
 import { ProfileTickets } from "./ProfileTickets";
 import s from "./Portfolio.module.css";
+import { coinHref } from "@/components/coin/ident";
 
 export type PortfolioTab = "positions" | "closed" | "created" | "tickets";
 const TABS: readonly PortfolioTab[] = ["positions", "closed", "created", "tickets"];
@@ -402,7 +403,7 @@ function Positions({ rows, own }: { rows: WalletPosition[]; own: boolean }) {
       align: "end",
       hideBelow: "sm",
       render: (p) => (
-        <Button href={`/coin/${p.symbol}`} variant="line" size="sm" className={s.lift} aria-label={`Trade $${p.symbol}`}>
+        <Button href={coinHref(p)} variant="line" size="sm" className={s.lift} aria-label={`Trade $${p.symbol}`}>
           Trade
         </Button>
       ),
@@ -413,7 +414,7 @@ function Positions({ rows, own }: { rows: WalletPosition[]; own: boolean }) {
       columns={columns}
       rows={rows}
       rowKey={(p) => p.mint}
-      rowHref={(p) => `/coin/${p.symbol}`}
+      rowHref={(p) => coinHref(p)}
       rowLabel={(p) => `$${p.symbol}, ${p.name}`}
       caption="Open positions, by value"
       initialSort={{ key: "value", dir: "desc" }}
@@ -509,7 +510,7 @@ function Closed({ rows, own }: { rows: ClosedPosition[]; own: boolean }) {
       columns={columns}
       rows={rows}
       rowKey={(p) => p.mint}
-      rowHref={(p) => `/coin/${p.symbol}`}
+      rowHref={(p) => coinHref(p)}
       rowLabel={(p) => `$${p.symbol}, ${p.name}`}
       caption="Closed positions, last trade first"
       initialSort={{ key: "when", dir: "desc" }}
@@ -588,7 +589,7 @@ function Created({ rows, own, creator, onWithdrawn }: { rows: CreatedCoin[]; own
         columns={columns}
         rows={rows}
         rowKey={(c) => c.mint}
-        rowHref={(c) => `/coin/${c.symbol}`}
+        rowHref={(c) => coinHref(c)}
         rowLabel={(c) => `$${c.symbol}, ${c.name}`}
         caption="Coins this wallet launched, newest first"
         className={s.table}

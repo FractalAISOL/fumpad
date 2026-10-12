@@ -34,6 +34,7 @@ import type {
   TradeRow,
   WalletPosition,
 } from "./types";
+import { mergeCoins, normalizeSymbol } from "../components/coin/ident";
 
 class ApiError extends Error {
   constructor(
@@ -45,6 +46,9 @@ class ApiError extends Error {
 }
 
 type Query = Record<string, string | number | undefined>;
+
+/** One URL path segment (L-2): ids from links and the API are encoded, never spliced raw. */
+const seg = (v: string) => encodeURIComponent(String(v));
 
 export class ApiFumpadData implements FumpadData {
   private readonly base: string;
@@ -100,27 +104,41 @@ export class ApiFumpadData implements FumpadData {
   listCoins(opts: { sort?: CoinSort; status?: "curve" | "graduated" | "all"; limit?: number } = {}): Promise<CoinSummary[]> {
     return this.get("/v1/coins", { sort: opts.sort, status: opts.status, limit: opts.limit });
   }
+  /**
+   * Every coin answering to `symbol`, newest first (H-3). Asks `/v1/coins?symbol=` (the API can
+   * filter server-side; until it does, the newest 200 are filtered here) and adds the API's own
+   * symbol match (`/v1/coins/:symbol`, the oldest), so a squatter and the newer coin both show.
+   */
+  async findCoinsBySymbol(symbol: string): Promise<CoinSummary[]> {
+    const sym = normalizeSymbol(symbol);
+    if (!sym) return [];
+    const [list, one] = await Promise.all([
+      this.get<CoinSummary[]>("/v1/coins", { symbol: sym, sort: "new", status: "all", limit: 200 }),
+      this.maybe<CoinDetail>(`/v1/coins/${seg(sym)}`),
+    ]);
+    return mergeCoins(sym, list, one);
+  }
   getCoin(symbolOrMint: string): Promise<CoinDetail | null> {
-    return this.maybe(`/v1/coins/${encodeURIComponent(symbolOrMint)}`);
+    return this.maybe(`/v1/coins/${seg(symbolOrMint)}`);
   }
   getPriceSeries(mint: Address, range: ChartRange): Promise<PricePoint[]> {
-    return this.get(`/v1/coins/${mint}/prices`, { range });
+    return this.get(`/v1/coins/${seg(mint)}/prices`, { range });
   }
   getHolders(mint: Address, viewer?: Address): Promise<{ total: number; top: Holder[] }> {
-    return this.get(`/v1/coins/${mint}/holders`, { viewer });
+    return this.get(`/v1/coins/${seg(mint)}/holders`, { viewer });
   }
   getRecentFumbles(mint: Address, viewer?: Address): Promise<FumbleRow[]> {
-    return this.get(`/v1/coins/${mint}/fumbles`, { viewer });
+    return this.get(`/v1/coins/${seg(mint)}/fumbles`, { viewer });
   }
   getClaimQueue(mint: Address, viewer?: Address): Promise<{ pool: number; owed: number; entries: QueueEntry[] }> {
-    return this.get(`/v1/coins/${mint}/queue`, { viewer });
+    return this.get(`/v1/coins/${seg(mint)}/queue`, { viewer });
   }
   getFeed(opts: { kind?: FeedKind | "all"; before?: number; limit?: number } = {}): Promise<FeedEvent[]> {
     return this.get("/v1/feed", { kind: opts.kind, before: opts.before === Infinity ? undefined : opts.before, limit: opts.limit });
   }
 
   getRecentTrades(mint: Address, limit?: number): Promise<TradeRow[]> {
-    return this.get(`/v1/coins/${mint}/trades`, { limit });
+    return this.get(`/v1/coins/${seg(mint)}/trades`, { limit });
   }
   getParams(): Promise<ProtocolParams> {
     return this.get("/v1/params");
@@ -209,31 +227,31 @@ export class ApiFumpadData implements FumpadData {
     return this.get("/v1/closest", { limit, viewer });
   }
   getTickets(owner: Address): Promise<Ticket[]> {
-    return this.get(`/v1/wallets/${owner}/tickets`);
+    return this.get(`/v1/wallets/${seg(owner)}/tickets`);
   }
   getTicket(id: Address): Promise<Ticket | null> {
-    return this.maybe(`/v1/tickets/${id}`);
+    return this.maybe(`/v1/tickets/${seg(id)}`);
   }
   getLeaderboard(board: Board, viewer?: Address): Promise<LeaderRow[]> {
-    return this.get(`/v1/leaderboards/${board}`, { viewer });
+    return this.get(`/v1/leaderboards/${seg(board)}`, { viewer });
   }
   getProfile(addressOrName: string): Promise<Profile | null> {
-    return this.maybe(`/v1/profiles/${encodeURIComponent(addressOrName)}`);
+    return this.maybe(`/v1/profiles/${seg(addressOrName)}`);
   }
   getPositions(wallet: Address): Promise<WalletPosition[]> {
-    return this.get(`/v1/wallets/${wallet}/positions`);
+    return this.get(`/v1/wallets/${seg(wallet)}/positions`);
   }
   getClosedPositions(wallet: Address): Promise<ClosedPosition[]> {
-    return this.get(`/v1/wallets/${wallet}/closed`);
+    return this.get(`/v1/wallets/${seg(wallet)}/closed`);
   }
   getCreatedCoins(wallet: Address): Promise<CreatedCoin[]> {
-    return this.get(`/v1/wallets/${wallet}/created`);
+    return this.get(`/v1/wallets/${seg(wallet)}/created`);
   }
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote> {
     return this.get("/v1/quote", { mint: args.mint, side: args.side, amount: args.amount, wallet: args.wallet });
   }
   getBalances(wallet: Address, mint: Address): Promise<{ sol: number; tokens: number; maturedTokens: number }> {
-    return this.get(`/v1/wallets/${wallet}/balances/${mint}`);
+    return this.get(`/v1/wallets/${seg(wallet)}/balances/${seg(mint)}`);
   }
   getStatus(): Promise<SystemStatus> {
     return this.get("/v1/status");

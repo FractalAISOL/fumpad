@@ -1029,6 +1029,12 @@ export class MockFumpadData implements FumpadData {
     return limit ? list.slice(0, limit) : list;
   }
 
+  async findCoinsBySymbol(symbol: string) {
+    const c = SPEC_BY_SYMBOL.get(symbol.toUpperCase().replace(/^\$/, ""));
+    if (c) watch(c);
+    return c ? [summary(c)] : [];
+  }
+
   async getCoin(symbolOrMint: string) {
     const c = specOf(symbolOrMint);
     watch(c);
@@ -1118,7 +1124,7 @@ export class MockFumpadData implements FumpadData {
   }
 
   async getLeaderboard(board: Board, viewer?: Address) {
-    return boardRows(board).map((row, i) => ({ ...row, rank: i + 1, isYou: viewer ? row.address === viewer : false }));
+    return boardRows(board).map((row, i) => ({ ...row, mint: row.symbol ? mintAddress(row.symbol) : undefined, rank: i + 1, isYou: viewer ? row.address === viewer : false }));
   }
 
   async getProfile(addressOrName: string) {
