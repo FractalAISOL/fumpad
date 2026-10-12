@@ -95,6 +95,20 @@
   height: 32px;
   background: var(--ink-3);
 }
+.pLegend {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" var(--wdth-numTight);
+  font-size: 10px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
 .pMark span {
   position: absolute;
   top: 34px;

@@ -65,12 +65,17 @@ export function PoolMeter({ pool, needed, symbol }: { pool: number; needed: numb
       <div className={s.pHave} style={{ width: `${have}%` }} />
       {short && <div className={s.pGap} style={{ left: `${have}%`, right: 0 }} />}
       <div className={s.pMark} style={{ left: `${have}%` }} aria-hidden="true">
-        <span style={have > 70 ? { transform: "translateX(-100%)" } : undefined}>pool {f.compact(pool)}</span>
+        {!short && <span style={have > 70 ? { transform: "translateX(-100%)" } : undefined}>pool {f.compact(pool)}</span>}
       </div>
       {short && (
-        <div className={s.pMark} style={{ left: "100%" }} aria-hidden="true">
-          <span style={{ transform: "translateX(-100%)" }}>{f.compact(needed)} needed</span>
-        </div>
+        <>
+          <div className={s.pMark} style={{ left: "100%" }} aria-hidden="true" />
+          {/* Both labels in one row so they can never overlap, whatever the pool/needed ratio. */}
+          <div className={s.pLegend} aria-hidden="true">
+            <span>pool {f.compact(pool)}</span>
+            <span>{f.compact(needed)} needed</span>
+          </div>
+        </>
       )}
     </div>
   );
