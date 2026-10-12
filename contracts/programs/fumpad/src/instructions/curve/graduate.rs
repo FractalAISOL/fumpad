@@ -44,7 +44,11 @@ pub const GRADUATION_RENT_BUDGET: u64 = 50_000_000;
 /// A fee too small for all of it leaves the shortfall to whoever runs the init calls
 /// (the keeper), exactly as before D20.
 ///
-/// remaining_accounts: appended verbatim to the PumpSwap CPI (forward compatibility).
+/// L-1 (v0.6): no remaining accounts; every account of the PumpSwap `create_pool` CPI (which
+/// `pool_authority` signs) is pinned here — pool, LP mint, the pool authority's LP ATA, the
+/// pool vaults (ATAs of the pool) and PumpSwap's event authority — so no other account ever
+/// rides along under that signature. The creator stays `pool_authority`: every existing
+/// pool's address is derived from it, and the immutable locker requires it as `lock` signer.
 #[event_cpi]
 #[derive(Accounts)]
 pub struct Graduate<'info> {
@@ -102,15 +106,15 @@ pub struct Graduate<'info> {
     #[account(mut)]
     pub pool_authority_lp: UncheckedAccount<'info>,
 
-    /// CHECK: pool's base vault (ATA); validated by PumpSwap.
+    /// CHECK: pool's base vault = ATA(pool, mint, Token-2022); checked in the handler (L-1).
     #[account(mut)]
     pub pool_base_vault: UncheckedAccount<'info>,
 
-    /// CHECK: pool's quote vault (ATA); validated by PumpSwap.
+    /// CHECK: pool's quote vault = ATA(pool, WSOL, SPL Token); checked in the handler (L-1).
     #[account(mut)]
     pub pool_quote_vault: UncheckedAccount<'info>,
 
-    /// CHECK: PumpSwap event authority; validated by PumpSwap.
+    /// CHECK: PumpSwap event authority PDA; checked in the handler (L-1).
     pub amm_event_authority: UncheckedAccount<'info>,
 
     /// CHECK: the PumpSwap program.
@@ -171,6 +175,13 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     require_keys_eq!(a.lp_mint.key(), lp_mint, FumpadError::WrongVenue);
     let lp_ata = get_associated_token_address_with_program_id(&pa_key, &lp_mint, &a.token_program.key());
     require_keys_eq!(a.pool_authority_lp.key(), lp_ata, FumpadError::InvalidAccount);
+    // L-1: pin the rest of the create_pool account list (no foreign account under our signature).
+    require!(ctx.remaining_accounts.is_empty(), FumpadError::InvalidAccount);
+    let base_vault = get_associated_token_address_with_program_id(&pool, &mint_key, &a.token_program.key());
+    require_keys_eq!(a.pool_base_vault.key(), base_vault, FumpadError::WrongVenue);
+    let quote_vault = get_associated_token_address_with_program_id(&pool, &WSOL_MINT, &a.quote_token_program.key());
+    require_keys_eq!(a.pool_quote_vault.key(), quote_vault, FumpadError::WrongVenue);
+    require_keys_eq!(a.amm_event_authority.key(), pumpswap::event_authority_pda(), FumpadError::WrongVenue);
 
     let pa_bump = [ctx.bumps.pool_authority];
     let pa_seeds: &[&[u8]] = &[POOL_AUTHORITY_SEED, &pa_bump];
@@ -241,7 +252,6 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
             can_edit_creator_fee: false,
             is_holder_reward: false,
         },
-        ctx.remaining_accounts,
         signer,
     )?;
 

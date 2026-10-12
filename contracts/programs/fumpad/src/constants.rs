@@ -21,6 +21,11 @@ pub const OBSERVATIONS_SEED: &[u8] = b"observations"; // ["observations", mint]
 pub const CLAIM_QUEUE_SEED: &[u8] = b"claim_queue"; // ["claim_queue", mint]
 #[constant]
 pub const POOL_AUTHORITY_SEED: &[u8] = b"pool_authority"; // ["pool_authority"] — creator of PumpSwap pools + signer for program-owned token moves
+/// L-1 (v0.6): ["pumpswap_signer"] — the PumpSwap `user` of `execute_buyback`. Owns only its
+/// WSOL ATA (and its PumpSwap volume accumulator): a PumpSwap CPI it signs can't touch any
+/// reward vault, curve vault or escrow (those belong to `pool_authority`).
+#[constant]
+pub const PUMPSWAP_SIGNER_SEED: &[u8] = b"pumpswap_signer";
 #[constant]
 pub const ESCROW_SEED: &[u8] = b"escrow"; // ["escrow", ticket] — D16 per-ticket escrow token account
 #[constant]

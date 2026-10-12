@@ -1,7 +1,8 @@
-//! Final internal pre-mainnet review (2026-10-12, v0.5). Each `issue_*` test demonstrates a
-//! finding and PASSES WHILE THE ISSUE EXISTS — when a fix lands, flip the assertions into a
-//! `regression_*` test (as `review_*.rs` / `redteam_custody.rs` do). No program code was
-//! changed for this review.
+//! Final internal pre-mainnet review (2026-10-12, v0.5; report: contracts/FINAL_REVIEW.md).
+//! Every finding is fixed in v0.6: each former `issue_*` reproduction is now a `regression_*`
+//! test that runs the original scenario and asserts the fix (doc comments keep the finding
+//! text, followed by "FIXED (v0.6)"). L-5 is covered in `curve_tests`
+//! (`graduate_is_permissionless_and_has_its_own_pause`).
 //!
 //! The PumpSwap-dependent tests also pass against the MAINNET PumpSwap + pump-fees binaries
 //! and mainnet GlobalConfig / FeeConfig (dumped 2026-10-12; swap them into `fixtures/`).
@@ -367,14 +368,21 @@ fn regression_late_pyth_heartbeat_still_files_the_ticket() {
 /// PDA per coin that only owns its WSOL account; a pool-creator PDA that only holds the
 /// in-flight graduation funds), cap the forwarded slice to PumpSwap's exact account count,
 /// and never forward caller-supplied extras under a PDA signature.
+///
+/// FIXED (v0.6): `execute_buyback` signs with ["pumpswap_signer"] (owns only its WSOL ATA)
+/// and forwards exactly the 17 `buy_exact_quote_in_v2` accounts; `graduate` forwards exactly
+/// PumpSwap's 18 `create_pool` accounts, each pinned (pool vaults = ATAs of the pool, event
+/// authority PDA), and refuses remaining accounts. `pool_authority` stays the pool creator
+/// (existing pools' addresses and the immutable locker's `lock` signer check depend on it).
 #[test]
-fn issue_pool_authority_signs_pumpswap_cpi_with_foreign_vaults_attached() {
-    let (mut f, _) = graduated();
-    // A second coin: its reward vault is owned by the same pool_authority PDA.
+fn regression_pumpswap_cpis_carry_no_foreign_accounts() {
+    let (mut f, _) = completed();
+    // A second coin: its reward vault and curve vault are owned by the same pool_authority PDA.
     let other_mint = Keypair::new();
     let om = kp_pk(&other_mint);
     let creator = f.env.new_user(10);
     let other_vault = fpda(&[fumpad::REWARD_VAULT_SEED, om.as_ref()]);
+    let other_curve = fpda(&[fumpad::CURVE_VAULT_SEED, om.as_ref()]);
     let i = ix(
         fumpad::accounts::CreateCoin {
             creator: kp_pk(&creator),
@@ -384,7 +392,7 @@ fn issue_pool_authority_signs_pumpswap_cpi_with_foreign_vaults_attached() {
             coin: fpda(&[fumpad::COIN_SEED, om.as_ref()]),
             pool_authority: pool_authority(),
             reward_vault: other_vault,
-            curve_vault: fpda(&[fumpad::CURVE_VAULT_SEED, om.as_ref()]),
+            curve_vault: other_curve,
             token_program: T22,
             system_program: SYSTEM,
             event_authority: event_authority(),
@@ -393,7 +401,18 @@ fn issue_pool_authority_signs_pumpswap_cpi_with_foreign_vaults_attached() {
         fumpad::instruction::CreateCoin { name: "Other".into(), symbol: "OTH".into(), uri: "".into() },
     );
     ok(f.env.send(&[i], &[&creator, &other_mint]));
-    assert_eq!(token_balance(&f.env, &other_vault), Params::default().reward_pool_supply);
+
+    // graduate: no extras, no substituted pool vaults / event authority.
+    let mut i = f.graduate_ix();
+    i.accounts.push(solana_instruction::AccountMeta::new(addr(&other_vault), false));
+    expect_err(f.env.send(&[cu_limit(400_000), i], &[]), FumpadError::InvalidAccount);
+    for (idx, key) in [(12usize, other_vault), (13, other_curve), (14, Pubkey::new_unique())] {
+        let mut i = f.graduate_ix();
+        i.accounts[idx].pubkey = addr(&key);
+        expect_err(f.env.send(&[cu_limit(400_000), i], &[]), FumpadError::WrongVenue);
+    }
+    ok(f.graduate());
+    f.post_graduation_setup();
 
     // Build buyback fees, then the keeper median.
     let t = f.env.new_user(100);
@@ -401,40 +420,50 @@ fn issue_pool_authority_signs_pumpswap_cpi_with_foreign_vaults_attached() {
     f.keeper_samples(124, 15);
     assert!(f.coin_state().buyback_lamports > 0);
 
-    // Permissionless crank whose venue slice carries the OTHER coin's reward vault (writable)
-    // and curve vault as extra accounts: they reach PumpSwap inside the pool_authority-signed CPI.
-    let pa = pool_authority();
-    let cranker = f.env.new_user(1);
-    let mut venue = f.venue(pa, f.reward_vault, ata(&pa, &WSOL_MINT, &TOKEN));
+    let ps = pumpswap_signer();
+    let buyback = |f: &mut Flow, venue: Vec<Meta>| {
+        let cranker = f.env.new_user(1);
+        let i = ix_with_remaining(
+            fumpad::accounts::ExecuteBuyback {
+                cranker: kp_pk(&cranker),
+                global: f.env.global_pda(),
+                coin: f.coin,
+                mint: f.mint,
+                observations: f.observations,
+                reward_vault: f.reward_vault,
+                pumpswap_signer: ps,
+                buyback_wsol: ata(&ps, &WSOL_MINT, &TOKEN),
+                wsol_mint: WSOL_MINT,
+                pumpswap_program: PUMPSWAP_PROGRAM_ID,
+                token_program: TOKEN,
+                token_2022_program: T22,
+                associated_token_program: ATA_PROGRAM,
+                system_program: SYSTEM,
+                event_authority: event_authority(),
+                program: fumpad::ID,
+            },
+            fumpad::instruction::ExecuteBuyback { max_lamports: u64::MAX },
+            &venue,
+        );
+        f.env.send_as(&cranker, &[cu_limit(1_400_000), i], &[&cranker])
+    };
+    // Foreign vaults appended to the slice: refused (exactly 17 accounts under a PDA signature).
+    let mut venue = f.venue(ps, f.reward_vault, ata(&ps, &WSOL_MINT, &TOKEN));
     venue.push(w(other_vault));
-    venue.push(w(fpda(&[fumpad::CURVE_VAULT_SEED, om.as_ref()])));
-    let i = ix_with_remaining(
-        fumpad::accounts::ExecuteBuyback {
-            cranker: kp_pk(&cranker),
-            global: f.env.global_pda(),
-            coin: f.coin,
-            mint: f.mint,
-            observations: f.observations,
-            reward_vault: f.reward_vault,
-            pool_authority: pa,
-            buyback_wsol: ata(&pa, &WSOL_MINT, &TOKEN),
-            wsol_mint: WSOL_MINT,
-            pumpswap_program: PUMPSWAP_PROGRAM_ID,
-            token_program: TOKEN,
-            token_2022_program: T22,
-            associated_token_program: ATA_PROGRAM,
-            system_program: SYSTEM,
-            event_authority: event_authority(),
-            program: fumpad::ID,
-        },
-        fumpad::instruction::ExecuteBuyback { max_lamports: u64::MAX },
-        &venue,
-    );
-    // Accepted: the whole slice (incl. the foreign vaults, writable) is forwarded to PumpSwap
-    // in the CPI that pool_authority signs (`invoke_venue` forwards up to 40 accounts).
-    let m = ok(f.env.send_as(&cranker, &[cu_limit(1_400_000), i], &[&cranker]));
+    venue.push(w(other_curve));
+    expect_err(buyback(&mut f, venue), FumpadError::WrongVenue);
+    // The PumpSwap `user` must be the dedicated signer, not pool_authority.
+    let pa = pool_authority();
+    let v = f.venue(pa, f.reward_vault, ata(&ps, &WSOL_MINT, &TOKEN));
+    expect_err(buyback(&mut f, v), FumpadError::WrongVenue);
+    // The exact slice works; pool_authority is not a signer of anything in the transaction.
+    let v = f.venue(ps, f.reward_vault, ata(&ps, &WSOL_MINT, &TOKEN));
+    let m = ok(buyback(&mut f, v));
     assert_eq!(events::<fumpad::events::BuybackExecuted>(&m).len(), 1);
-    assert_eq!(token_balance(&f.env, &other_vault), Params::default().reward_pool_supply, "untouched — today");
+    assert_eq!(token_balance(&f.env, &other_vault), Params::default().reward_pool_supply);
+    // The signer holds nothing but its WSOL ATA (dust): no lamports, no data.
+    let s = f.env.account(&ps).map(|a| (a.lamports, a.data.len())).unwrap_or((0, 0));
+    assert_eq!(s, (0, 0));
 }
 
 /// [L-2] `Params::is_valid` accepts values that silently disable or break protocol features
