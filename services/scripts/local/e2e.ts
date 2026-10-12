@@ -97,14 +97,16 @@ export async function runE2E(
       }),
     );
     const auth = keypair("upgrade-authority");
-    v = await startValidator({ rpcPort, upgradeAuthority: auth });
+    const admin = Keypair.generate();
+    const treasury = Keypair.generate();
+    const keeper = keypair("keeper");
+    // v0.6: LOCAL_PARAMS (short windows) are outside the on-chain bounds → seeded into the genesis.
+    const global = { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: [keeper.publicKey], params: LOCAL_PARAMS };
+    v = await startValidator({ rpcPort, upgradeAuthority: auth, global });
     const conn = new Connection(v.rpcUrl, "confirmed");
     const c = new FumpadClient(conn);
 
     // Actors: each funded by its own funder wallet so the funding graph is realistic.
-    const admin = Keypair.generate();
-    const treasury = Keypair.generate();
-    const keeper = keypair("keeper");
     const [creator, alice, bob, dave, eve, whale] = Array.from({ length: 6 }, () => Keypair.generate());
     const carol = Keypair.generate(); // creator's alt: funded BY the creator
     for (const k of [auth, admin, keeper]) await airdrop(conn, k.publicKey, 100);
@@ -203,18 +205,26 @@ export async function runE2E(
     // D17 (8% pool): eve buys enough that her claim stays > 10% of the pool (queued).
     await buy(alice, 1n);
     await buy(eve, 4n);
-    await sleep(3_500); // > min_hold_secs (2 s) on the chain clock
+    // > min_hold_secs on the CHAIN clock (it can lag the wall clock on a busy machine — the
+    // grinder burns 6 cores at this point — and then the first sells silently file no ticket).
+    const holdOver = async () => {
+      const t = await c.chainTime();
+      await waitFor("hold period on the chain clock", async () => (await c.chainTime()) > t + LOCAL_PARAMS.minHoldSecs + 1n, 30_000, 300);
+    };
+    await holdOver();
     const aliceSell = await sellPart(alice, 1n, 2n);
     const eveSell = await sellPart(eve, 19n, 20n);
     await buy(carol, 1n);
     await buy(dave, 1n);
     await buy(bob, 1n);
     log("✓ launch + 5 curve buys");
-    await sleep(3_500);
+    await holdOver();
     const carolSell = await sellPart(carol, 1n, 2n);
     const daveSell = await sellPart(dave, 1n, 2n);
     const bobTiny = await c.send(bob, await c.buildSell({ user: bob.publicKey, mint, tokensIn: 1_000_000n })); // ≈ $0.0x → no ticket
-    check("curve sells create tickets (matured, ≥ $50)", [aliceSell, eveSell, carolSell, daveSell].every((s) => s.events.some((e) => e.name === "TicketCreated")));
+    const sells = { alice: aliceSell, eve: eveSell, carol: carolSell, dave: daveSell };
+    const noTicket = Object.entries(sells).filter(([, s]) => !s.events.some((e) => e.name === "TicketCreated")).map(([n]) => n);
+    check("curve sells create tickets (matured, ≥ $50)", noTicket.length === 0, noTicket.length ? `no ticket: ${noTicket.join(", ")}` : undefined);
     const bobTx = await conn.getTransaction(bobTiny, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
     check("sell under $50 files no ticket", !decodeTransactionEvents(bobTx as unknown as TxLike).some((e) => e.name === "TicketCreated"));
     // D17: auto-claim is on by default; eve opts out on this coin and will claim by hand.
@@ -379,6 +389,23 @@ export async function runE2E(
       return [seed.toString("hex"), seed.toString("base64"), bs58.encode(seed), bs58.encode(Keypair.fromSeed(seed).secretKey), Array.from(seed).join(",")].some((n) => allLogs.includes(n));
     });
     check("no mint secret in any service log", !leaked && allLogs.includes("launch prepared"), `${left.length} pooled secrets checked against ${allLogs.length} log bytes`);
+
+    // The keeper must end healthy: no job failing at all (health flags a job at 3 consecutive
+    // failures; here not even one is tolerated by the end) — e.g. post-graduation setup of
+    // every graduated coin done.
+    type KeeperHealth = { failingJobs: string[]; jobs: Record<string, { failures: number; lastErr?: string }> };
+    const keeperHealthy = await waitFor("keeper healthy (no failing job)", async () => {
+      const h = (await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json()) as KeeperHealth;
+      return h.failingJobs.length === 0 && Object.values(h.jobs).every((j) => j.failures === 0) ? h : undefined;
+    }, 60_000, 2_000).then(
+      () => ({ ok: true, detail: "" }),
+      async () => {
+        const h = (await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json()) as KeeperHealth;
+        const bad = Object.entries(h.jobs).filter(([, j]) => j.failures > 0);
+        return { ok: false, detail: bad.map(([k, j]) => `${k} ×${j.failures}: ${j.lastErr}`).join(" ; ") };
+      },
+    );
+    check("keeper health: no failing jobs at the end", keeperHealthy.ok, keeperHealthy.detail);
 
     const counts: Record<string, number> = {};
     for (const t of ["vanity_mints", "transactions", "events", "coins", "trades", "tickets", "claims", "queue_entries", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) counts[t] = await countRows(pg.url, t);

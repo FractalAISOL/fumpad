@@ -99,7 +99,10 @@ export type FumpadLpLocker = {
           }
         },
         {
-          "name": "pool"
+          "name": "pool",
+          "docs": [
+            "creator checked in the handler."
+          ]
         },
         {
           "name": "lpMint"

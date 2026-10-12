@@ -68,30 +68,89 @@ export const DEFAULT_PARAMS: Params = {
   buybackMaxDeviationBps: 300,
   buybackMaxPoolBps: 50,
   solUsdFeedId: PYTH_SOL_USD_FEED_ID,
-  maxPriceAgeSecs: 60n,
+  maxPriceAgeSecs: 150n, // v0.6 M-4 (was 60)
   snipeWindowSlots: 4,
   snipeStartBps: 9_900,
 };
 
-/** Mirror of `Params::is_valid` (initialize / queue / execute), incl. the D14 caps. */
+/**
+ * v0.6 (M-1 / L-2) `Params::is_valid` ranges (contracts constants.rs, inclusive). A queued or
+ * initial params set outside them is refused on chain (`InvalidParams`).
+ */
+export const PARAM_BOUNDS = {
+  triggerMultipleBps: [50_000, 500_000], // 5x–50x
+  claimBps: [100, 2_500], // 1–25% of the ticket
+  maxClaimPoolBps: [100, 2_500], // 1–25% of the pool per claim
+  minSellUsdCents: [500n, 100_000n], // $5–$1,000
+  minHoldSecs: [60n, 86_400n],
+  rebuyWindowSecs: [86_400n, 30n * 86_400n],
+  claimWindowSecs: [7n * 86_400n, 365n * 86_400n],
+  maxOpenTickets: [1, 5],
+  oracleWindowSecs: [600n, 7_200n],
+  oracleMinSpacingSecs: [5n, 60n],
+  keeperStaleSecs: [60n, 3_600n],
+  buybackMaxDeviationBps: [10, 1_000],
+  buybackMaxPoolBps: [1, 200],
+  maxPriceAgeSecs: [30n, 300n],
+} as const;
+/** Coverage floor: ≥ one keeper sample per this many seconds of the oracle window. */
+export const ORACLE_MIN_SAMPLE_EVERY_SECS = 60n;
+/** D20 continuity / `graduation_lamports` tolerance, bps. */
+export const CURVE_CONSISTENCY_TOLERANCE_BPS = 10n;
+
+const inRange = <T extends number | bigint>(v: T, [lo, hi]: readonly [T, T]) => v >= lo && v <= hi;
+
+/**
+ * Mirror of `Params::curve_consistent`: graduation_lamports ≈ the raise the curve implies, raise >
+ * graduation fee, and the LP opening price ≈ the curve's final price (within 10 bps).
+ */
+export function curveConsistent(p: Params): boolean {
+  const close = (a: bigint, b: bigint) => (a > b ? a - b : b - a) * 10_000n <= b * CURVE_CONSISTENCY_TOLERANCE_BPS;
+  const t1 = p.initialVirtualToken - p.curveSupply;
+  if (t1 <= 0n || p.initialVirtualSol <= 0n) return false;
+  const v1 = (p.initialVirtualSol * p.initialVirtualToken) / t1;
+  const raise = v1 - p.initialVirtualSol;
+  if (raise <= p.graduationFeeLamports || !close(p.graduationLamports, raise)) return false;
+  return close((raise - p.graduationFeeLamports) * t1, v1 * p.lpSupply);
+}
+
+/** Mirror of `Params::is_valid` (initialize / queue / execute): D14 caps + v0.6 bounds + D20 continuity. */
 export function paramsValid(p: Params): boolean {
-  return (
+  const fees =
     p.graduationFeeLamports <= 1_000_000_000n &&
     p.feeBps <= 200 &&
-    p.feePoolShareBps + p.feePlatformShareBps + p.feeCreatorShareBps === 10_000 &&
-    p.feeBps < 10_000 &&
+    p.feePoolShareBps + p.feePlatformShareBps + p.feeCreatorShareBps === 10_000;
+  const supply =
     p.rewardPoolSupply + p.curveSupply + p.lpSupply === p.totalSupply &&
+    p.rewardPoolSupply > 0n &&
+    p.lpSupply > 0n &&
+    p.curveSupply > 0n &&
     p.initialVirtualToken > p.curveSupply &&
     p.initialVirtualSol > 0n &&
-    p.graduationLamports > p.graduationFeeLamports &&
-    p.triggerMultipleBps > 10_000 &&
-    p.claimBps <= 10_000 &&
-    p.maxClaimPoolBps <= 10_000 &&
-    p.maxOpenTickets <= 5 &&
-    p.oracleMinSpacingSecs > 0n &&
-    p.oracleWindowSecs > p.oracleMinSpacingSecs &&
+    curveConsistent(p);
+  const b = PARAM_BOUNDS;
+  const rewards =
+    inRange(p.triggerMultipleBps, b.triggerMultipleBps) &&
+    inRange(p.claimBps, b.claimBps) &&
+    inRange(p.maxClaimPoolBps, b.maxClaimPoolBps) &&
+    inRange(p.minSellUsdCents, b.minSellUsdCents) &&
+    inRange(p.minHoldSecs, b.minHoldSecs) &&
+    inRange(p.rebuyWindowSecs, b.rebuyWindowSecs) &&
+    inRange(p.claimWindowSecs, b.claimWindowSecs) &&
+    inRange(p.maxOpenTickets, b.maxOpenTickets);
+  const n = BigInt(p.oracleMinSamples);
+  const oracle =
+    inRange(p.oracleWindowSecs, b.oracleWindowSecs) &&
+    inRange(p.oracleMinSpacingSecs, b.oracleMinSpacingSecs) &&
+    n * ORACLE_MIN_SAMPLE_EVERY_SECS >= p.oracleWindowSecs &&
+    n <= p.oracleWindowSecs / p.oracleMinSpacingSecs &&
     p.oracleMinSamples <= 256 &&
-    p.snipeWindowSlots <= 50 &&
-    p.snipeStartBps <= 9_900
-  );
+    inRange(p.keeperStaleSecs, b.keeperStaleSecs) &&
+    p.keeperStaleSecs > p.oracleMinSpacingSecs &&
+    inRange(p.buybackMaxDeviationBps, b.buybackMaxDeviationBps) &&
+    inRange(p.buybackMaxPoolBps, b.buybackMaxPoolBps) &&
+    p.buybackMaxDeviationBps + 100 + 2 * p.buybackMaxPoolBps < 10_000;
+  const pyth = p.solUsdFeedId.toLowerCase() === PYTH_SOL_USD_FEED_ID && inRange(p.maxPriceAgeSecs, b.maxPriceAgeSecs);
+  const snipe = p.snipeWindowSlots <= 50 && p.snipeStartBps <= 9_900;
+  return fees && supply && rewards && oracle && pyth && snipe;
 }

@@ -10,11 +10,18 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Connection, Keypair } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 
 import {
+  bn,
+  DEFAULT_PARAMS,
   FUMPAD_PROGRAM_ID,
+  fumpadCoder,
+  globalPda,
   LP_LOCKER_PROGRAM_ID,
+  MAX_KEEPERS,
+  type Params,
+  paramsToIdl,
   PUMP_FEES_PROGRAM_ID,
   PUMPSWAP_PROGRAM_ID,
   PYTH_RECEIVER_PROGRAM_ID,
@@ -62,6 +69,36 @@ export function writePythFixture(usd: number): string {
   return out;
 }
 
+/**
+ * v0.6: `Params::is_valid` bounds (oracle window ≥ 10 min, hold ≥ 1 min, …) refuse the short test
+ * windows a local run needs, so the local Global is written into the genesis instead of going
+ * through `initialize_global` (the program stays strict; only this test chain is pre-seeded).
+ */
+export interface GlobalPreload {
+  admin: PublicKey;
+  platformTreasury: PublicKey;
+  keepers: PublicKey[];
+  params: Params;
+}
+
+export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
+  const keepers = [...g.keepers];
+  while (keepers.length < MAX_KEEPERS) keepers.push(PublicKey.default);
+  const data = await fumpadCoder().accounts.encode("Global", {
+    bump: PublicKey.findProgramAddressSync([Buffer.from("global")], FUMPAD_PROGRAM_ID)[1],
+    admin: g.admin, platform_treasury: g.platformTreasury, keepers, paused: 0, params: paramsToIdl(g.params),
+    guardian: g.admin, pause_expires_at: bn(0n), pending_admin_eta: bn(0n), reserved: new Array(80).fill(0),
+    pending_params: paramsToIdl(DEFAULT_PARAMS), pending_eta: bn(0n),
+    pending_admin: PublicKey.default, pending_treasury: PublicKey.default, pending_guardian: PublicKey.default,
+  });
+  const out = join(LOCAL, "global_local.json");
+  writeFileSync(out, JSON.stringify({
+    pubkey: globalPda().toBase58(),
+    account: { lamports: (data.length + 128) * 6960, data: [data.toString("base64"), "base64"], owner: FUMPAD_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0, space: data.length },
+  }));
+  return out;
+}
+
 export interface Validator {
   rpcUrl: string;
   wsUrl: string;
@@ -69,7 +106,7 @@ export interface Validator {
   stop(): Promise<void>;
 }
 
-export async function startValidator(opts: { rpcPort?: number; upgradeAuthority: Keypair; solUsd?: number }): Promise<Validator> {
+export async function startValidator(opts: { rpcPort?: number; upgradeAuthority: Keypair; solUsd?: number; global?: GlobalPreload }): Promise<Validator> {
   const rpcPort = opts.rpcPort ?? 8899;
   const deploy = join(CONTRACTS, "target/deploy");
   for (const so of ["fumpad.so", "fumpad_lp_locker.so"]) {
@@ -101,6 +138,7 @@ export async function startValidator(opts: { rpcPort?: number; upgradeAuthority:
     "--account", "-", join(FIXTURES, "pump_amm_global_config.json"),
     "--account", "-", join(FIXTURES, "pump_fees_fee_config_amm.json"),
     "--account", "-", pyth,
+    ...(opts.global ? ["--account", "-", await writeGlobalFixture(opts.global)] : []),
   ];
   const proc = spawn("solana-test-validator", args, { env: { ...process.env, PATH }, stdio: ["ignore", "ignore", "pipe"], cwd: LOCAL });
   let stderr = "";

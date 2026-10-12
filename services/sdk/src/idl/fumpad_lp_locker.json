@@ -93,7 +93,10 @@
           }
         },
         {
-          "name": "pool"
+          "name": "pool",
+          "docs": [
+            "creator checked in the handler."
+          ]
         },
         {
           "name": "lp_mint"

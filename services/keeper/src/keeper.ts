@@ -42,11 +42,13 @@ import {
   BPS_DENOM,
   type CoinAccount,
   coinAddresses,
+  coinRewardParams,
   decodeCoin,
   decodeObservations,
   decodePumpPool,
   decodeTokenAccount,
   FumpadClient,
+  isPaused,
   LOCKER_ERROR,
   FUMPAD_ERROR,
   MAX_SAMPLE_COINS,
@@ -146,6 +148,7 @@ export class Keeper {
   private params?: Params;
   private pendingEta = 0n;
   private paused = 0;
+  private pauseExpiresAt = 0n;
   private lastScan = 0;
   private lastTicketScan = 0;
   private chainNow = 0n;
@@ -256,6 +259,7 @@ export class Keeper {
       this.params = g.params;
       this.pendingEta = g.pendingEta;
       this.paused = g.paused;
+      this.pauseExpiresAt = g.pauseExpiresAt;
       const all = await this.client.scanCoins();
       for (const c of all) {
         const k = c.mint.toBase58();
@@ -279,9 +283,11 @@ export class Keeper {
     if (now - this.lastTicketScan > this.cfg.ticketScanIntervalSecs * 1000) {
       const open = await this.client.scanOpenTickets();
       const byMint = new Map<string, { min: bigint; n: number }>();
-      const trig = BigInt(this.params!.triggerMultipleBps);
       for (const { ticket } of open) {
         const k = ticket.mint.toBase58();
+        // v0.6 (M-1): each coin's snapshotted trigger, not the global one.
+        const known = this.coins.get(k);
+        const trig = BigInt((known ? coinRewardParams(known.coin, this.params!) : this.params!).triggerMultipleBps);
         const t = (ticket.sellPriceQ64 * trig) / BPS_DENOM;
         const e = byMint.get(k);
         byMint.set(k, { min: e && e.min < t ? e.min : t, n: (e?.n ?? 0) + 1 });
@@ -425,7 +431,7 @@ export class Keeper {
           const steps = await this.client.buildPostGraduation({ payer: this.keeperKey, mint: c.mint });
           for (const s of steps) {
             const r = await this.sender.send("post_graduation", s);
-            if (!r.ok) throw new Error(`post-graduation setup failed: ${r.error}`);
+            if (!r.ok) throw new Error(`post-graduation setup failed: ${r.error} :: ${(r.logs ?? []).slice(-4).join(" | ")}`);
           }
           c.setupDone = !this.cfg.dryRun || steps.length === 0;
           return steps.length;
@@ -472,7 +478,7 @@ export class Keeper {
       const q = await this.client.claimQueue(c.mint);
       if (!q || q.len === 0) continue;
       const pool = await this.client.tokenBalance(coinAddresses(c.mint).rewardVault);
-      const cap = (pool * BigInt(p.maxClaimPoolBps)) / BPS_DENOM;
+      const cap = (pool * BigInt(coinRewardParams(c.coin, p).maxClaimPoolBps)) / BPS_DENOM; // M-1: per-coin cap
       if (!q.entries.some((e) => e.amount > 0n && e.amount <= cap && e.amount <= pool)) continue;
       n += await this.guard(`queue:${c.mint.toBase58()}`, async () => {
         const b = await this.client.buildProcessQueue({ cranker: this.keeperKey, mint: c.mint });
@@ -493,7 +499,7 @@ export class Keeper {
 
   async runAutoClaims(): Promise<number> {
     const p = this.params!;
-    if (this.paused & PAUSE_CLAIMS) return 0;
+    if (isPaused({ paused: this.paused, pauseExpiresAt: this.pauseExpiresAt }, PAUSE_CLAIMS, this.chainNow)) return 0; // v0.6: pauses lapse
     const skip = AUTOCLAIM_SKIP();
     let n = 0;
     for (const c of this.coins.values()) {
@@ -514,7 +520,7 @@ export class Keeper {
       const optedOut = new Set(owners.filter((_, i) => infos[i] && decodePosition(new Uint8Array(infos[i]!.data)).autoClaimOptOut === 1).map((o) => o.toBase58()));
       const queuedPerOwner = new Map<string, number>();
       for (const e of queue.entries) queuedPerOwner.set(e.owner.toBase58(), (queuedPerOwner.get(e.owner.toBase58()) ?? 0) + 1);
-      const picks = planAutoClaims({ tickets: open, optedOut, queuedPerOwner, medianQ64: median, now: this.chainNow, params: p, poolTokens: pool });
+      const picks = planAutoClaims({ tickets: open, optedOut, queuedPerOwner, medianQ64: median, now: this.chainNow, params: coinRewardParams(c.coin, p), poolTokens: pool });
       for (const t of picks.slice(0, this.cfg.autoClaimMaxPerRun)) {
         n += await this.guard(`autoclaim:${t.key.toBase58()}`, async () => {
           const r = await this.sender.send("claim_for", this.client.buildClaimFor({ keeper: this.keeperKey, mint: c.mint, ticket: t.key, owner: t.ticket.owner }));

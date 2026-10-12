@@ -176,6 +176,11 @@ impl Flow {
     }
 
     pub fn with_params(params: Params) -> Self {
+        Self::with_mint(params, Keypair::new())
+    }
+
+    /// Like `with_params`, with a chosen mint keypair (e.g. ground for worst-case PDA bumps).
+    pub fn with_mint(params: Params, mint_kp: Keypair) -> Self {
         let mut env = Env::with_params(params);
         let mut c = env.svm.get_sysvar::<litesvm_clock::Clock>();
         c.unix_timestamp = T0;
@@ -189,7 +194,6 @@ impl Flow {
         put_token_account(&mut env, bfr_ata, WSOL_MINT, bfr, 0, TOKEN);
 
         let creator = env.new_user(10);
-        let mint_kp = Keypair::new();
         let mint = kp_pk(&mint_kp);
         let pa = pool_authority();
         let pool = pool_pda(0, &pa, &mint, &WSOL_MINT);

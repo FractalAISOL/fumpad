@@ -10,7 +10,7 @@ import { FUMPAD_IDL, LP_LOCKER_IDL, fumpadCoder, idlInstruction } from "../src/c
 import { FUMPAD_PROGRAM_ID, PUMPSWAP_PROGRAM_ID } from "../src/constants.js";
 import * as I from "../src/instructions/index.js";
 import { DEFAULT_PARAMS } from "../src/params.js";
-import { coinAddresses, coinAta, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, ticketPda } from "../src/pda.js";
+import { coinAddresses, coinAta, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, pumpswapSignerPda, ticketPda, wsolAta } from "../src/pda.js";
 
 const k = () => Keypair.generate().publicKey;
 const user = k();
@@ -27,7 +27,10 @@ const built: Record<string, [TransactionInstruction, number]> = {
   withdraw_escrow: [I.withdrawEscrowIx({ owner: user, mint, ticket: t1, escrowPayer: k() }), 0],
   set_pause: [I.setPauseIx(user, 3), 0],
   set_keepers: [I.setKeepersIx(user, [user]), 0],
-  set_admin: [I.setAdminIx(user, user, user), 0],
+  propose_admin: [I.proposeAdminIx({ admin: user, newAdmin: k(), platformTreasury: k(), guardian: k() }), 0],
+  accept_admin: [I.acceptAdminIx(user), 0],
+  cancel_admin: [I.cancelAdminIx(user), 0],
+  close_position: [I.closePositionIx({ wallet: user, mint, nextTicketSeq: 3n }), 3],
   migrate_global: [I.migrateGlobalIx({ admin: user, snipeWindowSlots: 4, snipeStartBps: 9_900 }), 0],
   create_coin: [I.createCoinIx({ creator: user, mint, name: "Fumble", symbol: "FUMB", uri: "https://x" }), 0],
   buy: [I.buyIx({ user, mint, solIn: 5n, minTokensOut: 1n, openTickets: [t1, t2], anyQueued: true }), 3],
@@ -151,6 +154,19 @@ describe("instruction builders vs IDL", () => {
     expect(venue[16].pubkey.equals(PUMPSWAP_PROGRAM_ID)).toBe(true);
   });
 
+  it("v0.6: close_position passes every past ticket PDA in seq order; buyback uses the pumpswap signer", () => {
+    const ix = I.closePositionIx({ wallet: user, mint, nextTicketSeq: 2n });
+    expect(ix.keys.slice(-2).map((m) => m.pubkey.toBase58())).toEqual([ticketPda(mint, user, 0n), ticketPda(mint, user, 1n)].map((p) => p.toBase58()));
+    expect(() => I.closePositionIx({ wallet: user, mint, nextTicketSeq: 65n })).toThrow(/max 64/);
+    const b = I.executeBuybackIx({ cranker: user, mint, maxLamports: 1n, buybackFeeRecipient: bfr });
+    const venue = b.keys.slice(-17);
+    expect(venue[1].pubkey.equals(pumpswapSignerPda())).toBe(true);
+    expect(venue[6].pubkey.equals(wsolAta(pumpswapSignerPda()))).toBe(true);
+    const ct = I.closeTicketIx({ caller: user, ticket: t1, owner: user, mint, queued: false });
+    const ci = idlInstruction(FUMPAD_IDL, "close_ticket").accounts.findIndex((a) => a.name === "coin");
+    expect(ct.keys[ci].pubkey.equals(coinAddresses(mint).coin)).toBe(true);
+  });
+
   it("close_ticket encodes a None optional account as the program id", () => {
     const ix = I.closeTicketIx({ caller: user, ticket: t1, owner: user, mint, queued: false });
     const idx = idlInstruction(FUMPAD_IDL, "close_ticket").accounts.findIndex((a) => a.name === "claim_queue");
@@ -165,8 +181,8 @@ describe("instruction builders vs IDL", () => {
   });
 
   it("rejects unknown/missing accounts", () => {
-    expect(() => I.idlMetas(FUMPAD_IDL, FUMPAD_PROGRAM_ID, "set_pause", { admin: user })).toThrow(/missing account `global`/);
-    expect(() => I.idlMetas(FUMPAD_IDL, FUMPAD_PROGRAM_ID, "set_pause", { admin: user, global: user, bogus: user })).toThrow(/unknown account/);
+    expect(() => I.idlMetas(FUMPAD_IDL, FUMPAD_PROGRAM_ID, "set_pause", { authority: user })).toThrow(/missing account `global`/);
+    expect(() => I.idlMetas(FUMPAD_IDL, FUMPAD_PROGRAM_ID, "set_pause", { authority: user, global: user, bogus: user })).toThrow(/unknown account/);
     expect(PublicKey.default.toBase58()).toBe("11111111111111111111111111111111");
   });
 });

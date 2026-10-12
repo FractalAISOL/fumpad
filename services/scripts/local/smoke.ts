@@ -17,14 +17,18 @@ import {
   type TxLike,
 } from "@fumpad/sdk";
 
-import { airdrop, initGlobal, directPumpBuy, tokenBalance } from "./actors.js";
+import { airdrop, initGlobal, directPumpBuy, LOCAL_PARAMS, tokenBalance } from "./actors.js";
 import { Indexer, loadIndexerConfig } from "@fumpad/indexer";
 
 import { keypair, sleep, startPostgres, startValidator, waitFor } from "./harness.js";
 
 async function main() {
   const auth = keypair("upgrade-authority");
-  const v = await startValidator({ upgradeAuthority: auth });
+  const admin = Keypair.generate();
+  const keeper = Keypair.generate();
+  const treasury = Keypair.generate();
+  // v0.6: LOCAL_PARAMS are outside the on-chain bounds → the Global is seeded into the genesis.
+  const v = await startValidator({ upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: [keeper.publicKey], params: LOCAL_PARAMS } });
   const conn = new Connection(v.rpcUrl, "confirmed");
   const c = new FumpadClient(conn);
   const show = async (label: string, sig: string) => {
@@ -34,9 +38,6 @@ async function main() {
     return evs;
   };
   try {
-    const admin = Keypair.generate();
-    const keeper = Keypair.generate();
-    const treasury = Keypair.generate();
     const creator = Keypair.generate();
     const alice = Keypair.generate();
     const whale = Keypair.generate();

@@ -8,7 +8,7 @@ import {
   type Commitment,
   type Connection,
   type Keypair,
-  type PublicKey,
+  PublicKey,
   type Signer,
   SYSVAR_CLOCK_PUBKEY,
   type TransactionInstruction,
@@ -40,6 +40,8 @@ import {
   CLAIM_QUEUE_ACCOUNT_SIZE,
   OBSERVATIONS_ACCOUNT_SIZE,
   CU,
+  initClaimQueueCu,
+  SEEDS,
   FUMPAD_PROGRAM_ID,
   MAX_QUEUE_ENTRIES_PER_TX,
   PUMPSWAP_DEFAULT_FEE_BPS,
@@ -84,6 +86,7 @@ import {
   coinPda,
   globalPda,
   poolAuthorityPda,
+  pumpswapSignerPda,
   positionPda,
   ticketPda,
   userVolumeAccumulatorPda,
@@ -380,11 +383,12 @@ export class FumpadClient {
   /**
    * After graduation: [init_observations], [9× init_claim_queue in one tx (v0.4, 1024
    * entries, ~69k CU)], and (once, globally) PumpSwap init_user_volume_accumulator for the
-   * pool authority — each its own tx. Already-done steps are skipped.
+   * buyback signer (v0.6 L-1: `pumpswap_signer`, was the pool authority) — each its own tx.
+   * Already-done steps are skipped.
    */
   async buildPostGraduation(a: { payer: PublicKey; mint: PublicKey }): Promise<BuiltTx[]> {
     const c = coinAddresses(a.mint);
-    const pa = poolAuthorityPda();
+    const pa = pumpswapSignerPda();
     const [obs, queue, uva] = await this.connection.getMultipleAccountsInfo([c.observations, c.claimQueue, userVolumeAccumulatorPda(pa)], this.commitment);
     const out: BuiltTx[] = [];
     // D20: graduate pre-funds both PDAs with rent, so "exists" ≠ "initialised" — check the size.
@@ -393,7 +397,9 @@ export class FumpadClient {
     if (!queue || queue.data.length < full) {
       const have = queue?.data.length ?? 0;
       const calls = Math.max(1, Math.ceil((full - have) / 10_240));
-      out.push({ instructions: [...this.cb(CU.initClaimQueue * calls), ...Array.from({ length: calls }, () => initClaimQueueIx(a))] });
+      // Budget by the queue PDA's actual bump: each call re-derives it (a low bump costs ~1.5k CU per attempt).
+      const [, bump] = PublicKey.findProgramAddressSync([SEEDS.claimQueue, a.mint.toBytes()], FUMPAD_PROGRAM_ID);
+      out.push({ instructions: [...this.cb(initClaimQueueCu(bump) * calls), ...Array.from({ length: calls }, () => initClaimQueueIx(a))] });
     }
     if (!uva) out.push({ instructions: [initUserVolumeAccumulatorIx(a.payer, pa)] });
     return out;

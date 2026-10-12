@@ -40,6 +40,8 @@ export const SEEDS = {
   observations: enc("observations"),
   claimQueue: enc("claim_queue"),
   poolAuthority: enc("pool_authority"),
+  // v0.6 L-1: PumpSwap `user` of execute_buyback (owns only its WSOL ATA)
+  pumpswapSigner: enc("pumpswap_signer"),
   escrow: enc("escrow"),
   graduationWsol: enc("graduation_wsol"),
   eventAuthority: enc("__event_authority"),
@@ -91,6 +93,17 @@ export const CLAIM_QUEUE_INIT_CALLS = Math.ceil(CLAIM_QUEUE_ACCOUNT_SIZE / 10_24
 export const PAUSE_LAUNCH = 1;
 export const PAUSE_TRADE = 2;
 export const PAUSE_CLAIMS = 4;
+/** v0.6 L-5: `graduate`. */
+export const PAUSE_GRADUATE = 8;
+/** v0.6 M-3: every flag; `set_pause` rejects other bits. Pauses lapse after MAX_PAUSE_SECS. */
+export const PAUSE_ALL = PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS | PAUSE_GRADUATE;
+export const MAX_PAUSE_SECS = 7n * 86_400n;
+/** v0.6 M-2: propose_admin → accept_admin delay. */
+export const ADMIN_TIMELOCK_SECS = 48n * 3_600n;
+/** v0.6 L-4: most ticket PDAs `close_position` takes. */
+export const MAX_CLOSE_POSITION_TICKETS = 64;
+/** v0.6 L-1: PumpSwap v2 trade account count (PDA-signed CPIs forward exactly this many). */
+export const PUMPSWAP_V2_ACCOUNTS = 17;
 export const MAX_SAMPLE_COINS = 10;
 /** Coins per legacy `record_samples` tx (5 accounts each); more needs v0 + ALT. */
 export const MAX_SAMPLE_COINS_LEGACY = 5;
@@ -150,11 +163,20 @@ export const CU = {
   claim: 200_000,
   processQueue: 450_000, // 13 entries: ~245k paying, ~323k escrowing
   skimSettle: 200_000,
-  /** Per call; 9 calls measured at ~69k total (v0.4 cu_report). */
-  initClaimQueue: 12_000,
+  /**
+   * Per call. 9 calls ≈ 72k total for a typical coin, but every call re-derives the queue PDA
+   * (~1.3–1.5k CU per extra bump attempt): a low-bump coin needed 140k (> the old 9 × 12k →
+   * its setup failed on every keeper pass). `buildPostGraduation` uses `initClaimQueueCu(bump)`.
+   */
+  initClaimQueue: 25_000,
   /** claim_for 74–87k measured + keeper-paid idempotent ATA create. */
   claimFor: 160_000,
   setAutoClaim: 30_000,
   initObservations: 60_000,
   default: 200_000,
 } as const;
+
+/** Per-call `init_claim_queue` budget for a queue PDA with canonical bump `bump` (worst case grows ~1.5k CU per attempt). */
+export function initClaimQueueCu(bump: number): number {
+  return Math.max(CU.initClaimQueue, 9_000 + 1_500 * (256 - bump));
+}
