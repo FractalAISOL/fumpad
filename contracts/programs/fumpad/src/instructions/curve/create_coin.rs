@@ -211,6 +211,6 @@ pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String
     coin.snipe = p.snipe_config(clock.slot);
     coin.reserved = [0; 60];
 
-    emit_cpi!(CoinCreated { mint: mint_key, creator, name, symbol, uri, ts: now });
+    emit_event!(ctx, CoinCreated { mint: mint_key, creator, name, symbol, uri, ts: now });
     Ok(())
 }

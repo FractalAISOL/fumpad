@@ -173,7 +173,7 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                     paid_total = paid_total.saturating_add(e.amount);
                     q.total_owed = q.total_owed.saturating_sub(e.amount);
                     match dest {
-                        Dest::Payable => emit_cpi!(ClaimPaid {
+                        Dest::Payable => emit_event!(ctx, ClaimPaid {
                             mint,
                             ticket: e.ticket,
                             owner: e.owner,
@@ -183,7 +183,7 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                             ts: now,
                             triggered_by: cranker,
                         }),
-                        Dest::Refuses => emit_cpi!(ClaimEscrowed {
+                        Dest::Refuses => emit_event!(ctx, ClaimEscrowed {
                             mint,
                             ticket: e.ticket,
                             owner: e.owner,

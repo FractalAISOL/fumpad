@@ -8,6 +8,9 @@ resolver = "2"
 edition = "2021"
 rust-version = "1.89.0"
 
+# SBF release build. overflow-checks MUST stay on. opt-level 3 is deliberate ("s"/"z" shrink
+# the .so but cost +12–90% CU); the size tuning lives in `.cargo/config.toml` (inliner flags).
+# See CONTRACTS.md "Build profile & program size".
 [profile.release]
 overflow-checks = true
 lto = "fat"

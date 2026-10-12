@@ -149,7 +149,7 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
     }
 
     for ev in events {
-        emit_cpi!(ev);
+        emit_event!(ctx, ev);
     }
     Ok(())
 }

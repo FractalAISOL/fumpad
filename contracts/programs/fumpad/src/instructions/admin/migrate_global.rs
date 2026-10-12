@@ -153,7 +153,7 @@ pub fn handle_migrate_global(ctx: Context<MigrateGlobal>, args: MigrateGlobalArg
     info.resize(new.len())?;
     info.try_borrow_mut_data()?.copy_from_slice(&new);
 
-    emit_cpi!(GlobalMigrated {
+    emit_event!(ctx, GlobalMigrated {
         old_len: old.len() as u32,
         new_len: new.len() as u32,
         snipe_window_slots: g.params.snipe_window_slots,

@@ -78,6 +78,6 @@ pub fn handle_close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
     logic::remove_open(&mut ctx.accounts.position, &ticket_key);
     let owner = t.owner;
     ctx.accounts.ticket.status = final_status;
-    emit_cpi!(TicketClosed { ticket: ticket_key, owner, final_status: final_status as u8, ts: now });
+    emit_event!(ctx, TicketClosed { ticket: ticket_key, owner, final_status: final_status as u8, ts: now });
     Ok(())
 }

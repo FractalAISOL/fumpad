@@ -70,6 +70,6 @@ pub fn handle_register_holdings(ctx: Context<RegisterHoldings>) -> Result<()> {
     position.add(added, now, p.min_hold_secs);
     position.last_balance = balance; // R-L2: observed
 
-    emit_cpi!(HoldingsRegistered { mint, wallet: user, added, ts: now });
+    emit_event!(ctx, HoldingsRegistered { mint, wallet: user, added, ts: now });
     Ok(())
 }

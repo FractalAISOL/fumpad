@@ -77,6 +77,6 @@ pub fn handle_settle_lp_fees(ctx: Context<SettleLpFees>) -> Result<()> {
     let coin = &mut a.coin;
     coin.platform_fees_unclaimed = coin.platform_fees_unclaimed.checked_add(platform).ok_or(FumpadError::MathOverflow)?;
     coin.creator_fees_unclaimed = coin.creator_fees_unclaimed.checked_add(creator).ok_or(FumpadError::MathOverflow)?;
-    emit_cpi!(LpFeesSettled { mint, lamports, platform, creator, ts: now });
+    emit_event!(ctx, LpFeesSettled { mint, lamports, platform, creator, ts: now });
     Ok(())
 }

@@ -21,11 +21,7 @@
 //! Both hooks also take `event_authority` (the caller's `#[event_cpi]` account,
 //! `ctx.accounts.event_authority`) so they can emit TicketCreated / TicketDebited.
 
-use anchor_lang::{
-    prelude::*,
-    solana_program::{instruction::Instruction, program::invoke_signed},
-    system_program, Discriminator,
-};
+use anchor_lang::{prelude::*, system_program, Discriminator};
 
 use crate::{
     constants::{CLAIM_QUEUE_SEED, TICKET_SEED},
@@ -423,14 +419,10 @@ pub fn create_pda_account_owned<'info>(
     }
 }
 
-/// `emit_cpi!` without a `ctx` in scope (hooks run inside other modules' handlers).
+/// `emit_event!` without a `ctx` in scope (hooks run inside other modules' handlers).
 pub fn emit_event<E: anchor_lang::Event>(event_authority: &AccountInfo, event: &E) -> Result<()> {
-    let (authority, bump) = crate::EVENT_AUTHORITY_AND_BUMP;
-    require_keys_eq!(event_authority.key(), authority, FumpadError::InvalidAccount);
-    let data: Vec<u8> = anchor_lang::event::EVENT_IX_TAG_LE.iter().copied().chain(event.data()).collect();
-    let ix = Instruction::new_with_bytes(crate::ID, &data, vec![AccountMeta::new_readonly(authority, true)]);
-    invoke_signed(&ix, &[event_authority.clone()], &[&[b"__event_authority", &[bump]]])
-        .map_err(anchor_lang::error::Error::from)
+    require_keys_eq!(event_authority.key(), crate::EVENT_AUTHORITY_AND_BUMP.0, FumpadError::InvalidAccount);
+    crate::events::emit_cpi_data(event_authority, event.data())
 }
 
 #[cfg(test)]

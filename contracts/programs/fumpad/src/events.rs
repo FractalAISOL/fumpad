@@ -1,7 +1,26 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{
+    prelude::*,
+    solana_program::{instruction::Instruction, program::invoke_signed},
+};
 
-// Every state change emits an event via `emit_cpi!` (instructions using it need
-// `#[event_cpi]` on their Accounts struct). The indexer treats these as the source of truth.
+// Every state change emits an event via `emit_event!(ctx, Event { .. })` (instructions using
+// it need `#[event_cpi]` on their Accounts struct). The indexer treats these as the source of truth.
+
+/// The self-CPI behind `emit_event!` (lib.rs): byte-for-byte what Anchor's `emit_cpi!` sends
+/// (`EVENT_IX_TAG_LE ++ event.data()`, one read-only `event_authority` signer, seeds
+/// `["__event_authority", bump]`), but one shared non-generic copy instead of the whole CPI
+/// inlined at every call site (program size). `event_authority` must already be validated
+/// (it is: `#[event_cpi]` seed-checks it, `hooks::emit_event` key-checks it).
+#[inline(never)]
+pub fn emit_cpi_data(event_authority: &AccountInfo, data: Vec<u8>) -> Result<()> {
+    let tag = anchor_lang::event::EVENT_IX_TAG_LE;
+    let mut ix_data = Vec::with_capacity(tag.len() + data.len());
+    ix_data.extend_from_slice(tag);
+    ix_data.extend_from_slice(&data);
+    let ix = Instruction::new_with_bytes(crate::ID, &ix_data, vec![AccountMeta::new_readonly(*event_authority.key, true)]);
+    invoke_signed(&ix, &[event_authority.clone()], &[&[b"__event_authority", &[crate::EVENT_AUTHORITY_AND_BUMP.1]]])
+        .map_err(anchor_lang::error::Error::from)
+}
 
 #[event]
 pub struct CoinCreated {

@@ -175,6 +175,6 @@ pub fn handle_swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, 
         snipe_tax: 0,
         snipe_tax_bps: 0,
     };
-    emit_cpi!(ev);
+    emit_event!(ctx, ev);
     Ok(())
 }

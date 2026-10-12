@@ -19,6 +19,39 @@ cargo test -p fumpad_lp_locker --lib   # locker √k accounting (property tests)
 cargo test -p tests                    # LiteSVM integration tests (needs `anchor build` first)
 ```
 
+## Build profile & program size
+`anchor build` = `cargo build-sbf --tools-version v1.57 --arch v3` (Anchor 1.2.1 defaults; platform-tools v1.57).
+- `Cargo.toml` `[profile.release]`: `opt-level` 3 (default), `lto = "fat"`, `codegen-units = 1`, **`overflow-checks = true` (must stay)**. SBF is already `panic = abort`; the deployed `.so` is stripped by `cargo build-sbf`.
+- `.cargo/config.toml` (SBF targets only, `cfg(target_os = "solana")`; host builds/tests/IDL unaffected): `-C llvm-args=-inline-threshold=60 -inlinehint-threshold=60 -unroll-threshold=50`. Builds without the file are still correct, just ~22% bigger — keep it for `anchor build --verifiable` / `solana-verify` too (it lives in the repo, so they pick it up).
+- Feature flags: none in the deployed binary. `idl-build` is only enabled by the IDL step (IDL output byte-identical before/after this tuning); `no-log-ix-name` was rejected (−2.5 KB, drops the `Instruction: X` log lines).
+- Code (fumpad only; the locker source is untouched): events go through `emit_event!(ctx, Event { .. })` (lib.rs) → one non-generic `events::emit_cpi_data` — byte-identical self-CPI to Anchor's `emit_cpi!`, which inlined the whole CPI at ~30 sites; `logic::plan_rebuy` orders ≤5 tickets with a stable insertion sort instead of std `sort_by` (same order; unit test checks it against `sort_by` on 2,000 random sets).
+
+| Build | `fumpad.so` | rent | `fumpad_lp_locker.so` | rent |
+|---|---|---|---|---|
+| before (O3, no flags) | 1,086,184 | 5.519 SOL | 209,960 | 1.067 SOL |
+| **now** | **800,672 (−26.3%)** | **4.068 SOL** | **184,216 (−12.3%)** | **0.937 SOL** |
+
+Rent = `solana rent <len + 45>` (program-data header), refundable on close; `solana program deploy` sizes the
+program-data account to the `.so` — pass `--max-len` for upgrade headroom, or `solana program extend` later.
+
+What was measured (deterministic keys, `cu_report` + `venue_tests::compute_units_and_batch_size` + `curve_tests::snipe_tax_compute_units` + the locker skim test; sizes in bytes):
+| Change | fumpad.so | locker.so | CU effect |
+|---|---|---|---|
+| `opt-level = "z"` | 824,240 | 182,632 | **+17–200%** (record_samples +90%, close_ticket +200%) — rejected |
+| `opt-level = "s"` | 904,832 | 189,040 | **+8–54%** (buy +23%, record_samples +54%) — rejected |
+| `opt-level = 1` | 1,115,440 | 216,600 | +10–60% and bigger — rejected |
+| `opt-level = 2` | 1,059,552 | 205,736 | ±0.1% (−2.5% size; superseded, worse than O3 combined with the flags) |
+| `lto = "thin"` / `lto = false` | 1,086,872 / 1,086,120 | 209,960 | none — no gain |
+| locker `[profile.release.package] opt-level = "s"/"z"` (with flags) | — | 186,120 / 184,816 | bigger than the flags alone — rejected |
+| `no-log-ix-name` feature | −2,568 | −176 | removes log lines — rejected |
+| code: `emit_event!` + insertion sort (O3, no flags) | 1,035,560 | 209,960 | −5.7…0% (event bytes copied once instead of byte-by-byte) |
+| code + inline 75 / hint 75 | 877,960 | 197,176 | −4…+4% |
+| code + inline 50 / hint 50 / unroll 50 | 800,624 | 184,256 | −2.4…+6.3% |
+| code + inline 35 / hint 35 | 821,224 | 195,584 | up to +10% — rejected |
+| **code + inline 60 / hint 60 / unroll 50 (chosen)** | **800,672** | **184,216** | **−2.5…+5.8%** |
+
+CU before → after (chosen build, same keys): curve `buy` 45,674 → 46,619 (+2.1%), first buy (ATA + position) 76,414 → 78,821 (+3.1%), `sell` (creates ticket) 54,516 → 55,560 (+1.9%), `swap_buy` 145,453 → 148,772 (+2.3%), `swap_sell` 127,599 → 130,876 (+2.6%), `claim` paid now 56,721 → 57,068 (+0.6%), `claim_for` escrowed 87,471 → 88,754 (+1.5%), `process_queue` full queue 13 paid 301,330 → 293,686 (−2.5%) / 13 escrowed 400,777 → 405,678 (+1.2%), `record_samples` 10 coins 108,366 → 110,595 (+2.1%), `graduate` 277,477 → 283,002 (+2.0%, budget 400k), `execute_buyback` 143,255 → 144,728 (+1.0%), `close_ticket` full-queue scan 22,479 → 23,793 (+5.8%), locker `skim` 79,637 → 80,859 (+1.5%), `settle_lp_fees` 20,320 → 20,488 (+0.8%). Every row stays under its budget in the compute table below.
+
 ## Deploy (order matters)
 1. Deploy `fumpad` (upgrade authority → Squads multisig), run `initialize_global`.
 2. Deploy `fumpad_lp_locker` from `target/deploy/fumpad_lp_locker.so` with its keypair, then **remove its upgrade
@@ -171,7 +204,7 @@ change in your final report. Errors: add variants only inside your module's sect
 ## Rules
 - Every SOL/token amount: checked math, u128 intermediates, rounding in the protocol's favor.
 - Validate every account: PDA seeds + bump, owners, mints, token programs. No trusting the client.
-- Every state change emits an event from `events.rs` via `emit_cpi!` (`#[event_cpi]`).
+- Every state change emits an event from `events.rs` via `emit_event!(ctx, Event { .. })` (needs `#[event_cpi]`; same self-CPI as Anchor's `emit_cpi!`, which isn't used because it inlines the whole CPI per call site); in hooks without `ctx`, `hooks::emit_event`.
 - Respect `Global.paused` flags.
 - Keep CU in mind: no large stack arrays (SBF frame = 4KB); heap or zero-copy instead.
 - Tests: happy path AND every rejection path (each `require!` should have a test that hits it).

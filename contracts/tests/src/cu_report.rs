@@ -200,6 +200,12 @@ fn cu_report() {
 
     // ── graduate, router, samples on a real coin ────────────────────────────
     let mut f = Flow::new();
+    let b = f.env.new_user(100);
+    let bk = kp_pk(&b);
+    rows.push(("buy (first: creates ATA + position)".into(), cu(f.buy(&b, SOL))));
+    rows.push(("buy (existing ATA + position)".into(), cu(f.buy(&b, SOL + 1))));
+    let held = f.tokens(&bk);
+    rows.push(("sell (creates ticket)".into(), cu(f.sell(&b, held / 2))));
     let whale = f.env.new_user(10_000);
     cu(f.buy(&whale, 200 * SOL));
     rows.push(("graduate".into(), cu(f.graduate())));

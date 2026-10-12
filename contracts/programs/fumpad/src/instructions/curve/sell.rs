@@ -195,9 +195,9 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
     let mint = a.mint.key();
     let user = a.user.key();
     if reopened {
-        emit_cpi!(CurveReopened { mint, completed_at, ts: now });
+        emit_event!(ctx, CurveReopened { mint, completed_at, ts: now });
     }
-    emit_cpi!(Trade {
+    emit_event!(ctx, Trade {
         mint,
         user,
         is_buy: false,
@@ -216,7 +216,7 @@ pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_
         snipe_tax_bps: 0,
     });
     if completed {
-        emit_cpi!(CurveCompleted { mint, ts: now });
+        emit_event!(ctx, CurveCompleted { mint, ts: now });
     }
 
     // Pay the seller LAST. A direct lamport move is only reconciled by the runtime at

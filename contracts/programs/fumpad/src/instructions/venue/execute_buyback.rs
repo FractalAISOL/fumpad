@@ -164,6 +164,6 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
     // account; it is accounted as spent from this coin's buyback balance.
 
     let ev = BuybackExecuted { mint: a.mint.key(), lamports_in: spend, tokens_out, ts: now };
-    emit_cpi!(ev);
+    emit_event!(ctx, ev);
     Ok(())
 }

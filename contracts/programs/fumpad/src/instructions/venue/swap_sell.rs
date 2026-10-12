@@ -184,6 +184,6 @@ pub fn handle_swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: 
         snipe_tax: 0,
         snipe_tax_bps: 0,
     };
-    emit_cpi!(ev);
+    emit_event!(ctx, ev);
     Ok(())
 }

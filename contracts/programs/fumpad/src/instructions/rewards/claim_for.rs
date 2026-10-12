@@ -105,7 +105,7 @@ pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
     )?;
     let (amount, median) = match decision {
         Decision::Queued { amount, queue_len } => {
-            emit_cpi!(ClaimQueued { mint, ticket: ticket_key, owner, amount, queue_len, ts: now, triggered_by: keeper });
+            emit_event!(ctx, ClaimQueued { mint, ticket: ticket_key, owner, amount, queue_len, ts: now, triggered_by: keeper });
             return Ok(());
         }
         Decision::PayNow { amount, median } => (amount, median),
@@ -135,7 +135,7 @@ pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
     let a = &mut *ctx.accounts;
     a.coin.tokens_paid_out = a.coin.tokens_paid_out.saturating_add(amount);
     match dest {
-        Dest::Payable => emit_cpi!(ClaimPaid {
+        Dest::Payable => emit_event!(ctx, ClaimPaid {
             mint,
             ticket: ticket_key,
             owner,
@@ -149,7 +149,7 @@ pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
             // decide_claim marked it Claimed; it is Escrowed until `withdraw_escrow`.
             a.ticket.status = TicketStatus::Escrowed;
             a.ticket.escrow_payer = keeper;
-            emit_cpi!(ClaimEscrowed {
+            emit_event!(ctx, ClaimEscrowed {
                 mint,
                 ticket: ticket_key,
                 owner,

@@ -1,0 +1,14 @@
+# On-chain (SBF) builds only — host builds (`cargo test`, IDL generation) are unaffected.
+# Program size: LLVM's -O3 inliner (threshold 250, inline-hint 325) duplicates Anchor's
+# account-validation / (de)serialisation code into every instruction. A lower inline threshold
+# plus a smaller unroll budget cut `fumpad.so` by ~22% and `fumpad_lp_locker.so` by ~12% at
+# +0.5–3% CU on the hot paths (+6% worst case, `close_ticket` scanning a full queue).
+# opt-level stays 3 ("s"/"z" cost +12–90% CU). Measurements: CONTRACTS.md "Build profile".
+# `cargo build-sbf` (and `anchor build`, `anchor build --verifiable`) read this file; a build
+# without it is still correct, just larger.
+[target.'cfg(target_os = "solana")']
+rustflags = [
+    "-C", "llvm-args=-inline-threshold=60",
+    "-C", "llvm-args=-inlinehint-threshold=60",
+    "-C", "llvm-args=-unroll-threshold=50",
+]

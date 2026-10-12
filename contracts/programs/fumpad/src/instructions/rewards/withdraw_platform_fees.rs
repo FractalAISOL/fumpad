@@ -30,7 +30,7 @@ pub fn handle_withdraw_platform_fees(ctx: Context<WithdrawPlatformFees>) -> Resu
     require!(amount > 0, FumpadError::ZeroAmount);
     ctx.accounts.coin.platform_fees_unclaimed = 0;
     // Event CPI first: direct lamport moves must come after every CPI in the instruction.
-    emit_cpi!(FeesWithdrawn {
+    emit_event!(ctx, FeesWithdrawn {
         mint: ctx.accounts.coin.mint,
         recipient: ctx.accounts.platform_treasury.key(),
         lamports: amount,

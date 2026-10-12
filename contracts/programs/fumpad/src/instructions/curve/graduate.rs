@@ -310,7 +310,7 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     }
 
     // ── 8. D20: spend the graduation fee on the setup rent; the rest → platform fees ──
-    // Every CPI is done, so these direct lamport moves need no reconciling CPI (emit_cpi
+    // Every CPI is done, so these direct lamport moves need no reconciling CPI (emit_event
     // below touches none of these accounts). Nothing here can exceed `grad_fee`, and every
     // lamport goes either to accounts only FUMPAD can ever spend (the two PDAs, which only
     // `init_observations` / `init_claim_queue` can turn into this coin's ring and queue) or
@@ -356,7 +356,7 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     coin.status = CoinStatus::Graduated;
     coin.graduated_at = now;
 
-    emit_cpi!(Graduated {
+    emit_event!(ctx, Graduated {
         mint: mint_key,
         pool,
         sol_deposited: quote_amount,

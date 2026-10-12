@@ -21,6 +21,6 @@ pub fn handle_set_auto_claim(ctx: Context<SetAutoClaim>, enabled: bool) -> Resul
     let pos = &mut ctx.accounts.position;
     pos.auto_claim_opt_out = u8::from(!enabled);
     let (mint, wallet) = (pos.mint, pos.wallet);
-    emit_cpi!(AutoClaimSet { mint, wallet, enabled, ts: Clock::get()?.unix_timestamp });
+    emit_event!(ctx, AutoClaimSet { mint, wallet, enabled, ts: Clock::get()?.unix_timestamp });
     Ok(())
 }

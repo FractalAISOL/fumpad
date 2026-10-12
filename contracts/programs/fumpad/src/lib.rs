@@ -1,3 +1,12 @@
+/// `emit_event!(ctx, Event { .. })`: same event self-CPI as Anchor's `emit_cpi!(Event { .. })`
+/// (same bytes, accounts and signer), routed through `events::emit_cpi_data` so the CPI code
+/// exists once instead of at all ~30 call sites (program size).
+macro_rules! emit_event {
+    ($ctx:ident, $event:expr) => {
+        $crate::events::emit_cpi_data(&$ctx.accounts.event_authority, anchor_lang::Event::data(&$event))?
+    };
+}
+
 pub mod constants;
 pub mod error;
 pub mod events;

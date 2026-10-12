@@ -168,7 +168,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
 
     let mint = a.mint.key();
     let user = a.user.key();
-    emit_cpi!(Trade {
+    emit_event!(ctx, Trade {
         mint,
         user,
         is_buy: true,
@@ -187,7 +187,7 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
         snipe_tax_bps: snipe_bps,
     });
     if completed {
-        emit_cpi!(CurveCompleted { mint, ts: now });
+        emit_event!(ctx, CurveCompleted { mint, ts: now });
     }
     Ok(())
 }

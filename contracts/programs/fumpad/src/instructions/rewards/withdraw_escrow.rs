@@ -97,6 +97,6 @@ pub fn handle_withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
         amount,
         ts: now,
     };
-    emit_cpi!(ev);
+    emit_event!(ctx, ev);
     Ok(())
 }

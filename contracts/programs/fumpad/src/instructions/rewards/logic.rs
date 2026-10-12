@@ -168,7 +168,16 @@ pub fn plan_rebuy(tickets: &[RebuyView], amount: u64, now: i64, window_secs: i64
                 && now - t.sell_ts <= window_secs
         })
         .collect();
-    order.sort_by(|&a, &b| (tickets[b].sell_ts, tickets[b].seq).cmp(&(tickets[a].sell_ts, tickets[a].seq)));
+    // Newest first: (sell_ts, seq) descending. Stable insertion sort over ≤ MAX_OPEN_TICKETS
+    // entries — same order as a stable `sort_by`, without std's ~15 KB driftsort in the binary.
+    let key = |i: usize| (tickets[i].sell_ts, tickets[i].seq);
+    for j in 1..order.len() {
+        let mut k = j;
+        while k > 0 && key(order[k - 1]) < key(order[k]) {
+            order.swap(k - 1, k);
+            k -= 1;
+        }
+    }
     let mut left = amount;
     for i in order {
         if left == 0 {
@@ -368,6 +377,32 @@ mod tests {
         // Same sell_ts → higher seq is newer.
         let same = [t(5, 0, 10, TicketStatus::Open), t(5, 1, 10, TicketStatus::Open)];
         assert_eq!(plan_rebuy(&same, 15, 10, w), vec![5, 10]);
+        // The insertion sort matches the reference stable `sort_by` (pseudo-random sets with
+        // duplicate (sell_ts, seq) keys, 0..=8 tickets, every partial amount).
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+        for _ in 0..2_000 {
+            let mut next = || {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x
+            };
+            let n = (next() % 9) as usize;
+            let ts: Vec<RebuyView> =
+                (0..n).map(|_| t((next() % 4) as i64, next() % 3, 1 + next() % 50, TicketStatus::Open)).collect();
+            let mut order: Vec<usize> = (0..n).collect();
+            order.sort_by(|&a, &b| (ts[b].sell_ts, ts[b].seq).cmp(&(ts[a].sell_ts, ts[a].seq)));
+            let total: u64 = ts.iter().map(|v| v.tokens).sum();
+            let amount = next() % (total + 1);
+            let mut want = vec![0u64; n];
+            let mut left = amount;
+            for i in order {
+                let d = left.min(ts[i].tokens);
+                want[i] = d;
+                left -= d;
+            }
+            assert_eq!(plan_rebuy(&ts, amount, 10, w), want);
+        }
     }
 
     #[test]

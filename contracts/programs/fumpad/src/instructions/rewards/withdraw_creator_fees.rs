@@ -20,7 +20,7 @@ pub fn handle_withdraw_creator_fees(ctx: Context<WithdrawCreatorFees>) -> Result
     require!(amount > 0, FumpadError::ZeroAmount);
     ctx.accounts.coin.creator_fees_unclaimed = 0;
     // Event CPI first: direct lamport moves must come after every CPI in the instruction.
-    emit_cpi!(FeesWithdrawn {
+    emit_event!(ctx, FeesWithdrawn {
         mint: ctx.accounts.coin.mint,
         recipient: ctx.accounts.creator.key(),
         lamports: amount,

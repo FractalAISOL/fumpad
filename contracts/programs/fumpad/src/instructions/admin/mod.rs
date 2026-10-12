@@ -73,7 +73,7 @@ pub fn handle_queue_params(ctx: Context<QueueParams>, params: Params) -> Result<
     let g = &mut ctx.accounts.global;
     g.pending_params = params;
     g.pending_eta = eta;
-    emit_cpi!(ParamsQueued { params, eta, ts: now });
+    emit_event!(ctx, ParamsQueued { params, eta, ts: now });
     Ok(())
 }
 
@@ -97,7 +97,7 @@ pub fn handle_execute_params(ctx: Context<ExecuteParams>) -> Result<()> {
     g.params = params;
     g.pending_params = Params::default();
     g.pending_eta = 0;
-    emit_cpi!(ParamsUpdated { params, ts: now });
+    emit_event!(ctx, ParamsUpdated { params, ts: now });
     Ok(())
 }
 
@@ -115,7 +115,7 @@ pub fn handle_cancel_params(ctx: Context<CancelParams>) -> Result<()> {
     require!(g.pending_eta != 0, FumpadError::NoPendingParams);
     g.pending_params = Params::default();
     g.pending_eta = 0;
-    emit_cpi!(ParamsCancelled { ts: now });
+    emit_event!(ctx, ParamsCancelled { ts: now });
     Ok(())
 }
 

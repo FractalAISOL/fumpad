@@ -163,7 +163,7 @@ pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
                 ctx.bumps.pool_authority,
                 amount,
             )?;
-            emit_cpi!(ClaimPaid {
+            emit_event!(ctx, ClaimPaid {
                 mint,
                 ticket: ticket_key,
                 owner,
@@ -175,7 +175,7 @@ pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
             });
         }
         Decision::Queued { amount, queue_len } => {
-            emit_cpi!(ClaimQueued { mint, ticket: ticket_key, owner, amount, queue_len, ts: now, triggered_by: owner });
+            emit_event!(ctx, ClaimQueued { mint, ticket: ticket_key, owner, amount, queue_len, ts: now, triggered_by: owner });
         }
     }
     Ok(())
