@@ -387,7 +387,8 @@ export class FumpadClient {
     const pa = poolAuthorityPda();
     const [obs, queue, uva] = await this.connection.getMultipleAccountsInfo([c.observations, c.claimQueue, userVolumeAccumulatorPda(pa)], this.commitment);
     const out: BuiltTx[] = [];
-    if (!obs) out.push({ instructions: [...this.cb(CU.initObservations), initObservationsIx(a)] });
+    // D20: graduate pre-funds both PDAs with rent, so "exists" ≠ "initialised" — check the size.
+    if (!obs || obs.data.length < OBSERVATIONS_ACCOUNT_SIZE) out.push({ instructions: [...this.cb(CU.initObservations), initObservationsIx(a)] });
     const full = CLAIM_QUEUE_ACCOUNT_SIZE;
     if (!queue || queue.data.length < full) {
       const have = queue?.data.length ?? 0;
