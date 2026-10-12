@@ -147,6 +147,12 @@ pub mod fumpad {
         instructions::handle_set_auto_claim(ctx, enabled)
     }
 
+    /// L-4 (v0.6): the wallet closes its Position (no open tickets; remaining_accounts = every
+    /// ticket PDA it ever created, all closed) and gets the rent back.
+    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
+        instructions::handle_close_position(ctx)
+    }
+
     // ── venue: router, oracle, buyback ──────────────────────────────────────
     pub fn swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
         instructions::handle_swap_buy(ctx, sol_in, min_tokens_out)

@@ -13,6 +13,7 @@ pub mod init_claim_queue;
 pub mod withdraw_escrow;
 pub mod claim_for;
 pub mod set_auto_claim;
+pub mod close_position;
 
 pub use register_holdings::*;
 pub use claim::*;
@@ -24,3 +25,4 @@ pub use init_claim_queue::*;
 pub use withdraw_escrow::*;
 pub use claim_for::*;
 pub use set_auto_claim::*;
+pub use close_position::*;

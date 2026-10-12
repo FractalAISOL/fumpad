@@ -566,8 +566,29 @@ fn regression_admin_changes_emit_events() {
 /// ever touched a coin through FUMPAD keeps its Position rent locked forever, even
 /// after a full exit with no open tickets (330-byte account ≈ 0.0023 SOL). Fix: `close_position` (owner-signed, requires
 /// open_count == 0, rent → wallet).
+///
+/// FIXED (v0.6): `close_position` — wallet-signed, no open tickets, and every ticket the
+/// position ever created already closed (their PDAs passed as remaining accounts), so a
+/// re-created position (seq restarts at 0) can't collide with an old ticket.
+fn close_position_ix(f: &Flow, wallet: &Pubkey, tickets: &[Pubkey]) -> solana_instruction::Instruction {
+    ix_with_remaining(
+        fumpad::accounts::ClosePosition {
+            wallet: *wallet,
+            position: f.position_key(wallet),
+            event_authority: event_authority(),
+            program: fumpad::ID,
+        },
+        fumpad::instruction::ClosePosition {},
+        &tickets.iter().map(|k| r(*k)).collect::<Vec<_>>(),
+    )
+}
+
+fn ticket_pda(f: &Flow, wallet: &Pubkey, seq: u64) -> Pubkey {
+    fpda(&[fumpad::TICKET_SEED, f.mint.as_ref(), wallet.as_ref(), &seq.to_le_bytes()])
+}
+
 #[test]
-fn issue_positions_are_never_closable() {
+fn regression_positions_can_be_closed_when_empty() {
     let mut f = Flow::new();
     let u = f.env.new_user(10);
     let uk = kp_pk(&u);
@@ -575,9 +596,45 @@ fn issue_positions_are_never_closable() {
     let all = f.tokens(&uk);
     ok(f.sell(&u, all)); // unmatured → no ticket
     let p = f.position(&uk).expect("position");
-    assert_eq!((p.open_count, p.matured, p.pending, f.tokens(&uk)), (0, 0, 0, 0));
+    assert_eq!((p.open_count, p.next_ticket_seq), (0, 0));
+    // Only the wallet itself: another signer derives another (non-existent) position PDA.
+    let rando = f.env.new_user(1);
+    let mut i = close_position_ix(&f, &uk, &[]);
+    i.accounts[0].pubkey = solana_signer::Signer::pubkey(&rando);
+    assert!(f.env.send_as(&rando, &[i], &[&rando]).is_err());
     let rent = f.env.lamports(&f.position_key(&uk));
-    assert!(rent > 2_000_000, "{rent} lamports of user rent stranded");
+    let before = f.env.lamports(&uk);
+    let m = ok(f.env.send_as(&u, &[close_position_ix(&f, &uk, &[])], &[&u]));
+    assert_eq!(events::<fumpad::events::PositionClosed>(&m)[0].wallet, uk);
+    assert_eq!(f.env.lamports(&uk), before + rent - 5_000);
+    assert!(f.position(&uk).is_none());
+
+    // With a ticket: refused while it is open, and until it is closed.
+    let w = f.env.new_user(100);
+    let wk = kp_pk(&w);
+    ok(f.buy(&w, 5 * SOL));
+    f.env.warp(601);
+    let half = f.tokens(&wk) / 2;
+    ok(f.sell(&w, half));
+    let t0 = ticket_pda(&f, &wk, 0);
+    assert_eq!(f.position(&wk).unwrap().open_count, 1);
+    expect_err(f.env.send_as(&w, &[close_position_ix(&f, &wk, &[t0])], &[&w]), FumpadError::PositionNotEmpty);
+    f.env.warp(fumpad::DEFAULT_CLAIM_WINDOW_SECS + 1); // expires (curve coin: never claimable)
+    ok(f.close_ticket(&rando, t0));
+    // The list must cover every ticket ever created, in order.
+    expect_err(f.env.send_as(&w, &[close_position_ix(&f, &wk, &[])], &[&w]), FumpadError::PositionNotEmpty);
+    let wrong = ticket_pda(&f, &wk, 1);
+    expect_err(f.env.send_as(&w, &[close_position_ix(&f, &wk, &[wrong])], &[&w]), FumpadError::InvalidAccount);
+    ok(f.env.send_as(&w, &[close_position_ix(&f, &wk, &[t0])], &[&w]));
+    assert!(f.position(&wk).is_none());
+
+    // Re-created by the next buy: tickets restart at seq 0 without colliding.
+    ok(f.buy(&w, SOL));
+    f.env.warp(601);
+    let all = f.tokens(&wk);
+    let m = ok(f.sell(&w, all));
+    assert_eq!(events::<fumpad::events::TicketCreated>(&m).len(), 1);
+    assert_eq!(f.position(&wk).unwrap().next_ticket_seq, 1);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

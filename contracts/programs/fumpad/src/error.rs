@@ -95,6 +95,6 @@ pub enum FumpadError {
     // ── v0.6 (appended) ─────────────────────────────────────────────────────
     #[msg("No admin change is proposed")]
     NoPendingAdmin,
-    #[msg("Position still has open tickets or tracked tokens")]
+    #[msg("Position still has open or unclosed tickets")]
     PositionNotEmpty,
 }
