@@ -66,8 +66,9 @@ export function tokens(n: number): string {
   return Math.abs(n) >= 1e7 ? compact(n, 2) : int(n);
 }
 
-/** Multiple of sell price: "11.4×". */
+/** Multiple of sell price: "11.4×"; "<0.1×" for a coin that went nowhere (never "0.0×"). */
 export function multiple(x: number): string {
+  if (x > 0 && x < 0.1) return "<0.1×";
   if (x >= 100) return int(x) + "×";
   return fmt(x, 1) + "×";
 }

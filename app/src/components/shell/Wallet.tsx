@@ -86,7 +86,9 @@ export function WalletButton({ compact }: { compact?: boolean }) {
         onClick={() => setOpen(true)}
         aria-label={`Wallet: ${active.name} ${f.shortAddr(active.address)}, ${balText(bal)}${instantOn ? ", instant trading on" : ""}`}
       >
-        <Avatar address={active.address} size="sm" />
+        <span className={s.chipAvatar}>
+          <Avatar address={active.address} size="sm" />
+        </span>
         <span className={cx(s.chipText, compact && "sr-only")}>
           <span className={cx("num", s.chipAddr)}>{f.shortAddr(active.address)}</span>
           <span className={cx("num", s.chipBal)}>

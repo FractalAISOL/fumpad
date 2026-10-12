@@ -78,6 +78,7 @@
 
 .right {
   margin-left: auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--s-2);
@@ -199,5 +200,13 @@
 @media (min-width: 900px) {
   .tabbar {
     display: none;
+  }
+}
+@media (max-width: 599px) {
+  .topIn {
+    gap: var(--s-3);
+  }
+  .right {
+    gap: 4px;
   }
 }

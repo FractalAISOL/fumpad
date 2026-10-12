@@ -73,9 +73,9 @@ export function parseStyle(v: string | null | undefined): CardStyle {
   return v === "paper" || v === "night" ? v : "flare";
 }
 
-/** "<0.1×" instead of "0.0×" for a coin that went nowhere. */
+/** "<0.1×" instead of "0.0×" for a coin that went nowhere (same rule as everywhere: `f.multiple`). */
 export function multipleText(x: number): string {
-  return x > 0 && x < 0.1 ? "<0.1×" : f.multiple(x);
+  return f.multiple(x);
 }
 
 export interface CardCopy {

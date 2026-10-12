@@ -434,11 +434,13 @@ function holdersFor(c: CoinSpec, viewer?: Address): { total: number; top: Holder
   top.push({ address: creatorOf(c), label: "Creator", kind: "creator", share: between(r, 1.2, 4.6) });
   let s = between(r, 2.6, 3.8);
   for (let i = 0; i < 5; i++) {
-    const who = r() < 0.4 ? pick(r, USERS).address : anon(`${c.symbol}h${i}`);
+    const named = r() < 0.4 ? pick(r, USERS).address : undefined;
+    // One row per wallet: a repeated pick (or the creator) becomes an anonymous holder.
+    const who = named && !top.some((h) => h.address === named) ? named : anon(`${c.symbol}h${i}`);
     top.push({ address: who, label: nameOf(who), kind: who === viewer ? "you" : "holder", share: s });
     s *= between(r, 0.7, 0.92);
   }
-  if (viewer === DEMO_WALLET && c.status === "graduated") {
+  if (viewer === DEMO_WALLET && c.status === "graduated" && !top.some((h) => h.address === DEMO_WALLET)) {
     top.push({ address: DEMO_WALLET, label: DEMO_NAME, kind: "you", share: 0.61 });
   }
   top.sort((a, b) => b.share - a.share);
