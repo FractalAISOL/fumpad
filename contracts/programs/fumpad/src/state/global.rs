@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::constants::*;
-use crate::state::CoinFees;
+use crate::state::{CoinFees, SnipeConfig};
 
 /// Singleton config. PDA ["global"].
 #[account]
@@ -69,6 +69,12 @@ pub struct Params {
     // Pyth
     pub sol_usd_feed_id: [u8; 32],
     pub max_price_age_secs: u64,
+
+    // D19 snipe protection (appended in v0.5; snapshotted per coin at `create_coin`)
+    /// Curve buys within this many slots after the launch slot pay the snipe tax (0 = off).
+    pub snipe_window_slots: u16,
+    /// Tax at the launch slot, bps; the schedule is min(this, ⌈10_000·(W − d)/W⌉) at offset d.
+    pub snipe_start_bps: u16,
 }
 
 impl Default for Params {
@@ -81,7 +87,7 @@ impl Default for Params {
             initial_virtual_sol: DEFAULT_INITIAL_VIRTUAL_SOL,
             initial_virtual_token: DEFAULT_INITIAL_VIRTUAL_TOKEN,
             graduation_lamports: DEFAULT_GRADUATION_LAMPORTS,
-            graduation_fee_lamports: 0,
+            graduation_fee_lamports: DEFAULT_GRADUATION_FEE_LAMPORTS,
             fee_bps: DEFAULT_FEE_BPS,
             fee_pool_share_bps: DEFAULT_FEE_POOL_SHARE_BPS,
             fee_platform_share_bps: DEFAULT_FEE_PLATFORM_SHARE_BPS,
@@ -102,6 +108,8 @@ impl Default for Params {
             buyback_max_pool_bps: DEFAULT_BUYBACK_MAX_POOL_BPS,
             sol_usd_feed_id: PYTH_SOL_USD_FEED_ID,
             max_price_age_secs: DEFAULT_MAX_PRICE_AGE_SECS,
+            snipe_window_slots: DEFAULT_SNIPE_WINDOW_SLOTS,
+            snipe_start_bps: DEFAULT_SNIPE_START_BPS,
         }
     }
 }
@@ -116,6 +124,11 @@ impl Params {
             fee_platform_share_bps: self.fee_platform_share_bps,
             fee_creator_share_bps: self.fee_creator_share_bps,
         }
+    }
+
+    /// D19: the snipe schedule a new coin snapshots at `create_coin` (launch slot = now).
+    pub fn snipe_config(&self, launch_slot: u64) -> SnipeConfig {
+        SnipeConfig { launch_slot, window_slots: self.snipe_window_slots, start_bps: self.snipe_start_bps }
     }
 
     /// Structural sanity checks run on initialize / queue / execute.
@@ -137,6 +150,8 @@ impl Params {
             && self.oracle_min_spacing_secs > 0
             && self.oracle_window_secs > self.oracle_min_spacing_secs
             && (self.oracle_min_samples as usize) <= OBSERVATION_CAPACITY
+            && self.snipe_window_slots <= MAX_SNIPE_WINDOW_SLOTS
+            && self.snipe_start_bps <= MAX_SNIPE_START_BPS
     }
 }
 

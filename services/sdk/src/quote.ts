@@ -22,6 +22,8 @@ import {
   pumpSell,
   quoteBuy,
   quoteSell,
+  snipeCurveOffer,
+  snipeTax,
   solInForBudget,
   updateReference,
 } from "./math/index.js";
@@ -51,6 +53,10 @@ export interface BuyQuoteRaw {
   priceImpactBps: number;
   partialFill: boolean;
   poolTokensBought: bigint;
+  /** D19: snipe tax in lamports (to the reward pool; included in totalCost), 0 outside the launch window. */
+  snipeTax: bigint;
+  /** D19: snipe tax rate applied, bps of (solUsed + snipeTax). */
+  snipeTaxBps: number;
 }
 
 export interface SellQuoteRaw {
@@ -75,20 +81,26 @@ function impactBps(exec: bigint, spot: bigint): number {
 /**
  * Curve buy for a total budget (fee on top), exactly as `buy` computes it. Fees: pass the
  * coin's snapshot (`coin.fees`, D14) — `Global.params` only for a coin not yet created.
+ *
+ * D19: `snipeBps` = the snipe tax rate for the slot the buy is expected to land in
+ * (`snipeTaxBps(coin.snipe, slot)`, 0 for the creator's buy bundled with create_coin). The
+ * tax is carved out of `solIn`, so `totalCost` stays ≤ the budget; the buyer just gets
+ * fewer tokens. Quoting at the current slot is the pessimistic case (the tax only decays).
  */
-export function quoteCurveBuy(r: CurveReserves, p: FeeParams, budgetLamports: bigint): BuyQuoteRaw | null {
+export function quoteCurveBuy(r: CurveReserves, p: FeeParams, budgetLamports: bigint, snipeBps = 0): BuyQuoteRaw | null {
   const solIn = solInForBudget(budgetLamports, p);
   const spot = curveSpotQ64(r) ?? 0n;
-  const q = quoteBuy(r, solIn);
+  const q = quoteBuy(r, snipeCurveOffer(solIn, snipeBps));
   if (!q) return null;
   const fee = computeFee(q.solUsed, p);
+  const tax = snipeTax(q.solUsed, snipeBps);
   const after = { ...r, virtualSol: r.virtualSol + q.solUsed, realSol: r.realSol + q.solUsed, virtualToken: r.virtualToken - q.tokensOut, realToken: r.realToken - q.tokensOut };
-  const bb = inlineBuyback(after, fee.pool);
+  const bb = inlineBuyback(after, fee.pool + tax);
   const exec = q.tokensOut > 0n ? (priceQ64(q.solUsed, q.tokensOut) ?? 0n) : spot;
   return {
     venue: "curve",
     solIn,
-    totalCost: q.solUsed + fee.total,
+    totalCost: q.solUsed + fee.total + tax,
     solUsed: q.solUsed,
     tokensOut: q.tokensOut,
     fee,
@@ -98,6 +110,8 @@ export function quoteCurveBuy(r: CurveReserves, p: FeeParams, budgetLamports: bi
     priceImpactBps: impactBps(exec, spot),
     partialFill: q.completes,
     poolTokensBought: bb.quote.tokensOut,
+    snipeTax: tax,
+    snipeTaxBps: snipeBps,
   };
 }
 
@@ -143,6 +157,8 @@ export function quoteSwapBuy(pool: PoolReserves, p: FeeParams, budgetLamports: b
     priceImpactBps: impactBps(exec, spot),
     partialFill: false,
     poolTokensBought: 0n,
+    snipeTax: 0n,
+    snipeTaxBps: 0,
   };
 }
 

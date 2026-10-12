@@ -48,6 +48,8 @@ const tradeData = {
   virtual_sol_reserves: bn(31_000_000_000n),
   virtual_token_reserves: bn(987_000_000_000_000n),
   ts: bn(1_800_000_000n),
+  snipe_tax: bn(495_000_000n),
+  snipe_tax_bps: 5_000,
 };
 
 describe("event decoding", () => {
@@ -76,6 +78,8 @@ describe("event decoding", () => {
     expect(tr.data.isBuy).toBe(true);
     expect(tr.data.priceQ64).toBe(((1n << 64n) * 3n) / 100n);
     expect(tr.data.mint.equals(mint)).toBe(true);
+    expect(tr.data.snipeTax).toBe(495_000_000n); // v0.5 D19
+    expect(tr.data.snipeTaxBps).toBe(5_000);
     expect(evs[1].index).toBe(1);
   });
 

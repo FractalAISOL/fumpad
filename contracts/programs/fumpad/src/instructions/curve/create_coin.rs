@@ -178,7 +178,8 @@ pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String
     )?;
 
     // ── Coin ──
-    let now = Clock::get()?.unix_timestamp;
+    let clock = Clock::get()?;
+    let now = clock.unix_timestamp;
     let creator = a.creator.key();
     let coin = &mut a.coin;
     coin.bump = ctx.bumps.coin;
@@ -206,7 +207,9 @@ pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String
     coin.reference = ReferencePrice::new(initial_spot, now);
     // D14: fee params are fixed per coin at launch.
     coin.fees = p.coin_fees();
-    coin.reserved = [0; 72];
+    // D19: launch slot + snipe schedule, likewise fixed at launch.
+    coin.snipe = p.snipe_config(clock.slot);
+    coin.reserved = [0; 60];
 
     emit_cpi!(CoinCreated { mint: mint_key, creator, name, symbol, uri, ts: now });
     Ok(())

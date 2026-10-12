@@ -185,7 +185,8 @@ impl World {
             tokens_paid_out: 0,
             reference: Default::default(),
             fees: fumpad::state::Params::default().coin_fees(),
-            reserved: [0; 72],
+            snipe: Default::default(),
+            reserved: [0; 60],
         };
         w.write_coin(&c);
         w

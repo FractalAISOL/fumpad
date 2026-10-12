@@ -75,6 +75,7 @@ import {
 import { skimIxs } from "./instructions/locker.js";
 import { buybackFeeRecipientAta, initUserVolumeAccumulatorIx, parseBuybackFeeRecipients, parseFeeConfigFlatFees, parseGlobalConfigFees } from "./instructions/pumpswap.js";
 import { computeBudgetIxs, createAtaIdempotentIx } from "./instructions/spl.js";
+import { isCreatorLaunchBuy, snipeTaxBps } from "./math/fees.js";
 import type { PoolReserves } from "./math/pumpswap.js";
 import {
   coinAddresses,
@@ -237,8 +238,9 @@ export class FumpadClient {
     if (a.initialBuyLamports && a.initialBuyLamports > 0n) {
       const g = await this.global();
       const p = g.params;
-      // New coin: its fee snapshot will be the current Global.params (D14).
-      quote = quoteCurveBuy({ virtualSol: p.initialVirtualSol, virtualToken: p.initialVirtualToken, realSol: 0n, realToken: p.curveSupply }, p, a.initialBuyLamports)!;
+      // New coin: its fee snapshot will be the current Global.params (D14). The creator's buy
+      // bundled with create_coin is exempt from the D19 snipe tax (snipeBps = 0).
+      quote = quoteCurveBuy({ virtualSol: p.initialVirtualSol, virtualToken: p.initialVirtualToken, realSol: 0n, realToken: p.curveSupply }, p, a.initialBuyLamports, 0)!;
       ixs.push(buyIx({ user: a.creator, mint, solIn: quote.solIn, minTokensOut: withSlippage(quote.tokensOut, a.slippageBps ?? 100), openTickets: [] }));
     }
     return { instructions: [...this.cb(quote ? CU.createCoinAndBuy : CU.createCoin), ...ixs], signers: mintKp ? [mintKp] : [], quote };
@@ -250,7 +252,10 @@ export class FumpadClient {
     if (!coin) throw new Error("coin not found");
     const slip = a.slippageBps ?? 100;
     if (coin.status === "curve") {
-      const q = quoteCurveBuy(reservesOf(coin), coin.fees, a.budgetLamports);
+      // D19: quote at the current slot (pessimistic — the snipe tax only decays).
+      const slot = BigInt(await this.connection.getSlot(this.commitment));
+      const exempt = isCreatorLaunchBuy({ user: a.user.toBase58(), creator: coin.creator.toBase58(), slot, launchSlot: coin.snipe.launchSlot, tradeCount: coin.tradeCount });
+      const q = quoteCurveBuy(reservesOf(coin), coin.fees, a.budgetLamports, exempt ? 0 : snipeTaxBps(coin.snipe, slot));
       if (!q || q.tokensOut === 0n) throw new Error("amount too small");
       return {
         quote: q,

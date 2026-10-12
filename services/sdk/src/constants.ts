@@ -103,6 +103,13 @@ export const PYTH_MAX_CONF_BPS = 200n;
 export const LOCKER_MIN_SKIM_LP = 1_000_000n;
 /** Lamports the graduate caller lends for PumpSwap account rent (unused part returned). */
 export const GRADUATION_RENT_BUDGET = 50_000_000n;
+/** D20 (v0.5): default graduation fee — pays the setup rent (graduate caller refund, observations, claim queue); the rest → platform. */
+export const DEFAULT_GRADUATION_FEE_LAMPORTS = 650_000_000n;
+/** D19 (v0.5): snipe protection defaults and `Params::is_valid` caps. */
+export const DEFAULT_SNIPE_WINDOW_SLOTS = 4;
+export const DEFAULT_SNIPE_START_BPS = 9_900;
+export const MAX_SNIPE_WINDOW_SLOTS = 50;
+export const MAX_SNIPE_START_BPS = 9_900;
 
 /** Anchor `emit_cpi!` instruction tag (EVENT_IX_TAG_LE). */
 export const EVENT_IX_TAG = Uint8Array.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
@@ -132,7 +139,7 @@ export const CU = {
   buy: 200_000,
   sell: 200_000,
   createCoinAndBuy: 350_000,
-  graduate: 400_000, // ~270k measured (v0.3)
+  graduate: 400_000, // ~276-279k measured (v0.5, incl. D20 setup pre-funding)
   swapBuy: 250_000,
   swapSell: 250_000,
   executeBuyback: 250_000,

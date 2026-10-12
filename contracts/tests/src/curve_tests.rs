@@ -9,11 +9,11 @@ use fumpad::{
     external::pumpswap::{event_authority_pda, lp_mint_pda, pool_pda, WSOL_MINT},
     instructions::curve::{GRADUATION_RENT_BUDGET, MAX_NAME_LEN, MAX_SYMBOL_LEN, MAX_URI_LEN},
     math::{
-        curve::{quote_buy, quote_sell, sol_for_tokens, CurveReserves},
-        fees::compute_fee,
+        curve::{quote_buy, quote_sell, sol_for_tokens, BuyQuote, CurveReserves},
+        fees::{compute_fee, snipe_curve_offer, snipe_tax},
         price::price_q64,
     },
-    state::{Coin, CoinStatus, Params, Position, PAUSE_CLAIMS, PAUSE_LAUNCH, PAUSE_TRADE},
+    state::{Coin, CoinStatus, Params, Position, SnipeConfig, PAUSE_CLAIMS, PAUSE_LAUNCH, PAUSE_TRADE},
 };
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata, TransactionResult};
 use solana_keypair::Keypair;
@@ -172,6 +172,7 @@ fn create_coin_with(env: &mut Env, creator: &Keypair, name: &str, symbol: &str, 
 fn create_coin(env: &mut Env, creator: &Keypair) -> Pubkey {
     let (mint, res) = create_coin_with(env, creator, "Fumble Coin", "FUMB", "https://fumpad.fun/m/fumb.json");
     ok(res);
+    env.skip_snipe_window();
     kp_pk(&mint)
 }
 
@@ -264,6 +265,8 @@ fn graduate_accounts(env: &Env, payer: &Pubkey, mint: &Pubkey) -> fumpad::accoun
         quote_token_program: SPL_TOKEN,
         associated_token_program: ATA_PROGRAM,
         system_program: SYSTEM,
+        observations: pda(&[fumpad::OBSERVATIONS_SEED, mint.as_ref()]),
+        claim_queue: pda(&[fumpad::CLAIM_QUEUE_SEED, mint.as_ref()]),
         event_authority: event_authority(),
         program: fumpad::ID,
     }
@@ -350,6 +353,10 @@ fn create_coin_mints_supply_and_revokes_authorities() {
     assert_eq!(c.virtual_sol_reserves, p.initial_virtual_sol);
     assert_eq!(c.virtual_token_reserves, p.initial_virtual_token);
     assert_eq!((c.real_sol_reserves, c.real_token_reserves), (0, p.curve_supply));
+    // D19: launch slot + snipe schedule snapshotted.
+    let slot = env.svm.get_sysvar::<litesvm_clock::Clock>().slot;
+    assert_eq!(c.snipe, p.snipe_config(slot));
+    assert_eq!((c.snipe.window_slots, c.snipe.start_bps), (4, 9_900));
     assert_lamport_invariant(&env, &mint);
     assert_vault_invariant(&env, &mint, &p);
 
@@ -834,14 +841,46 @@ fn graduate_flow(params: Params) {
     assert!(!exists(&env, &ata(&pa, &info.lp_mint, &TOKEN_2022)));
     assert!(!exists(&env, &ata(&pa, &WSOL_MINT, &SPL_TOKEN)));
     assert_eq!(env.lamports(&pa), 0);
-    let rent_paid = payer_before - env.lamports(&payer);
-    assert!(rent_paid < GRADUATION_RENT_BUDGET / 2, "caller paid {rent_paid}");
-    println!("graduate: caller paid {rent_paid} lamports net (rent incl. Lock + LP vault, tx fee)");
+    let ev = events::<Graduated>(&meta);
+    assert_eq!(ev.len(), 1);
+    let ev = &ev[0];
+    assert_eq!((ev.mint, ev.pool), (mint, pool));
+    assert_eq!((ev.sol_deposited, ev.tokens_deposited), (sol_deposited, p.lp_supply));
+    assert_eq!(ev.lp_locked, lp_locked);
+    // D20: the fee is split exactly into caller refund + PDA pre-funding + platform remainder.
+    assert_eq!(ev.caller_refund + ev.setup_prefunded + ev.platform_fee, p.graduation_fee_lamports);
+    let rent = |len: usize| env.svm.minimum_balance_for_rent_exemption(len);
+    let obs_key = pda(&[fumpad::OBSERVATIONS_SEED, mint.as_ref()]);
+    let queue_key = pda(&[fumpad::CLAIM_QUEUE_SEED, mint.as_ref()]);
+    let (obs_rent, queue_rent) = (rent(fumpad::OBSERVATIONS_SPACE), rent(fumpad::CLAIM_QUEUE_SPACE));
+    assert_eq!(env.lamports(&obs_key) + env.lamports(&queue_key), ev.setup_prefunded);
+    let caller_net = payer_before - env.lamports(&payer); // incl. the 5000-lamport tx fee
+    let gross_rent = caller_net - 5_000 + ev.caller_refund;
+    assert!(gross_rent < GRADUATION_RENT_BUDGET / 2, "graduate rent {gross_rent}");
+    println!(
+        "graduate: caller rent {gross_rent}, refunded {}, prefunded obs {} + queue {}, platform {}",
+        ev.caller_refund,
+        env.lamports(&obs_key),
+        env.lamports(&queue_key),
+        ev.platform_fee
+    );
+    let full_setup = gross_rent + obs_rent + queue_rent;
+    if p.graduation_fee_lamports >= full_setup {
+        // Self-funding: caller net = tx fee only; both PDAs hold their full rent.
+        assert_eq!(caller_net, 5_000, "graduate costs the caller nothing but the tx fee");
+        assert_eq!((env.lamports(&obs_key), env.lamports(&queue_key)), (obs_rent, queue_rent));
+        assert_eq!(ev.platform_fee, p.graduation_fee_lamports - full_setup);
+    } else {
+        // Priority: caller, observations, queue; nothing left for the platform.
+        assert_eq!(ev.platform_fee, 0);
+        assert_eq!(ev.caller_refund, gross_rent.min(p.graduation_fee_lamports));
+    }
 
-    // Price continuity: PumpSwap opens at the curve's final price.
+    // Price continuity: PumpSwap opens at the curve's final price — exactly so for the
+    // default fee the curve constants are derived with (D20, SPEC §3).
     let pool_price = price_q64(sol_deposited, p.lp_supply).unwrap();
     let diff = pool_price.abs_diff(curve_price);
-    if p.graduation_fee_lamports == 0 {
+    if p.graduation_fee_lamports == Params::default().graduation_fee_lamports {
         assert!(diff * 1_000_000 <= curve_price, "curve {curve_price} vs pool {pool_price}");
     }
 
@@ -850,16 +889,30 @@ fn graduate_flow(params: Params) {
     assert_eq!(g.amm_pool, pool);
     assert_eq!(g.graduated_at, env.now());
     assert_eq!(g.real_sol_reserves, 0);
-    assert_eq!(g.platform_fees_unclaimed, c.platform_fees_unclaimed + p.graduation_fee_lamports);
+    assert_eq!(g.platform_fees_unclaimed, c.platform_fees_unclaimed + ev.platform_fee);
     assert_eq!(g.buyback_lamports, c.buyback_lamports);
     assert_eq!(token_amount(&env, &curve_vault(&mint)), 0);
     assert_lamport_invariant(&env, &mint);
 
-    let ev = events::<Graduated>(&meta);
-    assert_eq!(ev.len(), 1);
-    assert_eq!((ev[0].mint, ev[0].pool), (mint, pool));
-    assert_eq!((ev[0].sol_deposited, ev[0].tokens_deposited), (sol_deposited, p.lp_supply));
-    assert_eq!(ev[0].lp_locked, lp_locked);
+    // D20: the keeper's init_observations + 9× init_claim_queue then cost it only the tx
+    // fees (or exactly the shortfall when the fee didn't cover everything).
+    let keeper = env.new_user(10);
+    let kp = kp_pk(&keeper);
+    let k_before = env.lamports(&kp);
+    let obs_ix = ix(
+        fumpad::accounts::InitObservations { payer: kp, coin: coin_pda(&mint), observations: obs_key, system_program: SYSTEM },
+        fumpad::instruction::InitObservations {},
+    );
+    ok(env.send_as(&keeper, &[obs_ix], &[&keeper]));
+    let q_ix = ix(
+        fumpad::accounts::InitClaimQueue { payer: kp, coin: coin_pda(&mint), claim_queue: queue_key, system_program: SYSTEM },
+        fumpad::instruction::InitClaimQueue {},
+    );
+    ok(env.send_as(&keeper, &vec![q_ix; fumpad::CLAIM_QUEUE_INIT_CALLS], &[&keeper]));
+    let keeper_paid = k_before - env.lamports(&kp) - 2 * 5_000;
+    assert_eq!(keeper_paid, (obs_rent + queue_rent) - ev.setup_prefunded, "keeper pays only the shortfall");
+    assert_eq!((env.lamports(&obs_key), env.lamports(&queue_key)), (obs_rent, queue_rent));
+    assert_eq!(env.account(&queue_key).unwrap().data.len(), fumpad::CLAIM_QUEUE_SPACE);
 
     // Terminal: no second graduation, no curve trading.
     assert_fumpad_err(graduate(&mut env, &mint), FumpadError::WrongCoinStatus);
@@ -872,9 +925,24 @@ fn graduate_creates_pumpswap_pool_and_locks_lp() {
     graduate_flow(Params::default());
 }
 
+/// D20: a fee below the setup cost funds the caller, then the ring, then part of the queue;
+/// the keeper tops up the rest and the platform gets nothing.
 #[test]
-fn graduate_with_fee_credits_platform() {
-    graduate_flow(Params { graduation_fee_lamports: SOL / 2, ..Params::default() });
+fn graduate_with_partial_fee_funds_setup_in_order() {
+    graduate_flow(Params { graduation_fee_lamports: SOL / 4, ..Params::default() });
+}
+
+/// Fee 0 (pre-D20 behaviour): the caller pays its rent, the keeper the whole setup.
+#[test]
+fn graduate_with_zero_fee_leaves_setup_to_callers() {
+    graduate_flow(Params { graduation_fee_lamports: 0, ..Params::default() });
+}
+
+/// A fee too small to make a fresh PDA rent-exempt is not split into dust: it refunds the
+/// caller as far as it goes.
+#[test]
+fn graduate_with_tiny_fee_refunds_caller_only() {
+    graduate_flow(Params { graduation_fee_lamports: 1_000, ..Params::default() });
 }
 
 #[test]
@@ -1024,13 +1092,293 @@ fn graduate_uses_fee_snapshotted_at_create() {
     assert_fumpad_err(env.queue_params(too_big), FumpadError::InvalidParams);
     // At the cap: accepted after 48h, but not for this (already created) coin.
     env.set_params_timelocked(Params { graduation_fee_lamports: SOL, ..Params::default() });
-    let platform_before = env.fetch::<Coin>(&coin_pda(&mint)).platform_fees_unclaimed;
-    ok(graduate(&mut env, &mint));
+    let before = env.fetch::<Coin>(&coin_pda(&mint));
+    let meta = ok(graduate(&mut env, &mint));
     let c = env.fetch::<Coin>(&coin_pda(&mint));
     assert_eq!(c.status, CoinStatus::Graduated);
-    assert_eq!(c.platform_fees_unclaimed, platform_before, "snapshotted fee (0) charged, not the new 1 SOL");
+    let ev = &events::<Graduated>(&meta)[0];
+    assert_eq!(
+        ev.caller_refund + ev.setup_prefunded + ev.platform_fee,
+        fumpad::DEFAULT_GRADUATION_FEE_LAMPORTS,
+        "snapshotted fee (0.65 SOL) charged, not the new 1 SOL"
+    );
+    assert_eq!(ev.sol_deposited, before.real_sol_reserves - fumpad::DEFAULT_GRADUATION_FEE_LAMPORTS);
+    assert_eq!(c.platform_fees_unclaimed, before.platform_fees_unclaimed + ev.platform_fee);
     assert_lamport_invariant(&env, &mint);
     // A coin created after the change snapshots the new fee.
     let mint2 = create_coin(&mut env, &creator);
     assert_eq!(env.fetch::<Coin>(&coin_pda(&mint2)).fees.graduation_fee_lamports, SOL);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// D19 snipe protection
+// ═════════════════════════════════════════════════════════════════════════════
+
+fn slot(env: &Env) -> u64 {
+    env.svm.get_sysvar::<litesvm_clock::Clock>().slot
+}
+
+fn set_slot(env: &mut Env, s: u64) {
+    let mut c = env.svm.get_sysvar::<litesvm_clock::Clock>();
+    c.slot = s;
+    env.svm.set_sysvar(&c);
+}
+
+/// Create a coin and stay in its launch slot (no `skip_snipe_window`).
+fn launch(env: &mut Env, creator: &Keypair) -> Pubkey {
+    let (mint, res) = create_coin_with(env, creator, "Snipe", "SNP", "");
+    ok(res);
+    kp_pk(&mint)
+}
+
+fn buy_ix(env: &Env, user: &Pubkey, mint: &Pubkey, sol_in: u64, min_out: u64) -> solana_instruction::Instruction {
+    ix(buy_accounts(env, user, mint), fumpad::instruction::Buy { sol_in, min_tokens_out: min_out })
+}
+
+/// What a curve buy of `sol_in` at snipe rate `bps` does to `before` (mirror of `buy`).
+struct SnipeExpect {
+    q: BuyQuote,
+    fee: fumpad::math::fees::FeeSplit,
+    tax: u64,
+    pool_tokens: u64,
+}
+
+fn expect_buy(before: &Coin, sol_in: u64, bps: u16) -> SnipeExpect {
+    let offer = snipe_curve_offer(sol_in, bps).unwrap();
+    let r = reserves(before);
+    let q = quote_buy(&r, offer).unwrap();
+    let fee = compute_fee(q.sol_used, &before.fees).unwrap();
+    let tax = snipe_tax(q.sol_used, bps).unwrap();
+    let mut after = r;
+    after.apply_buy(&q).unwrap();
+    let bb = quote_buy(&after, fee.pool + tax).unwrap();
+    SnipeExpect { q, fee, tax, pool_tokens: bb.tokens_out }
+}
+
+/// Buyer's lamports spent on the trade itself (excludes the ATA + position rent it paid).
+fn trade_cost(env: &Env, user: &Pubkey, mint: &Pubkey, lamports_before: u64) -> u64 {
+    let rents = env.lamports(&ata(user, mint, &TOKEN_2022)) + env.lamports(&position_pda(mint, user));
+    lamports_before - env.lamports(user) - rents
+}
+
+/// Buys at slot offsets 0..=W+1 pay 99 / 75 / 50 / 25 % then the normal fee only. The tax
+/// is carved out of `sol_in` (curve gets the rest, normal fee on top of that), lands in
+/// the reward pool via the inline buyback, and the lamport invariant holds.
+#[test]
+fn snipe_tax_follows_schedule_by_slot_offset() {
+    let mut env = env();
+    let p = Params::default();
+    let creator = env.new_user(10);
+    let schedule = [9_900u16, 7_500, 5_000, 2_500, 0, 0];
+    assert_eq!(schedule.len(), p.snipe_window_slots as usize + 2);
+    for (d, &bps) in schedule.iter().enumerate() {
+        let mint = launch(&mut env, &creator);
+        let launch_slot = slot(&env);
+        env.advance_slots(d as u64);
+        let buyer = env.new_user(100);
+        let bk = kp_pk(&buyer);
+        let before: Coin = env.fetch(&coin_pda(&mint));
+        assert_eq!(before.snipe.launch_slot, launch_slot);
+        let sol_in = SOL;
+        let e = expect_buy(&before, sol_in, bps);
+        let (lamports, pool_tokens) = (env.lamports(&bk), token_amount(&env, &reward_vault(&mint)));
+
+        let meta = ok(buy(&mut env, &buyer, &mint, sol_in, e.q.tokens_out));
+        let t = &events::<Trade>(&meta)[0];
+        assert_eq!((t.snipe_tax_bps, t.snipe_tax), (bps, e.tax), "offset {d}");
+        assert_eq!((t.sol_amount, t.token_amount), (e.q.sol_used, e.q.tokens_out));
+        assert_eq!((t.fee_pool, t.fee_platform, t.fee_creator), (e.fee.pool, e.fee.platform, e.fee.creator));
+        assert_eq!(t.pool_tokens_bought, e.pool_tokens);
+        assert_eq!(token_amount(&env, &reward_vault(&mint)) - pool_tokens, e.pool_tokens, "tax bought into the pool");
+        assert_eq!(token_amount(&env, &ata(&bk, &mint, &TOKEN_2022)), e.q.tokens_out);
+        // Charged exactly curve + normal fee + tax, never more than outside the window.
+        let cost = trade_cost(&env, &bk, &mint, lamports);
+        assert_eq!(cost, e.q.sol_used + e.fee.total + e.tax);
+        assert!(e.q.sol_used + e.tax <= sol_in && cost <= sol_in + compute_fee(sol_in, &before.fees).unwrap().total);
+        if bps == 0 {
+            assert_eq!(e.q.sol_used, sol_in);
+        } else {
+            // tax ≈ bps of (curve + tax), rounded up for the pool.
+            let share = e.tax as u128 * 10_000 / (e.tax + e.q.sol_used) as u128;
+            assert!(share.abs_diff(bps as u128) <= 1, "offset {d}: share {share}");
+        }
+        let c: Coin = env.fetch(&coin_pda(&mint));
+        assert_eq!(c.platform_fees_unclaimed, e.fee.platform, "platform gets only the normal share");
+        assert_eq!(c.creator_fees_unclaimed, e.fee.creator, "creator gets only the normal share");
+        assert_lamport_invariant(&env, &mint);
+        assert_vault_invariant(&env, &mint, &p);
+    }
+}
+
+/// The creator's buy inside the `create_coin` transaction is exempt; a second creator buy
+/// in that same transaction is not (it is no longer the coin's first trade).
+#[test]
+fn snipe_creator_buy_bundled_with_create_is_exempt() {
+    let mut env = env();
+    let creator = env.new_user(100);
+    let ck = kp_pk(&creator);
+    let mint_kp = Keypair::new();
+    let mint = kp_pk(&mint_kp);
+    let create = create_coin_ix(&ck, &mint, "Snipe", "SNP", "", &env);
+    let first = buy_ix(&env, &ck, &mint, 2 * SOL, 1);
+    let second = buy_ix(&env, &ck, &mint, SOL, 1);
+    let meta = ok(env.send(&[create, first, second], &[&creator, &mint_kp]));
+    let t = events::<Trade>(&meta);
+    assert_eq!(t.len(), 2);
+    assert_eq!((t[0].snipe_tax_bps, t[0].snipe_tax, t[0].sol_amount), (0, 0, 2 * SOL), "launch buy exempt");
+    assert_eq!(t[1].snipe_tax_bps, 9_900, "second creator buy in the launch tx is taxed");
+    assert_eq!(t[1].sol_amount, SOL / 100);
+    assert_eq!(t[1].snipe_tax, 99 * SOL / 100);
+    assert_lamport_invariant(&env, &mint);
+}
+
+/// Dev alt wallets in the launch slot — bundled into the launch transaction or not — pay
+/// the tax; so does the creator once another trade happened, or in a later slot.
+#[test]
+fn snipe_alts_and_later_creator_buys_pay_the_tax() {
+    let mut env = env();
+    let creator = env.new_user(100);
+    let alt = env.new_user(100);
+    let (ck, ak) = (kp_pk(&creator), kp_pk(&alt));
+
+    // a) alt wallet's buy bundled into the launch transaction (creator co-signs).
+    let mint_kp = Keypair::new();
+    let mint = kp_pk(&mint_kp);
+    let create = create_coin_ix(&ck, &mint, "Snipe", "SNP", "", &env);
+    let alt_buy = buy_ix(&env, &ak, &mint, SOL, 1);
+    let meta = ok(env.send(&[create, alt_buy], &[&creator, &mint_kp, &alt]));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax_bps, 9_900);
+    // b) another alt in the launch slot, separate transaction.
+    let alt2 = env.new_user(100);
+    let meta = ok(buy(&mut env, &alt2, &mint, SOL, 1));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax_bps, 9_900);
+    // c) the creator in the launch slot, but after other trades.
+    let meta = ok(buy(&mut env, &creator, &mint, SOL, 1));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax_bps, 9_900);
+    assert_lamport_invariant(&env, &mint);
+
+    // d) the creator's first buy one slot after launch.
+    let mint2 = launch(&mut env, &creator);
+    env.advance_slots(1);
+    let meta = ok(buy(&mut env, &creator, &mint2, SOL, 1));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax_bps, 7_500);
+
+    // e) the creator's own separate transaction in the launch slot that is still the coin's
+    //    first trade is exempt too — equivalent to bundling it (nothing traded in between).
+    let mint3 = launch(&mut env, &creator);
+    let meta = ok(buy(&mut env, &creator, &mint3, SOL, 1));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax, 0);
+}
+
+/// Sells in the window pay the normal fee only.
+#[test]
+fn snipe_tax_does_not_apply_to_sells() {
+    let mut env = env();
+    let creator = env.new_user(100);
+    let ck = kp_pk(&creator);
+    let mint_kp = Keypair::new();
+    let mint = kp_pk(&mint_kp);
+    let create = create_coin_ix(&ck, &mint, "Snipe", "SNP", "", &env);
+    let b = buy_ix(&env, &ck, &mint, 5 * SOL, 1);
+    ok(env.send(&[create, b], &[&creator, &mint_kp]));
+    let held = token_amount(&env, &ata(&ck, &mint, &TOKEN_2022));
+    let before: Coin = env.fetch(&coin_pda(&mint));
+    let gross = quote_sell(&reserves(&before), held / 2).unwrap();
+    let fee = compute_fee(gross, &before.fees).unwrap();
+    let lamports = env.lamports(&ck);
+    let meta = ok(sell(&mut env, &creator, &mint, held / 2, 0)); // slot offset 0
+    let t = &events::<Trade>(&meta)[0];
+    assert!(!t.is_buy);
+    assert_eq!((t.snipe_tax, t.snipe_tax_bps), (0, 0));
+    assert_eq!((t.sol_amount, t.fee_pool + t.fee_platform + t.fee_creator), (gross, fee.total));
+    assert_eq!(env.lamports(&ck) - lamports, gross - fee.total);
+    assert_lamport_invariant(&env, &mint);
+}
+
+/// A buy that completes the curve inside the window pays the tax on the SOL the curve
+/// actually took; the tax (curve now empty) waits in `buyback_lamports`.
+#[test]
+fn snipe_tax_on_completing_buy_follows_sol_used() {
+    let mut env = env();
+    let p = Params::default();
+    let creator = env.new_user(10);
+    let mint = launch(&mut env, &creator);
+    env.advance_slots(3); // 25%
+    let whale = env.new_user(1_000);
+    let wk = kp_pk(&whale);
+    let before: Coin = env.fetch(&coin_pda(&mint));
+    let sol_in = 400 * SOL;
+    let e = expect_buy(&before, sol_in, 2_500);
+    assert!(e.q.completes && e.q.sol_used < snipe_curve_offer(sol_in, 2_500).unwrap());
+    assert_eq!(e.tax, (e.q.sol_used as u128 * 2_500).div_ceil(7_500) as u64);
+    let lamports = env.lamports(&wk);
+    let meta = ok(buy(&mut env, &whale, &mint, sol_in, 1));
+    let t = &events::<Trade>(&meta)[0];
+    assert_eq!((t.snipe_tax, t.pool_tokens_bought), (e.tax, 0));
+    assert_eq!(trade_cost(&env, &wk, &mint, lamports), e.q.sol_used + e.fee.total + e.tax);
+    let c: Coin = env.fetch(&coin_pda(&mint));
+    assert_eq!(c.status, CoinStatus::Complete);
+    assert_eq!(c.buyback_lamports, e.fee.pool + e.tax);
+    assert_lamport_invariant(&env, &mint);
+    assert_vault_invariant(&env, &mint, &p);
+}
+
+/// The schedule is fixed per coin at `create_coin`: a later (timelocked) change applies only
+/// to coins launched after it.
+#[test]
+fn snipe_schedule_is_snapshotted_at_create() {
+    let mut env = env();
+    let creator = env.new_user(100);
+    let mint_a = launch(&mut env, &creator);
+    let launch_a = slot(&env);
+    env.set_params_timelocked(Params { snipe_window_slots: 0, ..Params::default() });
+    set_slot(&mut env, launch_a + 1); // back inside A's window (the 48h warp moved slots)
+    let buyer = env.new_user(100);
+    let meta = ok(buy(&mut env, &buyer, &mint_a, SOL, 1));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax_bps, 7_500, "A keeps its launch schedule");
+
+    let mint_b = launch(&mut env, &creator);
+    let b: Coin = env.fetch(&coin_pda(&mint_b));
+    assert_eq!(b.snipe, SnipeConfig { launch_slot: launch_a + 1, window_slots: 0, start_bps: 9_900 });
+    let meta = ok(buy(&mut env, &buyer, &mint_b, SOL, 1));
+    assert_eq!(events::<Trade>(&meta)[0].snipe_tax, 0, "B launched with protection off");
+}
+
+/// `Params::is_valid` caps: start ≤ 99%, window ≤ 50 slots.
+#[test]
+fn snipe_params_are_capped() {
+    let mut env = env();
+    let d = Params::default();
+    assert_fumpad_err(env.queue_params(Params { snipe_start_bps: 9_901, ..d }), FumpadError::InvalidParams);
+    assert_fumpad_err(env.queue_params(Params { snipe_window_slots: 51, ..d }), FumpadError::InvalidParams);
+    ok(env.queue_params(Params { snipe_start_bps: 9_900, snipe_window_slots: 50, ..d }));
+    ok(env.queue_params(Params { snipe_start_bps: 0, snipe_window_slots: 0, ..d }));
+}
+
+/// A buyer quoting without the tax is protected by `min_tokens_out`.
+#[test]
+fn snipe_tax_respects_slippage_guard() {
+    let mut env = env();
+    let creator = env.new_user(10);
+    let mint = launch(&mut env, &creator);
+    let bot = env.new_user(100);
+    let untaxed = quote_buy(&reserves(&env.fetch::<Coin>(&coin_pda(&mint))), SOL).unwrap().tokens_out;
+    assert_fumpad_err(buy(&mut env, &bot, &mint, SOL, untaxed), FumpadError::SlippageExceeded);
+}
+
+/// CU of a curve buy inside vs outside the window (same wallet and coin, so PDA bump
+/// searches cost the same; the wallet's ATA + position already exist).
+#[test]
+fn snipe_tax_compute_units() {
+    let mut env = env();
+    let creator = env.new_user(10);
+    let mint = launch(&mut env, &creator);
+    let a = env.new_user(100);
+    let first = ok(buy(&mut env, &a, &mint, SOL, 1)).compute_units_consumed;
+    env.advance_slots(1);
+    let taxed = ok(buy(&mut env, &a, &mint, SOL, 1)).compute_units_consumed;
+    env.skip_snipe_window();
+    let normal = ok(buy(&mut env, &a, &mint, SOL, 1)).compute_units_consumed;
+    println!("buy CU: first (taxed, creates ATA + position) {first}, taxed {taxed}, normal {normal}");
+    assert!(taxed < normal + 2_000, "taxed {taxed} vs normal {normal}");
 }

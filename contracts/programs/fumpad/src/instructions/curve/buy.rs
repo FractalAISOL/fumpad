@@ -12,12 +12,22 @@ use crate::{
     error::FumpadError,
     events::{CurveCompleted, Trade},
     instructions::rewards::hooks::{self, BuyHookAccounts},
-    math::{curve::quote_buy, fees::compute_fee, price::price_q64},
+    math::{
+        curve::quote_buy,
+        fees::{compute_fee, snipe_curve_offer, snipe_tax, snipe_tax_bps},
+        price::price_q64,
+    },
     state::{Coin, CoinStatus, Global, Position, PAUSE_TRADE},
 };
 
 /// Buy on the bonding curve. `sol_in` = lamports offered to the curve; the FUMPAD fee
 /// is charged on top of the lamports actually used (see `curve/mod.rs`).
+///
+/// D19: in the first `coin.snipe.window_slots` slots after launch a snipe tax of
+/// `snipe_tax_bps` is carved out of `sol_in` (only the rest is offered to the curve; the
+/// normal fee is on that rest), so the buyer's total never exceeds `sol_in` + normal fee.
+/// The tax goes entirely to the reward pool (inline buyback); `Trade.snipe_tax` /
+/// `snipe_tax_bps` report it. The creator's buy bundled with `create_coin` is exempt.
 ///
 /// remaining_accounts: the position's open tickets (exactly `position.open_count`,
 /// any order), then the coin's ClaimQueue only if one of them is `Queued` — consumed by
@@ -75,22 +85,39 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
     require!(sol_in > 0, FumpadError::ZeroAmount);
-    let now = Clock::get()?.unix_timestamp;
+    let clock = Clock::get()?;
+    let now = clock.unix_timestamp;
 
     // Canonical ATA balance before the buy (R-L2 observation).
     let balance_before = a.user_token_account.amount;
 
+    // ── D19 snipe tax ──
+    // Exempt: the creator's buy that is the coin's very first trade, in the launch slot —
+    // i.e. the buy bundled with `create_coin` (nothing can trade in between inside one
+    // transaction). A second creator buy, a later slot, or any other wallet (dev alts
+    // included) pays the schedule.
+    let creator_launch_buy =
+        a.user.key() == a.coin.creator && clock.slot == a.coin.snipe.launch_slot && a.coin.trade_count == 0;
+    let snipe_bps = if creator_launch_buy { 0 } else { snipe_tax_bps(&a.coin.snipe, clock.slot) };
+    let curve_offer = snipe_curve_offer(sol_in, snipe_bps).ok_or(FumpadError::MathOverflow)?;
+
     // ── Quote ──
     let mut r = reserves_of(&a.coin);
     let pre_spot = r.spot_price_q64().ok_or(FumpadError::MathOverflow)?;
-    let q = quote_buy(&r, sol_in).ok_or(FumpadError::MathOverflow)?;
+    let q = quote_buy(&r, curve_offer).ok_or(FumpadError::MathOverflow)?;
     require!(q.tokens_out > 0, FumpadError::ZeroAmount);
     require!(q.tokens_out >= min_tokens_out, FumpadError::SlippageExceeded);
     let fee = compute_fee(q.sol_used, &a.coin.fees).ok_or(FumpadError::MathOverflow)?;
+    // Tax follows the SOL the curve actually took (a completing buy uses less than offered).
+    let snipe = snipe_tax(q.sol_used, snipe_bps).ok_or(FumpadError::MathOverflow)?;
     r.apply_buy(&q).ok_or(FumpadError::MathOverflow)?;
 
-    // ── Move value: SOL (curve + fee) user → coin; tokens curve vault → user ──
-    let total_in = q.sol_used.checked_add(fee.total).ok_or(FumpadError::MathOverflow)?;
+    // ── Move value: SOL (curve + fee + snipe tax) user → coin; tokens curve vault → user ──
+    let total_in = q
+        .sol_used
+        .checked_add(fee.total)
+        .and_then(|t| t.checked_add(snipe))
+        .ok_or(FumpadError::MathOverflow)?;
     system_program::transfer(
         CpiContext::new(
             a.system_program.key(),
@@ -103,10 +130,11 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
     let decimals = a.mint.decimals;
     vault_transfer(a, a.user_token_account.to_account_info(), q.tokens_out, decimals, &[pa_seeds])?;
 
-    // ── Fees: platform + creator accrue; pool share buys back inline ──
+    // ── Fees: platform + creator accrue; pool share + the whole snipe tax buy back inline ──
     let coin = &mut a.coin;
     accrue_fees(coin, fee.platform, fee.creator)?;
-    let bb = inline_buyback(coin, &mut r, fee.pool)?;
+    let pool_lamports = fee.pool.checked_add(snipe).ok_or(FumpadError::MathOverflow)?;
+    let bb = inline_buyback(coin, &mut r, pool_lamports)?;
     store_reserves(coin, &r);
     bump_stats(coin, q.sol_used);
     // D10: exact curve touch point (post-trade spot includes the inline buyback).
@@ -155,6 +183,8 @@ pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_token
         virtual_sol_reserves: r.virtual_sol,
         virtual_token_reserves: r.virtual_token,
         ts: now,
+        snipe_tax: snipe,
+        snipe_tax_bps: snipe_bps,
     });
     if completed {
         emit_cpi!(CurveCompleted { mint, ts: now });

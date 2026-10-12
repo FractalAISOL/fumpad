@@ -241,7 +241,8 @@ fn put_coin(env: &mut Env, mint: Pubkey, pool: Pubkey, status: CoinStatus, buyba
         // D10 reference initialized at the pool's opening spot (as graduation carries it).
         reference: ReferencePrice::new(pool_spot_q64(env, &pool), START_TS - 30),
         fees: env.fetch::<fumpad::state::Global>(&env.global_pda()).params.coin_fees(),
-        reserved: [0; 72],
+        snipe: Default::default(),
+        reserved: [0; 60],
     };
     let mut data = Vec::new();
     coin.try_serialize(&mut data).unwrap();

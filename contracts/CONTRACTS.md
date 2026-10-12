@@ -40,6 +40,36 @@ program + PumpSwap GlobalConfig, global initialized, one keeper). Devnet account
 in `tests/fixtures/` (`solana account -u d <addr> --output json -o <file>`;
 `solana program dump -u d <id> <file>.so`).
 
+## v0.5 interface changes (D19 snipe tax, D20 graduation fee — SDK / keeper / indexer / app)
+Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-idl`, `npm run vectors`). SPEC §3 (D20) and §4.1 (D19) have the rationale.
+
+**Params / Global** (`Params` fields appended at the end → `Params` +4 bytes, `Global` 672 → **680 bytes**: re-init Global on devnet)
+- `snipe_window_slots: u16` (default 4, cap 50; 0 = off), `snipe_start_bps: u16` (default 9,900, cap 9,900). `Params::is_valid` enforces both caps.
+- `graduation_fee_lamports` default **0 → 650,000,000** (0.65 SOL; cap 1 SOL unchanged).
+- Curve defaults re-derived for continuity with the fee kept out of the LP: `initial_virtual_token` **988,744,870,180,001**, `curve_supply` **730,811,425,785,218**, `lp_supply` **189,188,574,214,782** (reward pool 80M, 30 SOL virtual, 85 SOL raise unchanged). Read them from chain; anything hard-coding the v0.4 values (e.g. `app/src/data/chain.ts` `initialVirtualTokens`) must update.
+- New constants: `DEFAULT_SNIPE_WINDOW_SLOTS`, `DEFAULT_SNIPE_START_BPS`, `MAX_SNIPE_WINDOW_SLOTS` (50), `MAX_SNIPE_START_BPS` (9,900), `DEFAULT_GRADUATION_FEE_LAMPORTS`; `OBSERVATIONS_SPACE` (8,280) exported next to `CLAIM_QUEUE_SPACE`.
+
+**State layout**
+- `Coin.snipe: SnipeConfig { launch_slot: u64, window_slots: u16, start_bps: u16 }` carved from `reserved` (72 → 60); size unchanged (338). Pre-v0.5 coins read zeros = no tax.
+
+**Instructions**
+| Change | Details |
+|---|---|
+| `buy` | Same accounts/args. In the launch window the snipe tax is carved out of `sol_in`: curve offer = ⌊sol_in·(10,000 − t)/10,000⌋, tax = ⌈sol_used·t/(10,000 − t)⌉, user pays `sol_used + fee(sol_used) + tax` (≤ `sol_in + fee(sol_in)`). t = 0 for the creator's buy that is the coin's first trade in the launch slot (bundle it with `create_coin`). Quote with the slot you expect to land in (current slot = pessimistic) and set `min_tokens_out` from it. |
+| `graduate` | **Two accounts appended** after `system_program` (before the event-CPI pair): `observations` (mut, PDA `["observations", mint]`), `claim_queue` (mut, PDA `["claim_queue", mint]`). Tx ≈1077 bytes. Spends the coin's snapshotted fee: caller refund (its measured net rent) → observations rent → claim-queue rent (pre-funded into the PDAs) → remainder to `platform_fees_unclaimed`. |
+| `init_observations`, `init_claim_queue` | Unchanged interface; with a pre-funded PDA the payer pays nothing (only a shortfall). |
+| `register_holdings` | Unchanged interface (`global`, `coin` boxed: the 680-byte Global overflowed the 4 KB stack frame). |
+
+**Events (layout changes — update decoders)**
+- `Trade` + trailing `snipe_tax: u64`, `snipe_tax_bps: u16` (0 for sells / router swaps / outside the window). Total charged on a buy = `sol_amount + fee_pool + fee_platform + fee_creator + snipe_tax`; `pool_tokens_bought` includes the tax's buyback. Indexer/UI: show "snipe tax" when `snipe_tax > 0`; count it as reward-pool inflow, not platform/creator fees.
+- `Graduated` + trailing `caller_refund: u64`, `setup_prefunded: u64`, `platform_fee: u64` (sum = the coin's graduation fee).
+
+**Errors:** none added.
+
+**Keeper behaviour:** unchanged sequence (`graduate`, then `init_observations` + 9× `init_claim_queue`); it now costs the keeper only tx fees for coins with the 0.65 SOL fee (it still advances graduate's 0.05 SOL rent loan, returned in-instruction).
+
+**Compute (v0.5 deltas):** curve `buy` +~200 CU (taxed 45.9k vs normal 45.7k, existing ATA/position; `curve_tests::snipe_tax_compute_units`); `graduate` **276–279k** (+~5k: two PDA bump checks + pre-funding; still set 400k). Everything else unchanged (table below).
+
 ## v0.4 interface changes (D17 — backend SDK / keeper must pick these up)
 Regenerate the client from `target/idl/fumpad.json`. SPEC §3, §5.3 and §10 have the rationale.
 
@@ -78,7 +108,7 @@ Regenerate the client from `target/idl/fumpad.json`. SPEC §3, §5.3 and §10 ha
 | `register_holdings` rebuy voiding the front entry of a full queue (`buy`/`swap_buy` share the hook) | 25–37k | no |
 | `close_ticket` voided, queue passed (full 1024 scanned) | 21–22k | no |
 | `record_samples` 1 / 5 / 10 coins | 16k / 56k / 107k | no (10 coins needs a v0 tx + ALT for size) |
-| `graduate` | 250–273k | **yes** (400k) |
+| `graduate` | 276–279k (v0.5; v0.4: 250–273k) | **yes** (400k) |
 | `swap_buy` (first buy, creates ATA+position / 5 open tickets) | 139–166k / 126–153k | no (clients set 1.4M today; ≥ 200k advisable) |
 | `swap_sell` (creates ticket) | 120–147k | no |
 | `execute_buyback` | 143k | no |

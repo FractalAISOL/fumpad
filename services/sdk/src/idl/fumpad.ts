@@ -1736,6 +1736,70 @@ export type Fumpad = {
           "address": "11111111111111111111111111111111"
         },
         {
+          "name": "observations",
+          "docs": [
+            "yet: `init_observations` requires `Graduated`); receives its rent from the",
+            "graduation fee so `init_observations` costs its payer nothing."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  98,
+                  115,
+                  101,
+                  114,
+                  118,
+                  97,
+                  116,
+                  105,
+                  111,
+                  110,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "claimQueue",
+          "docs": [
+            "likewise for `init_claim_queue`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  108,
+                  97,
+                  105,
+                  109,
+                  95,
+                  113,
+                  117,
+                  101,
+                  117,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
           "name": "eventAuthority"
         },
         {
@@ -4729,11 +4793,23 @@ export type Fumpad = {
             }
           },
           {
+            "name": "snipe",
+            "docs": [
+              "D19: launch slot + snipe-tax schedule snapshotted at `create_coin`. Occupies 12 bytes",
+              "of the former 72-byte `reserved` (coins created before v0.5 read zeros = no tax)."
+            ],
+            "type": {
+              "defined": {
+                "name": "snipeConfig"
+              }
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                72
+                60
               ]
             }
           }
@@ -5042,6 +5118,23 @@ export type Fumpad = {
           {
             "name": "ts",
             "type": "i64"
+          },
+          {
+            "name": "callerRefund",
+            "docs": [
+              "D20 (v0.5): how the coin's graduation fee was spent. `caller_refund` = the graduate",
+              "caller's net rent, reimbursed; `setup_prefunded` = rent pre-funded into the",
+              "observations + claim-queue PDAs; `platform_fee` = the remainder (to platform fees)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "setupPrefunded",
+            "type": "u64"
+          },
+          {
+            "name": "platformFee",
+            "type": "u64"
           }
         ]
       }
@@ -5331,6 +5424,20 @@ export type Fumpad = {
           {
             "name": "maxPriceAgeSecs",
             "type": "u64"
+          },
+          {
+            "name": "snipeWindowSlots",
+            "docs": [
+              "Curve buys within this many slots after the launch slot pay the snipe tax (0 = off)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "snipeStartBps",
+            "docs": [
+              "Tax at the launch slot, bps; the schedule is min(this, ⌈10_000·(W − d)/W⌉) at offset d."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -5571,6 +5678,38 @@ export type Fumpad = {
           {
             "name": "ts",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "snipeConfig",
+      "docs": [
+        "D19: per-coin snapshot of the snipe protection, taken at `create_coin`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "launchSlot",
+            "docs": [
+              "Clock slot of `create_coin`."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "windowSlots",
+            "docs": [
+              "Buys at slot offsets 0..window_slots pay the tax (0 = disabled)."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "startBps",
+            "docs": [
+              "Tax at offset 0, bps (≤ `MAX_SNIPE_START_BPS`)."
+            ],
+            "type": "u16"
           }
         ]
       }
@@ -5849,6 +5988,22 @@ export type Fumpad = {
           {
             "name": "ts",
             "type": "i64"
+          },
+          {
+            "name": "snipeTax",
+            "docs": [
+              "D19 (v0.5): snipe tax paid on top of the normal fee (curve buys in the launch window;",
+              "0 otherwise). All of it went to the reward pool (included in `pool_tokens_bought`).",
+              "Total charged = sol_amount + fee_pool + fee_platform + fee_creator + snipe_tax."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "snipeTaxBps",
+            "docs": [
+              "D19: the tax rate applied, bps of (sol_amount + snipe_tax); 0 outside the window."
+            ],
+            "type": "u16"
           }
         ]
       }

@@ -222,6 +222,7 @@ impl Flow {
         );
         let creator = f.creator.insecure_clone();
         ok(f.env.send(&[i], &[&creator, &mint_kp]));
+        f.env.skip_snipe_window();
         f
     }
 
@@ -383,6 +384,8 @@ impl Flow {
                 quote_token_program: TOKEN,
                 associated_token_program: ATA_PROGRAM,
                 system_program: SYSTEM,
+                observations: self.observations,
+                claim_queue: self.queue,
                 event_authority: event_authority(),
                 program: fumpad::ID,
             },

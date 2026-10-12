@@ -13,6 +13,7 @@ use crate::{
     constants::*,
     error::FumpadError,
     events::Graduated,
+    instructions::{rewards::init_claim_queue::CLAIM_QUEUE_SPACE, venue::init_observations::OBSERVATIONS_SPACE},
     external::pumpswap::{self, lp_mint_pda, pool_pda, token_amount, CreatePoolAccounts, CreatePoolArgs, WSOL_MINT},
     state::{Coin, CoinStatus, Global},
 };
@@ -31,8 +32,17 @@ pub const GRADUATION_RENT_BUDGET: u64 = 50_000_000;
 ///
 /// Liquidity: base = the curve vault's whole balance (= lp_supply minted at launch,
 /// since the curve is empty), quote = real_sol_reserves − graduation_fee_lamports.
-/// The graduation fee is credited to `platform_fees_unclaimed`. The caller (`payer`)
-/// pays PumpSwap's account rent (see `GRADUATION_RENT_BUDGET`).
+/// The caller (`payer`) advances PumpSwap's account rent (see `GRADUATION_RENT_BUDGET`).
+///
+/// D20 — the coin's snapshotted graduation fee pays the setup, in this order:
+///   1. the caller's net rent for this instruction, reimbursed (≤ `GRADUATION_RENT_BUDGET`);
+///   2. the observations ring's rent, pre-funded into its PDA (`init_observations` then
+///      costs nothing);
+///   3. the claim queue's full-size rent, pre-funded into its PDA (likewise for the 9
+///      `init_claim_queue` calls);
+///   4. the rest → `platform_fees_unclaimed`.
+/// A fee too small for all of it leaves the shortfall to whoever runs the init calls
+/// (the keeper), exactly as before D20.
 ///
 /// remaining_accounts: appended verbatim to the PumpSwap CPI (forward compatibility).
 #[event_cpi]
@@ -122,6 +132,16 @@ pub struct Graduate<'info> {
     pub quote_token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: D20 — the coin's future observations PDA ["observations", mint] (not created
+    /// yet: `init_observations` requires `Graduated`); receives its rent from the
+    /// graduation fee so `init_observations` costs its payer nothing.
+    #[account(mut, seeds = [OBSERVATIONS_SEED, mint.key().as_ref()], bump)]
+    pub observations: UncheckedAccount<'info>,
+    /// CHECK: D20 — the coin's future ClaimQueue PDA ["claim_queue", mint]; pre-funded
+    /// likewise for `init_claim_queue`.
+    #[account(mut, seeds = [CLAIM_QUEUE_SEED, mint.key().as_ref()], bump)]
+    pub claim_queue: UncheckedAccount<'info>,
 }
 
 pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()> {
@@ -135,6 +155,9 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
     require!(quote_amount > 0, FumpadError::InsufficientReserves);
     let base_amount = a.curve_vault.amount;
     require!(base_amount > 0, FumpadError::InsufficientReserves);
+    // D20: the caller's lamports before this instruction = now + the graduation WSOL
+    // account's rent (paid by Anchor's `init` before the handler; refunded at its close).
+    let payer_start = a.payer.lamports().checked_add(a.graduation_wsol.to_account_info().lamports());
 
     // ── Account checks for everything we store, burn from or close ──
     let pa_key = a.pool_authority.key();
@@ -286,10 +309,48 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
         transfer(a.pool_authority.to_account_info(), a.payer.to_account_info(), leftover, true)?;
     }
 
-    // ── 8. State ──
+    // ── 8. D20: spend the graduation fee on the setup rent; the rest → platform fees ──
+    // Every CPI is done, so these direct lamport moves need no reconciling CPI (emit_cpi
+    // below touches none of these accounts). Nothing here can exceed `grad_fee`, and every
+    // lamport goes either to accounts only FUMPAD can ever spend (the two PDAs, which only
+    // `init_observations` / `init_claim_queue` can turn into this coin's ring and queue) or
+    // back to the caller for exactly the rent it paid — calling `graduate` can't profit.
+    let rent = Rent::get()?;
+    let mut left = grad_fee;
+    // a) The caller's net rent (PumpSwap pool, LP mint, pool vaults, Lock, LP vault),
+    //    measured as its lamport delta over this instruction; capped by the rent budget.
+    let payer_cost = payer_start
+        .ok_or(FumpadError::MathOverflow)?
+        .saturating_sub(a.payer.lamports())
+        .min(GRADUATION_RENT_BUDGET);
+    let caller_refund = payer_cost.min(left);
+    left -= caller_refund;
+    // b) Rent of the observations ring and the claim queue, pre-funded into their PDAs.
+    let obs_info = a.observations.to_account_info();
+    let queue_info = a.claim_queue.to_account_info();
+    let obs_fund = prefund_amount(&rent, &obs_info, OBSERVATIONS_SPACE, left);
+    left -= obs_fund;
+    let queue_fund = prefund_amount(&rent, &queue_info, CLAIM_QUEUE_SPACE, left);
+    left -= queue_fund;
+    let setup_prefunded = obs_fund + queue_fund;
+    let out = caller_refund + setup_prefunded;
+    if out > 0 {
+        a.coin.sub_lamports(out)?;
+        if caller_refund > 0 {
+            a.payer.add_lamports(caller_refund)?;
+        }
+        if obs_fund > 0 {
+            obs_info.add_lamports(obs_fund)?;
+        }
+        if queue_fund > 0 {
+            queue_info.add_lamports(queue_fund)?;
+        }
+    }
+
+    // ── 9. State ──
     let coin = &mut a.coin;
-    coin.platform_fees_unclaimed =
-        coin.platform_fees_unclaimed.checked_add(grad_fee).ok_or(FumpadError::MathOverflow)?;
+    // Remainder of the fee (still in the coin account) → platform fees.
+    coin.platform_fees_unclaimed = coin.platform_fees_unclaimed.checked_add(left).ok_or(FumpadError::MathOverflow)?;
     coin.real_sol_reserves = 0;
     coin.amm_pool = pool;
     coin.status = CoinStatus::Graduated;
@@ -302,6 +363,25 @@ pub fn handle_graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()
         tokens_deposited: base_amount,
         lp_locked: lp_amount,
         ts: now,
+        caller_refund,
+        setup_prefunded,
+        platform_fee: left,
     });
     Ok(())
+}
+
+/// D20: lamports to pre-fund into a not-yet-created PDA so that it holds the rent of
+/// `space` bytes — at most `budget`. 0 if the account already exists (not system-owned or
+/// has data; impossible before graduation) or if the amount would leave a fresh account
+/// below the rent-exempt minimum (the transfer would fail).
+fn prefund_amount(rent: &Rent, acct: &AccountInfo, space: usize, budget: u64) -> u64 {
+    if acct.owner != &system_program::ID || !acct.data_is_empty() {
+        return 0;
+    }
+    let have = acct.lamports();
+    let x = rent.minimum_balance(space).saturating_sub(have).min(budget);
+    if x == 0 || have.saturating_add(x) < rent.minimum_balance(0) {
+        return 0;
+    }
+    x
 }

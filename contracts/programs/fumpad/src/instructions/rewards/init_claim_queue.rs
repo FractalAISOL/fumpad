@@ -18,7 +18,8 @@ pub const CLAIM_QUEUE_SPACE: usize = 8 + core::mem::size_of::<ClaimQueue>();
 pub const CLAIM_QUEUE_INIT_CALLS: usize = CLAIM_QUEUE_SPACE.div_ceil(MAX_DATA_INCREASE);
 
 /// Creates the per-coin ClaimQueue PDA ["claim_queue", mint] for a graduated coin.
-/// Permissionless; the payer funds rent.
+/// Permissionless. `graduate` pre-funds the PDA with the full-size rent (~0.5714 SOL) out
+/// of the coin's graduation fee (D20); the payer only tops up a shortfall.
 ///
 /// The queue (~80 KB) is larger than the 10 KiB a program may allocate per instruction,
 /// and a PDA can't be pre-allocated by the client (create_account needs the address to

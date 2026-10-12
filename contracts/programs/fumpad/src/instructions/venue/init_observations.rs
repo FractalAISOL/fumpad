@@ -1,7 +1,8 @@
 //! Create a graduated coin's price-observation ring. OWNER: venue/oracle module.
 //!
-//! Permissionless (the payer funds ~0.058 SOL rent). The account is the canonical PDA
-//! ["observations", mint] — created here with `init` (8,280 bytes fits the 10 KiB CPI
+//! Permissionless. `graduate` pre-funds the PDA with its rent (~0.0585 SOL) out of the
+//! coin's graduation fee (D20), so the payer normally pays nothing (Anchor's `init` only
+//! tops up a shortfall). The account is the canonical PDA ["observations", mint] — created here with `init` (8,280 bytes fits the 10 KiB CPI
 //! allocation limit) rather than as a client-pre-allocated `#[account(zero)]` keypair
 //! account: a keypair account would let anyone create extra rings for the same coin, and
 //! every consumer (claim, buyback) would have to be trusted to pick the right one. With
@@ -10,6 +11,9 @@
 use anchor_lang::prelude::*;
 
 use crate::{constants::*, error::FumpadError, state::*};
+
+/// Total account size of the observations PDA (8,280 bytes).
+pub const OBSERVATIONS_SPACE: usize = 8 + core::mem::size_of::<Observations>();
 
 #[derive(Accounts)]
 pub struct InitObservations<'info> {
@@ -20,7 +24,7 @@ pub struct InitObservations<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + std::mem::size_of::<Observations>(),
+        space = OBSERVATIONS_SPACE,
         seeds = [OBSERVATIONS_SEED, coin.mint.as_ref()],
         bump,
     )]
