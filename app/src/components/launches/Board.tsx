@@ -31,6 +31,8 @@ import {
 } from "./model";
 import { usePersisted } from "./persist";
 import s from "./Board.module.css";
+import { coinHref, hasLookalikeChars } from "@/components/coin/ident";
+import { MintTag } from "@/components/coin/MintTag";
 
 /** Live data, and whether quick-buys go on chain (else they are simulated by the mock). */
 const LIVE_API = !!process.env.NEXT_PUBLIC_FUMPAD_API;
@@ -110,7 +112,7 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
   const pct = curveFraction(c, graduationSol) * 100;
   const target = graduationSol || graduationSolOf(c);
   const raised = c.status === "curve" ? c.curveSol : target;
-  const href = `/coin/${encodeURIComponent(c.symbol)}`;
+  const href = coinHref(c);
   const so = c.socials;
   return (
     <article className={cx(s.row, arrival && s.arrived)} data-mint={c.mint}>
@@ -120,6 +122,8 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
           <span className={cx("ticker", s.tk)}>${c.symbol}</span>
           <span className={s.full}>{c.name}</span>
         </Link>
+        {/* H-3: a symbol or name with non-ASCII look-alikes shows its mint right in the row. */}
+        {(hasLookalikeChars(c.symbol) || hasLookalikeChars(c.name)) && <MintTag mint={c.mint} />}
         {arrival && <span className={s.tag}>{arrival.kind === "graduated" ? "Graduated" : "Past 50%"}</span>}
         <Age ts={c.createdAt} />
       </div>

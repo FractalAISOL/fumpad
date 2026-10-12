@@ -7,6 +7,7 @@ import { Avatar, Badge, type BadgeTone, CoinTile, CurveMeter, Gauge, IconReply, 
 import * as f from "@/design/format";
 import { useNow } from "../shell/Providers";
 import s from "./Feed.module.css";
+import { coinHref } from "@/components/coin/ident";
 
 const KIND: Record<FeedEvent["kind"], [string, BadgeTone]> = {
   cross: ["10× crossed", "flare"],
@@ -24,7 +25,7 @@ function pickLine(id: string, lines: ReactNode[]): ReactNode {
 
 function Tick({ e }: { e: FeedEvent }) {
   return (
-    <Link href={`/coin/${e.symbol}`} className={cx("ticker", s.tickerLink)}>
+    <Link href={coinHref(e)} className={cx("ticker", s.tickerLink)}>
       ${e.symbol}
     </Link>
   );
@@ -214,7 +215,7 @@ export function FeedPost({ e, fresh }: { e: FeedEvent; fresh?: boolean }) {
             <span className="num">{e.reposts}</span>
             <span className="sr-only">reposts</span>
           </span>
-          <Link href={`/coin/${e.symbol}`} className={s.open}>
+          <Link href={coinHref(e)} className={s.open}>
             Open ${e.symbol}
           </Link>
         </div>

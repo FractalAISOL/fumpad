@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { isAddress } from "@/components/coin/ident";
 import { cardCopy, ogSrc } from "@/components/share/card";
 import { ShareView } from "@/components/share/ShareView";
 import { DEMO_WALLET } from "@/data";
@@ -21,6 +22,7 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: { params: Promise<{ ticket: string }> }): Promise<Metadata> {
   const { ticket } = await params;
+  if (!isAddress(ticket)) return { title: "Ticket not found" };
   const [t, p] = await Promise.all([cachedTicket(ticket), cachedParams()]);
   if (!t) return { title: "Ticket not found" };
   const { head, kicker, body } = cardCopy(t, p);
@@ -54,6 +56,7 @@ export default function SharePage({ params }: { params: Promise<{ ticket: string
 
 async function Share({ params }: { params: Promise<{ ticket: string }> }) {
   const { ticket } = await params;
+  if (!isAddress(ticket)) notFound();
   const t = await cachedTicket(ticket);
   if (!t) notFound();
   return <ShareView ticket={t} siteUrl={SITE} />;

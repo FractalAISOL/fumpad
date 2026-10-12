@@ -8,6 +8,7 @@ import { useRefresh } from "../shell/live";
 import { useViewer } from "../shell/Providers";
 import s from "./People.module.css";
 import { ProfileCard } from "./ProfileCard";
+import { coinHref } from "@/components/coin/ident";
 
 const BOARDS: { value: Board; label: string; aside: string }[] = [
   { value: "fumbles", label: "Biggest fumbles", aside: "what the sold tokens are worth today" },
@@ -31,7 +32,7 @@ const coin: Column<LeaderRow> = {
   header: "Coin",
   hideBelow: "md",
   render: (r) => (
-    <Link href={`/coin/${r.symbol}`} className="ticker">
+    <Link href={coinHref(r)} className="ticker">
       ${r.symbol}
     </Link>
   ),

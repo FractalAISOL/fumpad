@@ -64,6 +64,12 @@ export async function cachedCoin(symbolOrMint: string) {
   return getFumpadData().getCoin(symbolOrMint);
 }
 
+export async function cachedCoinsBySymbol(symbol: string) {
+  "use cache";
+  cacheLife("minutes");
+  return getFumpadData().findCoinsBySymbol(symbol);
+}
+
 export async function cachedPriceSeries(mint: Address, range: ChartRange) {
   "use cache";
   cacheLife("minutes");

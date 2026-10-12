@@ -51,6 +51,8 @@ import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 import { TradePanel } from "./TradePanel";
+import { hasLookalikeChars } from "./ident";
+import { MintTag } from "./MintTag";
 
 const RANGES: { value: ChartRange; label: string }[] = [
   { value: "1h", label: "1h" },
@@ -254,6 +256,12 @@ export function CoinView({
         <h1 className={s.name}>{coin.name}</h1>
         <div className={s.sub}>
           <span className="ticker">${coin.symbol}</span>
+          <MintTag mint={coin.mint} />
+          {(hasLookalikeChars(coin.symbol) || hasLookalikeChars(coin.name)) && (
+            <Badge tone="ink">
+              <span title="The name or symbol uses characters outside plain A–Z, 0–9 (e.g. Cyrillic letters that look Latin). Check the mint.">Look-alike characters</span>
+            </Badge>
+          )}
           <span>
             by <Address address={coin.creator} avatar={false} />
           </span>
