@@ -6,6 +6,7 @@ import { type SVGProps, useEffect, useRef, useState } from "react";
 import { IconCoins, IconFeed, IconFumbles, IconMoon, IconPlus, IconRanks, IconSun, IconSystem, IconUser, Mark, Wordmark, cx } from "@/design";
 import { useViewer } from "./Providers";
 import s from "./Shell.module.css";
+import { THEME_KEY, THEME_SCRIPT } from "./theme";
 import { WalletButton, requestWalletConnect } from "./Wallet";
 
 /**
@@ -147,10 +148,8 @@ export function TabBar() {
 
 type Mode = "system" | "light" | "dark";
 const MODES: Mode[] = ["system", "light", "dark"];
-const KEY = "fumpad-theme";
-
-/** Inline, pre-paint: applies the saved theme before the first frame (no flash). */
-export const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem("${KEY}");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}})()`;
+const KEY = THEME_KEY;
+export { THEME_SCRIPT };
 
 export function ThemeToggle() {
   const [mode, setMode] = useState<Mode>("system");

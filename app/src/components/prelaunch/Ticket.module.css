@@ -1,0 +1,239 @@
+/* The ticket as an object, and the scrubbable gauge. */
+
+.ticket {
+  display: grid;
+  grid-template-columns: 1fr;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  overflow: hidden;
+}
+@media (min-width: 600px) {
+  .ticket {
+    grid-template-columns: 1fr clamp(120px, 14vw, 220px);
+  }
+}
+.main {
+  padding: clamp(18px, 2vw, 36px);
+}
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.title {
+  font-size: clamp(18px, 1.6vw, 30px);
+  font-weight: 700;
+  font-variation-settings: "wdth" 118;
+  letter-spacing: -0.03em;
+}
+.no {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 85;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+  margin: 18px 0 0;
+}
+@media (min-width: 900px) {
+  .fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.fields dt {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.fields dd {
+  margin: 4px 0 0;
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 85;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(14px, 1.1vw, 20px);
+  font-weight: 540;
+  letter-spacing: -0.02em;
+}
+/* The stub: perforated edge, the brand's 10×. */
+.stub {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px clamp(18px, 2vw, 36px);
+  border-top: 2px dashed var(--rule-2);
+}
+@media (min-width: 600px) {
+  .stub {
+    flex-direction: column;
+    justify-content: center;
+    border-top: 0;
+    border-left: 2px dashed var(--rule-2);
+    text-align: center;
+  }
+}
+.stubBig {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 75;
+  font-weight: 650;
+  letter-spacing: -0.07em;
+  font-size: clamp(34px, 4vw, 84px);
+  line-height: 1;
+  color: var(--flare);
+}
+.stubSmall {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+/* Prints once, top down, when it scrolls into view. */
+.ticket[data-reveal="armed"] {
+  clip-path: inset(0 0 100% 0);
+  transform: translateY(8px);
+  transition:
+    clip-path 900ms var(--ease-out),
+    transform 900ms var(--ease-out);
+}
+.ticket[data-in] {
+  clip-path: inset(0 0 0 0);
+  transform: none;
+}
+
+/* ── Gauge scrubber ────────────────────────────────────────────────────────── */
+.gauge {
+  display: grid;
+  gap: 12px;
+}
+.gHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.gLabel {
+  font-size: 15px;
+  font-weight: 560;
+  color: var(--ink-2);
+}
+.gValue {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 75;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+  letter-spacing: -0.06em;
+  font-size: clamp(34px, 3.2vw, 64px);
+  line-height: 1;
+}
+.gauge[data-hit] .gValue {
+  color: var(--flare);
+}
+.gTrackWrap {
+  position: relative;
+  padding: 14px 0 34px;
+  cursor: ew-resize;
+  touch-action: pan-y;
+  border-radius: var(--r-1);
+}
+.gTrackWrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+.gTrack {
+  position: relative;
+  height: clamp(14px, 1.2vw, 22px);
+  background: var(--sunken);
+  border: 1px solid var(--rule-2);
+}
+/* 10× = log 10 / log 30 = 67.7% along a 1–30× log track. */
+.gTrack::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 67.7%;
+  background: repeating-linear-gradient(-45deg, var(--flare) 0 2px, transparent 2px 7px);
+  opacity: 0.42;
+}
+.gFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ink);
+}
+.gFillX {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--flare);
+  z-index: 1;
+}
+.gNeedle {
+  position: absolute;
+  top: -9px;
+  bottom: -9px;
+  width: 4px;
+  margin-left: -2px;
+  background: var(--ink);
+  z-index: 2;
+}
+.gauge[data-hit] .gNeedle {
+  background: var(--flare);
+}
+.gTicks {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 30px;
+}
+.gTick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 6px;
+  background: var(--rule-2);
+}
+.gTick[data-major] {
+  height: 10px;
+  background: var(--ink-3);
+}
+.gTick[data-ten] {
+  width: 3px;
+  margin-left: -1px;
+  height: 14px;
+  background: var(--flare);
+}
+.gTickLbl {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" 80;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.gTickLbl[data-edge="start"] {
+  transform: none;
+}
+.gTickLbl[data-edge="end"] {
+  transform: translateX(-100%);
+}
+.gTickLbl[data-ten] {
+  color: var(--flare-text);
+  font-weight: 650;
+}
+.gStatus {
+  font-size: clamp(15px, 1.15vw, 19px);
+  line-height: 1.45;
+  color: var(--ink-2);
+  min-height: 3em;
+  max-width: 38em;
+}
+.gStatus strong {
+  color: var(--ink);
+}
+.gauge[data-hit] .gStatus strong {
+  color: var(--flare-text);
+}
