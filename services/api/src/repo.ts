@@ -87,22 +87,41 @@ export interface CoinRow {
 
 /**
  * One coin row plus its 24 h activity, holders, creator flag and the open ticket nearest the
- * trigger. Every subquery is an index lookup on the coin (trades_mint_ts, positions PK,
- * wallet_flags PK, tickets_mint_status). `trigBps` comes from Global.params (an integer).
+ * trigger. Every subquery is an index lookup on the coin (coin_hourly + the edge hour of trades_mint_recent,
+ * samples_mint_ts, coin_holders, wallet_flags PK, tickets_open_price; migration 006). Callers select the
+ * few rows they need first (`WHERE c.mint = ANY(...)`), so this runs per shown coin only.
+ * `trigBps` comes from Global.params (an integer).
  */
 const coinSelect = (trigBps: number) => `
   SELECT c.*, act.vol24, act.trades24,
-    (SELECT x.p FROM (
-        SELECT ts, (virtual_sol * 18446744073709551616 / NULLIF(virtual_tokens,0))::numeric(40,0) AS p FROM trades WHERE mint = c.mint AND ts <= $1 - 86400
-        UNION ALL SELECT ts, price_q64 FROM samples WHERE mint = c.mint AND ts <= $1 - 86400 AND NOT fallback
+    -- Newest point at or before now − 24 h: one backward index probe per source (the price is
+    -- computed for the winner only, not for every older trade).
+    (SELECT COALESCE(x.pq, (x.vs * 18446744073709551616 / NULLIF(x.vt,0))::numeric(40,0)) FROM (
+        (SELECT ts, virtual_sol AS vs, virtual_tokens AS vt, NULL::numeric AS pq FROM trades WHERE mint = c.mint AND ts <= $1 - 86400 ORDER BY ts DESC LIMIT 1)
+        UNION ALL
+        (SELECT ts, NULL, NULL, price_q64 FROM samples WHERE mint = c.mint AND ts <= $1 - 86400 AND NOT fallback ORDER BY ts DESC LIMIT 1)
       ) x ORDER BY x.ts DESC LIMIT 1) AS price24,
-    (SELECT count(*) FROM positions p WHERE p.mint = c.mint AND p.balance > 0) AS holders,
+    COALESCE((SELECT h.n FROM coin_holders h WHERE h.mint = c.mint), 0) AS holders,
     EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = c.creator) AS creator_flagged,
     (SELECT (cur.q / min(t.sell_price_q64))::float8 FROM tickets t
-      WHERE t.mint = c.mint AND t.status = 'open' AND cur.q * 10000 < t.sell_price_q64 * ${Math.trunc(trigBps)}) AS closest_multiple
+      WHERE t.mint = c.mint AND t.status = 'open'
+        -- q·10000 < s·trig  ⇔  s > ⌊q·10000 / trig⌋ (integers): the index range bound, kept exact by the filter.
+        AND t.sell_price_q64 > div(cur.q * 10000, ${Math.trunc(trigBps)}) AND cur.q * 10000 < t.sell_price_q64 * ${Math.trunc(trigBps)}) AS closest_multiple
   FROM coins c
   CROSS JOIN LATERAL (SELECT CASE WHEN c.status = 'graduated' AND c.median_q64 IS NOT NULL THEN c.median_q64 ELSE c.price_q64 END AS q) cur
-  CROSS JOIN LATERAL (SELECT COALESCE(sum(sol_amount),0) AS vol24, count(*) AS trades24 FROM trades t WHERE t.mint = c.mint AND t.ts > $1 - 86400) act`;
+  CROSS JOIN LATERAL (SELECT COALESCE(sum(x.v),0) AS vol24, COALESCE(sum(x.n),0) AS trades24 FROM (${VOL24_ROWS("c.mint", "$1")}) x) act`;
+
+/**
+ * The rows whose sum is a coin's FUMPAD volume over (now − 24 h, ∞): whole hours from the
+ * trigger-maintained `coin_hourly`, plus the partial edge hour straight from `trades`.
+ * `mint` filters one coin (or pass null for every coin, with a `mint` column); `now` is a bigint param.
+ */
+const VOL24_ROWS = (mint: string | null, now: string) => {
+  const w = `(${now}::bigint - 86400)`;
+  return `SELECT h.mint, h.volume AS v, h.trades AS n FROM coin_hourly h WHERE ${mint ? `h.mint = ${mint} AND ` : ""}h.hour > ${w} / 3600
+    UNION ALL
+    SELECT t.mint, t.sol_amount, 1 FROM trades t WHERE ${mint ? `t.mint = ${mint} AND ` : ""}t.ts > ${w} AND t.ts < (${w} / 3600 + 1) * 3600`;
+};
 
 /** Creator links from the metadata JSON: http(s) only, so a crafted `javascript:` never reaches an href. */
 export function socialsOf(md: Record<string, unknown> | null): CoinSummary["socials"] {
@@ -121,8 +140,23 @@ export function socialsOf(md: Record<string, unknown> | null): CoinSummary["soci
   return out.x || out.telegram || out.website ? Object.fromEntries(Object.entries(out).filter(([, v]) => v)) : undefined;
 }
 
+/** Above this many points in 24 h a coin's sparkline is probed instead of scanned. */
+const SPARK_SCAN_MAX_POINTS = 200;
+/**
+ * Sparklines (24 hourly points) are memoized per coin for this long per instance, and not
+ * dropped on every trade like the response cache: list endpoints stay cheap under constant
+ * trading. Price, change and volume fields are always fresh.
+ */
+const SPARK_MEMO_MS = 15_000;
+/** Busy coins per probe query. */
+const SPARK_PROBE_CHUNK = 40;
+/** The trending order (24 h volume of every coin) is recomputed at most this often per instance. */
+const TRENDING_RANK_MS = 5_000;
+
 export class Repo {
   private paramsCache?: { at: number; p: Params };
+  private trendRank?: { at: number; rows: Promise<{ mint: string; status: CoinRow["status"] }[]> };
+  private sparkMemo = new Map<string, { at: number; v: number[] }>();
   constructor(private db: Queryable) {}
 
   async params(): Promise<Params> {
@@ -167,7 +201,7 @@ export class Repo {
       graduationSol: lam(p.graduationLamports),
       poolTokens: tok(c.pool_tokens),
       ticketsOpen: Number(c.tickets_open),
-      spark: spark ?? (await this.spark(c)),
+      spark: spark ?? (await this.sparks([c])).get(c.mint)!,
       trades24h: Number(c.trades24 ?? 0),
       socials: socialsOf(c.metadata),
       closestMultiple: c.closest_multiple ?? undefined,
@@ -180,25 +214,119 @@ export class Repo {
 
   /** 24 hourly closes over the last 24 h (carry-forward), oldest first. */
   async spark(c: CoinRow): Promise<number[]> {
-    const now = nowSecs();
-    const pts = await this.rawPrices(c.mint, now - 86_400);
-    let last = c.price24 ? px(c.price24) : px(await this.initialPriceQ64());
-    const out: number[] = [];
-    let i = 0;
-    for (let h = 23; h >= 0; h--) {
-      const end = now - h * 3600;
-      while (i < pts.length && pts[i].t <= end) last = pts[i++].p;
-      out.push(last);
+    return (await this.sparks([c])).get(c.mint)!;
+  }
+
+  /**
+   * Sparklines for many coins in at most two queries: point k (0 = oldest) is the last trade
+   * spot or keeper sample in [now − 24 h, now − (23 − k) h], else the price 24 h ago (`price24`)
+   * or the launch price (the old per-coin carry-forward, exactly). Busy coins cost 24 × 2 index
+   * probes (trades_mint_recent, samples_mint_ts) however many trades they had.
+   */
+  async sparks(coins: Pick<CoinRow, "mint" | "price24" | "status" | "trades24">[]): Promise<Map<string, number[]>> {
+    const out = new Map<string, number[]>();
+    const t = Date.now();
+    const todo = coins.filter((c) => {
+      const hit = this.sparkMemo.get(c.mint);
+      if (hit && t - hit.at < SPARK_MEMO_MS) out.set(c.mint, hit.v);
+      return !out.has(c.mint);
+    });
+    if (todo.length) {
+      const fresh = await this.computeSparks(todo);
+      if (this.sparkMemo.size > 10_000) this.sparkMemo.clear();
+      for (const [m, v] of fresh) {
+        out.set(m, v);
+        this.sparkMemo.set(m, { at: t, v });
+      }
     }
     return out;
   }
 
-  private async rawPrices(mint: string, since: number): Promise<{ t: number; p: number }[]> {
+  private async computeSparks(coins: Pick<CoinRow, "mint" | "price24" | "status" | "trades24">[]): Promise<Map<string, number[]>> {
+    const out = new Map<string, number[]>();
+    if (!coins.length) return out;
+    const now = nowSecs();
+    const init = px(await this.initialPriceQ64());
+    for (const c of coins) out.set(c.mint, Array<number>(24).fill(c.price24 ? px(c.price24) : init));
+    // Quiet coins: read their few points and carry forward in JS. Busy coins: 48 index probes
+    // each, whatever their volume. (A graduated coin also has ~180 keeper samples a day.)
+    const points = (c: (typeof coins)[number]) => Number(c.trades24 ?? 0) + (c.status === "graduated" ? 200 : 0);
+    const quiet = coins.filter((c) => points(c) <= SPARK_SCAN_MAX_POINTS).map((c) => c.mint);
+    const busy = coins.filter((c) => points(c) > SPARK_SCAN_MAX_POINTS);
+    // Probe chunks run on separate pool connections, so a 150-coin board isn't one long query.
+    const chunks: (typeof busy)[] = [];
+    for (let i = 0; i < busy.length; i += SPARK_PROBE_CHUNK) chunks.push(busy.slice(i, i + SPARK_PROBE_CHUNK));
+    await Promise.all([this.sparksByScan(quiet, now, out), ...chunks.map((ch) => this.sparksByProbe(ch, now, out))]);
+    return out;
+  }
+
+  private async sparksByScan(mints: string[], now: number, out: Map<string, number[]>) {
+    if (!mints.length) return;
+    const r = await this.db.query<{ mint: string; ts: string; vs: string | null; vt: string | null; pq: string | null }>(
+      `SELECT mint, ts, virtual_sol AS vs, virtual_tokens AS vt, NULL::numeric AS pq FROM trades WHERE mint = ANY($1::text[]) AND ts >= $2
+       UNION ALL SELECT mint, ts, NULL, NULL, price_q64 FROM samples WHERE mint = ANY($1::text[]) AND ts >= $2 AND NOT fallback
+       ORDER BY mint, ts`,
+      [mints, now - 86_400],
+    );
+    let i = 0;
+    while (i < r.rows.length) {
+      const mint = r.rows[i].mint;
+      const arr = out.get(mint)!;
+      let last = arr[0];
+      for (let k = 0; k < 24; k++) {
+        const end = now - (23 - k) * 3600;
+        for (; i < r.rows.length && r.rows[i].mint === mint && Number(r.rows[i].ts) <= end; i++) {
+          const x = r.rows[i];
+          last = x.pq ? px(x.pq) : px(spotQ64(x.vs!, x.vt!));
+        }
+        arr[k] = last;
+      }
+      while (i < r.rows.length && r.rows[i].mint === mint) i++; // points after now (clock skew)
+    }
+  }
+
+  /** Keeper samples exist only for graduated coins (the oracle starts at graduation), so only they probe samples. */
+  private async sparksByProbe(coins: Pick<CoinRow, "mint" | "status">[], now: number, out: Map<string, number[]>) {
+    if (!coins.length) return;
+    const r = await this.db.query<{ mint: string; k: number; vs: string | null; vt: string | null; pq: string | null }>(
+      `SELECT m.mint, k.k, p.vs, p.vt, p.pq
+         FROM unnest($1::text[], $4::boolean[]) m(mint, grad) CROSS JOIN generate_series(0, 23) k(k)
+         CROSS JOIN LATERAL (
+           SELECT u.vs, u.vt, u.pq FROM (
+             (SELECT ts, virtual_sol AS vs, virtual_tokens AS vt, NULL::numeric AS pq FROM trades
+               WHERE mint = m.mint AND ts >= $2 AND ts <= $3 + k.k * 3600 ORDER BY ts DESC LIMIT 1)
+             UNION ALL
+             (SELECT ts, NULL, NULL, price_q64 FROM samples
+               WHERE m.grad AND mint = m.mint AND ts >= $2 AND ts <= $3 + k.k * 3600 AND NOT fallback ORDER BY ts DESC LIMIT 1)
+           ) u ORDER BY u.ts DESC LIMIT 1) p`,
+      [coins.map((c) => c.mint), now - 86_400, now - 23 * 3600, coins.map((c) => c.status === "graduated")],
+    );
+    for (const x of r.rows) {
+      const arr = out.get(x.mint);
+      if (arr) arr[x.k] = x.pq ? px(x.pq) : px(spotQ64(x.vs!, x.vt!));
+    }
+  }
+
+  /** Full rows (coinSelect) for these mints, in the given order. */
+  private async coinRows(mints: string[]): Promise<CoinRow[]> {
+    if (!mints.length) return [];
+    const trig = (await this.params()).triggerMultipleBps;
+    const r = await this.db.query<CoinRow>(`${coinSelect(trig)} WHERE c.mint = ANY($2::text[])`, [nowSecs(), mints]);
+    const by = new Map(r.rows.map((c) => [c.mint, c]));
+    return mints.map((m) => by.get(m)).filter((c): c is CoinRow => !!c);
+  }
+
+  private async summaries(rows: CoinRow[]): Promise<CoinSummary[]> {
+    const sp = await this.sparks(rows);
+    return Promise.all(rows.map((c) => this.summary(c, sp.get(c.mint))));
+  }
+
+  private async rawPrices(mint: string, since: number, limit?: number): Promise<{ t: number; p: number }[]> {
     const r = await this.db.query<{ ts: string; vs: string | null; vt: string | null; pq: string | null }>(
       `SELECT ts, virtual_sol AS vs, virtual_tokens AS vt, NULL AS pq FROM trades WHERE mint = $1 AND ts >= $2
        UNION ALL SELECT ts, NULL, NULL, price_q64 FROM samples WHERE mint = $1 AND ts >= $2 AND NOT fallback
-       ORDER BY ts`,
-      [mint, since],
+       ORDER BY ts ${limit ? "LIMIT $3" : ""}`,
+      limit ? [mint, since, limit] : [mint, since],
     );
     return r.rows.map((x) => ({ t: Number(x.ts), p: x.pq ? px(x.pq) : px(spotQ64(x.vs!, x.vt!)) }));
   }
@@ -207,16 +335,53 @@ export class Repo {
     const { sort = "trending", status = "all" } = opts;
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
     const where = status === "all" ? "" : status === "curve" ? "WHERE c.status <> 'graduated'" : "WHERE c.status = 'graduated'";
+    // Pick the page first from plain columns (trending: a shared rank, see trendingRank), then
+    // build only those rows.
     const order = {
-      trending: "vol24 DESC, c.created_at DESC",
+      trending: "", // trendingRank()
       new: "c.created_at DESC",
       mcap: "c.price_q64 DESC",
       closest: "c.tickets_open DESC, c.created_at DESC",
       graduating: "(CASE WHEN c.status = 'curve' THEN c.real_sol ELSE -1 END) DESC",
     }[sort];
-    const trig = (await this.params()).triggerMultipleBps;
-    const r = await this.db.query<CoinRow>(`SELECT * FROM (${coinSelect(trig)} ${where}) c ORDER BY ${order} LIMIT $2`, [nowSecs(), limit]);
-    return Promise.all(r.rows.map((c) => this.summary(c)));
+    if (sort === "trending") {
+      const ranked = (await this.trendingRank()).filter((c) => status === "all" || (status === "curve" ? c.status !== "graduated" : c.status === "graduated"));
+      return this.summaries(await this.coinRows(ranked.slice(0, limit).map((c) => c.mint)));
+    }
+    const ids = await this.db.query<{ mint: string }>(`SELECT c.mint FROM coins c ${where} ORDER BY ${order} LIMIT $1`, [limit]);
+    return this.summaries(await this.coinRows(ids.rows.map((x) => x.mint)));
+  }
+
+  /**
+   * Every coin by 24 h volume, then newest. Ranking needs every coin's volume (one pass over
+   * the hourly rollup), so it is shared for TRENDING_RANK_MS and NOT dropped on each trade the
+   * way the response cache is; each listed row's numbers are still read fresh. A coin's place
+   * can lag its volume by a few seconds.
+   */
+  private trendingRank() {
+    if (!this.trendRank || Date.now() - this.trendRank.at > TRENDING_RANK_MS) {
+      const rows = this.db
+        .query<{ mint: string; status: CoinRow["status"] }>(
+          `SELECT c.mint, c.status FROM coins c
+             LEFT JOIN (SELECT y.mint, sum(y.v) AS v FROM (${VOL24_ROWS(null, "$1")}) y GROUP BY y.mint) a USING (mint)
+            ORDER BY COALESCE(a.v, 0) DESC, c.created_at DESC`,
+          [nowSecs()],
+        )
+        .then((r) => r.rows);
+      this.trendRank = { at: Date.now(), rows };
+      rows.catch(() => (this.trendRank = undefined));
+    }
+    return this.trendRank.rows;
+  }
+
+  /** The coin's own columns only (no derived subqueries): for endpoints that need a few fields. */
+  private async coinBase(symbolOrMint: string): Promise<CoinBase | null> {
+    const r = await this.db.query<CoinBase>(
+      `SELECT mint, creator, created_at, status, amm_pool, amm_base, real_tokens, price_q64, median_q64, pool_tokens, queue_owed
+         FROM coins c WHERE c.mint = $1 OR upper(c.symbol) = upper($1) ORDER BY (c.mint = $1) DESC, c.created_at ASC LIMIT 1`,
+      [symbolOrMint.replace(/^\$/, "")],
+    );
+    return r.rows[0] ?? null;
   }
 
   async coinRow(symbolOrMint: string): Promise<CoinRow | null> {
@@ -274,21 +439,35 @@ export class Repo {
   }
 
   async getPriceSeries(mint: string, range: ChartRange): Promise<PricePoint[]> {
-    const c = await this.coinRow(mint);
+    const c = await this.coinBase(mint);
     if (!c) return [];
     const now = nowSecs();
     const since = range === "1h" ? now - 3600 : range === "1d" ? now - 86_400 : range === "7d" ? now - 7 * 86_400 : Number(c.created_at);
-    const pts = await this.rawPrices(c.mint, since);
     const start = Number(c.created_at) >= since ? [{ t: Number(c.created_at), p: px(await this.initialPriceQ64()) }] : [];
-    const all = [...start, ...pts];
-    // Downsample to ≤ 240 points (last value per bucket).
+    // Downsample to ≤ 240 points (last value per bucket). Small series come back raw; a busy
+    // coin's series is bucketed in Postgres (DISTINCT ON bucket) instead of shipping every trade.
     const maxPts = 240;
+    const head = await this.rawPrices(c.mint, since, maxPts + 1);
+    const all = [...start, ...head];
     if (all.length <= maxPts) return all.map((x) => ({ t: x.t * 1000, p: x.p }));
     const span = Math.max(1, now - since);
     const bucket = span / maxPts;
     const out = new Map<number, { t: number; p: number }>();
-    for (const x of all) out.set(Math.floor((x.t - since) / bucket), x);
+    for (const x of [...start, ...(await this.bucketedPrices(c.mint, since, bucket))]) out.set(Math.floor((x.t - since) / bucket), x);
     return [...out.values()].map((x) => ({ t: x.t * 1000, p: x.p }));
+  }
+
+  /** The last price point per `bucket`-second bucket since `since`, oldest first (same float bucket rule as the JS). */
+  private async bucketedPrices(mint: string, since: number, bucket: number): Promise<{ t: number; p: number }[]> {
+    const r = await this.db.query<{ ts: string; vs: string | null; vt: string | null; pq: string | null }>(
+      `SELECT DISTINCT ON (b) ts, vs, vt, pq FROM (
+         SELECT ts, virtual_sol AS vs, virtual_tokens AS vt, NULL::numeric AS pq FROM trades WHERE mint = $1 AND ts >= $2
+         UNION ALL SELECT ts, NULL, NULL, price_q64 FROM samples WHERE mint = $1 AND ts >= $2 AND NOT fallback
+       ) x CROSS JOIN LATERAL (SELECT floor((x.ts - $2)::float8 / $3::float8) AS b) k
+       ORDER BY b, ts DESC`,
+      [mint, since, bucket],
+    );
+    return r.rows.map((x) => ({ t: Number(x.ts), p: x.pq ? px(x.pq) : px(spotQ64(x.vs!, x.vt!)) }));
   }
 
   /** Global.params in display units (getParams). */
@@ -351,32 +530,37 @@ export class Repo {
    * `sig` on it, and the chart points they add (same rule as getPriceSeries: trade spots
    * and keeper samples).
    */
-  async liveCoin(mint: string, sig?: string): Promise<{ coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] } | null> {
-    const coin = await this.getCoin(mint);
-    if (!coin) return null;
-    if (!sig) return { coin, trades: [], points: [] };
-    const [tr, sm] = await Promise.all([
-      this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
-        `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
-         WHERE signature = $1 AND mint = $2 ORDER BY idx`,
-        [sig, mint],
-      ),
-      this.db.query<{ ts: string; price_q64: string }>("SELECT ts, price_q64 FROM samples WHERE signature = $1 AND mint = $2 AND NOT fallback ORDER BY idx", [sig, mint]),
+  async liveCoin(mint: string, sig?: string | string[]): Promise<{ coin: CoinDetail; trades: TradeRow[]; points: PricePoint[] } | null> {
+    const sigs = sig === undefined ? [] : Array.isArray(sig) ? sig : [sig];
+    const [coin, tr, sm] = await Promise.all([
+      this.getCoin(mint),
+      sigs.length
+        ? this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
+            `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
+              WHERE signature = ANY($1::text[]) AND mint = $2 ORDER BY slot, idx`,
+            [sigs, mint],
+          )
+        : null,
+      sigs.length
+        ? this.db.query<{ ts: string; price_q64: string }>("SELECT ts, price_q64 FROM samples WHERE signature = ANY($1::text[]) AND mint = $2 AND NOT fallback ORDER BY ts, idx", [sigs, mint])
+        : null,
     ]);
+    if (!coin) return null;
+    if (!tr || !sm) return { coin, trades: [], points: [] };
     const trades = this.tradeRows(tr.rows);
     const points = [...trades.map((t) => ({ t: t.ts, p: t.price })), ...sm.rows.map((x) => ({ t: Number(x.ts) * 1000, p: px(x.price_q64) }))].sort((a, b) => a.t - b.t);
     return { coin, trades: trades.reverse(), points };
   }
 
   async getHolders(mint: string, viewer?: string): Promise<{ total: number; top: Holder[] }> {
-    const c = await this.coinRow(mint);
+    const c = await this.coinBase(mint);
     if (!c) return { total: 0, top: [] };
     const p = await this.params();
     const supply = tok(p.totalSupply);
-    const r = await this.db.query<{ wallet: string; balance: string }>(
-      "SELECT wallet, balance FROM positions WHERE mint = $1 AND balance > 0 ORDER BY balance DESC LIMIT 20",
-      [c.mint],
-    );
+    const [r, n] = await Promise.all([
+      this.db.query<{ wallet: string; balance: string }>("SELECT wallet, balance FROM positions WHERE mint = $1 AND balance > 0 ORDER BY balance DESC LIMIT 20", [c.mint]),
+      this.db.query<{ n: string }>("SELECT COALESCE((SELECT n FROM coin_holders WHERE mint = $1), 0) AS n", [c.mint]),
+    ]);
     const top: Holder[] = [{ address: "reward-pool", label: "Reward pool", kind: "pool", share: (tok(c.pool_tokens) / supply) * 100 }];
     if (c.status === "graduated" && c.amm_pool && c.amm_base) top.push({ address: c.amm_pool, label: "PumpSwap pool", kind: "amm", share: (tok(c.amm_base) / supply) * 100 });
     else top.push({ address: "bonding-curve", label: "Bonding curve", kind: "amm", share: ((tok(c.real_tokens) + tok(p.lpSupply)) / supply) * 100 });
@@ -388,11 +572,11 @@ export class Repo {
         share: (tok(h.balance) / supply) * 100,
       });
     }
-    return { total: Number(c.holders ?? 0), top: top.sort((a, b) => b.share - a.share) };
+    return { total: Number(n.rows[0].n), top: top.sort((a, b) => b.share - a.share) };
   }
 
   async getRecentFumbles(mint: string, viewer?: string): Promise<FumbleRow[]> {
-    const c = await this.coinRow(mint);
+    const c = await this.coinBase(mint);
     if (!c) return [];
     const cur = this.currentQ64(c);
     const r = await this.db.query<{ ticket: string; owner: string; original_tokens: string; sell_lamports: string; sell_ts: string; sell_price_q64: string; name: string | null }>(
@@ -414,17 +598,25 @@ export class Repo {
 
   /** Average reward-pool inflow (base units/sec) over 24 h, for queue ETAs. */
   private async poolInflowPerSec(mint: string): Promise<number> {
-    const r = await this.db.query<{ v: string }>(
-      `SELECT (SELECT COALESCE(sum(pool_tokens_bought),0) FROM trades WHERE mint = $1 AND ts > $2 - 86400)
-            + (SELECT COALESCE(sum(tokens_out),0) FROM buybacks WHERE mint = $1 AND ts > $2 - 86400)
-            + (SELECT COALESCE(sum(base_out),0) FROM lp_skims WHERE mint = $1 AND ts > $2 - 86400) AS v`,
-      [mint, nowSecs()],
+    return (await this.poolInflows([mint])).get(mint) ?? 0;
+  }
+
+  /** `poolInflowPerSec` for many mints in one query. */
+  private async poolInflows(mints: string[]): Promise<Map<string, number>> {
+    if (!mints.length) return new Map();
+    const r = await this.db.query<{ mint: string; v: string }>(
+      `SELECT m.mint,
+              (SELECT COALESCE(sum(pool_tokens_bought),0) FROM trades WHERE mint = m.mint AND ts > $2 - 86400)
+            + (SELECT COALESCE(sum(tokens_out),0) FROM buybacks WHERE mint = m.mint AND ts > $2 - 86400)
+            + (SELECT COALESCE(sum(base_out),0) FROM lp_skims WHERE mint = m.mint AND ts > $2 - 86400) AS v
+         FROM unnest($1::text[]) m(mint)`,
+      [mints, nowSecs()],
     );
-    return Number(r.rows[0].v) / 86_400;
+    return new Map(r.rows.map((x) => [x.mint, Number(x.v) / 86_400]));
   }
 
   async getClaimQueue(mint: string, viewer?: string): Promise<{ pool: number; owed: number; entries: QueueEntry[] }> {
-    const c = await this.coinRow(mint);
+    const c = await this.coinBase(mint);
     if (!c) return { pool: 0, owed: 0, entries: [] };
     const p = await this.params();
     const r = await this.db.query<{ ticket: string; owner: string; amount: string; sell_ts: string; name: string | null }>(
@@ -432,7 +624,7 @@ export class Repo {
       [c.mint],
     );
     const pool = BigInt(c.pool_tokens);
-    const inflow = await this.poolInflowPerSec(c.mint);
+    const inflow = r.rows.length ? await this.poolInflowPerSec(c.mint) : 0;
     const entries = r.rows.map((e, i) => {
       const amount = BigInt(e.amount);
       const needs = poolNeededFor(amount, p.maxClaimPoolBps);
@@ -493,15 +685,33 @@ export class Repo {
 
   async getTickets(owner: string): Promise<Ticket[]> {
     const r = await this.db.query<TicketRow>(`${TICKET_SELECT} WHERE t.owner = $1 ORDER BY t.sell_ts DESC LIMIT 500`, [owner]);
-    return Promise.all(r.rows.map((t) => this.ticket(t)));
+    return this.tickets(r.rows);
   }
 
   async getTicket(id: string): Promise<Ticket | null> {
     const r = await this.db.query<TicketRow>(`${TICKET_SELECT} WHERE t.ticket = $1`, [id]);
-    return r.rows[0] ? this.ticket(r.rows[0]) : null;
+    return r.rows[0] ? (await this.tickets(r.rows))[0] : null;
   }
 
-  private async ticket(t: TicketRow): Promise<Ticket> {
+  /** Map ticket rows; queue positions and pool inflows of the queued ones in two queries total. */
+  private async tickets(rows: TicketRow[]): Promise<Ticket[]> {
+    const queued = rows.filter((t) => t.status === "queued");
+    const [pos, inflow] = queued.length
+      ? await Promise.all([
+          this.db.query<{ ticket: string; pos: string }>(
+            `SELECT u.ticket, (SELECT count(*) + 1 FROM queue_entries q
+                                 WHERE q.mint = u.mint AND (q.sell_ts < u.sell_ts OR (q.sell_ts = u.sell_ts AND q.ticket < u.ticket))) AS pos
+               FROM unnest($1::text[], $2::text[], $3::bigint[]) u(ticket, mint, sell_ts)`,
+            [queued.map((t) => t.ticket), queued.map((t) => t.mint), queued.map((t) => t.sell_ts)],
+          ),
+          this.poolInflows([...new Set(queued.map((t) => t.mint))]),
+        ])
+      : [null, new Map<string, number>()];
+    const positions = new Map((pos?.rows ?? []).map((x) => [x.ticket, Number(x.pos)]));
+    return Promise.all(rows.map((t) => this.ticket(t, positions.get(t.ticket), inflow.get(t.mint) ?? 0)));
+  }
+
+  private async ticket(t: TicketRow, queuePos?: number, inflowPerSec = 0): Promise<Ticket> {
     const p = await this.params();
     const now = nowSecs();
     const cur = this.currentQ64({ status: t.coin_status, median_q64: t.median_q64, price_q64: t.price_q64 });
@@ -522,18 +732,11 @@ export class Repo {
     let needs: bigint | undefined;
     let eta: number | undefined;
     if (t.status === "queued") {
-      const q = await this.db.query<{ pos: string }>(
-        "SELECT count(*) + 1 AS pos FROM queue_entries WHERE mint = $1 AND (sell_ts < $2 OR (sell_ts = $2 AND ticket < $3))",
-        [t.mint, t.sell_ts, t.ticket],
-      );
-      queuePosition = Number(q.rows[0].pos);
+      queuePosition = queuePos;
       needs = poolNeededFor(claimAmount, p.maxClaimPoolBps);
       const pool = BigInt(t.pool_tokens);
       if (needs <= pool) eta = 0;
-      else {
-        const inflow = await this.poolInflowPerSec(t.mint);
-        if (inflow > 0) eta = Math.round((Number(needs - pool) / inflow) * 1000);
-      }
+      else if (inflowPerSec > 0) eta = Math.round((Number(needs - pool) / inflowPerSec) * 1000);
     }
     return {
       id: t.ticket,
@@ -578,13 +781,20 @@ export class Repo {
     const notFlagged = "NOT EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = x.address)";
     let rows: Omit<LeaderRow, "rank">[] = [];
     if (board === "fumbles") {
+      // Rank every ticket by a float8 estimate of its worth (cheap), keep a margin, then rank
+      // the survivors exactly in numeric and join names only for them.
       const r = await this.db.query<{ address: string; name: string | null; symbol: string; sold: string; worth: string; m: number }>(
-        `SELECT * FROM (
-           SELECT t.owner AS address, u.name, c.symbol, t.sell_lamports AS sold,
-                  (t.original_tokens * COALESCE(c.median_q64, c.price_q64) / 18446744073709551616)::numeric(40,0) AS worth,
-                  CASE WHEN t.sell_price_q64 > 0 THEN (COALESCE(c.median_q64, c.price_q64) / t.sell_price_q64)::float8 ELSE 0 END AS m
-             FROM tickets t JOIN coins c USING (mint) LEFT JOIN users u ON u.address = t.owner) x
-         WHERE ${notFlagged} ORDER BY worth DESC LIMIT 50`,
+        `WITH cur AS (SELECT mint, symbol, COALESCE(median_q64, price_q64) AS q FROM coins),
+         top AS (
+           SELECT t.owner AS address, t.original_tokens, t.sell_lamports, t.sell_price_q64, cur.symbol, cur.q
+             FROM tickets t JOIN cur USING (mint)
+            WHERE NOT EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = t.owner)
+            ORDER BY t.original_tokens::float8 * cur.q::float8 DESC LIMIT 80)
+         SELECT x.address, u.name, x.symbol, x.sell_lamports AS sold,
+                (x.original_tokens * x.q / 18446744073709551616)::numeric(40,0) AS worth,
+                CASE WHEN x.sell_price_q64 > 0 THEN (x.q / x.sell_price_q64)::float8 ELSE 0 END AS m
+           FROM top x LEFT JOIN users u ON u.address = x.address
+          ORDER BY worth DESC LIMIT 50`,
       );
       rows = r.rows.map((x) => ({ address: x.address, name: x.name ?? undefined, symbol: x.symbol, soldForSol: lam(x.sold), worthNowSol: lam(x.worth), multiple: x.m }));
     } else if (board === "claimers") {
@@ -723,26 +933,23 @@ export class Repo {
 
   /** Coins the wallet launched (coins_creator), newest first, with creator fees. */
   async getCreatedCoins(wallet: string): Promise<CreatedCoin[]> {
-    const trig = (await this.params()).triggerMultipleBps;
-    const r = await this.db.query<CoinRow & { creator_fees_unclaimed: string }>(
-      `SELECT * FROM (${coinSelect(trig)} WHERE c.creator = $2) c ORDER BY c.created_at DESC LIMIT 100`,
-      [nowSecs(), wallet],
-    );
-    if (!r.rows.length) return [];
+    const ids = await this.db.query<{ mint: string }>("SELECT mint FROM coins WHERE creator = $1 ORDER BY created_at DESC LIMIT 100", [wallet]);
+    const rows = (await this.coinRows(ids.rows.map((x) => x.mint))) as (CoinRow & { creator_fees_unclaimed: string })[];
+    if (!rows.length) return [];
+    const r = { rows };
     const w = await this.db.query<{ mint: string; withdrawn: string }>(
       "SELECT mint, sum(lamports) AS withdrawn FROM fee_withdrawals WHERE mint = ANY($1::text[]) AND is_creator GROUP BY mint",
       [r.rows.map((c) => c.mint)],
     );
     const withdrawn = new Map(w.rows.map((x) => [x.mint, lam(x.withdrawn)]));
-    return Promise.all(
-      r.rows.map(async (c) => {
-        const out = withdrawn.get(c.mint) ?? 0;
-        const now = lam(c.creator_fees_unclaimed);
-        // Every creator fee (curve, router, settled LP fees) accrues in Coin.creator_fees_unclaimed
-        // until withdrawn, so earned = withdrawn + unclaimed, exactly.
-        return { ...(await this.summary(c)), feesEarnedSol: out + now, feesWithdrawnSol: out, feesWithdrawableSol: now };
-      }),
-    );
+    const sums = await this.summaries(r.rows);
+    return r.rows.map((c, i) => {
+      const out = withdrawn.get(c.mint) ?? 0;
+      const now = lam(c.creator_fees_unclaimed);
+      // Every creator fee (curve, router, settled LP fees) accrues in Coin.creator_fees_unclaimed
+      // until withdrawn, so earned = withdrawn + unclaimed, exactly.
+      return { ...sums[i], feesEarnedSol: out + now, feesWithdrawnSol: out, feesWithdrawableSol: now };
+    });
   }
 
   async getStats(solUsd: number): Promise<PlatformStats> {
@@ -778,6 +985,12 @@ export function levelOf(xp: number) {
   const level = Math.floor(Math.sqrt(xp / 250)) + 1;
   return { level, xpNext: 250 * level * level, title: TITLES[Math.min(TITLES.length - 1, Math.floor(level / 4.5))] };
 }
+
+/** The coin's own columns (`coinBase`). */
+type CoinBase = Pick<
+  CoinRow,
+  "mint" | "creator" | "created_at" | "status" | "amm_pool" | "amm_base" | "real_tokens" | "price_q64" | "median_q64" | "pool_tokens" | "queue_owed"
+>;
 
 interface UserStatsRow {
   xp: string;

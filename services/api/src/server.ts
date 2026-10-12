@@ -79,8 +79,12 @@ export async function buildServer(
     new LiveHub(
       cfg.databaseUrl,
       { feed: (id) => repo.feedById(id), coin: (mint, sig) => repo.liveCoin(mint, sig) },
-      (mints, wallets) => cache.invalidate(mints ? [...mints, ...(wallets ?? []), "list", "feed", "stats", "board", "closest", "tickets", "profile"] : undefined),
+      // Per transaction: everything keyed by a touched mint/wallet plus the cheap cross-coin
+      // lists. Leaderboards (a full ticket scan) are left to their 10 s TTL instead of being
+      // recomputed after every trade.
+      (mints, wallets) => cache.invalidate(mints ? [...mints, ...(wallets ?? []), "list", "feed", "stats", "closest", "tickets", "profile"] : undefined),
       app.log,
+      { coalesceMs: cfg.liveCoalesceMs },
     );
   const pool =
     deps?.pool !== undefined
@@ -237,8 +241,14 @@ export async function buildServer(
     }
     perIp.set(ip, n);
     socket.send(JSON.stringify({ type: "hello", serverTime: Date.now() }));
-    const unsub = live.subscribe((m) => {
-      if (socket.readyState === 1) socket.send(JSON.stringify(m));
+    const unsub = live.subscribe((_m, json) => {
+      if (socket.readyState !== 1) return;
+      // A client that can't keep up (MBs queued) is dropped; it reconnects and resyncs.
+      if (socket.bufferedAmount > cfg.wsMaxBufferedBytes) {
+        socket.close(1013, "too slow");
+        return;
+      }
+      socket.send(json);
     });
     const ping = setInterval(() => socket.readyState === 1 && socket.ping(), 25_000);
     socket.on("message", () => {
@@ -257,7 +267,8 @@ export async function buildServer(
     let dbOk = false;
     let lagSecs: number | null = null;
     try {
-      const r = await db.query<{ t: string | null }>("SELECT max(block_time) AS t FROM transactions");
+      // Newest transaction by slot (indexed), not max(block_time) (a full scan at mainnet size).
+      const r = await db.query<{ t: string | null }>("SELECT (SELECT block_time FROM transactions ORDER BY slot DESC LIMIT 1) AS t");
       dbOk = true;
       lagSecs = r.rows[0].t ? Math.floor(Date.now() / 1000) - Number(r.rows[0].t) : null;
     } catch {
