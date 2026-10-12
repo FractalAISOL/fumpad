@@ -48,6 +48,7 @@ export class ChainSync {
     );
     if (!coinAcc) return;
     const c = decodeCoin(new Uint8Array(coinAcc.data));
+    const graduated = c.status === "graduated" && !c.ammPool.equals(PublicKey.default);
     const vault = vaultAcc ? decodeTokenAccount(new Uint8Array(vaultAcc.data)).amount : null;
     let ammBase: bigint | null = null;
     let ammQuote: bigint | null = null;
@@ -61,14 +62,25 @@ export class ChainSync {
       `UPDATE coins SET status = $2, virtual_sol = $3, virtual_tokens = $4, real_sol = $5, real_tokens = $6,
           pool_tokens = COALESCE($7, pool_tokens), buyback_pending = $8, platform_fees_unclaimed = $9, creator_fees_unclaimed = $10,
           reference_q64 = $11, amm_base = COALESCE($12, amm_base), amm_quote = COALESCE($13, amm_quote),
-          price_q64 = COALESCE($14, price_q64), chain_synced_at = now()
+          price_q64 = COALESCE($14, price_q64),
+          completed_at = COALESCE(completed_at, $15), graduated_at = COALESCE(graduated_at, $16), amm_pool = COALESCE(amm_pool, $17),
+          chain_synced_at = now()
         WHERE mint = $1`,
       [
         mint, c.status, c.virtualSolReserves.toString(), c.virtualTokenReserves.toString(), c.realSolReserves.toString(), c.realTokenReserves.toString(),
         vault?.toString() ?? null, c.buybackLamports.toString(), c.platformFeesUnclaimed.toString(), c.creatorFeesUnclaimed.toString(),
         c.reference.avgQ64.toString(), ammBase?.toString() ?? null, ammQuote?.toString() ?? null, spot?.toString() ?? null,
+        // Heal what a missed/out-of-order CurveCompleted/Graduated event would have written
+        // (seen on devnet: Graduated applied before the coin row existed → no graduated_at,
+        // no amm_pool, so the pool was never watched and the API showed "Bonding curve").
+        c.completedAt ? c.completedAt.toString() : null,
+        c.graduatedAt ? c.graduatedAt.toString() : null,
+        graduated ? c.ammPool.toBase58() : null,
       ],
     );
+    if (graduated) {
+      await this.db.query("INSERT INTO cursors (address, kind, mint) VALUES ($1, 'pool', $2) ON CONFLICT DO NOTHING", [c.ammPool.toBase58(), mint]);
+    }
     if (this.opts.fetchMetadata) await this.fetchMetadata(mint);
   }
 
