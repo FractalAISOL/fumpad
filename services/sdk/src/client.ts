@@ -38,6 +38,7 @@ import {
 } from "./accounts.js";
 import {
   CLAIM_QUEUE_ACCOUNT_SIZE,
+  OBSERVATIONS_ACCOUNT_SIZE,
   CU,
   FUMPAD_PROGRAM_ID,
   MAX_QUEUE_ENTRIES_PER_TX,
@@ -150,7 +151,9 @@ export class FumpadClient {
   }
   async observations(mint: PublicKey): Promise<ObservationsAccount | null> {
     const d = await this.data(coinAddresses(mint).observations);
-    return d ? decodeObservations(d) : null;
+    // D20: graduate pre-funds the PDA with rent before `init_observations` creates it, so an
+    // existing-but-empty account means "not initialised yet".
+    return d && d.length >= OBSERVATIONS_ACCOUNT_SIZE ? decodeObservations(d) : null;
   }
   async claimQueue(mint: PublicKey): Promise<ClaimQueueAccount | null> {
     const d = await this.data(coinAddresses(mint).claimQueue);

@@ -79,6 +79,8 @@ export const MIN_COVERED_BUCKETS = 5;
 export const MAX_QUEUE_ENTRIES_PER_TX = 13;
 export const MAX_KEEPERS = 3;
 export const OBSERVATION_CAPACITY = 256;
+/** 8 disc + 80 header + 256 × 32-byte samples. */
+export const OBSERVATIONS_ACCOUNT_SIZE = 8 + 80 + 32 * OBSERVATION_CAPACITY;
 /** D17 (v0.4): 1024 entries (was 256). */
 export const CLAIM_QUEUE_CAPACITY = 1024;
 /** ClaimQueue account size: 8 disc + 48 header + 80 × capacity = 81,976 bytes. */

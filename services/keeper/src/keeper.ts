@@ -38,6 +38,7 @@ import {
 import { pino, type Logger } from "pino";
 
 import {
+  OBSERVATIONS_ACCOUNT_SIZE,
   BPS_DENOM,
   type CoinAccount,
   coinAddresses,
@@ -301,7 +302,8 @@ export class Keeper {
       const infos = await this.conn.getMultipleAccountsInfo(keys);
       chunk.forEach((c, j) => {
         const [o, p, b, q] = infos.slice(j * 4, j * 4 + 4);
-        c.obs = o ? decodeObservations(new Uint8Array(o.data)) : null;
+        // D20: graduate pre-funds the PDA before init_observations, so a short account = not initialised.
+        c.obs = o && o.data.length >= OBSERVATIONS_ACCOUNT_SIZE ? decodeObservations(new Uint8Array(o.data)) : null;
         if (p && b && q) {
           const pool = decodePumpPool(new Uint8Array(p.data));
           c.pool = { base: decodeTokenAccount(new Uint8Array(b.data)).amount, quote: decodeTokenAccount(new Uint8Array(q.data)).amount + pool.virtualQuoteReserves };
