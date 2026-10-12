@@ -12,9 +12,10 @@
  * pure and deterministic, so caching it changes nothing.
  *
  * Arguments are the cache key; keep them serializable (strings, numbers, plain objects).
+ * Reads go through `serverData()` (`./ssr.ts`), which adds the SSR secret header when set.
  */
 import { cacheLife } from "next/cache";
-import { getFumpadData } from ".";
+import { serverData } from "./ssr";
 import type { CoinSort } from "./interface";
 import type { Address, Board, ChartRange, FeedKind, ProtocolParams } from "./types";
 
@@ -29,7 +30,7 @@ const minute = (ms: number) => Math.floor(ms / 60_000) * 60_000;
 export async function shellSnapshot(): Promise<{ solUsd: number; now: number; params: ProtocolParams }> {
   "use cache";
   cacheLife("minutes");
-  const data = getFumpadData();
+  const data = serverData();
   const [solUsd, params] = await Promise.all([data.getSolUsd(), data.getParams()]);
   return { solUsd, now: minute(data.now()), params };
 }
@@ -37,113 +38,113 @@ export async function shellSnapshot(): Promise<{ solUsd: number; now: number; pa
 export async function cachedParams() {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getParams();
+  return serverData().getParams();
 }
 
 export async function cachedSolUsd() {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getSolUsd();
+  return serverData().getSolUsd();
 }
 
 export async function cachedStats() {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getStats();
+  return serverData().getStats();
 }
 
 export async function cachedCoins(opts: { sort?: CoinSort; status?: "curve" | "graduated" | "all"; limit?: number } = {}) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().listCoins(opts);
+  return serverData().listCoins(opts);
 }
 
 export async function cachedCoin(symbolOrMint: string) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getCoin(symbolOrMint);
+  return serverData().getCoin(symbolOrMint);
 }
 
 export async function cachedCoinsBySymbol(symbol: string) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().findCoinsBySymbol(symbol);
+  return serverData().findCoinsBySymbol(symbol);
 }
 
 export async function cachedPriceSeries(mint: Address, range: ChartRange) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getPriceSeries(mint, range);
+  return serverData().getPriceSeries(mint, range);
 }
 
 export async function cachedHolders(mint: Address, viewer?: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getHolders(mint, viewer);
+  return serverData().getHolders(mint, viewer);
 }
 
 export async function cachedRecentFumbles(mint: Address, viewer?: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getRecentFumbles(mint, viewer);
+  return serverData().getRecentFumbles(mint, viewer);
 }
 
 export async function cachedClaimQueue(mint: Address, viewer?: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getClaimQueue(mint, viewer);
+  return serverData().getClaimQueue(mint, viewer);
 }
 
 export async function cachedFeed(opts: { kind?: FeedKind | "all"; limit?: number } = {}) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getFeed(opts);
+  return serverData().getFeed(opts);
 }
 
 export async function cachedClosestTo10x(limit?: number, viewer?: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getClosestTo10x(limit, viewer);
+  return serverData().getClosestTo10x(limit, viewer);
 }
 
 export async function cachedTickets(owner: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getTickets(owner);
+  return serverData().getTickets(owner);
 }
 
 export async function cachedTicket(id: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getTicket(id);
+  return serverData().getTicket(id);
 }
 
 export async function cachedLeaderboard(board: Board, viewer?: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getLeaderboard(board, viewer);
+  return serverData().getLeaderboard(board, viewer);
 }
 
 export async function cachedProfile(addressOrName: string) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getProfile(addressOrName);
+  return serverData().getProfile(addressOrName);
 }
 
 export async function cachedPositions(wallet: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getPositions(wallet);
+  return serverData().getPositions(wallet);
 }
 
 export async function cachedClosedPositions(wallet: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getClosedPositions(wallet);
+  return serverData().getClosedPositions(wallet);
 }
 
 export async function cachedCreatedCoins(wallet: Address) {
   "use cache";
   cacheLife("minutes");
-  return getFumpadData().getCreatedCoins(wallet);
+  return serverData().getCreatedCoins(wallet);
 }

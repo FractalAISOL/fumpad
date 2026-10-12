@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { ImageResponse } from "next/og";
 import { isAddress } from "@/components/coin/ident";
 import { cardCopy, cardPalette, curveProgress, multipleText, parseStyle } from "@/components/share/card";
-import { getFumpadData } from "@/data";
+import { serverData } from "@/data/ssr";
 import * as f from "@/design/format";
 import { gauge as G } from "@/design/tokens";
 
@@ -35,7 +35,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
   // L-2: a ticket id is a base58 PDA; anything else never reaches the API.
   if (!isAddress(id)) return new Response("Invalid ticket id", { status: 400, headers: { "Cache-Control": MISS_CACHE, "Content-Type": "text/plain; charset=utf-8" } });
   const style = parseStyle(new URL(req.url).searchParams.get("style"));
-  const data = getFumpadData();
+  const data = serverData();
   const [t, params] = await Promise.all([data.getTicket(id), data.getParams()]);
   if (!t) return new Response("Ticket not found", { status: 404, headers: { "Cache-Control": MISS_CACHE, "Content-Type": "text/plain; charset=utf-8" } });
   const copy = cardCopy(t, params);

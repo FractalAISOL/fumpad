@@ -22,6 +22,22 @@ Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. 
 
 The API's `CORS_ORIGINS` (Railway, service `api`) must include `https://fumpad.app` and `https://www.fumpad.app` (done on Oct 12 2026). Optional API knobs: `WAITLIST_IP_SALT` (HMAC key for IP hashes, set), `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20).
 
+## Security settings (Vercel env, all environments)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `API_SSR_SECRET` | unset | Server-side only (no `NEXT_PUBLIC_`, never in the browser bundle). When set, every request the Next server makes to the API (Server Components, metadata, `/og` cards) carries `x-fumpad-ssr: <secret>`, so the API can recognise our renderer and exempt it from per-IP limits instead of trusting an IP allow-list. Set the same value on the API service (Railway) once it reads the header; generate with `openssl rand -hex 32`; rotate by setting the new value on both and redeploying. Code: `src/data/ssr.ts` (`server-only`). |
+| `NEXT_PUBLIC_SOLANA_RPC` | public mainnet RPC | **Public by design**: inlined into the client bundle, so any key in it is visible to everyone. It must be a frontend-only key, **restricted to our origins** (Helius → the key → Access Control → Allowed Domains: `fumpad.app`, `www.fumpad.app`, `fumpad.vercel.app`; add preview domains only if needed) and **never the backend's key** (indexer, API, keeper each have their own). An unrestricted key here lets anyone burn our RPC credits. `next build` prints a warning when the URL carries a key, when it matches `RPC_URL`/`HELIUS_API_KEY` in the build env, or when it is unset in production. Its origin (https + wss) is added to the CSP automatically. |
+| `CSP_MODE` | `enforce` in production builds, `report-only` in `next dev` | `report-only` sends `Content-Security-Policy-Report-Only` (violations only logged in the console) — use it on a preview deployment to try a policy change; `off` removes the CSP (emergency only). Read at build time: redeploy after changing. |
+| `CSP_REPORT_URI` | unset | Optional endpoint for CSP violation reports. |
+| `NEXT_PUBLIC_IPFS_GATEWAY` | `https://ipfs.io` | Gateway for `ipfs://` coin images (`src/design/image.ts`). |
+
+Headers on every route (`src/security/headers.ts`, applied in `next.config.ts`): the CSP (scripts only from our origin + Cloudflare Turnstile; connections only to the API, the Solana RPC and Privy; frames only Privy + Turnstile; no plugins, no framing, `base-uri`/`form-action` self), `X-Frame-Options: DENY`, `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, a minimal `Permissions-Policy`. `script-src` allows inline scripts (no nonce) because Cache Components prerenders static shells; a nonce would force every page to render per request. If the API or RPC host changes, rebuild so the CSP follows it.
+
+Privy dashboard (privy.io → the app → Settings → Domains): allowed origins should be exactly `https://fumpad.app`, `https://www.fumpad.app`, `https://fumpad.vercel.app` (plus `http://localhost:3000`/`3100` only while testing). Login is refused from anywhere else, which limits what a copied front end can do with our app id.
+
+After deploying: open the site, log in, open the wallet menu and a coin page with DevTools → Console open; there should be no `Content-Security-Policy` violations. `curl -sI https://fumpad.app/ | grep -i content-security` shows the enforced header.
+
 ## Open the app (launch day)
 
 1. Vercel → project `fumpad` → Settings → Environment Variables → Production: set `NEXT_PUBLIC_PRELAUNCH` = `off`. (Or delete `PRELAUNCH_HOSTS`'s value / set it to an empty string; `off` is clearer.)
