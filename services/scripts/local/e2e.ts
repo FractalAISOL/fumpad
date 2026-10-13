@@ -210,8 +210,11 @@ export async function runE2E(
       const tx = await conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
       return { sig, events: decodeTransactionEvents(tx as unknown as TxLike), ticket: b.ticket };
     };
-    // D19: wait out the snipe window (4 slots) so these buys pay the normal fee.
-    await sleep(2_500);
+    // D19: wait out the snipe window (4 slots) so these buys pay the normal fee — by SLOT, not
+    // wall time: under load (the grinder burns 6 cores here) 2.5 s can still be inside the window,
+    // and a 25–99% snipe tax left alice's half-sell under $50 (no ticket → the e2e failed).
+    const snipe = (await c.coin(mint))!.snipe;
+    await waitFor("snipe window over", async () => BigInt(await conn.getSlot("confirmed")) >= snipe.launchSlot + BigInt(snipe.windowSlots) + 1n, 30_000, 200);
     // D17 (8% pool): eve buys enough that her claim stays > 10% of the pool (queued).
     await buy(alice, 1n);
     await buy(eve, 4n);
@@ -400,22 +403,27 @@ export async function runE2E(
     });
     check("no mint secret in any service log", !leaked && allLogs.includes("launch prepared"), `${left.length} pooled secrets checked against ${allLogs.length} log bytes`);
 
-    // The keeper must end healthy: no job failing at all (health flags a job at 3 consecutive
-    // failures; here not even one is tolerated by the end) — e.g. post-graduation setup of
-    // every graduated coin done.
-    type KeeperHealth = { failingJobs: string[]; jobs: Record<string, { failures: number; lastErr?: string }> };
+    // The keeper must end healthy: /health ok with no failing job (it flags a job after 3
+    // consecutive failures), and the post-graduation setup never failed for any coin (it did
+    // for low-bump coins before the bump-aware init_claim_queue budget).
+    type KeeperHealth = { ok: boolean; failingJobs: string[] };
+    const keeperLog = () => (services.find((s) => s.name === "keeper")?.logs ?? []).join("\n");
     const keeperHealthy = await waitFor("keeper healthy (no failing job)", async () => {
       const h = (await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json()) as KeeperHealth;
-      return h.failingJobs.length === 0 && Object.values(h.jobs).every((j) => j.failures === 0) ? h : undefined;
+      return h.ok && h.failingJobs.length === 0 ? h : undefined;
     }, 60_000, 2_000).then(
       () => ({ ok: true, detail: "" }),
       async () => {
         const h = (await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json()) as KeeperHealth;
-        const bad = Object.entries(h.jobs).filter(([, j]) => j.failures > 0);
-        return { ok: false, detail: bad.map(([k, j]) => `${k} ×${j.failures}: ${j.lastErr}`).join(" ; ") };
+        return { ok: false, detail: `failing: ${h.failingJobs.join(", ")}` };
       },
     );
-    check("keeper health: no failing jobs at the end", keeperHealthy.ok, keeperHealthy.detail);
+    const setupFailures = keeperLog().split("\n").filter((l) => l.includes("post-graduation setup failed"));
+    check(
+      "keeper health: no failing jobs at the end, post-graduation setup never failed",
+      keeperHealthy.ok && setupFailures.length === 0,
+      [keeperHealthy.detail, ...setupFailures.slice(0, 2)].filter(Boolean).join(" ; ").slice(0, 600),
+    );
 
     const counts: Record<string, number> = {};
     for (const t of ["vanity_mints", "transactions", "events", "coins", "trades", "tickets", "claims", "queue_entries", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) counts[t] = await countRows(pg.url, t);
