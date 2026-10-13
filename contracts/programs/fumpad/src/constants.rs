@@ -66,7 +66,7 @@ pub const DEFAULT_BUYBACK_MAX_POOL_BPS: u16 = 50; // slice ≤ 0.5% of quote dep
 pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 60;
 /// D31: attestations older than this (now − block_time) are rejected.
 pub const DEFAULT_MAX_ATTEST_AGE_SECS: i64 = 86_400;
-/// D31: attested ticket tokens per coin per sliding hour ≤ this share of supply (20%).
+/// D31: ticket tokens per coin becoming effective per hour ≤ this share of supply (20%); excess is deferred (M-1).
 pub const DEFAULT_MAX_ATTEST_TOKENS_PER_HOUR_BPS: u16 = 2_000;
 /// D31: a ticket is claimable only after `attested_at + ticket_challenge_secs` (6 h).
 pub const DEFAULT_TICKET_CHALLENGE_SECS: i64 = 6 * 3_600;
@@ -89,10 +89,8 @@ pub const PREGRAD_SAMPLE_MAX_AGE_SECS: i64 = 60;
 pub const ATTEST_CLOCK_SKEW_SECS: i64 = 60;
 /// Allowance for the venue's own fee (1.25% on DBC/DAMM, D32) when checking a buyback's output.
 pub const BUYBACK_VENUE_FEE_ALLOWANCE_BPS: u64 = 200;
-/// Lowest share of the DAMM v2 pool liquidity the recorded position must hold permanently locked (99.99%).
-pub const MIN_LOCKED_LIQUIDITY_BPS: u64 = 9_999;
-/// Rate-cap bucket length (sliding hour).
-pub const ATTEST_BUCKET_SECS: i64 = 3_600;
+/// Rate-cap window: `max_attest_tokens_per_hour_bps` of supply per this many seconds (leaky bucket, M-1).
+pub const ATTEST_CAP_WINDOW_SECS: i64 = 3_600;
 
 // ── `Params::is_valid` bounds (inclusive) ────────────────────────────────────
 pub const MIN_TRIGGER_MULTIPLE_BPS: u32 = 50_000;

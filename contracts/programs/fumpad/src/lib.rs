@@ -158,8 +158,8 @@ pub mod fumpad {
         instructions::handle_attest_rebuy(ctx)
     }
 
-    pub fn void_ticket(ctx: Context<VoidTicket>, reason: u8) -> Result<()> {
-        instructions::handle_void_ticket(ctx, reason)
+    pub fn void_ticket(ctx: Context<VoidTicket>, reason: u8, reopen: bool) -> Result<()> {
+        instructions::handle_void_ticket(ctx, reason, reopen)
     }
 
     pub fn close_consumed(ctx: Context<CloseConsumed>) -> Result<()> {

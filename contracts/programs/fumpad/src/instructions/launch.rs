@@ -1,5 +1,11 @@
 //! `register_coin` — the last instruction of the launch tx (SPEC v0.7 §2): DBC `initialize_virtual_pool_with_token2022`
 //! → creator's top-level DBC `swap2` (min fee) → `register_coin`.
+//!
+//! Launch binding (off-chain review L1): when `Global.params.launch_signer` is set, the API's launch key must
+//! co-sign `register_coin` (as it co-signs the vanity mint), so only API-built launch transactions register. DBC
+//! 0.2.1 gives its min fee (`enable_first_swap_with_min_fee`) to ONE swap of the pool-creation transaction only —
+//! further top-level swaps in the same transaction pay the scheduler's 99% (`launch_tests`), so no
+//! instructions-sysvar check is needed here.
 
 use anchor_lang::prelude::*;
 use anchor_spl::{
@@ -45,12 +51,19 @@ pub struct RegisterCoin<'info> {
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+    /// `Global.params.launch_signer` (required iff that is set; otherwise pass the fumpad program id = None).
+    pub launch_signer: Option<Signer<'info>>,
 }
 
 pub fn handle_register_coin(ctx: Context<RegisterCoin>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let g = &ctx.accounts.global;
     require!(!g.is_paused(PAUSE_LAUNCH, now), FumpadError::Paused);
+    let want = g.params.launch_signer;
+    if want != Pubkey::default() {
+        let got = ctx.accounts.launch_signer.as_ref().map(|s| s.key());
+        require!(got == Some(want), FumpadError::Unauthorized);
+    }
     let config_key = ctx.accounts.dbc_config.key();
     require!(g.is_allowed_config(&config_key), FumpadError::ConfigNotAllowed);
     let cfg = super::admin::validate_config(&ctx.accounts.dbc_config)?;

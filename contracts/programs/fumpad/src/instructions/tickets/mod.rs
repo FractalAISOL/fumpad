@@ -13,10 +13,14 @@ use crate::{
     error::FumpadError,
     events::{ConsumedClosed, TicketVoided},
     instructions::rewards::logic,
-    state::{Consumed, Global, Position, Ticket, TicketStatus},
+    state::{Coin, Consumed, Global, Position, Ticket, TicketStatus, CONSUMED_KIND_SELL, CONSUMED_KIND_SELL_REOPENED},
 };
 
 /// SPEC v0.7 §5.3: the guardian (or admin) voids a bad attestation inside its challenge window.
+/// `reopen` (REVIEW-v0.7 L-2): the attestation was wrong but the trade may be honest (engine bug: wrong amount,
+/// price, venue bit…) — the sell's replay marker is reopened so the keepers can attest the corrected record of the
+/// same trade once (any message but the voided one). `reopen = false` keeps the trade consumed forever (fraud).
+/// The voided tokens' rate-cap capacity is released (M-1). The tx references `coin` and `mint` (review L3).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct VoidTicket<'info> {
@@ -27,6 +31,11 @@ pub struct VoidTicket<'info> {
         constraint = global.is_admin_or_guardian(authority.key) @ FumpadError::Unauthorized,
     )]
     pub global: Box<Account<'info, Global>>,
+    #[account(mut, seeds = [COIN_SEED, ticket.mint.as_ref()], bump = coin.bump)]
+    pub coin: Box<Account<'info, Coin>>,
+    /// CHECK: the ticket's mint (address-checked; referenced so mint-history crawls see voids).
+    #[account(address = ticket.mint @ FumpadError::InvalidAccount)]
+    pub mint: UncheckedAccount<'info>,
     #[account(
         mut,
         seeds = [TICKET_SEED, ticket.mint.as_ref(), ticket.owner.as_ref(), &ticket.seq.to_le_bytes()],
@@ -35,19 +44,28 @@ pub struct VoidTicket<'info> {
     pub ticket: Box<Account<'info, Ticket>>,
     #[account(mut, seeds = [POSITION_SEED, ticket.mint.as_ref(), ticket.owner.as_ref()], bump = position.bump)]
     pub position: Box<Account<'info, Position>>,
+    /// The sell's replay marker (`ticket.consumed`).
+    #[account(mut, address = ticket.consumed @ FumpadError::InvalidAccount)]
+    pub consumed: Box<Account<'info, Consumed>>,
 }
 
-pub fn handle_void_ticket(ctx: Context<VoidTicket>, reason: u8) -> Result<()> {
+pub fn handle_void_ticket(ctx: Context<VoidTicket>, reason: u8, reopen: bool) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    let window = ctx.accounts.global.params.ticket_challenge_secs;
+    let p = ctx.accounts.global.params;
     let t = &mut ctx.accounts.ticket;
     require!(t.status == TicketStatus::Open, FumpadError::TicketNotOpen);
-    require!(now < t.attested_at.saturating_add(window), FumpadError::ChallengeWindowOver);
+    require!(now < t.attested_at.saturating_add(p.ticket_challenge_secs), FumpadError::ChallengeWindowOver);
     t.status = TicketStatus::Voided;
-    let (ticket, mint, owner) = (t.key(), t.mint, t.owner);
+    let (ticket, mint, owner, tokens, effective_at) = (t.key(), t.mint, t.owner, t.tokens, t.attested_at);
     logic::remove_open(&mut ctx.accounts.position, &ticket);
-    let authority = ctx.accounts.authority.key();
-    emit_event!(ctx, TicketVoided { ticket, mint, owner, reason, authority, ts: now });
+    ctx.accounts.coin.release_attest(now, tokens, p.max_attest_tokens_per_hour_bps, effective_at);
+    if reopen {
+        let m = &mut ctx.accounts.consumed;
+        require!(m.kind == CONSUMED_KIND_SELL && m.ticket == ticket, FumpadError::InvalidAccount);
+        m.kind = CONSUMED_KIND_SELL_REOPENED;
+    }
+    let (authority, coin) = (ctx.accounts.authority.key(), ctx.accounts.coin.key());
+    emit_event!(ctx, TicketVoided { ticket, mint, owner, reason, authority, ts: now, coin, reopened: reopen });
     Ok(())
 }
 

@@ -6,7 +6,9 @@ use crate::{constants::*, error::FumpadError, events::PositionClosed, state::Pos
 pub const MAX_CLOSE_POSITION_TICKETS: u64 = 64;
 
 /// L-4: close an empty Position; rent back to whoever paid it (`rent_payer`, the attesting keeper). Signed by the
-/// wallet or the rent payer. Requires no open (Open/Queued) ticket, and every ticket the position ever created to
+/// wallet, or by the rent payer only while the wallet has NOT opted out of auto-claim (REVIEW-v0.7 L-1: closing
+/// deletes the D17 opt-out and a re-created Position starts with auto-claim on, so only the wallet itself may
+/// close an opted-out Position). Requires no open (Open/Queued) ticket, and every ticket the position ever created to
 /// be closed: remaining_accounts = ticket PDAs ["ticket", mint, wallet, seq] for seq 0..next_ticket_seq, none a
 /// live fumpad account (so a re-created position, seq restarting at 0, can't collide with an old ticket).
 #[event_cpi]
@@ -29,7 +31,10 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     let pos = &ctx.accounts.position;
     let (mint, wallet) = (pos.mint, pos.wallet);
     let signer = ctx.accounts.signer.key();
-    require!(signer == wallet || signer == pos.rent_payer, FumpadError::Unauthorized);
+    require!(
+        signer == wallet || (signer == pos.rent_payer && pos.auto_claim_opt_out == 0),
+        FumpadError::Unauthorized
+    );
     require!(pos.open_count == 0, FumpadError::PositionNotEmpty);
     let n = pos.next_ticket_seq;
     require!(n <= MAX_CLOSE_POSITION_TICKETS, FumpadError::PositionNotEmpty);

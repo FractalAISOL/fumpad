@@ -187,13 +187,15 @@ pub struct ClaimLpFees<'info> {
     pub caller: Signer<'info>,
     #[account(seeds = [GLOBAL_SEED], bump = global.bump)]
     pub global: Box<Account<'info, Global>>,
-    #[account(mut, seeds = [COIN_SEED, mint.key().as_ref()], bump = coin.bump, has_one = mint, has_one = damm_pool, has_one = damm_position)]
+    #[account(mut, seeds = [COIN_SEED, mint.key().as_ref()], bump = coin.bump, has_one = mint, has_one = damm_pool)]
     pub coin: Box<Account<'info, Coin>>,
     /// CHECK: the coin's mint (has_one).
     pub mint: UncheckedAccount<'info>,
     /// CHECK: the coin's DAMM v2 pool (has_one); vaults checked against its data.
     pub damm_pool: UncheckedAccount<'info>,
-    /// CHECK: the coin's locked position (has_one).
+    /// CHECK: any DAMM v2 position of the coin's pool whose NFT the `fee_claimer` PDA holds (usually
+    /// `coin.damm_position`; REVIEW-v0.7 H-1: a third-party position handed to `fee_claimer` and recorded by an early
+    /// `graduate` must not strand the fees of ours). DAMM checks the NFT owner signs (`fee_claimer`).
     #[account(mut)]
     pub damm_position: UncheckedAccount<'info>,
     /// CHECK: PDA ["position_nft_account", position.nft_mint] (checked).
@@ -242,6 +244,7 @@ pub fn handle_claim_lp_fees(ctx: Context<ClaimLpFees>) -> Result<()> {
     require_keys_eq!(pool.token_a_vault, a.damm_token_a_vault.key(), FumpadError::WrongVenue);
     require_keys_eq!(pool.token_b_vault, a.damm_token_b_vault.key(), FumpadError::WrongVenue);
     let position = meteora::read_damm_position(&a.damm_position)?;
+    require_keys_eq!(position.pool, a.damm_pool.key(), FumpadError::WrongVenue);
     require_keys_eq!(
         a.position_nft_account.key(),
         meteora::damm_position_nft_account(&position.nft_mint),

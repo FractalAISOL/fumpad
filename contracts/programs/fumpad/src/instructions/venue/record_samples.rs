@@ -6,6 +6,7 @@
 //! * Curve coin: pool = `coin.dbc_pool`, DBC `sqrt_price` (offset 280); keeper only; stored in the Coin
 //!   (`pregrad_sample_*`) for the pre-graduation buyback guard only (never for claims, D1). The observations
 //!   account of the group is ignored.
+//! * Complete coin (curve done, not graduated): skipped (no sample, no event, no error).
 //! * The transaction must contain nothing but compute-budget instructions besides this one (no "move the pool and
 //!   sample it" in one atomic transaction).
 
@@ -136,7 +137,9 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
                 }
                 events.push(SampleRecorded { mint: coin.mint, venue: meteora::VENUE_DAMM, price_q64: price, fallback, ts: now });
             }
-            CoinStatus::Complete => return err!(FumpadError::WrongCoinStatus),
+            // Any router buy can complete a curve between building and landing a batch: skip it, don't fail the
+            // other coins (REVIEW-v0.7 note). No event for a skipped coin.
+            CoinStatus::Complete => continue,
         }
     }
 

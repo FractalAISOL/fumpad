@@ -224,20 +224,30 @@ fn record_binding_rules() {
     assert_fumpad_err(env.attest_sell(&old, &[0, 1]), FumpadError::AttestationExpired);
 }
 
+/// M-1 design: the per-coin cap (20% of supply per hour) defers tickets past it — their challenge window starts
+/// later — and never refuses one; once the backlog drains, tickets are effective immediately again.
 #[test]
-fn rate_cap_limits_tokens_per_coin_per_hour() {
+fn rate_cap_defers_tokens_beyond_the_hourly_cap() {
     let (mut env, c) = setup();
-    let cap = meteora::TOTAL_SUPPLY / 5; // 20% of supply per sliding hour
-    let r1 = env.sell_record(&c, &Pubkey::new_unique(), cap - 1_000, PRICE);
-    ok(env.attest_sell(&r1, &[0, 1]));
-    let r2 = env.sell_record(&c, &Pubkey::new_unique(), 1_001, PRICE);
-    assert_fumpad_err(env.attest_sell(&r2, &[0, 1]), FumpadError::AttestRateLimited);
-    let r3 = SellRecord { ticket_tokens: 1_000, base_amount: 1_000, ix_key: 7, ..r2 };
-    ok(env.attest_sell(&r3, &[0, 1]));
-    // An hour later the window has slid: retry succeeds (never lost, just later).
+    let cap = meteora::TOTAL_SUPPLY / 5;
+    let t0 = env.now();
+    let r1 = env.sell_record(&c, &Pubkey::new_unique(), cap, PRICE);
+    let meta = ok(env.attest_sell(&r1, &[0, 1]));
+    let ev: TicketAttested = event(&meta);
+    assert_eq!((ev.ts, ev.effective_at), (t0, t0), "one hour's cap is effective at once");
+    // Half an hour of cap beyond it → effective 30 min later (claimable 30 min later too).
+    let bob = Pubkey::new_unique();
+    let r2 = env.sell_record(&c, &bob, cap / 2, PRICE);
+    let meta = ok(env.attest_sell(&r2, &[0, 1]));
+    let ev: TicketAttested = event(&meta);
+    assert_eq!(ev.effective_at, t0 + 1_800);
+    let (_, t) = ticket_of(&env, &r2, 0);
+    assert_eq!(t.attested_at, t0 + 1_800);
+    // Two hours later the backlog has drained: effective immediately.
     env.warp(2 * 3_600);
-    let r2 = SellRecord { block_time: env.now() - 30, pyth_publish_time: env.now() - 31, ..r2 };
-    ok(env.attest_sell(&r2, &[0, 1]));
+    let r3 = env.sell_record(&c, &Pubkey::new_unique(), cap, PRICE);
+    let ev: TicketAttested = event(&ok(env.attest_sell(&r3, &[0, 1])));
+    assert_eq!(ev.effective_at, env.now());
 }
 
 #[test]
@@ -343,19 +353,7 @@ fn guardian_voids_inside_the_challenge_window_only() {
     ok(env.attest_sell(&r2, &[0, 1]));
     let (k0, _) = ticket_of(&env, &r, 0);
     let (k1, _) = ticket_of(&env, &r2, 1);
-    let void = |env: &Env, who: &Pubkey, t: &Pubkey| {
-        ix(
-            fumpad::accounts::VoidTicket {
-                authority: *who,
-                global: env.global(),
-                ticket: *t,
-                position: position_pda(&c.mint, &alice),
-                event_authority: ev_auth(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::VoidTicket { reason: 3 },
-        )
-    };
+    let void = |env: &Env, who: &Pubkey, t: &Pubkey| env.void_ticket_ix(who, t, 3, false);
     let rando = env.new_user(1);
     let i = void(&env, &kp_pk(&rando), &k0);
     assert_fumpad_err(env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
@@ -364,6 +362,7 @@ fn guardian_voids_inside_the_challenge_window_only() {
     let meta = ok(env.send(&[i], &[&admin]));
     let ev: TicketVoided = event(&meta);
     assert_eq!((ev.ticket, ev.reason, ev.authority), (k0, 3, kp_pk(&admin)));
+    assert_eq!((ev.mint, ev.coin, ev.reopened), (c.mint, c.coin_pda(), false));
     assert_eq!(env.fetch::<Ticket>(&k0).status, TicketStatus::Voided);
     assert_eq!(env.fetch::<Position>(&position_pda(&c.mint, &alice)).open_count, 1);
     // Already voided → not open.
@@ -399,10 +398,7 @@ fn consumed_markers_close_only_after_ticket_and_max_age() {
     assert_fumpad_err(env.send(&[close(&env)], &[]), FumpadError::ConsumedNotClosable);
     // Void + close the ticket (permissionless, rent → keeper).
     let admin = env.admin.insecure_clone();
-    let v = ix(
-        fumpad::accounts::VoidTicket { authority: kp_pk(&admin), global: env.global(), ticket: tk, position: position_pda(&c.mint, &alice), event_authority: ev_auth(), program: fumpad::ID },
-        fumpad::instruction::VoidTicket { reason: 0 },
-    );
+    let v = env.void_ticket_ix(&kp_pk(&admin), &tk, 0, false);
     ok(env.send(&[v], &[&admin]));
     let ct = ix(
         fumpad::accounts::CloseTicket {

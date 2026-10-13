@@ -39,7 +39,7 @@ pub struct Global {
     pub pending_config: Pubkey,
     pub pending_config_add: u8,
     pub pending_config_eta: i64,
-    pub reserved: [u8; 128],
+    pub reserved: [u8; 64],
 }
 
 pub const PAUSE_LAUNCH: u8 = 1 << 0;
@@ -87,6 +87,10 @@ pub struct Params {
     pub max_attest_tokens_per_hour_bps: u16,
     pub ticket_challenge_secs: i64,
     pub attest_threshold: u8,
+
+    /// Off-chain review L1 (launch binding): when not `Pubkey::default()`, `register_coin` must also be signed by
+    /// this key (the API's launch co-signer). Changed like every param: `queue_params` → 48 h → `execute_params`.
+    pub launch_signer: Pubkey,
 }
 
 impl Default for Params {
@@ -115,6 +119,7 @@ impl Default for Params {
             max_attest_tokens_per_hour_bps: DEFAULT_MAX_ATTEST_TOKENS_PER_HOUR_BPS,
             ticket_challenge_secs: DEFAULT_TICKET_CHALLENGE_SECS,
             attest_threshold: ATTEST_THRESHOLD,
+            launch_signer: Pubkey::default(),
         }
     }
 }

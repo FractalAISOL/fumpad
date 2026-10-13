@@ -280,12 +280,9 @@ fn cu_report() {
     let consumed = w.t(&t).consumed;
     let rent_payer = w.t(&t).rent_payer;
     let admin = w.env.admin.insecure_clone();
-    let v = ix(
-        fumpad::accounts::VoidTicket { authority: kp_pk(&admin), global: w.env.global(), ticket: t, position: position_pda(&w.c.mint, &kp_pk(&u)), event_authority: ev_auth(), program: fumpad::ID },
-        fumpad::instruction::VoidTicket { reason: 1 },
-    );
+    let v = w.env.void_ticket_ix(&kp_pk(&admin), &t, 1, true);
     let meta = ok(w.env.send(&[v], &[&admin]));
-    r.add("void_ticket", &meta, 0);
+    r.add("void_ticket (reopen)", &meta, 0);
     let meta = ok(w.close_ticket(&t, false));
     r.add("close_ticket (voided, no queue)", &meta, 0);
     let meta = ok(w.set_auto_claim(&u, false));
@@ -314,7 +311,7 @@ fn cu_report() {
         ("Coin", 546),
         ("Position", 315),
         ("Ticket", 276),
-        ("Consumed", 82),
+        ("Consumed", 8 + <fumpad::state::Consumed as anchor_lang::Space>::INIT_SPACE),
         ("ClaimQueue", 81_976),
         ("Observations", 8_280),
     ] {

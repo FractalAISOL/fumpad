@@ -54,6 +54,11 @@ pub fn sell_consumed_seeds_hash(signature: &[u8; 64]) -> [u8; 32] {
     solana_sha256_hasher::hashv(&[signature]).to_bytes()
 }
 
+/// `Consumed.message_hash` of a sell marker: sha256(message)[..16].
+pub fn sell_message_hash(message: &[u8]) -> [u8; 16] {
+    solana_sha256_hasher::hashv(&[message]).to_bytes()[..16].try_into().unwrap()
+}
+
 pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let g = &ctx.accounts.global;
@@ -96,14 +101,25 @@ pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
     let pyth_age = r.block_time.checked_sub(r.pyth_publish_time).ok_or(FumpadError::MathOverflow)?;
     require!(pyth_age >= 0 && pyth_age as u64 <= p.max_price_age_secs, FumpadError::StalePythPrice);
 
-    // Replay marker.
+    // Replay marker. An existing marker refuses the trade, unless the guardian reopened it (L-2) and this is a
+    // different (corrected) message than the voided one.
     let sig_hash = sell_consumed_seeds_hash(&r.signature);
+    let message_hash = sell_message_hash(&v.message);
     let ix_key = r.ix_key.to_le_bytes();
     let (consumed_key, consumed_bump) =
         Pubkey::find_program_address(&[CONSUMED_SEED, &sig_hash, &ix_key], &crate::ID);
     let a = &ctx.accounts;
     require_keys_eq!(a.consumed.key(), consumed_key, FumpadError::InvalidAccount);
-    require!(*a.consumed.owner != crate::ID, FumpadError::AlreadyConsumed);
+    let reopened = if *a.consumed.owner == crate::ID {
+        let m = Consumed::try_deserialize(&mut &a.consumed.try_borrow_data()?[..])?;
+        require!(
+            m.kind == CONSUMED_KIND_SELL_REOPENED && m.message_hash != message_hash,
+            FumpadError::AlreadyConsumed
+        );
+        Some(m)
+    } else {
+        None
+    };
 
     // Position (created on the wallet's first ticket on this coin).
     let mint = r.mint;
@@ -138,11 +154,9 @@ pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
     };
     require!(pos.open_count < p.max_open_tickets, FumpadError::TooManyOpenTickets);
 
-    // Rate cap (sliding hour, % of supply).
+    // Rate cap (% of supply per hour): over the cap the ticket is deferred, never refused (M-1).
     let coin = &mut ctx.accounts.coin;
-    coin.roll_attest_buckets(now);
-    require!(coin.attest_fits(now, r.ticket_tokens, p.max_attest_tokens_per_hour_bps), FumpadError::AttestRateLimited);
-    coin.attest_bucket_tokens = coin.attest_bucket_tokens.saturating_add(r.ticket_tokens);
+    let effective_at = coin.schedule_attest(now, r.ticket_tokens, p.max_attest_tokens_per_hour_bps);
     coin.tickets_created = coin.tickets_created.saturating_add(1);
 
     // Ticket.
@@ -179,7 +193,7 @@ pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
         escrow_payer: Pubkey::default(),
         source,
         venue,
-        attested_at: now,
+        attested_at: effective_at,
         rent_payer: keeper,
         consumed: consumed_key,
         reserved: [0; 16],
@@ -187,16 +201,30 @@ pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
     write_account(&ticket_info, &t)?;
 
     let consumed_info = a.consumed.to_account_info();
-    create_pda_account(
-        &keeper_info,
-        &consumed_info,
-        &system,
-        8 + Consumed::INIT_SPACE,
-        &[CONSUMED_SEED, &sig_hash, &ix_key, &[consumed_bump]],
-    )?;
+    let marker_payer = match reopened {
+        // Re-attestation of a reopened trade: the marker (and its original rent payer) is reused.
+        Some(m) => m.rent_payer,
+        None => {
+            create_pda_account(
+                &keeper_info,
+                &consumed_info,
+                &system,
+                8 + Consumed::INIT_SPACE,
+                &[CONSUMED_SEED, &sig_hash, &ix_key, &[consumed_bump]],
+            )?;
+            keeper
+        }
+    };
     write_account(
         &consumed_info,
-        &Consumed { bump: consumed_bump, kind: CONSUMED_KIND_SELL, ticket: ticket_key, rent_payer: keeper, block_time: r.block_time },
+        &Consumed {
+            bump: consumed_bump,
+            kind: CONSUMED_KIND_SELL,
+            ticket: ticket_key,
+            rent_payer: marker_payer,
+            block_time: r.block_time,
+            message_hash,
+        },
     )?;
 
     pos.next_ticket_seq = seq.checked_add(1).ok_or(FumpadError::MathOverflow)?;
@@ -225,6 +253,7 @@ pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
         keepers,
         submitter: keeper,
         ts: now,
+        effective_at,
     });
     Ok(())
 }
