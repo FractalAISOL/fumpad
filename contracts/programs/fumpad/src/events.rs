@@ -3,14 +3,13 @@ use anchor_lang::{
     solana_program::{instruction::Instruction, program::invoke_signed},
 };
 
-// Every state change emits an event via `emit_event!(ctx, Event { .. })` (instructions using
-// it need `#[event_cpi]` on their Accounts struct). The indexer treats these as the source of truth.
+use crate::constants::MAX_KEEPERS;
+use crate::state::Params;
 
-/// The self-CPI behind `emit_event!` (lib.rs): byte-for-byte what Anchor's `emit_cpi!` sends
-/// (`EVENT_IX_TAG_LE ++ event.data()`, one read-only `event_authority` signer, seeds
-/// `["__event_authority", bump]`), but one shared non-generic copy instead of the whole CPI
-/// inlined at every call site (program size). `event_authority` must already be validated
-/// (it is: `#[event_cpi]` seed-checks it, `hooks::emit_event` key-checks it).
+// Every state change emits an event via `emit_event!(ctx, Event { .. })` (needs `#[event_cpi]`). The indexer treats
+// these as the source of truth. Field lists: INTERFACE-v0.7.md §6.
+
+/// The self-CPI behind `emit_event!`: byte-for-byte what Anchor's `emit_cpi!` sends, one shared copy (size).
 #[inline(never)]
 pub fn emit_cpi_data(event_authority: &AccountInfo, data: Vec<u8>) -> Result<()> {
     let tag = anchor_lang::event::EVENT_IX_TAG_LE;
@@ -22,98 +21,262 @@ pub fn emit_cpi_data(event_authority: &AccountInfo, data: Vec<u8>) -> Result<()>
         .map_err(anchor_lang::error::Error::from)
 }
 
+// ── governance ──────────────────────────────────────────────────────────────
 #[event]
-pub struct CoinCreated {
-    pub mint: Pubkey,
-    pub creator: Pubkey,
-    pub name: String,
-    pub symbol: String,
-    pub uri: String,
+pub struct GlobalInitialized {
+    pub admin: Pubkey,
+    pub platform_treasury: Pubkey,
+    pub guardian: Pubkey,
+    pub cluster_tag: u8,
+    pub params: Params,
     pub ts: i64,
 }
 
 #[event]
-pub struct Trade {
-    pub mint: Pubkey,
-    pub user: Pubkey,
-    pub is_buy: bool,
-    /// false = bonding curve, true = PumpSwap via router.
-    pub on_amm: bool,
-    pub token_amount: u64,
-    /// SOL side before FUMPAD's fee.
-    pub sol_amount: u64,
-    pub fee_pool: u64,
-    pub fee_platform: u64,
-    pub fee_creator: u64,
-    /// Tokens bought into the reward pool by this trade (curve: inline buyback).
-    pub pool_tokens_bought: u64,
-    pub price_q64: u128,
-    pub virtual_sol_reserves: u64,
-    pub virtual_token_reserves: u64,
+pub struct ParamsQueued {
+    pub params: Params,
+    pub eta: i64,
     pub ts: i64,
-    /// D19 (v0.5): snipe tax paid on top of the normal fee (curve buys in the launch window;
-    /// 0 otherwise). All of it went to the reward pool (included in `pool_tokens_bought`).
-    /// Total charged = sol_amount + fee_pool + fee_platform + fee_creator + snipe_tax.
-    pub snipe_tax: u64,
-    /// D19: the tax rate applied, bps of (sol_amount + snipe_tax); 0 outside the window.
-    pub snipe_tax_bps: u16,
+}
+
+#[event]
+pub struct ParamsUpdated {
+    pub params: Params,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ParamsCancelled {
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct PauseSet {
+    pub paused: u8,
+    pub expires_at: i64,
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct KeepersSet {
+    pub keepers: [Pubkey; MAX_KEEPERS],
+    pub added_at: [i64; MAX_KEEPERS],
+    pub ts: i64,
+}
+
+#[event]
+pub struct AdminProposed {
+    pub admin: Pubkey,
+    pub platform_treasury: Pubkey,
+    pub guardian: Pubkey,
+    pub eta: i64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct AdminAccepted {
+    pub previous_admin: Pubkey,
+    pub admin: Pubkey,
+    pub platform_treasury: Pubkey,
+    pub guardian: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct AdminProposalCancelled {
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ConfigQueued {
+    pub config: Pubkey,
+    pub add: bool,
+    pub eta: i64,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ConfigUpdated {
+    pub config: Pubkey,
+    pub add: bool,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ConfigCancelled {
+    pub config: Pubkey,
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct GlobalMigrated {
+    pub old_len: u32,
+    pub new_len: u32,
+    pub ts: i64,
+}
+
+// ── coins, trading, fees ────────────────────────────────────────────────────
+#[event]
+pub struct CoinRegistered {
+    pub mint: Pubkey,
+    pub creator: Pubkey,
+    pub dbc_pool: Pubkey,
+    pub dbc_config: Pubkey,
+    pub launch_slot: u64,
+    pub launch_window_slots: u64,
+    pub ts: i64,
+}
+
+/// A router trade. buy: `quote_gross` = WSOL spent (fee included); sell: WSOL received + fee. `fee` = Meteora
+/// trading + protocol fee of the swap (pool counters).
+#[event]
+pub struct RoutedTrade {
+    pub mint: Pubkey,
+    pub trader: Pubkey,
+    pub venue: u8,
+    pub is_buy: bool,
+    pub base_amount: u64,
+    pub quote_gross: u64,
+    pub fee: u64,
+    pub pre_sqrt_price: u128,
+    pub post_sqrt_price: u128,
+    pub slot: u64,
+    pub ts: i64,
 }
 
 #[event]
 pub struct CurveCompleted {
     pub mint: Pubkey,
+    pub dbc_pool: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct FeesClaimed {
+    pub mint: Pubkey,
+    pub venue: u8,
+    pub claimed: u64,
+    pub to_buyback: u64,
+    pub to_platform: u64,
+    pub to_creator: u64,
+    pub launch_window: bool,
+    pub ts: i64,
+}
+
+#[event]
+pub struct FeesWithdrawn {
+    pub mint: Pubkey,
+    pub recipient: Pubkey,
+    pub lamports: u64,
+    pub creator: bool,
+    pub ts: i64,
+}
+
+#[event]
+pub struct BuybackExecuted {
+    pub mint: Pubkey,
+    pub venue: u8,
+    pub lamports_in: u64,
+    pub tokens_out: u64,
+    pub guard_price_q64: u128,
+    pub spot_price_q64: u128,
+    pub ts: i64,
+}
+
+#[event]
+pub struct PoolMigrated {
+    pub mint: Pubkey,
+    pub damm_pool: Pubkey,
+    pub migrator: Pubkey,
+    pub cost: u64,
     pub ts: i64,
 }
 
 #[event]
 pub struct Graduated {
     pub mint: Pubkey,
-    pub pool: Pubkey,
-    pub sol_deposited: u64,
-    pub tokens_deposited: u64,
-    /// LP tokens moved into the immutable `fumpad_lp_locker` (D11).
-    pub lp_locked: u64,
-    pub ts: i64,
-    /// D20 (v0.5): how the coin's graduation fee was spent. `caller_refund` = the graduate
-    /// caller's net rent, reimbursed; `setup_prefunded` = rent pre-funded into the
-    /// observations + claim-queue PDAs; `platform_fee` = the remainder (to platform fees).
+    pub damm_pool: Pubkey,
+    pub damm_position: Pubkey,
+    pub leftover_tokens: u64,
+    pub migration_fee: u64,
+    pub surplus: u64,
+    pub migrator_refund: u64,
     pub caller_refund: u64,
     pub setup_prefunded: u64,
     pub platform_fee: u64,
-}
-
-/// D11: skimmed LP-fee SOL unwrapped from ATA(coin, WSOL) and credited to the Coin.
-/// (The skim itself — LP withdrawn, base tokens sent to the reward vault — is logged by
-/// the locker's own `Skimmed` event.)
-#[event]
-pub struct LpFeesSettled {
-    pub mint: Pubkey,
-    pub lamports: u64,
-    pub platform: u64,
-    pub creator: u64,
     pub ts: i64,
 }
 
 #[event]
-pub struct TicketCreated {
+pub struct SampleRecorded {
+    pub mint: Pubkey,
+    pub venue: u8,
+    pub price_q64: u128,
+    pub fallback: bool,
+    pub ts: i64,
+}
+
+// ── tickets ─────────────────────────────────────────────────────────────────
+#[event]
+pub struct TicketAttested {
     pub mint: Pubkey,
     pub owner: Pubkey,
     pub ticket: Pubkey,
+    pub seq: u64,
+    pub pool: Pubkey,
+    pub venue: u8,
+    pub source: u8,
+    pub signature: [u8; 64],
+    pub ix_key: u32,
+    pub base_amount: u64,
+    pub quote_gross: u64,
     pub tokens: u64,
     pub sell_price_q64: u128,
     pub sell_usd_cents: u64,
+    pub pyth_publish_time: i64,
+    pub slot: u64,
+    pub sell_ts: i64,
+    pub keepers: [Pubkey; 2],
+    pub submitter: Pubkey,
     pub ts: i64,
 }
 
 #[event]
 pub struct TicketDebited {
     pub ticket: Pubkey,
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub signature: [u8; 64],
+    pub ix_key: u32,
     pub debited: u64,
     pub remaining: u64,
     pub voided: bool,
     pub ts: i64,
 }
 
+#[event]
+pub struct TicketVoided {
+    pub ticket: Pubkey,
+    pub mint: Pubkey,
+    pub owner: Pubkey,
+    pub reason: u8,
+    pub authority: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct ConsumedClosed {
+    pub consumed: Pubkey,
+    pub ticket: Pubkey,
+    pub rent_payer: Pubkey,
+    pub ts: i64,
+}
+
+// ── claims ──────────────────────────────────────────────────────────────────
 #[event]
 pub struct ClaimQueued {
     pub mint: Pubkey,
@@ -122,7 +285,6 @@ pub struct ClaimQueued {
     pub amount: u64,
     pub queue_len: u16,
     pub ts: i64,
-    /// D17: who sent the claim — the owner (`claim`) or a keeper (`claim_for`).
     pub triggered_by: Pubkey,
 }
 
@@ -135,86 +297,9 @@ pub struct ClaimPaid {
     pub from_queue: bool,
     pub median_price_q64: u128,
     pub ts: i64,
-    /// D17: who triggered the payout — the owner (`claim`), a keeper (`claim_for`, auto-claim)
-    /// or the `process_queue` cranker (`from_queue`).
     pub triggered_by: Pubkey,
 }
 
-#[event]
-pub struct TicketClosed {
-    pub ticket: Pubkey,
-    pub owner: Pubkey,
-    pub final_status: u8,
-    pub ts: i64,
-}
-
-#[event]
-pub struct SampleRecorded {
-    pub mint: Pubkey,
-    pub price_q64: u128,
-    pub fallback: bool,
-    pub ts: i64,
-}
-
-#[event]
-pub struct BuybackExecuted {
-    pub mint: Pubkey,
-    pub lamports_in: u64,
-    pub tokens_out: u64,
-    pub ts: i64,
-}
-
-#[event]
-pub struct FeesWithdrawn {
-    pub mint: Pubkey,
-    pub recipient: Pubkey,
-    pub lamports: u64,
-    /// true = creator fees, false = platform fees.
-    pub creator: bool,
-    pub ts: i64,
-}
-
-#[event]
-pub struct HoldingsRegistered {
-    pub mint: Pubkey,
-    pub wallet: Pubkey,
-    pub added: u64,
-    pub ts: i64,
-}
-
-// ── v0.3 ────────────────────────────────────────────────────────────────────
-
-/// D15: a params change was queued; `execute_params` may apply it from `eta`.
-#[event]
-pub struct ParamsQueued {
-    pub params: crate::state::Params,
-    pub eta: i64,
-    pub ts: i64,
-}
-
-#[event]
-pub struct ParamsUpdated {
-    pub params: crate::state::Params,
-    pub ts: i64,
-}
-
-#[event]
-pub struct ParamsCancelled {
-    pub ts: i64,
-    /// v0.6: the admin or the guardian (M-2).
-    pub authority: Pubkey,
-}
-
-/// D13: a coin stuck in `Complete` for 7 days reopened its curve (escape hatch).
-#[event]
-pub struct CurveReopened {
-    pub mint: Pubkey,
-    pub completed_at: i64,
-    pub ts: i64,
-}
-
-/// D16: a queued payout whose owner's ATA refuses transfers was paid into the ticket's
-/// escrow token account (`["escrow", ticket]`); the owner withdraws it with `withdraw_escrow`.
 #[event]
 pub struct ClaimEscrowed {
     pub mint: Pubkey,
@@ -223,7 +308,6 @@ pub struct ClaimEscrowed {
     pub escrow: Pubkey,
     pub amount: u64,
     pub ts: i64,
-    /// D17: the `process_queue` cranker or the `claim_for` keeper (it also paid the escrow rent).
     pub triggered_by: Pubkey,
 }
 
@@ -237,93 +321,26 @@ pub struct EscrowWithdrawn {
     pub ts: i64,
 }
 
-/// D17: a wallet opted out of (or back into) keeper auto-claim for one coin.
+#[event]
+pub struct TicketClosed {
+    pub ticket: Pubkey,
+    pub owner: Pubkey,
+    pub final_status: u8,
+    pub rent_payer: Pubkey,
+    pub ts: i64,
+}
+
+#[event]
+pub struct PositionClosed {
+    pub mint: Pubkey,
+    pub wallet: Pubkey,
+    pub ts: i64,
+}
+
 #[event]
 pub struct AutoClaimSet {
     pub mint: Pubkey,
     pub wallet: Pubkey,
     pub enabled: bool,
-    pub ts: i64,
-}
-
-// ── v0.5 ────────────────────────────────────────────────────────────────────
-
-/// `migrate_global` grew a legacy Global to the current layout (existing bytes kept; the
-/// appended `Params` fields set from its args, in both `params` and `pending_params`).
-#[event]
-pub struct GlobalMigrated {
-    pub old_len: u32,
-    pub new_len: u32,
-    pub snipe_window_slots: u16,
-    pub snipe_start_bps: u16,
-    /// Lamports the admin added to keep the larger account rent-exempt.
-    pub rent_paid: u64,
-    pub ts: i64,
-    /// v0.6 (M-2): the guardian after migration (= the admin for a pre-v0.6 Global).
-    pub guardian: Pubkey,
-    /// v0.6 (M-3): when the migrated pause flags lapse (now + 7 days if any flag was set).
-    pub pause_expires_at: i64,
-}
-
-// ── v0.6 (final pre-mainnet review) ────────────────────────────────────────
-
-/// L-3: `initialize_global`.
-#[event]
-pub struct GlobalInitialized {
-    pub admin: Pubkey,
-    pub platform_treasury: Pubkey,
-    pub guardian: Pubkey,
-    pub params: crate::state::Params,
-    pub ts: i64,
-}
-
-/// L-3 / M-3: `set_pause` by the admin or the guardian; flags lapse at `expires_at` (0 = none set).
-#[event]
-pub struct PauseSet {
-    pub paused: u8,
-    pub expires_at: i64,
-    pub authority: Pubkey,
-    pub ts: i64,
-}
-
-/// L-3: `set_keepers` (immediate; keepers can only trigger samples of on-chain reserves).
-#[event]
-pub struct KeepersSet {
-    pub keepers: [Pubkey; crate::constants::MAX_KEEPERS],
-    pub ts: i64,
-}
-
-/// M-2: the admin proposed a new admin / treasury / guardian; `accept_admin` from `eta`.
-#[event]
-pub struct AdminProposed {
-    pub admin: Pubkey,
-    pub platform_treasury: Pubkey,
-    pub guardian: Pubkey,
-    pub eta: i64,
-    pub ts: i64,
-}
-
-/// M-2: the proposed admin accepted; `admin`, `platform_treasury`, `guardian` are now live.
-#[event]
-pub struct AdminAccepted {
-    pub previous_admin: Pubkey,
-    pub admin: Pubkey,
-    pub platform_treasury: Pubkey,
-    pub guardian: Pubkey,
-    pub ts: i64,
-}
-
-/// M-2: a proposal was cancelled (by the admin or the guardian).
-#[event]
-pub struct AdminProposalCancelled {
-    pub authority: Pubkey,
-    pub ts: i64,
-}
-
-/// L-4: a wallet closed its empty Position (rent back to it).
-#[event]
-pub struct PositionClosed {
-    pub mint: Pubkey,
-    pub wallet: Pubkey,
     pub ts: i64,
 }

@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 anchor-lang = "1.2.1"
 fumpad = { path = "../programs/fumpad", features = ["no-entrypoint"] }
-fumpad_lp_locker = { path = "../programs/fumpad_lp_locker", features = ["no-entrypoint"] }
 litesvm = "0.18"
 solana-keypair = "3"
 solana-signer = "3"

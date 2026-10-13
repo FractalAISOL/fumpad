@@ -1,12 +1,12 @@
-/// `emit_event!(ctx, Event { .. })`: same event self-CPI as Anchor's `emit_cpi!(Event { .. })`
-/// (same bytes, accounts and signer), routed through `events::emit_cpi_data` so the CPI code
-/// exists once instead of at all ~30 call sites (program size).
+/// `emit_event!(ctx, Event { .. })`: same event self-CPI as Anchor's `emit_cpi!(Event { .. })`, routed through one
+/// shared `events::emit_cpi_data` (program size).
 macro_rules! emit_event {
     ($ctx:ident, $event:expr) => {
         $crate::events::emit_cpi_data(&$ctx.accounts.event_authority, anchor_lang::Event::data(&$event))?
     };
 }
 
+pub mod attestation;
 pub mod constants;
 pub mod error;
 pub mod events;
@@ -21,43 +21,36 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv");
+declare_id!("5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb");
 
+/// FUMPAD v0.7 — Meteora DBC (curve) → DAMM v2 (pool); tickets by 2-of-3 keeper attestation. INTERFACE-v0.7.md.
 #[program]
 pub mod fumpad {
     use super::*;
 
-    // ── admin ───────────────────────────────────────────────────────────────
+    // ── admin / governance ──────────────────────────────────────────────────
     pub fn initialize_global(
         ctx: Context<InitializeGlobal>,
         admin: Pubkey,
         platform_treasury: Pubkey,
+        cluster_tag: u8,
         params: Params,
     ) -> Result<()> {
-        instructions::handle_initialize_global(ctx, admin, platform_treasury, params)
+        instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params)
     }
 
-    /// D15: queue a params change; `execute_params` applies it after 48h.
-    pub fn queue_params(ctx: Context<QueueParams>, params: Params) -> Result<()> {
+    pub fn queue_params(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
         instructions::handle_queue_params(ctx, params)
     }
 
-    pub fn execute_params(ctx: Context<ExecuteParams>) -> Result<()> {
+    pub fn execute_params(ctx: Context<PermissionlessGlobal>) -> Result<()> {
         instructions::handle_execute_params(ctx)
     }
 
-    /// M-2: admin or guardian.
     pub fn cancel_params(ctx: Context<GuardianOrAdmin>) -> Result<()> {
         instructions::handle_cancel_params(ctx)
     }
 
-    /// Grow a Global written by an older program version to the current layout (admin; pays
-    /// the extra rent). Fills only newly appended params from `args`; no-op when current.
-    pub fn migrate_global(ctx: Context<MigrateGlobal>, args: MigrateGlobalArgs) -> Result<()> {
-        instructions::handle_migrate_global(ctx, args)
-    }
-
-    /// M-2 / M-3: admin or guardian; flags lapse after 7 days unless renewed.
     pub fn set_pause(ctx: Context<GuardianOrAdmin>, paused: u8) -> Result<()> {
         instructions::handle_set_pause(ctx, paused)
     }
@@ -66,8 +59,6 @@ pub mod fumpad {
         instructions::handle_set_keepers(ctx, keepers)
     }
 
-    /// M-2 (replaces `set_admin`): propose a new admin / treasury / guardian; the new admin
-    /// applies it with `accept_admin` after 48h; the guardian or admin can `cancel_admin`.
     pub fn propose_admin(
         ctx: Context<AdminOnly>,
         new_admin: Pubkey,
@@ -85,38 +76,43 @@ pub mod fumpad {
         instructions::handle_cancel_admin(ctx)
     }
 
-    // ── curve / launch / graduation ─────────────────────────────────────────
-    pub fn create_coin(ctx: Context<CreateCoin>, name: String, symbol: String, uri: String) -> Result<()> {
-        instructions::handle_create_coin(ctx, name, symbol, uri)
+    pub fn queue_config(ctx: Context<QueueConfig>, config: Pubkey, add: bool) -> Result<()> {
+        instructions::handle_queue_config(ctx, config, add)
     }
 
-    pub fn buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
-        instructions::handle_buy(ctx, sol_in, min_tokens_out)
+    pub fn execute_config(ctx: Context<ExecuteConfig>) -> Result<()> {
+        instructions::handle_execute_config(ctx)
     }
 
-    pub fn sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
-        instructions::handle_sell(ctx, tokens_in, min_sol_out)
+    pub fn cancel_config(ctx: Context<GuardianOrAdmin>) -> Result<()> {
+        instructions::handle_cancel_config(ctx)
     }
 
-    pub fn graduate<'info>(ctx: Context<'info, Graduate<'info>>) -> Result<()> {
-        instructions::handle_graduate(ctx)
+    pub fn migrate_global(ctx: Context<MigrateGlobal>) -> Result<()> {
+        instructions::handle_migrate_global(ctx)
     }
 
-    // ── rewards ─────────────────────────────────────────────────────────────
-    pub fn register_holdings(ctx: Context<RegisterHoldings>) -> Result<()> {
-        instructions::handle_register_holdings(ctx)
+    // ── launch ──────────────────────────────────────────────────────────────
+    pub fn register_coin(ctx: Context<RegisterCoin>) -> Result<()> {
+        instructions::handle_register_coin(ctx)
     }
 
-    pub fn claim(ctx: Context<Claim>) -> Result<()> {
-        instructions::handle_claim(ctx)
+    // ── router ──────────────────────────────────────────────────────────────
+    pub fn buy<'info>(ctx: Context<'info, Route<'info>>, amount_in: u64, min_out: u64, mode: u8) -> Result<()> {
+        instructions::handle_buy(ctx, amount_in, min_out, mode)
     }
 
-    pub fn process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max_entries: u8) -> Result<()> {
-        instructions::handle_process_queue(ctx, max_entries)
+    pub fn sell<'info>(ctx: Context<'info, Route<'info>>, amount_in: u64, min_out: u64) -> Result<()> {
+        instructions::handle_sell(ctx, amount_in, min_out)
     }
 
-    pub fn close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
-        instructions::handle_close_ticket(ctx)
+    // ── fees / buyback ──────────────────────────────────────────────────────
+    pub fn claim_fees(ctx: Context<ClaimFees>) -> Result<()> {
+        instructions::handle_claim_fees(ctx)
+    }
+
+    pub fn claim_lp_fees(ctx: Context<ClaimLpFees>) -> Result<()> {
+        instructions::handle_claim_lp_fees(ctx)
     }
 
     pub fn withdraw_creator_fees(ctx: Context<WithdrawCreatorFees>) -> Result<()> {
@@ -127,55 +123,75 @@ pub mod fumpad {
         instructions::handle_withdraw_platform_fees(ctx)
     }
 
-    pub fn init_claim_queue(ctx: Context<InitClaimQueue>) -> Result<()> {
-        instructions::handle_init_claim_queue(ctx)
+    pub fn execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>, max_in: u64) -> Result<()> {
+        instructions::handle_execute_buyback(ctx, max_in)
     }
 
-    /// D16: move an escrowed queue payout to the owner's token account of choice.
-    pub fn withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
-        instructions::handle_withdraw_escrow(ctx)
+    // ── graduation ──────────────────────────────────────────────────────────
+    pub fn migrate_pool<'info>(ctx: Context<'info, MigratePool<'info>>) -> Result<()> {
+        instructions::handle_migrate_pool(ctx)
     }
 
-    /// D17 auto-claim: a keeper claims a ticket for its owner (payout to the owner's
-    /// canonical ATA, or its escrow). Same rules as `claim`; owner may opt out.
-    pub fn claim_for(ctx: Context<ClaimFor>) -> Result<()> {
-        instructions::handle_claim_for(ctx)
-    }
-
-    /// D17: the position's wallet opts out of / back into keeper auto-claim for this coin.
-    pub fn set_auto_claim(ctx: Context<SetAutoClaim>, enabled: bool) -> Result<()> {
-        instructions::handle_set_auto_claim(ctx, enabled)
-    }
-
-    /// L-4 (v0.6): the wallet closes its Position (no open tickets; remaining_accounts = every
-    /// ticket PDA it ever created, all closed) and gets the rent back.
-    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
-        instructions::handle_close_position(ctx)
-    }
-
-    // ── venue: router, oracle, buyback ──────────────────────────────────────
-    pub fn swap_buy<'info>(ctx: Context<'info, SwapBuy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
-        instructions::handle_swap_buy(ctx, sol_in, min_tokens_out)
-    }
-
-    pub fn swap_sell<'info>(ctx: Context<'info, SwapSell<'info>>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
-        instructions::handle_swap_sell(ctx, tokens_in, min_sol_out)
-    }
-
-    pub fn execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>, max_lamports: u64) -> Result<()> {
-        instructions::handle_execute_buyback(ctx, max_lamports)
+    pub fn graduate(ctx: Context<Graduate>) -> Result<()> {
+        instructions::handle_graduate(ctx)
     }
 
     pub fn init_observations(ctx: Context<InitObservations>) -> Result<()> {
         instructions::handle_init_observations(ctx)
     }
 
+    pub fn init_claim_queue(ctx: Context<InitClaimQueue>) -> Result<()> {
+        instructions::handle_init_claim_queue(ctx)
+    }
+
+    // ── oracle ──────────────────────────────────────────────────────────────
     pub fn record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -> Result<()> {
         instructions::handle_record_samples(ctx)
     }
 
-    /// D11: unwrap LP fees skimmed by `fumpad_lp_locker` into the Coin's fee counters.
-    pub fn settle_lp_fees(ctx: Context<SettleLpFees>) -> Result<()> {
-        instructions::handle_settle_lp_fees(ctx)
+    // ── tickets (D31) ───────────────────────────────────────────────────────
+    pub fn attest_sell(ctx: Context<AttestSell>) -> Result<()> {
+        instructions::handle_attest_sell(ctx)
+    }
+
+    pub fn attest_rebuy(ctx: Context<AttestRebuy>) -> Result<()> {
+        instructions::handle_attest_rebuy(ctx)
+    }
+
+    pub fn void_ticket(ctx: Context<VoidTicket>, reason: u8) -> Result<()> {
+        instructions::handle_void_ticket(ctx, reason)
+    }
+
+    pub fn close_consumed(ctx: Context<CloseConsumed>) -> Result<()> {
+        instructions::handle_close_consumed(ctx)
+    }
+
+    // ── claims ──────────────────────────────────────────────────────────────
+    pub fn claim(ctx: Context<Claim>) -> Result<()> {
+        instructions::handle_claim(ctx)
+    }
+
+    pub fn claim_for(ctx: Context<ClaimFor>) -> Result<()> {
+        instructions::handle_claim_for(ctx)
+    }
+
+    pub fn process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max_entries: u8) -> Result<()> {
+        instructions::handle_process_queue(ctx, max_entries)
+    }
+
+    pub fn withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
+        instructions::handle_withdraw_escrow(ctx)
+    }
+
+    pub fn set_auto_claim(ctx: Context<SetAutoClaim>, enabled: bool) -> Result<()> {
+        instructions::handle_set_auto_claim(ctx, enabled)
+    }
+
+    pub fn close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
+        instructions::handle_close_ticket(ctx)
+    }
+
+    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
+        instructions::handle_close_position(ctx)
     }
 }

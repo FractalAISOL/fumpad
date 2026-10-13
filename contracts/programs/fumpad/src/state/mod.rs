@@ -1,5 +1,6 @@
 pub mod claim_queue;
 pub mod coin;
+pub mod consumed;
 pub mod global;
 pub mod observations;
 pub mod position;
@@ -7,6 +8,7 @@ pub mod ticket;
 
 pub use claim_queue::*;
 pub use coin::*;
+pub use consumed::*;
 pub use global::*;
 pub use observations::*;
 pub use position::*;

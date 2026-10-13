@@ -1,12 +1,8 @@
 use anchor_lang::prelude::*;
 
-/// Single error enum for the program. Modules add variants ONLY inside their own
-/// section (keep the section order) so parallel branches merge cleanly.
+/// v0.7 (D39): fresh error enum, codes 6000 + index. Append only (INTERFACE-v0.7.md §7).
 #[error_code]
 pub enum FumpadError {
-    // ── common ──────────────────────────────────────────────────────────────
-    #[msg("Not implemented")]
-    NotImplemented,
     #[msg("Unauthorized")]
     Unauthorized,
     #[msg("Invalid parameters")]
@@ -23,78 +19,104 @@ pub enum FumpadError {
     InvalidAccount,
     #[msg("Wrong coin status for this action")]
     WrongCoinStatus,
-
-    // ── curve / launch / graduation ─────────────────────────────────────────
-    #[msg("Name, symbol or URI too long")]
-    MetadataTooLong,
-    #[msg("Curve has no tokens left")]
-    CurveExhausted,
-    #[msg("Curve is not complete")]
-    CurveNotComplete,
-    #[msg("Insufficient reserves")]
-    InsufficientReserves,
-    #[msg("Name and symbol must not be empty")]
-    EmptyMetadata,
-    #[msg("PumpSwap pool creation did not move the expected amounts")]
-    GraduationMismatch,
-
-    // ── rewards / claims / queue ────────────────────────────────────────────
-    #[msg("Oracle price is stale or invalid")]
-    StaleOraclePrice,
-    #[msg("Ticket is not open")]
-    TicketNotOpen,
-    #[msg("Ticket has expired")]
-    TicketExpired,
-    #[msg("Price has not held 10x the sell price")]
-    TriggerNotMet,
-    #[msg("Not enough keeper price samples spread over the 30-min window (claims and buybacks pause during a keeper outage)")]
-    InsufficientSamples,
-    #[msg("Claim queue is full")]
-    QueueFull,
-    #[msg("Open tickets passed do not match the position")]
-    OpenTicketsMismatch,
-    #[msg("Ticket cannot be closed yet")]
-    TicketNotClosable,
-    #[msg("Coin lamport accounting invariant violated")]
-    LamportInvariant,
-
-    // ── venue / router / oracle / buyback ───────────────────────────────────
-    #[msg("Wrong venue program or pool")]
+    #[msg("Wrong venue program, pool or account list")]
     WrongVenue,
+    #[msg("DBC config is not on the FUMPAD allow-list")]
+    ConfigNotAllowed,
+    #[msg("DBC config does not have the FUMPAD shape (fee claimer, leftover receiver, token, migration, locks)")]
+    InvalidConfig,
+    #[msg("Config allow-list is full")]
+    ConfigListFull,
+    #[msg("No parameter change is queued")]
+    NoPendingParams,
+    #[msg("No config change is queued")]
+    NoPendingConfig,
+    #[msg("No admin change is proposed")]
+    NoPendingAdmin,
+    #[msg("Timelock (48h) has not elapsed")]
+    TimelockNotElapsed,
+    #[msg("Global account layout is unknown or newer than this program")]
+    UnsupportedGlobalLayout,
+    #[msg("DBC pool already completed or migrated")]
+    PoolNotFresh,
+    #[msg("DBC pool has not been migrated to DAMM v2 yet")]
+    NotMigrated,
+    #[msg("DAMM v2 pool or position is not the coin's locked migration pool")]
+    InvalidMigratedPool,
+    #[msg("Launch window (anti-snipe fee) still active")]
+    LaunchWindowActive,
+    #[msg("Nothing to claim")]
+    NothingToClaim,
+    #[msg("Launch-window fees not settled yet: call claim_fees first")]
+    LaunchFeesUnsettled,
+    #[msg("Nothing to buy back")]
+    NothingToBuyBack,
+    #[msg("Spot price deviates too far from the guard price")]
+    PriceDeviation,
+    #[msg("No fresh keeper sample")]
+    StaleSample,
+    #[msg("Not enough keeper price samples spread over the window (claims and buybacks pause during a keeper outage)")]
+    InsufficientSamples,
     #[msg("Sample too soon after the previous one")]
     SampleTooSoon,
     #[msg("Sampling transaction must contain only the sampling instruction")]
     SampleTxNotIsolated,
-    #[msg("Spot price deviates too far from the median")]
-    PriceDeviation,
-    #[msg("Nothing to buy back")]
-    NothingToBuyBack,
-    #[msg("No skimmed LP fees to settle")]
-    NothingToSettle,
-
-    // ── v0.3 (appended so earlier codes stay stable) ────────────────────────
-    #[msg("No parameter change is queued")]
-    NoPendingParams,
-    #[msg("Parameter timelock (48h) has not elapsed")]
-    TimelockNotElapsed,
+    #[msg("A buyback may not complete the curve")]
+    WouldCompleteCurve,
+    #[msg("Ed25519 attestation instruction missing right before this instruction")]
+    MissingAttestation,
+    #[msg("Malformed attestation")]
+    InvalidAttestation,
+    #[msg("Not enough distinct active keeper signatures")]
+    NotEnoughKeeperSignatures,
+    #[msg("Attestation is too old")]
+    AttestationExpired,
+    #[msg("Attestation is for another program or cluster")]
+    WrongCluster,
+    #[msg("Pool is not this coin's DBC or DAMM v2 pool")]
+    PoolNotOfCoin,
+    #[msg("Coin creator's sells never create tickets")]
+    CreatorSell,
+    #[msg("Ticket value below the USD minimum")]
+    BelowMinimumUsd,
+    #[msg("Invalid ticket amount or price")]
+    InvalidTicketAmount,
+    #[msg("Pyth price too far from the trade's block time")]
+    StalePythPrice,
+    #[msg("Attestation rate cap reached for this coin: retry later")]
+    AttestRateLimited,
+    #[msg("Wallet has the maximum number of open tickets on this coin")]
+    TooManyOpenTickets,
+    #[msg("This trade was already attested")]
+    AlreadyConsumed,
+    #[msg("Challenge window is over")]
+    ChallengeWindowOver,
+    #[msg("Ticket is still in its challenge window")]
+    TicketInChallenge,
+    #[msg("Ticket is not open")]
+    TicketNotOpen,
+    #[msg("Ticket has expired")]
+    TicketExpired,
+    #[msg("Price has not held the trigger multiple of the sell price")]
+    TriggerNotMet,
+    #[msg("Claim queue is full")]
+    QueueFull,
     #[msg("Wallet already has the maximum number of queued claims on this coin")]
     WalletQueueLimit,
+    #[msg("Claim queue account required: the ticket is queued")]
+    QueueAccountRequired,
     #[msg("Ticket has no escrowed payout")]
     NoEscrow,
-    #[msg("Claim queue account required: an open ticket is queued")]
-    QueueAccountRequired,
-
-    // ── v0.4 (appended) ─────────────────────────────────────────────────────
     #[msg("The ticket owner opted out of auto-claim for this coin")]
     AutoClaimDisabled,
-
-    // ── v0.5 (appended) ─────────────────────────────────────────────────────
-    #[msg("Global account layout is unknown or newer than this program (migrate_global never shrinks)")]
-    UnsupportedGlobalLayout,
-
-    // ── v0.6 (appended) ─────────────────────────────────────────────────────
-    #[msg("No admin change is proposed")]
-    NoPendingAdmin,
+    #[msg("Ticket cannot be closed yet")]
+    TicketNotClosable,
+    #[msg("Consumed marker cannot be closed yet")]
+    ConsumedNotClosable,
     #[msg("Position still has open or unclosed tickets")]
     PositionNotEmpty,
+    #[msg("Coin lamport accounting invariant violated")]
+    LamportInvariant,
+    #[msg("Rebuy is outside the ticket's rebuy window")]
+    RebuyOutOfWindow,
 }
