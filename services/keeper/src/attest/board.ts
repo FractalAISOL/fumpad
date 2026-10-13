@@ -72,8 +72,20 @@ CREATE TABLE IF NOT EXISTS attest_status (
 export class PgBoard implements SignatureBoard {
   constructor(private pool: pg.Pool) {}
 
+  /** Idempotent; serialised with an advisory lock because concurrent `CREATE TABLE IF NOT EXISTS` races in Postgres. */
   async init(): Promise<void> {
-    await this.pool.query(ATTEST_BOARD_DDL);
+    const c = await this.pool.connect();
+    try {
+      await c.query("BEGIN");
+      await c.query("SELECT pg_advisory_xact_lock(hashtext('fumpad_attest_board_ddl'))");
+      await c.query(ATTEST_BOARD_DDL);
+      await c.query("COMMIT");
+    } catch (e) {
+      await c.query("ROLLBACK").catch(() => {});
+      throw e;
+    } finally {
+      c.release();
+    }
   }
 
   async publish(id: string, kind: AttestKind, mint: string, message: Uint8Array, keeper: string, signature: Uint8Array): Promise<void> {
