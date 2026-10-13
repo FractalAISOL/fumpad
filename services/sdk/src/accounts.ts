@@ -2,7 +2,7 @@
 import { PublicKey } from "@solana/web3.js";
 
 import { normalize } from "./borsh.js";
-import { fumpadCoder } from "./coder.js";
+import { FUMPAD_IDL, fumpadCoder } from "./coder.js";
 import { CLAIM_QUEUE_CAPACITY, OBSERVATION_CAPACITY } from "./constants.js";
 import { type Params, paramsFromIdl } from "./params.js";
 
@@ -153,8 +153,7 @@ export const decodeTicket = (data: Uint8Array): TicketAccount => strip(decode<Ti
 export const decodeConsumed = (data: Uint8Array): ConsumedAccount => decode<ConsumedAccount>("Consumed", data);
 
 export function accountDiscriminator(name: "Global" | "Coin" | "Position" | "Ticket" | "Consumed" | "Observations" | "ClaimQueue"): Uint8Array {
-  const acc = (fumpadCoder() as unknown as { idl: { accounts: { name: string; discriminator: number[] }[] } }).idl;
-  const a = acc.accounts.find((x) => x.name === name);
+  const a = (FUMPAD_IDL as unknown as { accounts: { name: string; discriminator: number[] }[] }).accounts.find((x) => x.name === name);
   if (!a) throw new Error(`no account ${name}`);
   return Uint8Array.from(a.discriminator);
 }
