@@ -19,7 +19,6 @@
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "sync-idl": "node scripts/sync-idl.mjs",
-    "vectors": "node scripts/gen-vectors.mjs",
     "local": "tsx scripts/local-e2e.ts",
     "validator": "tsx scripts/local/dev-chain.ts",
     "api-types": "node scripts/gen-api-types.mjs",

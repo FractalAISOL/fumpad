@@ -2,9 +2,6 @@
  * @fumpad/sdk v0.7 — typed client for the FUMPAD v0.7 program (Meteora DBC → DAMM v2, attested
  * tickets; contracts/INTERFACE-v0.7.md). Built on @solana/web3.js v1 and @anchor-lang/core's BorshCoder.
  * Browser-safe: no node: imports.
- *
- * The v0.6 SDK (own curve, PumpSwap, LP locker) is kept at `@fumpad/sdk/v06` only while the services are
- * ported; it is removed before v0.7 ships.
  */
 export * from "./accounts.js";
 export * from "./attestation.js";

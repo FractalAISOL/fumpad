@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 
 import {
+  accountDiscriminator,
   bn,
   CLUSTER_TAG,
   DAMM_V2_PROGRAM_ID,
@@ -85,7 +86,10 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
   while (keepers.length < MAX_KEEPERS) keepers.push(PublicKey.default);
   const configs = [...g.configs];
   while (configs.length < MAX_CONFIGS) configs.push(PublicKey.default);
-  const data = await fumpadCoder().accounts.encode("Global", {
+  // Encode with the borsh layout directly: Anchor coders cap their buffer at 1000 bytes (Global is 1044).
+  const layout = (fumpadCoder().types as unknown as { typeLayouts: Map<string, { encode(v: unknown, b: Buffer): number }> }).typeLayouts.get("Global")!;
+  const buf = Buffer.alloc(4096);
+  const len = layout.encode({
     bump: PublicKey.findProgramAddressSync([Buffer.from("global")], FUMPAD_PROGRAM_ID)[1],
     admin: g.admin,
     platform_treasury: g.platformTreasury,
@@ -107,7 +111,8 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
     pending_config_add: 0,
     pending_config_eta: bn(0n),
     reserved: new Array(128).fill(0),
-  });
+  }, buf);
+  const data = Buffer.concat([Buffer.from(accountDiscriminator("Global")), buf.subarray(0, len)]);
   mkdirSync(LOCAL, { recursive: true });
   const out = join(LOCAL, "global_local.json");
   writeFileSync(

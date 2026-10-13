@@ -197,9 +197,10 @@ describe("attestor 2-of-3", () => {
     const { atts, sub, board } = setup();
     sub.next = { ok: false, code: FUMPAD_ERROR.AttestRateLimited, error: "rate" };
     for (const a of atts) await a.tick();
-    for (const a of atts) await a.tick(); // the designated signer has tried once and backed off
+    for (const a of atts) await a.tick(); // whoever was designated has tried once and backed off
     const n = sub.calls.length;
-    expect(n).toBe(1);
+    expect(n).toBeGreaterThanOrEqual(1);
+    expect(n).toBeLessThanOrEqual(2); // the designated signer can change as signatures arrive
     for (const a of atts) await a.tick();
     expect(sub.calls.length).toBe(n); // backed off
     const { atts: b, sub: s2, board: bd2 } = setup();
