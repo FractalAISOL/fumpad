@@ -1,5 +1,6 @@
-//! Oracle samples (SPEC v0.7 §6) and buybacks (§3.4): pre-graduation keeper-only guard against the last keeper
-//! sample, post-graduation median guard, slices, pinned account lists, sandwich resistance.
+//! Oracle samples (SPEC v0.7 §6) and buybacks (§3.4): pre-graduation keeper-only guard against the median of the
+//! recent keeper samples and the last one (L5), post-graduation median guard, slices, pinned account lists,
+//! sandwich resistance.
 
 use crate::flow::*;
 use crate::meteora::{self, WSOL};
@@ -105,6 +106,12 @@ fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
     // No sample yet → StaleSample.
     assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::StaleSample);
     ok(env.sample(0, &[&c]));
+    // One fresh sample is not enough (L5): the guard needs the median of ≥ 4 samples over ≥ 60 s.
+    assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::InsufficientSamples);
+    for _ in 1..fumpad::PREGRAD_MIN_SAMPLES {
+        env.warp(20);
+        ok(env.sample(0, &[&c]));
+    }
     // Not a keeper → Unauthorized.
     let rando = env.new_user(10);
     assert_fumpad_err(env.buyback(&c, &rando, SOL), FumpadError::Unauthorized);
@@ -136,7 +143,13 @@ fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
     // Buy until only ~0.001 SOL of room remains (fee 1.25% charged on top of what reaches the curve).
     ok(env.direct_buy(&c, &whale, (room - 1_000_000) * 10_000 / 9_875));
     env.warp(11);
+    // The median still sits at the pre-whale price (L5) until the new level dominates the recent samples.
     ok(env.sample(0, &[&c]));
+    assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::PriceDeviation);
+    for _ in 1..fumpad::PREGRAD_MIN_SAMPLES {
+        env.warp(20);
+        ok(env.sample(0, &[&c]));
+    }
     let q = env.dbc_quote_reserve(&c);
     let left = meteora::MAINNET_THRESHOLD - q;
     let meta = ok(env.buyback(&c, &k, u64::MAX));
@@ -149,7 +162,7 @@ fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
 fn regression_pda_signed_cpis_carry_no_foreign_accounts() {
     let (mut env, c) = funded_curve_coin();
     let k = env.keepers[0].insecure_clone();
-    ok(env.sample(0, &[&c]));
+    env.pregrad_warmup(&c);
     let good = env.buyback_ix(&c, &kp_pk(&k), SOL);
     let n = 16; // named accounts incl. event-CPI pair
     // Output redirected to the keeper's own token account (the PDA signs the venue CPI).
@@ -226,5 +239,133 @@ fn post_graduation_buyback_median_guard_and_slice() {
     let pumper = env.new_user(200);
     ok(env.direct_buy(&c, &pumper, 20 * SOL));
     assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::PriceDeviation);
+    env.assert_coin_invariant(&c);
+}
+
+// ── L5: the pre-graduation guard is a median of recent keeper samples ──────────
+const BAND: u128 = fumpad::DEFAULT_BUYBACK_MAX_DEVIATION_BPS as u128;
+
+fn in_band(x: u128, reference: u128) -> bool {
+    x.abs_diff(reference) <= reference * BAND / 10_000
+}
+
+/// A third-party trader moves the curve's spot to ≥ `target` with small direct buys (overshoot ≲ 0.1%).
+fn push_spot_to(env: &mut Env, c: &TCoin, who: &Keypair, target: u128) {
+    let mut i = 0u64;
+    while env.dbc_spot_q64(c) < target {
+        ok(env.direct_buy(c, who, SOL / 200 + i));
+        i += 1;
+        assert!(i < 5_000, "spot never reached the target");
+    }
+}
+
+/// L5 regression (single sample): one keeper sample taken at a spot moved +10% can't steer the guard. The attacker
+/// holding the moved price passes the v0.7 rule (spot within ±3% of the latest sample) but not the median; moving
+/// back passes the median but not the latest sample. Once honest samples dominate again, the buyback runs at the
+/// honest price.
+#[test]
+fn regression_l5_one_moved_sample_cannot_steer_the_pregrad_guard() {
+    let (mut env, c) = funded_curve_coin();
+    let k = env.keepers[0].insecure_clone();
+    env.pregrad_warmup(&c);
+    let honest = env.dbc_spot_q64(&c);
+    let attacker = env.new_user(500);
+
+    push_spot_to(&mut env, &c, &attacker, honest * 11_000 / 10_000);
+    env.warp(20);
+    ok(env.sample(0, &[&c])); // the keeper samples the moved spot
+    let moved = env.coin(&c).pregrad_sample_price_q64;
+    let spot = env.dbc_spot_q64(&c);
+    assert!(in_band(spot, moved), "the v0.7 single-sample guard would accept this buyback");
+    assert!(!in_band(spot, honest));
+    assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::PriceDeviation);
+
+    // Move back (sell everything): spot agrees with the median, not with the moved latest sample → still rejected.
+    let bal = env.base_balance(&kp_pk(&attacker), &c.mint);
+    ok(env.direct_sell(&c, &attacker, bal));
+    assert!(in_band(env.dbc_spot_q64(&c), honest));
+    assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::PriceDeviation);
+
+    // Next honest sample: buyback at the honest price, guard = the ring median.
+    env.warp(20);
+    ok(env.sample(0, &[&c]));
+    let median = env.coin(&c).pregrad_ring.median_q64(env.now()).unwrap();
+    let ev: BuybackExecuted = event(&ok(env.buyback(&c, &k, SOL)));
+    assert_eq!(ev.guard_price_q64, median);
+    assert!(in_band(ev.guard_price_q64, honest) && in_band(ev.spot_price_q64, ev.guard_price_q64));
+    env.assert_coin_invariant(&c);
+}
+
+/// L5 regression (ratchet): the attacker moves the spot +2.5% before every keeper sample — each move in band of the
+/// previous sample, so the v0.7 guard would follow it and let the buyback pay a price ratcheted arbitrarily far up.
+/// The median lags two samples behind (~5%), so no buyback executes above the honest band during the ratchet.
+#[test]
+fn regression_l5_in_band_ratchet_cannot_make_the_buyback_overpay() {
+    let (mut env, c) = funded_curve_coin();
+    let k = env.keepers[0].insecure_clone();
+    env.pregrad_warmup(&c);
+    let honest = env.dbc_spot_q64(&c);
+    let attacker = env.new_user(1_000);
+    let mut old_guard_would_pay = 0;
+    for _ in 0..8 {
+        let latest = env.coin(&c).pregrad_sample_price_q64;
+        push_spot_to(&mut env, &c, &attacker, latest * 10_250 / 10_000);
+        env.warp(20);
+        ok(env.sample(0, &[&c]));
+        let spot = env.dbc_spot_q64(&c);
+        if in_band(spot, env.coin(&c).pregrad_sample_price_q64) {
+            old_guard_would_pay += 1;
+        }
+        let r = env.buyback(&c, &k, SOL);
+        // The first step is still within the band of an all-honest median (+2.5%); afterwards the median lags.
+        if in_band(spot, honest) {
+            let ev: BuybackExecuted = event(&ok(r));
+            assert!(in_band(ev.spot_price_q64, ev.guard_price_q64) && in_band(ev.guard_price_q64, honest));
+        } else {
+            assert_fumpad_err(r, FumpadError::PriceDeviation);
+        }
+    }
+    assert_eq!(old_guard_would_pay, 8);
+    assert!(env.dbc_spot_q64(&c) > honest * 12_000 / 10_000, "ratcheted > +20% without an overpaying buyback");
+}
+
+/// L5 liveness: under honest sampling (every 20 s, organic in-band flow), buybacks execute on every sample once the
+/// ring is warm (4 samples over 60 s), and again after a keeper outage longer than the window.
+#[test]
+fn pregrad_buyback_liveness_under_honest_sampling() {
+    let (mut env, c) = funded_curve_coin();
+    let k = env.keepers[0].insecure_clone();
+    let trader = env.new_user(100);
+    let mut executed = 0;
+    for step in 0..15usize {
+        if step % 2 == 0 {
+            ok(env.direct_buy(&c, &trader, SOL / 20));
+        } else {
+            let bal = env.base_balance(&kp_pk(&trader), &c.mint);
+            ok(env.direct_sell(&c, &trader, bal));
+        }
+        ok(env.sample(0, &[&c]));
+        let r = env.buyback(&c, &k, SOL / 100);
+        if step + 1 < fumpad::PREGRAD_MIN_SAMPLES {
+            assert_fumpad_err(r, FumpadError::InsufficientSamples);
+        } else {
+            let median = env.coin(&c).pregrad_ring.median_q64(env.now()).unwrap();
+            let ev: BuybackExecuted = event(&ok(r));
+            assert_eq!(ev.guard_price_q64, median);
+            assert!(in_band(ev.spot_price_q64, median));
+            executed += 1;
+        }
+        env.warp(20);
+    }
+    assert_eq!(executed, 15 + 1 - fumpad::PREGRAD_MIN_SAMPLES);
+    // Keeper outage > window: a fresh sample alone isn't enough; a new warm-up (60 s) restores buybacks.
+    env.warp(fumpad::PREGRAD_WINDOW_SECS);
+    ok(env.sample(0, &[&c]));
+    assert_fumpad_err(env.buyback(&c, &k, SOL / 100), FumpadError::InsufficientSamples);
+    for _ in 1..fumpad::PREGRAD_MIN_SAMPLES {
+        env.warp(20);
+        ok(env.sample(0, &[&c]));
+    }
+    ok(env.buyback(&c, &k, SOL / 100));
     env.assert_coin_invariant(&c);
 }

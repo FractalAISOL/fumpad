@@ -4,8 +4,8 @@
 //!   (`["observations", mint]`). v0.6 rules: keeper samples, or anyone once the coin had no keeper sample for
 //!   `keeper_stale_secs` (flagged fallback, never counted for medians); keeper spacing vs the previous keeper sample.
 //! * Curve coin: pool = `coin.dbc_pool`, DBC `sqrt_price` (offset 280); keeper only; stored in the Coin
-//!   (`pregrad_sample_*`) for the pre-graduation buyback guard only (never for claims, D1). The observations
-//!   account of the group is ignored.
+//!   (`pregrad_sample_*` = the latest, and pushed into the 5-sample `pregrad_ring`, L5) for the pre-graduation
+//!   buyback guard only (never for claims, D1). The observations account of the group is ignored.
 //! * Complete coin (curve done, not graduated): skipped (no sample, no event, no error).
 //! * The transaction must contain nothing but compute-budget instructions besides this one (no "move the pool and
 //!   sample it" in one atomic transaction).
@@ -95,6 +95,7 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
                 let price = price_q64_from_sqrt(pool.sqrt_price).ok_or(FumpadError::MathOverflow)?;
                 coin.pregrad_sample_price_q64 = price;
                 coin.pregrad_sample_ts = now;
+                coin.pregrad_ring.push(now, price);
                 write_account(coin_info, &coin)?;
                 events.push(SampleRecorded { mint: coin.mint, venue: meteora::VENUE_DBC, price_q64: price, fallback: false, ts: now });
             }

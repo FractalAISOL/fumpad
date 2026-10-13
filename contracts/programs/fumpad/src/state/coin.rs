@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{ATTEST_CAP_WINDOW_SECS, BPS_DENOM};
+use crate::constants::{
+    ATTEST_CAP_WINDOW_SECS, BPS_DENOM, PREGRAD_MIN_SAMPLES, PREGRAD_MIN_SPAN_SECS, PREGRAD_RING_LEN, PREGRAD_WINDOW_SECS,
+};
 use crate::state::{FeeSplitBps, Params, RewardTerms};
 
 /// One per registered coin. PDA ["coin", mint]. v0.7 fresh layout (D39).
@@ -77,7 +79,60 @@ pub struct Coin {
     /// D35: tokens `withdraw_leftover` moved into the reward vault (measured).
     pub leftover_tokens: u64,
 
-    pub reserved: [u8; 64],
+    /// L5: the last `PREGRAD_RING_LEN` keeper pre-graduation samples (incl. the one above). The pre-grad buyback
+    /// guard is their median (≥ `PREGRAD_MIN_SAMPLES` within `PREGRAD_WINDOW_SECS`, spanning ≥
+    /// `PREGRAD_MIN_SPAN_SECS`). Carved out of the former 64 reserved bytes (Coin size unchanged; zeroed = empty).
+    pub pregrad_ring: PregradRing,
+    pub reserved: [u8; 2],
+}
+
+/// L5: ring of recent keeper pre-graduation DBC spot samples (62 bytes).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct PregradRing {
+    /// DBC spot, Q64.64, saturated to `u64::MAX`. A curve coin trades far below 1 lamport per base unit
+    /// (q64 < 2^64), so saturation never happens in practice; if it did, the median would be too low and the guard
+    /// fails closed (spot out of band → no buyback).
+    pub prices_q64: [u64; PREGRAD_RING_LEN],
+    /// Unix seconds of each sample (u32: valid until 2106).
+    pub ts: [u32; PREGRAD_RING_LEN],
+    /// Next slot to write.
+    pub head: u8,
+    /// Filled slots (≤ `PREGRAD_RING_LEN`).
+    pub len: u8,
+}
+
+impl PregradRing {
+    pub fn push(&mut self, now: i64, price_q64: u128) {
+        let i = (self.head as usize) % PREGRAD_RING_LEN;
+        self.prices_q64[i] = u64::try_from(price_q64).unwrap_or(u64::MAX);
+        self.ts[i] = now.clamp(0, u32::MAX as i64) as u32;
+        self.head = ((i + 1) % PREGRAD_RING_LEN) as u8;
+        self.len = (self.len as usize + 1).min(PREGRAD_RING_LEN) as u8;
+    }
+
+    /// Median of the samples taken in `[now − PREGRAD_WINDOW_SECS, now]`, if there are ≥ `PREGRAD_MIN_SAMPLES`
+    /// of them spanning ≥ `PREGRAD_MIN_SPAN_SECS` (even count: mean of the two middle values).
+    #[inline(never)]
+    pub fn median_q64(&self, now: i64) -> Option<u128> {
+        let mut v = [0u64; PREGRAD_RING_LEN];
+        let (mut n, mut lo, mut hi) = (0usize, i64::MAX, i64::MIN);
+        for i in 0..(self.len as usize).min(PREGRAD_RING_LEN) {
+            let ts = self.ts[i] as i64;
+            if ts > now || now - ts > PREGRAD_WINDOW_SECS {
+                continue;
+            }
+            v[n] = self.prices_q64[i];
+            n += 1;
+            lo = lo.min(ts);
+            hi = hi.max(ts);
+        }
+        if n < PREGRAD_MIN_SAMPLES || hi - lo < PREGRAD_MIN_SPAN_SECS {
+            return None;
+        }
+        let v = &mut v[..n];
+        v.sort_unstable();
+        Some(if n % 2 == 1 { v[n / 2] as u128 } else { (v[n / 2 - 1] as u128 + v[n / 2] as u128) / 2 })
+    }
 }
 
 impl Coin {
@@ -145,6 +200,43 @@ mod tests {
         c.status = CoinStatus::Curve;
         c.total_supply = 1_000_000;
         c
+    }
+
+    #[test]
+    fn pregrad_ring_median_needs_count_and_span() {
+        let mut r = PregradRing::default();
+        let t = 1_000_000;
+        let q = 1u128 << 50;
+        // Warm-up: 3 samples are not enough; 4 spanning < 60 s neither.
+        for (k, dt) in [0, 15, 30].iter().enumerate() {
+            r.push(t + dt, q + k as u128);
+            assert_eq!(r.median_q64(t + dt), None);
+        }
+        r.push(t + 45, q);
+        assert_eq!(r.median_q64(t + 45), None, "span 45 s < 60 s");
+        r.push(t + 60, q);
+        assert_eq!(r.median_q64(t + 60), Some(q + 1));
+        // One manipulated sample (×10) can't move the median outside the honest values.
+        r.push(t + 75, q * 10);
+        assert_eq!(r.len as usize, PREGRAD_RING_LEN);
+        let m = r.median_q64(t + 75).unwrap();
+        assert!(m >= q && m <= q + 2, "{m}");
+        // Two outliers out of five still can't (median = third value).
+        r.push(t + 90, q * 10);
+        let m = r.median_q64(t + 90).unwrap();
+        assert!(m >= q && m <= q + 2, "{m}");
+        // Samples older than the window drop out: only the 2 newest remain → None.
+        assert_eq!(r.median_q64(t + 60 + PREGRAD_WINDOW_SECS + 1), None);
+        // Even count: mean of the two middle values.
+        let mut r = PregradRing::default();
+        for (i, p) in [4u128, 1, 3, 2].iter().enumerate() {
+            r.push(t + 20 * i as i64, *p * q);
+        }
+        assert_eq!(r.median_q64(t + 60), Some(q * 5 / 2));
+        // Saturation fails closed (too low).
+        let mut r = PregradRing::default();
+        r.push(t, u128::MAX);
+        assert_eq!(r.prices_q64[0], u64::MAX);
     }
 
     #[test]

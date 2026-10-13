@@ -175,9 +175,11 @@ the PDA address pre-graduation, unused), buyback (w, PDA), buyback_wsol (w; `ATA
 cranker pays), reward_vault (w), wsol_mint, venue_program, token_program, token_2022_program,
 associated_token_program, system_program [ev]; remaining = the venue's `swap2` accounts **exactly** (DBC 15 / DAMM
 14, every key pinned: payer = `buyback`, input = `buyback_wsol`, output = `reward_vault`, referral = None).
-- Not `PAUSE_TRADE`. `Curve` (pre-grad): **keeper-only**; `slot ≥ launch_slot + launch_window_slots`; spot (DBC
-  `sqrt_price`) within ±`buyback_max_deviation_bps` of the coin's last keeper pre-grad sample, which must be
-  ≤ 60 s old (`PREGRAD_SAMPLE_MAX_AGE_SECS`); slice ≤ `buyback_max_pool_bps` of the curve's `quote_reserve`; and
+- Not `PAUSE_TRADE`. `Curve` (pre-grad): **keeper-only**; `slot ≥ launch_slot + launch_window_slots`; the coin's
+  last keeper pre-grad sample must be ≤ 60 s old (`PREGRAD_SAMPLE_MAX_AGE_SECS`, else `StaleSample`); **guard price
+  = median of `coin.pregrad_ring`** (samples with `ts ∈ [now − 300, now]`, ≥ 4 of them spanning ≥ 60 s, even count
+  → mean of the two middle values; else `InsufficientSamples`); spot (DBC `sqrt_price`) within
+  ±`buyback_max_deviation_bps` of BOTH that median and the last sample (`PriceDeviation`; L5, §8 2026-10-13 c); slice ≤ `buyback_max_pool_bps` of the curve's `quote_reserve`; and
   `quote_reserve + slice < migration_quote_threshold` (a buyback never completes the curve).
 - `Graduated`: permissionless; spot within ±band of the 30-min keeper median (coverage as v0.6); slice ≤
   `buyback_max_pool_bps` of the pool's `token_b_amount`.
@@ -232,8 +234,9 @@ dbc_program [ev]. Permissionless; not `PAUSE_GRADUATE`; coin `Curve|Complete`.
   fallback rules exactly as v0.6 (keeper spacing vs keeper samples, fallback after `keeper_stale_secs`, fallback
   samples never count).
 - `Curve`: pool == `coin.dbc_pool`; **keeper only**; spacing ≥ `oracle_min_spacing_secs` vs the previous pre-grad
-  sample; DBC `sqrt_price` (offset 280) → `coin.pregrad_sample_price_q64/ts` (no ring; the observations account in
-  the group is ignored). Used only by the pre-grad buyback guard, never for claims (D1).
+  sample; DBC `sqrt_price` (offset 280) → `coin.pregrad_sample_price_q64/ts` and pushed into `coin.pregrad_ring`
+  (5 samples, in the Coin; the observations account in the group is ignored). Used only by the pre-grad buyback
+  guard, never for claims (D1).
 - `Complete` → the group is **skipped** (no sample, no event, no error; the rest of the batch proceeds). Event
   `SampleRecorded` per sampled group.
 
@@ -384,7 +387,9 @@ rewards RewardTerms {trigger_multiple_bps u32, claim_bps u16, max_claim_pool_bps
 min_hold_secs i64, rebuy_window_secs i64, claim_window_secs i64, max_open_tickets u8},
 fee_split {buyback_bps u16, platform_bps u16, creator_bps u16}, attest_cursor i64, attest_tokens_total u64,
 attest_released_tokens u64, pregrad_sample_price_q64 u128, pregrad_sample_ts i64, migrator Pubkey,
-migrator_cost u64, migration_fee_lamports u64, leftover_tokens u64, reserved [u8;64]`.
+migrator_cost u64, migration_fee_lamports u64, leftover_tokens u64, pregrad_ring PregradRing {prices_q64 [u64;5],
+ts [u32;5], head u8, len u8} (62 bytes; prices saturate at u64::MAX, ts = unix seconds), reserved [u8;2]` (546 bytes
+incl. discriminator; the ring sits at offset 482 where `reserved [u8;64]` started).
 Lamport invariant: `lamports == rent_exempt_min + creator_fees_unclaimed + platform_fees_unclaimed +
 buyback_lamports` (tested).
 Rate cap (M-1: leaky bucket, defers, never rejects): `cap = max(1, total_supply × max_attest_tokens_per_hour_bps /
@@ -480,6 +485,16 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 6056 LamportInvariant · 6057 RebuyOutOfWindow · **6058 PoolDisabled**.
 
 ## 8. Changelog
+### 2026-10-13 c — pre-graduation buyback guard on a median of keeper samples (security-review L5)
+1. `Coin.reserved [u8;64]` → `pregrad_ring PregradRing (62 B) + reserved [u8;2]` (same size and offsets). Zeroed bytes
+   = empty ring, so existing Coins decode unchanged.
+2. `record_samples` (`Curve`) also pushes the sample into `pregrad_ring`.
+3. `execute_buyback` (`Curve`): guard price = ring median (≥ 4 samples within 300 s spanning ≥ 60 s, else
+   `InsufficientSamples`); spot must be within the band of the median AND of the latest sample. `BuybackExecuted.
+   guard_price_q64` is the median. Constants `PREGRAD_RING_LEN 5`, `PREGRAD_WINDOW_SECS 300`, `PREGRAD_MIN_SAMPLES 4`,
+   `PREGRAD_MIN_SPAN_SECS 60` (not params). No instruction/account-list/event/error change. SDK: `CoinAccount.
+   pregradRing`, `pregradMedianQ64`; keeper skips pre-grad buybacks until the ring is warm.
+
 ### 2026-10-13 b — bootstrap keepers + configs in `initialize_global` (devnet/mainnet deploy; services follow)
 1. `initialize_global` takes a trailing arg `keepers: [Pubkey; 3]` and the initial DBC configs as remaining accounts
    (0–8, read-only, validated like `execute_config` add). Bootstrap keepers get `keeper_added_at = 0` and attest at

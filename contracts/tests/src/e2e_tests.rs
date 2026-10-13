@@ -37,7 +37,7 @@ fn full_lifecycle_one_coin() {
     let ev: FeesClaimed = event(&meta);
     assert!(ev.launch_window && ev.to_buyback == ev.claimed);
     // Pre-graduation sample + keeper buyback into the reward vault.
-    ok(env.sample(0, &[&c]));
+    env.pregrad_warmup(&c);
     let k0 = env.keepers[0].insecure_clone();
     ok(env.buyback(&c, &k0, u64::MAX));
     let pre_grad_bought = env.token_balance(&env.reward_vault(&c.mint));

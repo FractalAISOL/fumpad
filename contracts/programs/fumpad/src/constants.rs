@@ -85,6 +85,14 @@ pub const MAX_PAUSE_SECS: i64 = 7 * 86_400;
 pub const KEEPER_ATTEST_FREEZE_SECS: i64 = 6 * 3_600;
 /// SPEC v0.7 §3.4: the pre-graduation buyback guard needs a keeper sample at most this old.
 pub const PREGRAD_SAMPLE_MAX_AGE_SECS: i64 = 60;
+/// L5: keeper pre-graduation samples kept per coin (`Coin.pregrad_ring`).
+pub const PREGRAD_RING_LEN: usize = 5;
+/// L5: the pre-grad guard's median uses the ring samples at most this old.
+pub const PREGRAD_WINDOW_SECS: i64 = 300;
+/// L5: … and needs at least this many of them …
+pub const PREGRAD_MIN_SAMPLES: usize = 4;
+/// L5: … spanning at least this long (oldest to newest in the window).
+pub const PREGRAD_MIN_SPAN_SECS: i64 = 60;
 /// Clock skew tolerated between an attested `block_time` and the validator clock / the coin's registration.
 pub const ATTEST_CLOCK_SKEW_SECS: i64 = 60;
 /// Allowance for the venue's own fee (1.25% on DBC/DAMM, D32) when checking a buyback's output.

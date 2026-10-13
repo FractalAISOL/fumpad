@@ -78,6 +78,7 @@ import {
   PAUSE,
   planQueuePayments,
   positionPda,
+  pregradMedianQ64,
   priceQ64FromSqrt,
   processQueueIx,
   recordSamplesIx,
@@ -645,6 +646,10 @@ export class Keeper {
       if (k.status === "curve") {
         if (!c.dbc || this.slot < k.launchSlot + k.launchWindowSlots) continue;
         if (this.chainNow - k.pregradSampleTs > 60n || !withinBand(spot, k.pregradSamplePriceQ64, p.buybackMaxDeviationBps)) continue;
+        // L5 (on-chain): spot must also be within the band of the median of the coin's recent keeper samples
+        // (≥ 4 within 5 min spanning ≥ 60 s) — skip until the ring is warm instead of paying for InsufficientSamples
+        const median = pregradMedianQ64(k.pregradRing, this.chainNow);
+        if (median === null || !withinBand(spot, median, p.buybackMaxDeviationBps)) continue;
         // L5: the live spot and the on-chain sample must both agree with the TWAP of our last N observations
         this.observePregrad(c);
         const twap = this.pregradTwap(c);

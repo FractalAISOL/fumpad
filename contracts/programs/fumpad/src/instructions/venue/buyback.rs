@@ -84,7 +84,8 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
     // Guard price, spot, slice cap and the exact venue account list.
     let (venue, guard, spot, cap, expected): (u8, u128, u128, u64, Vec<Pubkey>) = match a.coin.status {
         CoinStatus::Curve => {
-            // Pre-graduation: keeper-only, after the anti-snipe window, ±band of the last keeper sample (≤ 60 s).
+            // Pre-graduation: keeper-only, after the anti-snipe window, spot within ±band of BOTH the median of the
+            // recent keeper samples (the guard price) and the last keeper sample (≤ 60 s old).
             require!(a.global.is_keeper(&a.cranker.key()), FumpadError::Unauthorized);
             require!(
                 slot >= a.coin.launch_slot.saturating_add(a.coin.launch_window_slots),
@@ -99,6 +100,11 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
                 a.coin.pregrad_sample_ts > 0 && now.saturating_sub(a.coin.pregrad_sample_ts) <= PREGRAD_SAMPLE_MAX_AGE_SECS,
                 FumpadError::StaleSample
             );
+            // L5: the guard is the median of the recent keeper samples (≥ 4 within 5 min, spanning ≥ 60 s), so one
+            // sample taken at a moved spot can't steer it; spot must also stay within the band of the latest sample.
+            let median = a.coin.pregrad_ring.median_q64(now).ok_or(FumpadError::InsufficientSamples)?;
+            let latest = a.coin.pregrad_sample_price_q64;
+            let latest_band = mul_div(latest, p.buyback_max_deviation_bps as u128, BPS_DENOM as u128)?;
             let config_info = venue_accounts.get(1).ok_or(FumpadError::WrongVenue)?;
             require_keys_eq!(config_info.key(), a.coin.dbc_config, FumpadError::WrongVenue);
             let threshold = {
@@ -131,7 +137,8 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
                 DBC_PROGRAM_ID,
             ];
             let spot = price_q64_from_sqrt(pool.sqrt_price).ok_or(FumpadError::MathOverflow)?;
-            (meteora::VENUE_DBC, a.coin.pregrad_sample_price_q64, spot, slice.min(room), expected)
+            require!(spot.abs_diff(latest) <= latest_band, FumpadError::PriceDeviation);
+            (meteora::VENUE_DBC, median, spot, slice.min(room), expected)
         }
         CoinStatus::Graduated => {
             require_keys_eq!(a.venue_program.key(), DAMM_V2_PROGRAM_ID, FumpadError::WrongVenue);

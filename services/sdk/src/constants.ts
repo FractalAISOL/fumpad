@@ -71,6 +71,12 @@ export const KEEPER_ATTEST_FREEZE_SECS = 6 * 3_600;
 export const ATTEST_CLOCK_SKEW_SECS = 60;
 export const ATTEST_BUCKET_SECS = 3_600;
 export const PREGRAD_SAMPLE_MAX_AGE_SECS = 60;
+/** L5: `Coin.pregrad_ring` — the pre-grad buyback guard is the median of ≥ MIN_SAMPLES ring samples taken within
+ * WINDOW_SECS and spanning ≥ MIN_SPAN_SECS; spot must be within the band of it AND of the latest sample. */
+export const PREGRAD_RING_LEN = 5;
+export const PREGRAD_WINDOW_SECS = 300;
+export const PREGRAD_MIN_SAMPLES = 4;
+export const PREGRAD_MIN_SPAN_SECS = 60;
 export const MAX_PAUSE_SECS = 7 * 86_400;
 export const TIMELOCK_SECS = 48 * 3_600;
 /** `close_consumed` requires now > consumed.block_time + MAX_MAX_ATTEST_AGE_SECS. */

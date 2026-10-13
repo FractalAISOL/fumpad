@@ -2,7 +2,19 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { accountDiscriminator, activeKeepers, bn, decodeGlobal, DEFAULT_PARAMS, fumpadCoder, paramsProblems, paramsToIdl } from "../src/index.js";
+import {
+  accountDiscriminator,
+  activeKeepers,
+  bn,
+  decodeCoin,
+  decodeGlobal,
+  DEFAULT_PARAMS,
+  fumpadCoder,
+  paramsProblems,
+  paramsToIdl,
+  PREGRAD_RING_LEN,
+  pregradMedianQ64,
+} from "../src/index.js";
 
 const k = () => Keypair.generate().publicKey;
 
@@ -48,5 +60,42 @@ describe("keepers + params helpers", () => {
     expect(paramsProblems({ ...DEFAULT_PARAMS, oracleMinSamples: 20 })).toHaveLength(1); // 20 × 60 < 1,800
     expect(paramsProblems({ ...DEFAULT_PARAMS, feeCreatorShareBps: 1 })).toHaveLength(1);
     expect(paramsProblems({ ...DEFAULT_PARAMS, attestThreshold: 3 })).toHaveLength(1);
+  });
+});
+
+describe("Coin.pregrad_ring (L5)", () => {
+  const COIN_LEN = 546; // unchanged by L5: the ring (62 B) is carved out of the former 64 reserved bytes
+  const RING_OFF = COIN_LEN - 64;
+  const coinWithRing = (prices: bigint[], ts: number[], head: number, len: number): Uint8Array => {
+    const b = new Uint8Array(COIN_LEN);
+    b.set(accountDiscriminator("Coin"), 0);
+    const v = new DataView(b.buffer);
+    prices.forEach((p, i) => v.setBigUint64(RING_OFF + 8 * i, p, true));
+    ts.forEach((t, i) => v.setUint32(RING_OFF + 40 + 4 * i, t, true));
+    b[RING_OFF + 60] = head;
+    b[RING_OFF + 61] = len;
+    return b;
+  };
+  const Q = 1n << 50n;
+  const T = 1_000_000;
+
+  it("decodes at the end of the 546-byte Coin", () => {
+    const c = decodeCoin(coinWithRing([Q, Q + 1n, Q + 2n, Q * 10n, Q], [T, T + 20, T + 40, T + 60, T + 80], 0, 5));
+    expect(c.status).toBe("curve");
+    expect(c.pregradRing.pricesQ64).toEqual([Q, Q + 1n, Q + 2n, Q * 10n, Q]);
+    expect(c.pregradRing.ts).toEqual([T, T + 20, T + 40, T + 60, T + 80]);
+    expect([c.pregradRing.head, c.pregradRing.len]).toEqual([0, 5]);
+    // one ×10 outlier can't move the median outside the honest values
+    expect(pregradMedianQ64(c.pregradRing, BigInt(T + 80))).toBe(Q + 1n);
+    expect(decodeCoin(coinWithRing([], [], 0, 0)).pregradRing.len).toBe(0);
+  });
+
+  it("pregradMedianQ64 mirrors PregradRing::median_q64: ≥ 4 samples in 300 s spanning ≥ 60 s", () => {
+    const ring = (p: bigint[], t: number[]) => ({ pricesQ64: p, ts: t, head: p.length % PREGRAD_RING_LEN, len: p.length });
+    expect(pregradMedianQ64(ring([Q, Q, Q], [T, T + 30, T + 60]), BigInt(T + 60))).toBeNull(); // 3 < 4
+    expect(pregradMedianQ64(ring([Q, Q, Q, Q], [T, T + 15, T + 30, T + 45]), BigInt(T + 45))).toBeNull(); // span 45 s
+    expect(pregradMedianQ64(ring([4n * Q, Q, 3n * Q, 2n * Q], [T, T + 20, T + 40, T + 60]), BigInt(T + 60))).toBe((5n * Q) / 2n); // even: mean
+    expect(pregradMedianQ64(ring([Q, Q, Q, Q], [T, T + 20, T + 40, T + 60]), BigInt(T + 301))).toBeNull(); // T aged out
+    expect(pregradMedianQ64(ring([Q, Q, Q, Q], [T, T + 20, T + 40, T + 60]), BigInt(T + 59))).toBeNull(); // future sample ignored
   });
 });

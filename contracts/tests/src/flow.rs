@@ -436,6 +436,22 @@ impl Env {
         self.send_as(&k, &[i], &[&k])
     }
 
+    /// L5: keeper pre-grad samples every 20 s until the buyback guard's median exists (4 samples over 60 s); the
+    /// last sample is taken now.
+    pub fn pregrad_warmup(&mut self, c: &TCoin) {
+        for i in 0..fumpad::PREGRAD_MIN_SAMPLES {
+            if i > 0 {
+                self.warp(20);
+            }
+            ok(self.sample(0, &[c]));
+        }
+    }
+
+    /// Current DBC spot (Q64.64) of a curve coin.
+    pub fn dbc_spot_q64(&self, c: &TCoin) -> u128 {
+        sqrt_to_q64(meteora::rd_u128(&self.dbc_pool_data(c), m::DBC_POOL_SQRT_PRICE))
+    }
+
     /// Keeper samples every 15 s for `secs` (claim/buyback median coverage).
     pub fn sample_for(&mut self, c: &TCoin, secs: i64) {
         let mut t = 0;

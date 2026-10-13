@@ -63,7 +63,8 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
   pinned account lists, claimed into a transient WSOL PDA and unwrapped into the Coin. First DBC claim after the 8-slot
   window → 100% buyback (D33); then 50/30/20 (platform + creator exact floors, remainder buyback).
 - **Buyback**: `buyback` PDA as payer, output straight into the reward vault, venue list pinned exactly. Pre-grad:
-  keeper-only, ±3% of the coin's last keeper sample (≤ 60 s), slice ≤ 0.5% of the curve's quote reserve, never
+  keeper-only, spot ±3% of BOTH the median of the coin's recent keeper samples (`Coin.pregrad_ring`: ≥ 4 within 5 min
+  spanning ≥ 60 s) and its last keeper sample (≤ 60 s), slice ≤ 0.5% of the curve's quote reserve, never
   completes the curve. Post-grad: v0.6 rules on the DAMM v2 pool (30-min median ±3%, 0.5% of `token_b_amount`).
 - **Graduation**: `migrate_pool` (our wrapper of DBC `migration_damm_v2`, records the caller's flash-rent cost) and
   `graduate` (verifies the DAMM v2 pool + our position — pool, `fee_claimer`-held NFT, fully permanently locked; never
@@ -85,7 +86,7 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 
 | Account | Bytes | Rent (SOL) | Paid by |
 |---|---|---|---|
-| `fumpad.so` program data (`anchor build`, inliner flags) | 747,616 (+45) | 3.7988 | deployer |
+| `fumpad.so` program data (`anchor build`, inliner flags) | 754,288 (+45) | ≈3.833 | deployer |
 | Global | 1,044 | 0.00595 | admin (init) |
 | Coin | 546 | 0.00342 | creator (`register_coin`) |
 | Reward vault (Token-2022 ATA) | 170 | ≈0.00207 | creator (`register_coin`) |
@@ -103,11 +104,11 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 | `sell` router DBC / DAMM v2 | 62k / 47k | — | default |
 | `claim_fees` (DBC) | 62k | — | default |
 | `claim_lp_fees` (DAMM v2) | 67k | — | default |
-| `execute_buyback` DBC (pre-grad, creates the WSOL ATA) / DAMM v2 (full 30-min median) | 114k / 89k | — | default |
+| `execute_buyback` DBC (pre-grad, 4-sample median, creates the WSOL ATA) / DAMM v2 (full 30-min median) | 115k / 90k | — | default |
 | `migrate_pool` (DBC migration CPI incl. DAMM v2 pool + lock) | 176k | 1,081 | set ≥ 400k |
 | `graduate` | 110k | 1,045 | set ≥ 200k |
 | `init_observations` / `init_claim_queue` × 9 (one tx) | 13k / 61k | — | default |
-| `record_samples` 1 coin (pre-grad / DAMM) / 5 coins / 10 coins | 14k / 15k / 45k / 83k | — / — / 773 / 1,268 | 10 coins need v0 + ALT |
+| `record_samples` 1 coin (pre-grad / DAMM) / 5 coins / 10 coins | 15k / 15k / 46k / 84k | — / — / 773 / 1,268 | 10 coins need v0 + ALT |
 | `attest_sell` new position / existing position | 40k / 35k | 985 (with the Ed25519 ix) | default |
 | `attest_rebuy` queued ticket on a 1023-entry queue / voiding the front entry | 40k / 34k | — | default |
 | `claim` paid now behind 1022 entries / queued at the end / queued at the FRONT of 1023 | 72k / 72k / 71k | — | default |
@@ -179,8 +180,11 @@ everything else within noise.
 - Meteora's single upgrade authority can change DBC / DAMM v2 (fees, locks, layouts); DAMM v2 operators can disable
   a pool or change its fee (D38). fumpad fails closed on the layouts it reads (owner + discriminator + length); an
   account-list change needs a client update (router) or a program update (pinned PDA-signed lists).
-- The pre-graduation buyback guard trusts one keeper sample ≤ 60 s old: a pump landing before that sample and held
-  through the buyback is not caught on-chain (the 0.5%-of-quote-reserve slice bounds it).
+- The pre-graduation buyback guard (L5) is the median of the coin's last 5 keeper samples (≥ 4 within 5 min spanning
+  ≥ 60 s) and spot must also agree with the latest sample, so one sample at a moved spot (or a +band ratchet per
+  sample) can't steer it. A pump held through ≥ 3 keeper samples (≥ ~40 s at a 20 s cadence; ~80 s at the keeper's
+  40 s cadence) does move the median; the 0.5%-of-quote-reserve slice and the ±3% band bound each buyback. Samples
+  stay keeper-only: a compromised keeper key can still push 4 samples over 60 s (REVIEW-v0.7 note).
 - Tickets are only as good as the 2-of-3 keeper re-derivation (D31): the 6h challenge window + guardian `void_ticket`
   and the per-coin rate cap bound a compromised keeper pair; nothing on-chain re-checks hold time, rebuys or the
   D10/D12 ticket price. Since M-1 the cap defers instead of rejecting: a compromised pair can push every later ticket
@@ -201,6 +205,16 @@ H-1, M-1, L-1, L-2, I-1 fixed, plus the review notes (samples skip `Complete` co
 pre-funded `fee_wsol`, router `PoolDisabled`, cluster ids) and the contract items of the off-chain review (L1 launch
 co-signer `Params.launch_signer`; L3 `void_ticket` references `coin` + `mint`, `TicketVoided.coin`). Interface
 changes: `INTERFACE-v0.7.md` §8 (changelog). Tests: `tests/src/review_v07.rs` (`regression_*`, `verify_*`).
+
+**L5 (security-review, on-chain part):** the pre-graduation buyback guard is the median of `Coin.pregrad_ring` (last 5
+keeper pre-grad samples; ≥ 4 within 300 s spanning ≥ 60 s) and spot must also be within the band of the latest
+sample (INTERFACE §8 2026-10-13 c, SPEC Clarifications 24). The ring uses 62 of the Coin's 64 reserved bytes: Coin
+stays 546 bytes, Global unchanged. Tests: `tests/src/oracle_buyback_tests.rs` (`regression_l5_*`,
+`pregrad_buyback_liveness_under_honest_sampling`) + unit test `pregrad_ring_median_needs_count_and_span`. Cost:
+≈ +0.5k CU `record_samples` (pre-grad), ≈ +1.3k CU `execute_buyback` (DBC), +4,488 bytes of `.so`.
+**Devnet:** a program upgrade is needed (the deployed program data is 749,800 bytes →
+`solana program extend 5YMF… 4488` first, ≈ +0.031 SOL rent); **no Global/Coin migration** — existing Coins read an
+empty ring (zeroed reserved bytes) and their pre-grad buybacks resume after the keeper's next 4 samples (≥ 60 s).
 
 ## Archive: v0.3–v0.6 notes (superseded by the v0.7 fresh layouts, D39 — kept for history only)
 ### v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)

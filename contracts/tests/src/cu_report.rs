@@ -62,11 +62,15 @@ fn cu_report() {
     ok(env.router_buy(&c, &alice, 20 * SOL));
     let meta = ok(env.claim_fees(&c));
     r.add("claim_fees (DBC, 50/30/20)", &meta, 0);
+    for _ in 1..fumpad::PREGRAD_MIN_SAMPLES {
+        ok(env.sample(0, &[&c]));
+        env.warp(20);
+    }
     let meta = ok(env.sample(0, &[&c]));
     r.add("record_samples (1 coin, pre-grad)", &meta, 0);
     let k0 = env.keepers[0].insecure_clone();
     let meta = ok(env.buyback(&c, &k0, u64::MAX));
-    r.add("execute_buyback (DBC, pre-grad; creates buyback WSOL ATA)", &meta, 0);
+    r.add("execute_buyback (DBC, pre-grad, 4-sample median; creates buyback WSOL ATA)", &meta, 0);
     // Attest on the curve: first ticket of a wallet (creates position + ticket + marker).
     env.warp(60);
     let rec = env.sell_record(&c, &Pubkey::new_unique(), 1_000 * M, 1 << 40);

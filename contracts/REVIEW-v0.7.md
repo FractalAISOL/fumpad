@@ -7,8 +7,8 @@ the **mainnet** DBC 0.2.1 + DAMM v2 0.2.4 binaries and the mainnet DAMM v2 migra
 suite (full suite: 67 passed, 1 ignored). Turn each into a `regression_*` test when fixing.
 **Status:** all five findings fixed on the review-fix branch; every `issue_*` test is now a `regression_*` test
 (same file) asserting the fix, plus regression tests for the notes marked fixed below and for the off-chain review
-items with contract changes (`security-review/REPORT-v0.7.md` L1 launch binding, L3 void events). Full suite: 73
-passed, 1 ignored.
+items with contract changes (`security-review/REPORT-v0.7.md` L1 launch binding, L3 void events). L5 (pre-grad
+buyback guard on a median of keeper samples) closed on-chain too. Full suite: 78 passed, 1 ignored.
 
 **Bottom line:** no path found for a third party to take funds out of the program or to move one coin's fees,
 leftover, LP fees or buyback output to another coin. One High: anyone can stop a coin from ever graduating in fumpad
@@ -43,6 +43,13 @@ leftover, LP fees or buyback output to another coin. One High: anyone can stop a
 - **Pre-grad buyback trusts one keeper sample ≤ 60 s** and is keeper-only (already in CONTRACTS.md open risks): a single
   compromised keeper key can pump → sample → buy back → dump, bounded by 0.5% of the quote reserve per call, every
   `oracle_min_spacing_secs`. Consider 2 samples from 2 keepers, or a per-coin pre-grad buyback budget per hour.
+  *Status: fixed for market manipulation (security-review L5) — the guard is the median of the coin's last 5 keeper
+  samples (`Coin.pregrad_ring`, ≥ 4 within 5 min spanning ≥ 60 s) and spot must also agree with the latest sample;
+  a single moved sample or a per-sample in-band ratchet can't steer it
+  (`regression_l5_one_moved_sample_cannot_steer_the_pregrad_guard`,
+  `regression_l5_in_band_ratchet_cannot_make_the_buyback_overpay`; liveness
+  `pregrad_buyback_liveness_under_honest_sampling`). Residual: samples are still keeper-only, so a compromised keeper
+  key can feed 4 samples over 60 s and must then hold the pumped price that long (same per-call bound).*
 - **DAMM v2 `pool_status` / `layout_version` / `collect_fee_mode` are not read.** Samples keep recording a disabled
   pool's frozen price (claims can trigger on it, D38); `token_b_amount` is 0 on layout-0 pools (buyback cap 0). Cheap
   hardening: require `pool_status == 0` for samples/buybacks, `layout_version ≥ 1`, `collect_fee_mode == OnlyB`.

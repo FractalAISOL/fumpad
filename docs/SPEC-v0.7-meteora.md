@@ -50,7 +50,7 @@ CPI DBC `claim_trading_fee` (and after graduation DAMM `claim_position_fee`) sig
 `Coin.launch_fees_settled = false` at register. The **first** `claim_fees` for a coin, only allowed once `slot ≥ launch_slot + 8`, sends **100%** of what it claims to the buyback balance (everything accrued so far = the snipe window plus a few normal slots; the overshoot only ever favors the reward pool), then sets the flag. Keeper calls it right after the window. Later claims split normally.
 
 ### 3.4 `execute_buyback(mint, max_in)`
-Swap from the coin's buyback balance with `PDA["buyback"]` as payer, output to the reward vault. Post-graduation: v0.6 rules (permissionless, spot within ±3% of the 30-min keeper median, slice ≤ 0.5% of pool depth). Pre-graduation (no median yet): **keeper-only**, slice ≤ 0.5% of the curve's quote reserve, and spot (DBC `sqrt_price`) within ±3% of the coin's most recent keeper sample ≤ 60 s old. Buybacks never complete the curve (cap the slice to stay below the migration threshold).
+Swap from the coin's buyback balance with `PDA["buyback"]` as payer, output to the reward vault. Post-graduation: v0.6 rules (permissionless, spot within ±3% of the 30-min keeper median, slice ≤ 0.5% of pool depth). Pre-graduation (no median yet): **keeper-only**, slice ≤ 0.5% of the curve's quote reserve, and spot (DBC `sqrt_price`) within ±3% of the coin's most recent keeper sample ≤ 60 s old AND of the median of its recent keeper samples (Clarifications 24). Buybacks never complete the curve (cap the slice to stay below the migration threshold).
 
 ## 4. Graduation
 DBC completes when the quote threshold is reached; anyone (Meteora's mainnet keepers, our keeper, or `fumpad.graduate`) calls `migration_damm_v2`. `graduate(mint)` (permissionless, idempotent per step):
@@ -139,8 +139,8 @@ decision; each pins down something the spec left open or that the mainnet binari
    returns to the payer.
 9. **Statuses.** `Complete` is set only when the router itself completes the curve; `graduate` accepts `Curve` or
    `Complete` once DBC reports the pool migrated. `PAUSE_GRADUATE` covers `migrate_pool` and `graduate`.
-10. **Pre-graduation samples** are keeper-only, spaced like keeper samples, and stored in the Coin (no ring before
-   graduation). Pre-graduation buybacks additionally require the launch window to be over.
+10. **Pre-graduation samples** are keeper-only, spaced like keeper samples, and stored in the Coin (the latest one
+   plus a 5-sample ring for the pre-grad buyback guard, see 24; no observations account before graduation). Pre-graduation buybacks additionally require the launch window to be over.
 11. **Router.** Buys: ExactIn or PartialFill; sells: ExactIn. Referral must be None (exact fee measurement).
    `RoutedTrade.quote_gross` = WSOL spent incl. fee (buy) / WSOL received + fee (sell).
 12. **Config allow-list**: 8 slots; add and remove are both 48h-timelocked; every add (and every `register_coin`)
@@ -195,3 +195,10 @@ decision; each pins down something the spec left open or that the mainnet binari
    freezes protect an already-running system, so every later `set_keepers` (6 h freeze for new keys) and config
    change (48 h) keeps them. Three keeper slots means the jobs keeper (samples, `claim_for`, pre-graduation
    buybacks) shares a key with one attestor (devnet: attestor-1).
+24. **Pre-graduation buyback guard = median of keeper samples (security-review L5).** The Coin keeps its last 5
+   keeper pre-graduation samples (`pregrad_ring`, carved out of reserved bytes — Coin size unchanged). A pre-grad
+   buyback needs ≥ 4 of them within the last 5 min spanning ≥ 60 s; the guard price is their median, and spot must
+   be within ±band of that median AND of the latest sample (≤ 60 s old). One sample taken at a moved spot, or a
+   ratchet of in-band moves sampled one after another, can't move the guard; the price must be held through a
+   majority of the window's samples. Fixed constants, not params. After a keeper outage > 5 min (or at the first
+   samples of a coin) buybacks wait for a 60 s warm-up. Post-graduation guard unchanged.

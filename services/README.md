@@ -228,7 +228,10 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
 - **Pre-graduation buybacks (v0.7 L5)**: run at randomized times (`BUYBACK_INTERVAL_SECS` × (1 + U[0, `BUYBACK_JITTER`)))
   and only when the live spot AND the on-chain pre-grad sample sit inside the ±band of the keeper's own TWAP of its last
   `PREGRAD_TWAP_SAMPLES` (8) spot observations spaced ≥ `PREGRAD_TWAP_SPACING_SECS` (15); the pre-grad sample itself is
-  only recorded at a spot that agrees with that TWAP.
+  only recorded at a spot that agrees with that TWAP. On-chain (contracts INTERFACE §8 2026-10-13 c) the guard is the
+  median of the coin's last 5 keeper samples (`Coin.pregrad_ring`, ≥ 4 within 300 s spanning ≥ 60 s) and the latest
+  sample; the keeper mirrors it (`pregradMedianQ64`) and skips the buyback until the ring is warm (at the 40 s
+  pre-grad sampling cadence: ~2 min after the first sample).
 
 ### Attestors + watcher (v0.7, `--mode attestor|watcher`)
 - **Trust**: an attestor signs only what it derived from its own RPC at `finalized`. "Landed" = the consumed marker

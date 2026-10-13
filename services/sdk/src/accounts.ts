@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import { normalize } from "./borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "./coder.js";
-import { CLAIM_QUEUE_CAPACITY, OBSERVATION_CAPACITY } from "./constants.js";
+import { CLAIM_QUEUE_CAPACITY, OBSERVATION_CAPACITY, PREGRAD_MIN_SAMPLES, PREGRAD_MIN_SPAN_SECS, PREGRAD_RING_LEN, PREGRAD_WINDOW_SECS } from "./constants.js";
 import { type Params, paramsFromIdl } from "./params.js";
 
 export type CoinStatus = "curve" | "complete" | "graduated";
@@ -82,12 +82,23 @@ export interface CoinAccount {
   attestCursor: bigint;
   attestTokensTotal: bigint;
   attestReleasedTokens: bigint;
+  /** Latest keeper pre-grad sample (also in `pregradRing`). */
   pregradSamplePriceQ64: bigint;
   pregradSampleTs: bigint;
   migrator: PublicKey;
   migratorCost: bigint;
   migrationFeeLamports: bigint;
   leftoverTokens: bigint;
+  /** L5: last PREGRAD_RING_LEN keeper pre-grad samples (see `pregradMedianQ64`). */
+  pregradRing: PregradRing;
+}
+
+/** L5: ring of keeper pre-graduation DBC spot samples (prices Q64.64 saturated to u64; ts unix seconds). */
+export interface PregradRing {
+  pricesQ64: bigint[];
+  ts: number[];
+  head: number;
+  len: number;
 }
 
 export interface PositionAccount {
@@ -239,6 +250,27 @@ export function decodeClaimQueue(data: Uint8Array): ClaimQueueAccount {
 export function decodeTokenAccount(data: Uint8Array): { mint: PublicKey; owner: PublicKey; amount: bigint } {
   if (data.length < 72) throw new Error("not a token account");
   return { mint: pk(data, 0), owner: pk(data, 32), amount: dv(data).getBigUint64(64, true) };
+}
+
+/**
+ * Port of PregradRing::median_q64 (L5): median of the ring samples with ts in [now − 300, now] (even count: mean of
+ * the two middle values), or null unless ≥ 4 of them span ≥ 60 s. The pre-grad buyback guard price.
+ */
+export function pregradMedianQ64(ring: PregradRing, now: bigint): bigint | null {
+  const prices: bigint[] = [];
+  let lo: bigint | null = null;
+  let hi: bigint | null = null;
+  for (let i = 0; i < Math.min(ring.len, PREGRAD_RING_LEN); i++) {
+    const ts = BigInt(ring.ts[i]);
+    if (ts > now || now - ts > BigInt(PREGRAD_WINDOW_SECS)) continue;
+    prices.push(ring.pricesQ64[i]);
+    lo = lo === null || ts < lo ? ts : lo;
+    hi = hi === null || ts > hi ? ts : hi;
+  }
+  if (prices.length < PREGRAD_MIN_SAMPLES || hi! - lo! < BigInt(PREGRAD_MIN_SPAN_SECS)) return null;
+  prices.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const n = prices.length;
+  return n % 2 === 1 ? prices[(n - 1) / 2] : (prices[n / 2 - 1] + prices[n / 2]) / 2n;
 }
 
 export const COVERAGE_BUCKETS = 6n;
