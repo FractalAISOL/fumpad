@@ -48,7 +48,7 @@ const cleanSort = (v: unknown): GradSort => (v === "recent" ? "recent" : "volume
 const LANE_HINT: Record<LaneId, string> = {
   new: "Under half the curve, newest first",
   final: "Past half the curve, closest to graduating first",
-  graduated: "Trading on PumpSwap. Tickets can pay out here.",
+  graduated: "Trading on Meteora, LP locked. Tickets can pay out here.",
 };
 
 /* ── A one-second clock for ages ("12s") ─────────────────────────────────── */
@@ -630,7 +630,7 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
         </span>
         <span className={s.rGrad}>
           <b />
-          <b>PumpSwap</b>
+          <b>Meteora pool</b>
         </span>
       </div>
 

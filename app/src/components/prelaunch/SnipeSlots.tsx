@@ -4,15 +4,14 @@ import { useState } from "react";
 import s from "./Sections.module.css";
 
 /**
- * Snipe tax by slot (SPEC §4.1: 99 / 75 / 50 / 25%, then the normal fee). A radio group:
- * hover, tap or arrow through the slots; the sentence says what a 1 SOL buy pays there.
+ * The launch-window fee by slot (SPEC v0.7 D33: Meteora's fee scheduler, 99% falling linearly to
+ * the normal 1.25% over 8 slots, buys and sells alike). A radio group: hover, tap or arrow
+ * through the slots; the sentence says what a 1 SOL trade pays there.
  */
+const NORMAL = 1.25;
 const SLOTS = [
-  { slot: "0", time: "0 s", tax: 99 },
-  { slot: "1", time: "0.4 s", tax: 75 },
-  { slot: "2", time: "0.8 s", tax: 50 },
-  { slot: "3", time: "1.2 s", tax: 25 },
-  { slot: "4+", time: "1.6 s on", tax: 0 },
+  ...Array.from({ length: 8 }, (_, d) => ({ slot: String(d), time: `${(d * 0.4).toFixed(1).replace(".0", "")} s`, tax: 99 - (d * (99 - NORMAL)) / 8 })),
+  { slot: "8+", time: "3.2 s+", tax: 0 },
 ];
 
 export function SnipeSlots() {
@@ -46,8 +45,11 @@ export function SnipeSlots() {
             <span className={s.slotBarWrap}>
               <span className={s.slotBar} style={{ transform: `scaleY(${Math.max(x.tax, 1) / 100})` }} />
             </span>
-            <span className={s.slotTax}>{x.tax ? `${x.tax}%` : "1% fee"}</span>
-            <span className={s.slotName}>Slot {x.slot}</span>
+            <span className={s.slotTax}>{x.tax ? `${Math.round(x.tax)}%` : `${NORMAL}%`}</span>
+            <span className={s.slotName}>
+              <span className="sr-only">Slot </span>
+              {x.slot}
+            </span>
             <span className={s.slotTime}>{x.time}</span>
           </button>
         ))}
@@ -55,10 +57,11 @@ export function SnipeSlots() {
       <p className={s.snipeSay} aria-live="polite">
         {cur.tax ? (
           <>
-            A 1 SOL buy in slot {cur.slot}: <b>{toPool.toFixed(2)} SOL</b> goes to the coin&rsquo;s reward pool, {(1 - toPool).toFixed(2)} SOL buys the coin.
+            A 1 SOL buy in slot {cur.slot} pays <b>{toPool.toFixed(2)} SOL</b> in fees, and FUMPAD&rsquo;s share of it goes to the coin&rsquo;s reward pool;{" "}
+            {(1 - toPool).toFixed(2)} SOL buys the coin.
           </>
         ) : (
-          <>From the fifth slot on, buys pay the normal 1% fee. The window is over in about 1.6 seconds.</>
+          <>From the ninth slot on, trades pay the normal {NORMAL}% fee. The window is over in about 3 seconds.</>
         )}
       </p>
     </div>

@@ -59,7 +59,11 @@ export function PoolFill() {
           <span data-total>{int(TOTAL)}</span> PIGN
         </span>
       </div>
-      <div className={s.poolBar} role="img" aria-label={`Example reward pool: ${int(SEED)} from launch, ${int(FEES)} from fee buybacks, ${int(LP)} from LP fee skims.`}>
+      <div
+        className={s.poolBar}
+        role="img"
+        aria-label={`Example reward pool: ${int(SEED)} set aside at launch (lands at graduation), ${int(FEES)} from curve fee buybacks, ${int(LP)} from pool fee buybacks.`}
+      >
         <span className={s.poolSlot} style={{ width: pct(SEED) }}>
           <span data-seg className={s.segSeed} />
         </span>
@@ -72,13 +76,13 @@ export function PoolFill() {
       </div>
       <div className={s.poolLegend} aria-hidden="true">
         <span>
-          <i className={s.segSeed} /> At launch <b>{int(SEED)}</b>
+          <i className={s.segSeed} /> Set aside, 8% <b>{int(SEED)}</b>
         </span>
         <span>
-          <i className={s.segFees} /> Fee buybacks <b>+{int(FEES)}</b>
+          <i className={s.segFees} /> Curve fee buybacks <b>+{int(FEES)}</b>
         </span>
         <span>
-          <i className={s.segLp} /> LP fee skims <b>+{int(LP)}</b>
+          <i className={s.segLp} /> Pool fee buybacks <b>+{int(LP)}</b>
         </span>
       </div>
     </div>

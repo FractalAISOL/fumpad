@@ -86,7 +86,7 @@ export default function WaitingRoom() {
             <dl className={s.rules}>
               <div>
                 <dt>Who gets one</dt>
-                <dd>Any sell of $50 or more through FUMPAD, of tokens that have been in your wallet for 10 minutes.</dd>
+                <dd>Any sell of $50 or more of a FUMPAD coin, here or on any app, of tokens that have been in your wallet for 10 minutes.</dd>
               </div>
               <div>
                 <dt>Ticket price</dt>
@@ -122,13 +122,16 @@ export default function WaitingRoom() {
             <div className={s.sources}>
               <div className={s.source}>
                 <p className={s.sourceFig}>8%</p>
-                <h3 className={s.h3}>of the supply, at launch</h3>
-                <p>80,000,000 tokens are set aside before the first trade.</p>
+                <h3 className={s.h3}>of the supply, set aside</h3>
+                <p>80,000,000 tokens are reserved at launch and land in the pool when the coin graduates.</p>
               </div>
               <div className={s.source}>
                 <p className={s.sourceFig}>50%</p>
-                <h3 className={s.h3}>of every trading fee</h3>
-                <p>Every FUMPAD trade pays 1%. Half of it buys the coin into its pool; 30% goes to FUMPAD and 20% to the creator.</p>
+                <h3 className={s.h3}>of FUMPAD&rsquo;s fee</h3>
+                <p>
+                  Every trade on a FUMPAD coin pays 1.25%, on any app. Meteora keeps a fifth; of FUMPAD&rsquo;s 1%, half buys the coin into its pool, 30% goes to
+                  FUMPAD and 20% to the creator.
+                </p>
                 <div className={s.split} role="img" aria-label="Fee split: 50% reward pool, 30% FUMPAD, 20% creator">
                   <span style={{ flexGrow: 50 }}>Pool 50</span>
                   <span style={{ flexGrow: 30 }}>FUMPAD 30</span>
@@ -136,9 +139,9 @@ export default function WaitingRoom() {
                 </div>
               </div>
               <div className={s.source}>
-                <p className={s.sourceFig}>0.20%</p>
-                <h3 className={s.h3}>LP fee, after graduation</h3>
-                <p>The locked liquidity earns on all volume, from any app. Its token half is skimmed into the pool.</p>
+                <p className={s.sourceFig}>1.25%</p>
+                <h3 className={s.h3}>after graduation too</h3>
+                <p>The locked liquidity earns the same fee on all volume, from any app, and it splits the same way.</p>
               </div>
             </div>
             <p className={s.notice}>
@@ -155,12 +158,16 @@ export default function WaitingRoom() {
               Snipers fund the fumblers.
             </h2>
             <p className={s.lede}>
-              Buys in the first four slots after a launch pay a snipe tax: 99%, then 75, 50 and 25. All of it goes to the coin&rsquo;s reward pool, not to FUMPAD or the creator.
+              Trades in the first eight slots after a launch pay up to 99%, falling to the normal 1.25% in about three seconds. FUMPAD&rsquo;s whole share goes to the
+              coin&rsquo;s reward pool, not to FUMPAD or the creator.
             </p>
           </header>
           <div className={s.body}>
             <SnipeSlots />
-            <p className={s.fine}>Sells are never taxed. The creator&rsquo;s own buy inside the launch transaction is exempt; every other wallet pays the schedule.</p>
+            <p className={s.fine}>
+              Buys and sells alike, on any app. The creator&rsquo;s first buy is the first trade in the launch transaction and pays the normal fee; every other
+              wallet pays the schedule.
+            </p>
           </div>
         </div>
       </section>
@@ -267,7 +274,7 @@ export default function WaitingRoom() {
               Liquidity locked forever.
             </h2>
             <p className={s.lede}>
-              At 85 SOL raised the coin graduates to PumpSwap, and every LP token goes into a locker. Nobody can pull it out, including us.
+              At 85 SOL raised the coin graduates to a Meteora pool, and all of its liquidity is permanently locked. Nobody can pull it out, including us.
             </p>
           </header>
           <Reveal className={`${s.body} ${s.locker}`}>
@@ -276,23 +283,23 @@ export default function WaitingRoom() {
                 <path d="M16 34 V22 a16 16 0 0 1 32 0 V34" className={s.shackle} />
                 <rect x="6" y="32" width="52" height="38" rx="5" className={s.lockBody} />
               </svg>
-              <p className={s.lockName}>The LP locker</p>
+              <p className={s.lockName}>The locked position</p>
               <ul className={s.lockNo}>
                 <li>No withdraw</li>
-                <li>No admin</li>
-                <li>No upgrades</li>
+                <li>100% locked</li>
+                <li>Fees only</li>
               </ul>
             </div>
             <div className={s.lockFlow}>
               <p className={s.lockOut}>Only trading fees come out</p>
               <div className={s.lockRows}>
                 <div>
-                  <span className={s.lockFig}>Tokens</span>
-                  <span>to the coin&rsquo;s reward pool</span>
+                  <span className={s.lockFig}>50%</span>
+                  <span>buys the coin into its reward pool</span>
                 </div>
                 <div>
-                  <span className={s.lockFig}>SOL</span>
-                  <span>60% to FUMPAD, 40% to the creator</span>
+                  <span className={s.lockFig}>50%</span>
+                  <span>30% to FUMPAD, 20% to the creator</span>
                 </div>
               </div>
               <p className={s.fine}>The liquidity can&rsquo;t be rugged. The coin can still go to zero: that&rsquo;s a memecoin.</p>
@@ -314,19 +321,19 @@ export default function WaitingRoom() {
               <div>
                 <dt>20%</dt>
                 <dd>
-                  <b>of every trading fee.</b> Claimable whenever you like.
+                  <b>of FUMPAD&rsquo;s share of every trading fee,</b> on every app, before and after graduation. Claimable whenever you like.
                 </dd>
               </div>
               <div>
-                <dt>40%</dt>
+                <dt>Any app</dt>
                 <dd>
-                  <b>of the SOL from LP fees,</b> for as long as the graduated coin trades.
+                  <b>trades your coin from the first block,</b> and every sell over $50 there counts for fumblers too.
                 </dd>
               </div>
               <div>
-                <dt>0%</dt>
+                <dt>1.25%</dt>
                 <dd>
-                  <b>snipe tax on your launch buy,</b> when it&rsquo;s in the launch transaction.
+                  <b>fee on your launch buy;</b> snipers right behind you pay up to 99%.
                 </dd>
               </div>
               <div>

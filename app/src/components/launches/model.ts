@@ -4,7 +4,7 @@
  *
  *   New            curve < 50%            newest first
  *   Final stretch  curve ≥ 50% (complete) curve progress, highest first
- *   Graduated      on PumpSwap            24 h volume (or most recent graduation)
+ *   Graduated      on Meteora DAMM v2     24 h volume (or most recent graduation)
  */
 import type { CoinSummary } from "@/data";
 import { graduationSolOf } from "@/data/chain";

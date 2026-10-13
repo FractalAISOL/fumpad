@@ -11,6 +11,8 @@ const TOC = [
   { id: "market", label: "Market risk" },
   { id: "rewards", label: "Rewards are not guaranteed" },
   { id: "contracts", label: "Smart-contract risk" },
+  { id: "meteora", label: "Meteora" },
+  { id: "attestation", label: "Keeper attestations" },
   { id: "dependencies", label: "Services FUMPAD depends on" },
   { id: "keys", label: "Keys and wallets" },
   { id: "law", label: "Law, tax and your region" },
@@ -21,7 +23,7 @@ export default function RiskPage() {
     <DocPage
       title="Risk disclosure"
       lede="What can go wrong when you use FUMPAD. Read it before you trade; only use money you can afford to lose."
-      notice={<DraftNotice updated="October 12, 2026" />}
+      notice={<DraftNotice updated="October 13, 2026" />}
       toc={TOC}
     >
       <DocSection id="experimental" title="Experimental software">
@@ -54,14 +56,46 @@ export default function RiskPage() {
       </DocSection>
       <DocSection id="contracts" title="Smart-contract risk">
         <p>
-          FUMPAD&apos;s contracts may contain bugs that lose or lock funds. Reviews and tests reduce that risk; they don&apos;t remove it. The main program is
-          upgradeable by its admin, under a timelock for parameter changes; the liquidity locker is not upgradeable, which also means a bug in it
-          can&apos;t be fixed.
+          FUMPAD&apos;s contracts may contain bugs that lose or lock funds. Reviews and tests reduce that risk; they don&apos;t remove it. The FUMPAD program
+          is upgradeable by its admin, under a timelock for parameter changes. Trading, the bonding curve and the locked liquidity run on Meteora&apos;s
+          programs, which FUMPAD doesn&apos;t control (next section).
+        </p>
+      </DocSection>
+      <DocSection id="meteora" title="Meteora">
+        <p>
+          Every FUMPAD coin trades on Meteora&apos;s Dynamic Bonding Curve and, after graduation, a Meteora DAMM v2 pool. That brings risks FUMPAD can&apos;t
+          remove:
+        </p>
+        <ul>
+          <li>
+            <b>Upgrades.</b> Meteora can upgrade both programs at any time through a single upgrade authority; whether it is a multisig is unverified. An
+            upgrade could change fees, the liquidity lock or anything else, for every coin at once.
+          </li>
+          <li>
+            <b>Pool controls.</b> Meteora&apos;s operators can disable trading on a DAMM v2 pool or change its fee, including a FUMPAD coin&apos;s pool.
+          </li>
+          <li>
+            <b>Fees.</b> Meteora keeps 20% of every trading fee and 0.2% of the liquidity at graduation. These go to Meteora, not to the reward pool.
+          </li>
+          <li>
+            <b>Bugs and outages.</b> A bug or outage in Meteora&apos;s programs or apps can stop trading or lose funds, and FUMPAD can&apos;t fix it.
+          </li>
+          <li>
+            <b>Other pools and apps.</b> Anyone can open other pools for a FUMPAD coin; sells there don&apos;t file tickets. Apps that route trades to
+            Meteora are third parties with their own fees and risks.
+          </li>
+        </ul>
+      </DocSection>
+      <DocSection id="attestation" title="Keeper attestations">
+        <p>
+          Tickets exist because FUMPAD&apos;s keepers attest qualifying sells (two of three must agree). If keepers are down, disagree or can&apos;t attribute a
+          sell to its seller, a sell may get its ticket late or not at all. A ticket can be voided within its challenge window if its attestation was wrong.
+          Keys controlling the keepers or the guardian could be lost or stolen; FUMPAD&apos;s safeguards limit, but don&apos;t remove, the damage.
         </p>
       </DocSection>
       <DocSection id="dependencies" title="Services FUMPAD depends on">
         <p>
-          FUMPAD relies on Solana, PumpSwap, the Pyth price feed, RPC providers, its own keepers and indexer, and Privy for login and the Trading wallet.
+          FUMPAD relies on Solana, Meteora, the Pyth price feed, RPC providers, its own keepers and indexer, and Privy for login and the Trading wallet.
           Any of them can fail, change or be unavailable, which can delay or block trades, tickets and claims.
         </p>
       </DocSection>

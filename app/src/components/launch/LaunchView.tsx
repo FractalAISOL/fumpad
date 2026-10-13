@@ -3,7 +3,7 @@
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { splitVanity } from "@/chain/program";
 import { type LaunchStep, type PreparedLaunch, useFumpadTx } from "@/chain/tx";
-import { cpOut } from "@/data/chain";
+import { curveReservesAt, quoteBuy } from "@/data/meteora";
 import {
   AmountInput,
   Button,
@@ -106,13 +106,16 @@ export function LaunchView() {
 
   const firstBuy = parseAmount(buy);
   const net = firstBuy * (1 - PARAMS.feeBps / 10_000);
-  const firstTokens = firstBuy > 0 ? cpOut(PARAMS.initialVirtualSol, PARAMS.initialVirtualTokens, net) : 0;
+  // The creator's buy is the fresh DBC pool's first swap, at the normal fee (D33).
+  const firstTokens = firstBuy > 0 ? quoteBuy(curveReservesAt(PARAMS.initialVirtualSol, PARAMS.initialVirtualTokens, 0), firstBuy, PARAMS.feeBps, PARAMS.curveSupply).amountOut : 0;
   const tick = symbol || "TICKER";
-  // D19: buys in the first few slots after launch pay a decaying tax into the reward pool;
-  // the creator's buy in the launch transaction is exempt.
+  // D33: trades in the first slots after launch pay the DBC scheduler's fee, 99% falling to the
+  // normal fee; FUMPAD's share of it goes to the reward pool. The creator's first buy, the first
+  // swap in the launch transaction, pays the normal fee.
   const snipeSecs = (PARAMS.snipeWindowSlots ?? 0) * 0.4;
-  const snipeOn = snipeSecs > 0 && (PARAMS.snipeStartBps ?? 0) > 0;
+  const snipeOn = snipeSecs > 0 && (PARAMS.snipeStartBps ?? 0) > PARAMS.feeBps;
   const snipePct = f.fixed((PARAMS.snipeStartBps ?? 0) / 100, 0);
+  const feePct = f.fixed(PARAMS.feeBps / 100, PARAMS.feeBps % 100 ? 2 : 0);
 
   // D18 step 1: reserve the coin's `…fmbL` address (server-side vanity mint) for the review.
   const openReview = async () => {
@@ -172,7 +175,7 @@ export function LaunchView() {
       <div className={s.head}>
         <h1 className={s.h1}>Launch a coin</h1>
         <p className={s.lede}>
-          Every coin on FUMPAD starts with 8% of its supply in a reward pool, so people who sell too early get paid back. Takes about a minute.
+          Every coin on FUMPAD sets aside 8% of its supply for a reward pool, so people who sell too early, on any app, get paid back. Takes about a minute.
         </p>
       </div>
 
@@ -309,15 +312,27 @@ export function LaunchView() {
               <p className={s.hint}>
                 {firstBuy > 0 ? (
                   <>
-                    You get about <Tokens value={firstTokens} symbol={tick} /> at the opening price
-                    {snipeOn ? ", exempt from snipe protection because it rides in the launch transaction" : ""}. As the creator you can&apos;t file fumble
-                    tickets on this coin; you earn 20% of every trade fee instead.
+                    You get about <Tokens value={firstTokens} symbol={tick} /> at the opening price.{" "}
+                    {snipeOn && (
+                      <>
+                        <b>Your first buy gets the normal {feePct}% fee; snipers pay up to {snipePct}%.</b> It&apos;s the first trade in the launch transaction, so
+                        nobody gets in ahead of you, and anyone trading in the next ~{f.fixed(snipeSecs, 0)} s pays the launch-window fee, with FUMPAD&apos;s share
+                        going to ${tick}&apos;s reward pool.{" "}
+                      </>
+                    )}
+                    As the creator you can&apos;t file fumble tickets on this coin; you earn {f.fixed(PARAMS.feeCreatorShareBps / 100, 0)}% of FUMPAD&apos;s share
+                    of every trade fee instead, on every app.
                   </>
                 ) : (
                   <>
-                    Buying first in the launch transaction means nobody can buy ahead of you.
-                    {snipeOn && <> Bots that try anyway pay snipe protection: up to {snipePct}% of their buy goes to the reward pool for the first ~{f.fixed(snipeSecs, 0)} s.</>}{" "}
-                    As the creator you earn 20% of every trade fee.
+                    Buying first in the launch transaction means nobody can buy ahead of you, and your buy pays the normal {feePct}% fee.
+                    {snipeOn && (
+                      <>
+                        {" "}
+                        Bots that try anyway pay up to {snipePct}% for the first ~{f.fixed(snipeSecs, 0)} s, and FUMPAD&apos;s share of that goes to the reward pool.
+                      </>
+                    )}{" "}
+                    As the creator you earn {f.fixed(PARAMS.feeCreatorShareBps / 100, 0)}% of FUMPAD&apos;s share of every trade fee, on every app.
                   </>
                 )}
               </p>
@@ -355,16 +370,21 @@ export function LaunchView() {
               <KV
                 rows={[
                   { k: "Supply, mint authority revoked", v: <Tokens value={PARAMS.totalSupply} /> },
-                  { k: `Reward pool, ${f.fixed((PARAMS.rewardPoolSupply / PARAMS.totalSupply) * 100, 0)}%`, v: <Tokens value={PARAMS.rewardPoolSupply} /> },
+                  {
+                    k: `Reward pool at graduation, ${f.fixed((PARAMS.rewardPoolSupply / PARAMS.totalSupply) * 100, 0)}%`,
+                    v: <Tokens value={PARAMS.rewardPoolSupply} />,
+                  },
                   { k: "On the bonding curve", v: <Tokens value={PARAMS.curveSupply} compact /> },
                   { k: "Graduates at", v: <span className="num">{f.fixed(PARAMS.graduationSol, PARAMS.graduationSol < 10 ? 2 : 0)} SOL</span> },
                   ...(snipeOn
-                    ? [{ k: "Snipe protection", v: <span className="num">{snipePct}% → 0 in ~{f.fixed(snipeSecs, 0)} s, to the pool</span> }]
+                    ? [{ k: "Snipe protection", v: <span className="num">{snipePct}% → {feePct}% in ~{f.fixed(snipeSecs, 0)} s</span> }]
                     : []),
                   { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> },
                 ]}
               />
-              <p className={s.splitLabel}>Each {f.fixed(PARAMS.feeBps / 100, PARAMS.feeBps % 100 ? 1 : 0)}% trade fee</p>
+              <p className={s.splitLabel}>
+                Each {feePct}% trade fee, on any app: Meteora keeps {f.fixed(PARAMS.venueFeeShareBps / 100, 0)}%, FUMPAD&apos;s share goes
+              </p>
               <SplitBar
                 label="Fee split"
                 parts={[
@@ -373,7 +393,11 @@ export function LaunchView() {
                   { label: "you", share: PARAMS.feeCreatorShareBps / 100 },
                 ]}
               />
-              <p className={s.hint}>At graduation the liquidity moves to PumpSwap and is locked forever. Nobody can pull it, including you.</p>
+              <p className={s.hint}>
+                ${tick} trades on Meteora from the first block, so Axiom, Jupiter and other Solana apps can trade it too, and every sell over{" "}
+                {f.usdRule(PARAMS.minSellUsd)} counts wherever it happens. At graduation the liquidity moves to a Meteora pool, 100% locked forever. Nobody can pull it,
+                including you.
+              </p>
             </div>
           </Panel>
         </aside>
@@ -407,7 +431,7 @@ export function LaunchView() {
           rows={[
             { k: "First buy", v: firstBuy > 0 ? <span className="num">{f.sol(firstBuy)} SOL</span> : <span className="muted">None</span> },
             ...(firstBuy > 0 ? [{ k: "You receive", v: <Tokens value={firstTokens} symbol={symbol} /> }] : []),
-            ...(firstBuy > 0 && snipeOn ? [{ k: "Snipe tax", v: <span>Exempt, same transaction</span> }] : []),
+            ...(firstBuy > 0 && snipeOn ? [{ k: "Fee on your buy", v: <span className="num">{feePct}%, first in line</span> }] : []),
             { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> },
             { k: "Total", v: <span className="num">{f.sol(firstBuy + 0.02)} SOL</span> },
           ]}
