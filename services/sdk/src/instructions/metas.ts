@@ -2,7 +2,7 @@ import type { Idl } from "@anchor-lang/core";
 import { type AccountMeta, PublicKey, TransactionInstruction } from "@solana/web3.js";
 
 import { idlInstruction } from "../coder.js";
-import { FUMPAD_PROGRAM_ID } from "../constants.js";
+import { DEFAULT_FUMPAD_PROGRAM_ID, FUMPAD_PROGRAM_ID } from "../constants.js";
 import { eventAuthorityPda } from "../pda.js";
 
 /** Accounts keyed by IDL name (snake_case or camelCase). `null` = absent optional account. */
@@ -27,7 +27,8 @@ export function idlMetas(idl: Idl, programId: PublicKey, ixName: string, account
     if (accounts[c] !== undefined) used.add(c);
     if (accounts[a.name] !== undefined) used.add(a.name);
     if (key === undefined) {
-      if (a.address) key = new PublicKey(a.address);
+      // the IDL pins fumpad's own id (e.g. initialize_global's `program`) to the compiled-in one: follow FUMPAD_PROGRAM_ID
+      if (a.address) key = a.address === DEFAULT_FUMPAD_PROGRAM_ID ? FUMPAD_PROGRAM_ID : new PublicKey(a.address);
       else if (a.name === "event_authority" && programId.equals(FUMPAD_PROGRAM_ID)) key = eventAuthorityPda();
       else if (a.name === "program") key = programId;
     }

@@ -1,0 +1,238 @@
+{
+  "takenAt": "2026-10-13T21:27:48.119Z",
+  "slot": 456589591,
+  "genesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "programs": [
+    {
+      "name": "dbc",
+      "id": "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN",
+      "programData": "HUfnSSiJxgspQm6C1rkqv6L3XgVtn7AESApgCQpCXCYh",
+      "upgradeAuthority": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
+      "lastDeployedSlot": 445503633,
+      "payloadBytes": 2326577,
+      "sha256": "4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b",
+      "fixture": "dbc_mainnet.so",
+      "fixtureSha256": "4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b",
+      "matchesFixture": true
+    },
+    {
+      "name": "damm_v2",
+      "id": "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+      "programData": "AUh8bm2XsMfex3KjYGcM3G4uBqUNSDw6HEhWaWMYnyPH",
+      "upgradeAuthority": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
+      "lastDeployedSlot": 445230614,
+      "payloadBytes": 2174352,
+      "sha256": "4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b",
+      "fixture": "damm_v2_mainnet.so",
+      "fixtureSha256": "4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b",
+      "matchesFixture": true
+    },
+    {
+      "name": "squads_v4",
+      "id": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+      "programData": "Fy3YMJCvwbAXUgUM5b91ucUVA3jYzwWLHL3MwBqKsh8n",
+      "upgradeAuthority": null,
+      "lastDeployedSlot": 302582236,
+      "payloadBytes": 1470416,
+      "sha256": "dec8d3e0fae58c7c8f2416e5f67c25e673f047afd6dd2bba4a47e0b29a01d34c",
+      "fixture": "squads_v4_mainnet.so",
+      "fixtureSha256": "dec8d3e0fae58c7c8f2416e5f67c25e673f047afd6dd2bba4a47e0b29a01d34c",
+      "matchesFixture": true
+    },
+    {
+      "name": "token_2022",
+      "id": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "programData": "DoU57AYuPFu2QU514RktNPG22QhApEjnKxnBcu4BHDTY",
+      "upgradeAuthority": "AeLmXCbPaQHGWRLr2saFsEVfmMNuKnxRAbWCT9P5twgz",
+      "lastDeployedSlot": 427147035,
+      "payloadBytes": 1382016,
+      "sha256": "0999dbf708971e723b08d1caafc988826a59c6001ed6dc02260da07defbe1469"
+    },
+    {
+      "name": "pyth_receiver",
+      "id": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
+      "programData": "96QrNCjmh32H9quY9DX4NEH81nECVsbkATBDZeoVbvLV",
+      "upgradeAuthority": "6oXTdojyfDS8m5VtTaYB9xRCxpKGSvKJFndLUPV3V3wT",
+      "lastDeployedSlot": 327047637,
+      "payloadBytes": 1355920,
+      "sha256": "0d6bf9142c2eb1fdb8ead48054491369bed3a8d6846c5887e362844155599ab2"
+    }
+  ],
+  "accounts": [
+    {
+      "name": "damm_v2_migration_config",
+      "id": "A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck",
+      "owner": "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+      "lamports": 2887848,
+      "space": 328,
+      "sha256": "988089b8bacd1967ad85e4acd2bb520c847c872a74fed0614b01a89c57ae73a5",
+      "fixture": "damm_v2_migration_config_mainnet.json",
+      "matchesFixture": true
+    },
+    {
+      "name": "squads_program_config",
+      "id": "BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr",
+      "owner": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+      "lamports": 1893120,
+      "space": 144,
+      "sha256": "ba8e7712f069f2e68e8583b105ac2eb22d791265440da56df32f9f3f734af3e0",
+      "fixture": "squads_v4_program_config_mainnet.json",
+      "matchesFixture": true
+    },
+    {
+      "name": "pyth_sol_usd",
+      "id": "7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE",
+      "owner": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
+      "lamports": 1825031,
+      "space": 134,
+      "sha256": "92e2a1afe191f9db630654b4afeed555c1a745312a9cde4983caa6a28238e802"
+    },
+    {
+      "name": "wsol_mint",
+      "id": "So11111111111111111111111111111111111111112",
+      "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+      "lamports": 1852116095981,
+      "space": 82,
+      "sha256": "b0f919425a529f4971ef8dabd535aec34947d5c8c4885df80dae91635b98c5f3",
+      "fixture": "wsol_mint.json",
+      "matchesFixture": true
+    },
+    {
+      "name": "dbc_pool_authority",
+      "id": "FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM",
+      "owner": "11111111111111111111111111111111",
+      "lamports": 68823832972,
+      "space": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "damm_v2_pool_authority",
+      "id": "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC",
+      "owner": "11111111111111111111111111111111",
+      "lamports": 177581437000,
+      "space": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "rent": [
+    {
+      "label": "0 (system account / rent floor)",
+      "bytes": 0,
+      "lamports": 650240
+    },
+    {
+      "label": "program account (36)",
+      "bytes": 36,
+      "lamports": 833120
+    },
+    {
+      "label": "Consumed marker (98)",
+      "bytes": 98,
+      "lamports": 1148080
+    },
+    {
+      "label": "Ticket (276)",
+      "bytes": 276,
+      "lamports": 2052320
+    },
+    {
+      "label": "Position (315)",
+      "bytes": 315,
+      "lamports": 2250440
+    },
+    {
+      "label": "Coin (546)",
+      "bytes": 546,
+      "lamports": 3423920
+    },
+    {
+      "label": "Global (1,044)",
+      "bytes": 1044,
+      "lamports": 5953760
+    },
+    {
+      "label": "DBC config (1,048)",
+      "bytes": 1048,
+      "lamports": 5974080
+    },
+    {
+      "label": "Observations (8,280)",
+      "bytes": 8280,
+      "lamports": 42712640
+    },
+    {
+      "label": "ClaimQueue (81,976)",
+      "bytes": 81976,
+      "lamports": 417088320
+    }
+  ],
+  "rentLinear": {
+    "perByteTwoYears": 5080,
+    "ok": true
+  },
+  "priorityFees": [
+    {
+      "program": "dbc (program + pool authority)",
+      "samples": 150,
+      "p50": 0,
+      "p75": 0,
+      "p90": 0,
+      "max": 0
+    },
+    {
+      "program": "damm_v2 (program + pool authority)",
+      "samples": 150,
+      "p50": 0,
+      "p75": 0,
+      "p90": 0,
+      "max": 535714
+    }
+  ],
+  "pyth": {
+    "priceUsd": 106.82576909000001,
+    "publishTime": 1791926819,
+    "ageSecs": 14
+  },
+  "features": {
+    "checked": 280,
+    "inactiveOnMainnet": [
+      "51VCKU5eV6mcTc9q9ArfWELU2CqDoi13hdAjr6fHMdtv",
+      "5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP",
+      "6TkHkRmP7JZy1fdM6fg5uXn76wChQBWGokHBJzrLB3mj",
+      "7VgiehxNxu53KdxgLspGQY8myE6f7UokaWa4jsGcaSz",
+      "8aXvSuopd1PUj7UhehfXJRg6619RHp8ZvwTyyJHdUYsj",
+      "9LZdXeKGeBV6hRLdxS1rHbHoEUsKqesCC2ZAPTPKJAbK",
+      "9onWzzvCzNC2jfhxxeqRgs5q7nFAAKpCUvkj6T6GJK9i",
+      "B1ockRevenueSharing111111111111111111111111",
+      "B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g",
+      "CR3dVN2Yoo95Y96kLSTaziWDAQT2MNEpiWh5cqVq2pNE",
+      "CustomCommissionCo11ector111111111111111111",
+      "DEJmsCntuYqbXtL5z5TxbaxJXFUJAFjf7TqWSF7YWjQg",
+      "DT4n6ABDqs6w4bnfwrXT9rsprcPf6cdDga1egctaPkLC",
+      "EBq48m8irRKuE7ZnMTLvLg2UuGSqhe8s8oMqnmja1fJw",
+      "EaQpmC6GtRssaZ3PCUM5YksGqUdMLeZ46BQXYtHYakDS",
+      "ExtendProgCheckedWi11BeDe1eted11111111111111",
+      "Ftxb3ZKq7aNqgxDBbP7EonvR2RszZk9ctjdsTX38kQaz",
+      "GsUBNYNDPdMLHPD37TToHzrzcNcjpC9w5n1EcJk5iTaM",
+      "HTW2pSyErTj4BV6KBM9NZ9VBUJVxt7sacNWcf76wtzb3",
+      "LoaderV4WasAbandoned11111111111111111111111",
+      "MinimumDe1egat1onForRewardsWi11BeDe1eted111",
+      "RfEcA95xnhuwooVAhUUksEJLZBF7xKCLuqrJoqk4Zph",
+      "TestFeature11111111111111111111111111111111",
+      "TestFeature21111111111111111111111111111111",
+      "VoteAccount1nitia1izeV211111111111111111111",
+      "chaie9S2zVfuxJKNRGkyTDokLwWxx6kD2ZLsqQHaDD8",
+      "depVvnQ2UysGrhwdiwU42tCadZL8GcBb1i2GYhMopQv",
+      "mZdnRh9T2EbDNvqKjkCR3bvo5c816tJaojtE9Xs7iuY",
+      "ptr9umikaeAS7ZBBp2fsfRhie16F1V2jCKA2y6gXNAK",
+      "s512oDwgx8hjMnaQjXfqqrZroVj4HvC6TkN3iSSWXCh",
+      "sProgVaNWkYdP2eTRAy1CPrgb3b9p8yXCASrPEqo6VJ",
+      "turbRpTzBzDU6PJmWvRTbcJXXGxUs19CvQamUrRD9bN",
+      "txv1hPU76QFBVeq3942jJ65e9Em2xbdbCJrzX8sM4U4",
+      "zk1snxsc6Fh3wsGNbbHAJNHiJoYgF29mMnTSusGx5EJ",
+      "zkNLP7EQALfC1TYeB3biDU7akDckj8iPkvh9y2Mt2K3",
+      "zkiTNuzBKxrCLMKehzuQeKZyLtX2yvFcEKMML8nExU8",
+      "mustRekeyVm2QHYB3JPefBiU4BY3Z6JkW2k3Scw5GWP"
+    ]
+  }
+}

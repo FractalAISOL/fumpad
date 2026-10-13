@@ -132,8 +132,10 @@ Squads app's transaction builder). Rehearsed: all of these, plus the refusals li
 Why the order (2 → 4 → 5): until step 4 nothing is irreversible (the guardian, still the deployer, can
 `cancel_admin`). Step 5 is irreversible, so it happens only after the admin vault has executed a real transaction.
 
-Program id: every command uses the SDK's `FUMPAD_PROGRAM_ID` (`5YMF…` today); a mainnet deploy with a different id
-updates that constant like the rest of the stack.
+Program id: every command uses the SDK's `FUMPAD_PROGRAM_ID`: the compiled-in devnet id `5YMF…` unless the
+environment variable `FUMPAD_PROGRAM_ID` is set. **On mainnet export it first** (`export FUMPAD_PROGRAM_ID=$(solana-keygen
+pubkey ~/fumpad-keys/mainnet/fumpad-program-keypair.json)`), as LAUNCH-DAY.md does; `scripts/mainnet/bootstrap-mainnet.ts`
+sets it itself from the program keypair.
 
 ### Program upgrades afterwards (Squads flow)
 ```sh

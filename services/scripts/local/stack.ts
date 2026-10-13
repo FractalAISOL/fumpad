@@ -12,13 +12,27 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { Connection, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, type PublicKey } from "@solana/web3.js";
 
 import { DBC_POOL_AUTHORITY } from "@fumpad/sdk";
 import { createPool, migrate } from "@fumpad/indexer";
 
 import { airdrop, createFumpadConfig, LOCAL_PARAMS, transferSol } from "./actors.js";
-import { buildGrinder, keypair, keypairPath, LOCAL, type Postgres, type Service, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
+import { buildGrinder, keypair, keypairPath, LOCAL, type Postgres, readKeypairFile, type Service, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
+
+/**
+ * An already-running, already-bootstrapped chain (the mainnet-fork rehearsal: real `initialize_global`, mainnet
+ * params): the stack then only starts Postgres + the services against it, with these keeper keys
+ * (`[0]` = attestor-1 = the jobs keeper) and launch co-signer, and never stops the validator.
+ */
+export interface ExistingChain {
+  v: Validator;
+  keeperKeyPaths: [string, string, string];
+  launchKey: Keypair;
+  config: PublicKey;
+  /** price the attestors / watcher / API use (PYTH_SOURCE=constant) */
+  solUsd: number;
+}
 
 export interface StackOpts {
   rpcPort?: number;
@@ -27,6 +41,7 @@ export interface StackOpts {
   /** Mints the grinder keeps ready (the e2e needs 1; the app stack a few). */
   poolTarget?: number;
   log?: (s: string) => void;
+  chain?: ExistingChain;
 }
 
 export interface Stack {
@@ -34,10 +49,11 @@ export interface Stack {
   pg: Postgres;
   conn: Connection;
   services: Service[];
-  admin: Keypair;
-  treasury: Keypair;
+  /** generated chain only (undefined on an ExistingChain) */
+  admin?: Keypair;
+  treasury?: Keypair;
   keepers: Keypair[];
-  config: Keypair;
+  config: { publicKey: PublicKey };
   /** The API's launch key = `Params.launch_signer` (off-chain review L1): the API co-signs every launch. */
   launchKey: Keypair;
   api: string;
@@ -64,7 +80,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
   let pg: Postgres | undefined;
   const stop = async () => {
     for (const s of [...services].reverse()) await s.stop();
-    await v?.stop();
+    if (!opts.chain) await v?.stop();
     await pg?.stop();
   };
   try {
@@ -84,21 +100,40 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }),
     );
 
-    const auth = keypair("upgrade-authority");
-    const admin = Keypair.generate();
-    const treasury = Keypair.generate();
-    const keepers = [keypair("keeper"), keypair("keeper2"), keypair("keeper3")];
-    const config = Keypair.generate();
-    // Launch binding (off-chain review L1): only API-built launches (co-signed by its launch key) register.
-    const launchKey = Keypair.generate();
-    const params = { ...LOCAL_PARAMS, launchSigner: launchKey.publicKey };
-    v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), params, configs: [config.publicKey] } });
+    let admin: Keypair | undefined;
+    let treasury: Keypair | undefined;
+    let keepers: Keypair[];
+    let keeperPaths: string[];
+    let config: { publicKey: PublicKey };
+    let launchKey: Keypair;
+    const usd = String(opts.chain?.solUsd ?? 150);
+    if (opts.chain) {
+      v = opts.chain.v;
+      keeperPaths = [...opts.chain.keeperKeyPaths];
+      keepers = keeperPaths.map(readKeypairFile);
+      config = { publicKey: opts.chain.config };
+      launchKey = opts.chain.launchKey;
+      log("✓ chain: existing (bootstrapped) validator, its Global and config");
+    } else {
+      const auth = keypair("upgrade-authority");
+      admin = Keypair.generate();
+      treasury = Keypair.generate();
+      keepers = [keypair("keeper"), keypair("keeper2"), keypair("keeper3")];
+      keeperPaths = [keypairPath("keeper"), keypairPath("keeper2"), keypairPath("keeper3")];
+      const cfg = Keypair.generate();
+      config = cfg;
+      // Launch binding (off-chain review L1): only API-built launches (co-signed by its launch key) register.
+      launchKey = Keypair.generate();
+      const params = { ...LOCAL_PARAMS, launchSigner: launchKey.publicKey };
+      v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), params, configs: [cfg.publicKey] } });
+      const c0 = new Connection(v.rpcUrl, "confirmed");
+      for (const k of [auth, admin, ...keepers]) await airdrop(c0, k.publicKey, 20);
+      // DBC's pool authority fronts the migration's flash rent (mainnet: Meteora keeps it funded).
+      await transferSol(c0, admin, DBC_POOL_AUTHORITY, 10n * SOL);
+      await createFumpadConfig(c0, admin, cfg);
+      log("✓ chain ready: Global seeded (local windows, 3 keepers, FUMPAD DBC config allow-listed), config created");
+    }
     const conn = new Connection(v.rpcUrl, "confirmed");
-    for (const k of [auth, admin, ...keepers]) await airdrop(conn, k.publicKey, 20);
-    // DBC's pool authority fronts the migration's flash rent (mainnet: Meteora keeps it funded).
-    await transferSol(conn, admin, DBC_POOL_AUTHORITY, 10n * SOL);
-    await createFumpadConfig(conn, admin, config);
-    log("✓ chain ready: Global seeded (local windows, 3 keepers, FUMPAD DBC config allow-listed), config created");
 
     const common = { DATABASE_URL: pg.url, RPC_URL: v.rpcUrl, LOG_LEVEL: "info" };
     services.push(
@@ -116,12 +151,12 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }),
     );
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${ports.indexer}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5" }));
+    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5" }));
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
         RPC_URL: v.rpcUrl,
-        KEEPER_KEYPAIR: keypairPath("keeper"),
+        KEEPER_KEYPAIR: keeperPaths[0],
         PORT: String(ports.keeper),
         LOG_LEVEL: "info",
         LOOP_MS: "1000",
@@ -149,16 +184,16 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
           KEEPER_MODE: "attestor",
           RPC_URL: v.rpcUrl,
           DATABASE_URL: pg.url,
-          KEEPER_KEYPAIR: keypairPath(i === 0 ? "keeper" : `keeper${i + 1}`),
+          KEEPER_KEYPAIR: keeperPaths[i],
           PYTH_SOURCE: "constant",
-          PYTH_CONSTANT_USD: "150",
+          PYTH_CONSTANT_USD: usd,
           ATTEST_LOOP_MS: "2000",
           ATTEST_FALLBACK_SUBMIT_SECS: "10",
           LOG_LEVEL: "info",
         }),
       );
     }
-    services.push(startService("watcher", "keeper/src/main.ts", { KEEPER_MODE: "watcher", RPC_URL: v.rpcUrl, PORT: String(ports.watcher), PYTH_SOURCE: "constant", PYTH_CONSTANT_USD: "150", WATCH_LOOP_MS: "3000", WATCH_GRACE_SECS: "120", LOG_LEVEL: "info" }));
+    services.push(startService("watcher", "keeper/src/main.ts", { KEEPER_MODE: "watcher", RPC_URL: v.rpcUrl, PORT: String(ports.watcher), PYTH_SOURCE: "constant", PYTH_CONSTANT_USD: usd, WATCH_LOOP_MS: "3000", WATCH_GRACE_SECS: "120", LOG_LEVEL: "info" }));
     await waitFor("keeper health", async () => (await fetch(`http://127.0.0.1:${ports.keeper}/health`)).status > 0, 60_000);
     await waitFor("watcher health", async () => (await fetch(`http://127.0.0.1:${ports.watcher}/health`)).ok, 60_000);
     log("✓ indexer, api, grinder, keeper, 3 attestors, watcher running");

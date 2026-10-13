@@ -53,6 +53,7 @@ export function keypair(name: string): Keypair {
   return k;
 }
 export const keypairPath = (name: string) => join(LOCAL, `${name}.json`);
+export const readKeypairFile = (path: string) => Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(path, "utf8")) as number[]));
 
 /** Pyth PriceUpdateV2 at `usd` with publish_time far in the future (validator sees age 0). */
 export function writePythFixture(usd: number): string {
@@ -153,16 +154,23 @@ export async function startValidator(opts: {
   extraArgs?: string[];
   /** Genesis epoch length; long epochs make `warp` advance the clock (see Validator.warp). */
   slotsPerEpoch?: number;
+  /**
+   * Replaces the default genesis programs/accounts (fumpad + fixtures DBC/DAMM v2 + migration config + Pyth +
+   * optional Global): the mainnet fork (scripts/mainnet/rehearsal.ts) passes its own read-only mainnet dump and
+   * deploys fumpad itself.
+   */
+  genesis?: string[];
 }): Promise<Validator> {
   const rpcPort = opts.rpcPort ?? 8899;
   const so = join(CONTRACTS, "target/deploy/fumpad.so");
-  if (!existsSync(so)) throw new Error("missing contracts/target/deploy/fumpad.so: run `anchor build -p fumpad` in contracts/");
-  for (const f of ["dbc_mainnet.so", "damm_v2_mainnet.so", "damm_v2_migration_config_mainnet.json"]) if (!existsSync(join(FIXTURES, f))) throw new Error(`missing fixture ${f}`);
+  if (!opts.genesis) {
+    if (!existsSync(so)) throw new Error("missing contracts/target/deploy/fumpad.so: run `anchor build -p fumpad` in contracts/");
+    for (const f of ["dbc_mainnet.so", "damm_v2_mainnet.so", "damm_v2_migration_config_mainnet.json"]) if (!existsSync(join(FIXTURES, f))) throw new Error(`missing fixture ${f}`);
+  }
   const ledger = process.env.FUMPAD_LEDGER_DIR ?? join(tmpdir(), `fumpad-ledger-${rpcPort}`);
   rmSync(ledger, { recursive: true, force: true });
   const probe = new Connection(`http://127.0.0.1:${rpcPort}`);
   if (await probe.getSlot().then(() => true, () => false)) throw new Error(`something is already serving RPC on port ${rpcPort} (stop the other validator first)`);
-  const pyth = writePythFixture(opts.solUsd ?? 150);
   const authPath = join(LOCAL, "upgrade-authority.json");
   writeFileSync(authPath, JSON.stringify(Array.from(opts.upgradeAuthority.secretKey)));
   const base = [
@@ -170,6 +178,9 @@ export async function startValidator(opts: {
     "--ledger", ledger,
     "--rpc-port", String(rpcPort),
     "--faucet-port", String(rpcPort + 1001),
+    // keep the whole history: the default (10,000 shreds) purges old slots after a few minutes of traffic (a
+    // program deploy alone is ~1,500 shreds) and getSignaturesForAddress then fails with "Transaction … not found"
+    "--limit-ledger-size", "50000000",
     // FUMPAD_GOSSIP_PORT: run a second local stack next to another one (gossip + dynamic ports otherwise collide)
     ...(process.env.FUMPAD_GOSSIP_PORT
       ? ["--gossip-port", process.env.FUMPAD_GOSSIP_PORT, "--dynamic-port-range", `${Number(process.env.FUMPAD_GOSSIP_PORT) + 1}-${Number(process.env.FUMPAD_GOSSIP_PORT) + 40}`]
@@ -178,12 +189,14 @@ export async function startValidator(opts: {
   const genesis = [
     "--reset",
     ...(opts.slotsPerEpoch ? ["--slots-per-epoch", String(opts.slotsPerEpoch)] : []),
-    "--upgradeable-program", FUMPAD_PROGRAM_ID.toBase58(), so, authPath,
-    "--bpf-program", DBC_PROGRAM_ID.toBase58(), join(FIXTURES, "dbc_mainnet.so"),
-    "--bpf-program", DAMM_V2_PROGRAM_ID.toBase58(), join(FIXTURES, "damm_v2_mainnet.so"),
-    "--account", "-", join(FIXTURES, "damm_v2_migration_config_mainnet.json"),
-    "--account", "-", pyth,
-    ...(opts.global ? ["--account", "-", await writeGlobalFixture(opts.global)] : []),
+    ...(opts.genesis ?? [
+      "--upgradeable-program", FUMPAD_PROGRAM_ID.toBase58(), so, authPath,
+      "--bpf-program", DBC_PROGRAM_ID.toBase58(), join(FIXTURES, "dbc_mainnet.so"),
+      "--bpf-program", DAMM_V2_PROGRAM_ID.toBase58(), join(FIXTURES, "damm_v2_mainnet.so"),
+      "--account", "-", join(FIXTURES, "damm_v2_migration_config_mainnet.json"),
+      "--account", "-", writePythFixture(opts.solUsd ?? 150),
+      ...(opts.global ? ["--account", "-", await writeGlobalFixture(opts.global)] : []),
+    ]),
     ...(opts.extraArgs ?? []),
   ];
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
