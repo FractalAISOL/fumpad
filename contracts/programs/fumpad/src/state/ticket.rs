@@ -28,7 +28,8 @@ pub struct Ticket {
     pub source: TicketSource,
     /// 0 DBC, 1 DAMM v2.
     pub venue: u8,
-    /// When `attest_sell` ran; claimable from `attested_at + ticket_challenge_secs`.
+    /// Effective attestation time: when `attest_sell` ran, or later when the per-coin rate cap deferred the ticket
+    /// (M-1). Claimable from `attested_at + ticket_challenge_secs`; the guardian may void it until then.
     pub attested_at: i64,
     pub rent_payer: Pubkey,
     /// The `consumed` marker of the attested sell.

@@ -261,6 +261,8 @@ pub struct DammPool {
     pub creator: Pubkey,
     pub token_b_amount: u64,
     pub total_b_fee: u128,
+    /// 0 = enabled, 1 = disabled by the DAMM v2 operator.
+    pub pool_status: u8,
 }
 
 pub fn read_damm_pool(info: &AccountInfo) -> Result<DammPool> {
@@ -276,6 +278,7 @@ pub fn read_damm_pool(info: &AccountInfo) -> Result<DammPool> {
         token_b_amount: rd_u64(&d, DAMM_POOL_TOKEN_B_AMOUNT),
         total_b_fee: rd_u128(&d, DAMM_POOL_TOTAL_LP_B_FEE)
             .wrapping_add(rd_u64(&d, DAMM_POOL_TOTAL_PROTOCOL_B_FEE) as u128),
+        pool_status: d[DAMM_POOL_STATUS],
     })
 }
 

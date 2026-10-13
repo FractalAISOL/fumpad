@@ -243,6 +243,9 @@ pub struct TicketAttested {
     pub keepers: [Pubkey; 2],
     pub submitter: Pubkey,
     pub ts: i64,
+    /// = `Ticket.attested_at`: `ts`, or later when the rate cap deferred the ticket (M-1). Claimable from
+    /// `effective_at + ticket_challenge_secs`.
+    pub effective_at: i64,
 }
 
 #[event]
@@ -266,6 +269,10 @@ pub struct TicketVoided {
     pub reason: u8,
     pub authority: Pubkey,
     pub ts: i64,
+    /// The coin PDA (off-chain review L3: the void tx now also references `coin` and `mint`).
+    pub coin: Pubkey,
+    /// L-2: the sell's replay marker was reopened — a corrected attestation of the same trade may follow.
+    pub reopened: bool,
 }
 
 #[event]

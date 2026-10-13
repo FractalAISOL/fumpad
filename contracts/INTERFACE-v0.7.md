@@ -7,6 +7,10 @@ prefix `interface:` and a one-line note. Anything not yet verified on the mainne
 - Program: `fumpad` (Anchor 1.2.1), **new program id `5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb`** (D39; not
   deployed anywhere). `declare_id!` in `programs/fumpad/src/lib.rs` (the keypair lives in `contracts/target/deploy/fumpad-keypair.json`, git-ignored; back it up). Fresh layouts; no
   v0.6 data migration. `fumpad_lp_locker` is deleted.
+- **Devnet and mainnet use different fumpad program ids.** `5YMF…S9Fb` is the devnet (and test) id — its keypair is
+  the devnet one; the mainnet build gets its own keypair and `declare_id!`. Every attestation message carries both the
+  program id and `Global.cluster_tag` (0 mainnet, 1 devnet, 2 local), and the program checks both, so an
+  attestation signed for one cluster never verifies on another. Keepers still use separate keys per cluster.
 - External programs (same ids on mainnet + devnet; tests run the **mainnet** binaries, D37):
   DBC `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN` (0.2.1), DAMM v2 `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`
   (0.2.4), SPL Token, Token-2022, ATA, Ed25519 precompile `Ed25519SigVerify111111111111111111111111111`, instructions
@@ -99,14 +103,19 @@ top-level DBC `swap2` (gets the min fee) → `register_coin`).
 
 Accounts: creator (s,w; pays Coin + reward-vault rent), global, mint (Token-2022 mint = pool base mint), dbc_config,
 dbc_pool, coin (w, init `["coin", mint]`), reward_pool (PDA), reward_vault (w; `ATA(reward_pool, mint,
-Token-2022)`, created idempotently), token_2022_program, associated_token_program, system_program [ev].
+Token-2022)`, created idempotently), token_2022_program, associated_token_program, system_program, **launch_signer
+(s; optional — required iff `Global.params.launch_signer != default`, else pass the fumpad program id)** [ev].
 
-Checks: not `PAUSE_LAUNCH`; `dbc_pool` owned by DBC with the `VirtualPool` discriminator; `pool.base_mint == mint`,
+Checks: not `PAUSE_LAUNCH`; launch binding: when `Global.params.launch_signer` is set, `launch_signer` must be that
+key and sign (`Unauthorized` otherwise) — the API co-signs every launch tx it builds, like the vanity mint; `dbc_pool` owned by DBC with the `VirtualPool` discriminator; `pool.base_mint == mint`,
 `pool.config == dbc_config`, `pool.creator == creator`; `pool.migration_progress == 0` (pre-bonding, not complete);
 `dbc_config ∈ Global.configs` and still passes the §5.4 structural checks. Snapshots into Coin: reward terms + fee
 split (from `Global.params`), `launch_slot = pool.activation_point`, `launch_window_slots` = DBC fee scheduler
 `number_of_period × period_frequency` (0 if no scheduler), `total_supply = config.pre_migration_token_supply`.
 Event `CoinRegistered`.
+DBC 0.2.1 gives its min fee (`enable_first_swap_with_min_fee`) to ONE swap of the pool-creation tx only: further
+top-level swaps in the same tx pay the 99% scheduler fee (verified on the mainnet binary,
+`review_v07::verify_dbc_min_fee_goes_to_one_swap_per_launch_tx`), so `register_coin` doesn't introspect the tx.
 
 ### Router
 | Ix | Args | Accounts |
@@ -123,6 +132,7 @@ Remaining accounts (pass-through, only the trader signs; 15 ≤ n ≤ 24 for DBC
   12 event_authority, 13 program.
 
 Checks: buy not `PAUSE_TRADE` (sells never paused); coin `Curve` → DBC, `Graduated` → DAMM, else `WrongCoinStatus`;
+DAMM pool `pool_status` (offset 481) must be 0 — a pool disabled by its operator → `PoolDisabled` (buys and sells);
 `venue_program` id; pool == `coin.dbc_pool` / `coin.damm_pool`; base mint == `coin.mint`, quote mint == WSOL;
 payer == trader; referral = None (keeps the fee measurement exact); base account = the trader's **canonical**
 `ATA(trader, mint, Token-2022)`; quote account = an SPL-Token WSOL account owned by the trader; sell `mode` is
@@ -146,6 +156,10 @@ Zero claimed → `NothingToClaim` (the launch flag is still set when the window 
 Event `FeesClaimed`.
 
 `claim_lp_fees()` — DAMM v2 position fees (permissionless). Requires `Graduated` and `launch_fees_settled`.
+`damm_position` = **any** DAMM v2 position of `coin.damm_pool` whose NFT the `fee_claimer` PDA holds (normally
+`coin.damm_position`, the DBC-created 100%-locked one; `position.pool != coin.damm_pool` → `WrongVenue`; DAMM itself
+requires the NFT holder `fee_claimer` to sign). Pass the position of the NFT you claim for; `coin.damm_position` is
+not enforced (REVIEW-v0.7 H-1: a third-party position handed to `fee_claimer` before `graduate` can't strand ours).
 Accounts: caller (s,w), global, coin (w), mint, damm_pool, damm_position (w), position_nft_account,
 damm_token_a_vault (w), damm_token_b_vault (w), fee_claimer (w), fee_wsol (w), reward_vault (w; token-a
 destination), wsol_mint, token_program, token_2022_program, system_program, damm_pool_authority,
@@ -193,12 +207,15 @@ dbc_program [ev]. Permissionless; not `PAUSE_GRADUATE`; coin `Curve|Complete`.
 2. Verifies the DAMM v2 pool: owner DAMM, `pool == PDA["pool", damm_config, max, min]`, `damm_config` owned by DAMM
    with `pool_creator_authority == DBC pool authority`, `token_a_mint == mint`, `token_b_mint == WSOL`,
    `creator == DBC pool authority`; the position: `position.pool == damm_pool`, `unlocked == 0`, `vested == 0`,
-   `permanent_locked ≥ 99.99%` of pool liquidity (100% observed on mainnet DBC 0.2.1), NFT account =
-   `PDA["position_nft_account", position.nft_mint]` with token owner `fee_claimer` and amount 1. Records
-   `damm_pool`, `damm_position`, `status = Graduated`.
-3. `withdraw_leftover` if not yet withdrawn (DBC flag), measured as the reward-vault delta (`leftover_tokens` = 0 when
-   someone else already called DBC's permissionless `withdraw_leftover`); `withdraw_migration_fee`
-   (partner) if not yet withdrawn; `partner_withdraw_surplus` if not yet withdrawn — both into `fee_wsol`, unwrapped.
+   `permanent_locked > 0`, NFT account = `PDA["position_nft_account", position.nft_mint]` with token owner
+   `fee_claimer` and amount 1. **Never compared with pool totals** (REVIEW-v0.7 H-1: anyone can add or lock
+   liquidity; extra third-party liquidity no longer blocks `graduate`). Records `damm_pool`, `damm_position`,
+   `status = Graduated`. Keepers pass the NFT mint of the DBC migration (first position).
+3. `withdraw_leftover` if not yet withdrawn (DBC flag), measured as the reward-vault delta; when someone else already
+   called DBC's permissionless `withdraw_leftover`, `leftover_tokens` = reward-vault balance − `coin.buyback_tokens`
+   (REVIEW-v0.7 I-1; donations to the vault count); `withdraw_migration_fee` (partner) if not yet withdrawn;
+   `partner_withdraw_surplus` if not yet withdrawn — both into `fee_wsol`, unwrapped. WSOL already sitting in a
+   pre-funded `fee_wsol` is excluded from `surplus` and the budget and returned to the caller with the rent.
 4. Spends migration fee + surplus (the "setup budget"), in order: migrator refund (`coin.migrator_cost`, capped)
    → caller's own net rent for this ix → observations rent (pre-funded into the PDA) → claim-queue rent
    (pre-funded) → remainder `platform_fees_unclaimed` (a step the budget can't fully fund is funded partially unless
@@ -217,7 +234,8 @@ dbc_program [ev]. Permissionless; not `PAUSE_GRADUATE`; coin `Curve|Complete`.
 - `Curve`: pool == `coin.dbc_pool`; **keeper only**; spacing ≥ `oracle_min_spacing_secs` vs the previous pre-grad
   sample; DBC `sqrt_price` (offset 280) → `coin.pregrad_sample_price_q64/ts` (no ring; the observations account in
   the group is ignored). Used only by the pre-grad buyback guard, never for claims (D1).
-- `Complete` → `WrongCoinStatus`. Event `SampleRecorded` per group.
+- `Complete` → the group is **skipped** (no sample, no event, no error; the rest of the batch proceeds). Event
+  `SampleRecorded` per sampled group.
 
 ### Tickets (attestations, D31)
 `attest_sell()` — no args. Accounts: keeper (s,w; ∈ `Global.keepers`; pays rent of position/ticket/consumed),
@@ -231,25 +249,37 @@ Checks (fail → error, nothing created): not `PAUSE_ATTEST`; `program_id`, `clu
 venue bit0 = 0 → `pool == coin.dbc_pool`, 1 → `pool == coin.damm_pool ≠ default`; `trader ∉ {default,
 coin.creator}`; `usd_cents ≥ coin.rewards.min_sell_usd_cents`; `0 < ticket_tokens ≤ base_amount`; `quote_gross > 0`;
 `ticket_price_q64 > 0`; `slot ≥ coin.launch_slot`; `block_time ≥ coin.created_at − 60`; `block_time ≤ now + 60`;
-`now − block_time ≤ max_attest_age_secs`; `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs`; per-coin rate
-cap (`max_attest_tokens_per_hour_bps` of `coin.total_supply` over a sliding hour, §5.3; `AttestRateLimited` = retry
-later); `position.open_count < coin.rewards.max_open_tickets`. Creates the Ticket (`Open`, `attested_at = now`,
-`rent_payer = keeper`). Event `TicketAttested`.
+`now − block_time ≤ max_attest_age_secs`; `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs`;
+`position.open_count < coin.rewards.max_open_tickets`; replay: the sell marker must not exist — or be **reopened**
+(`kind = 2`, set by `void_ticket(.., reopen = true)`) with a `message_hash` different from this message's
+(`AlreadyConsumed` otherwise); a reopened marker is reused (its original `rent_payer` kept) and turned back into a
+live sell marker. **Rate cap (M-1): never rejects** — the per-coin leaky bucket (§5.3) gives the ticket an
+`effective_at ≥ now` (= now while the coin is under `max_attest_tokens_per_hour_bps` of supply per hour, later when
+over it). Creates the Ticket (`Open`, `attested_at = effective_at`, `rent_payer = keeper`). Event `TicketAttested`
+(`effective_at`).
 
-`attest_rebuy()` — no args. Accounts: keeper (s,w), global, coin, ticket (w), position (w), consumed (w; rebuy PDA,
+`attest_rebuy()` — no args. Accounts: keeper (s,w), global, coin (**w**), ticket (w), position (w), consumed (w; rebuy PDA,
 created), claim_queue (w; **optional**: required iff the ticket is `Queued`, else pass the fumpad program id),
 instructions sysvar, system_program [ev]. Same Ed25519 scheme over the 236-byte rebuy message (§4.2).
 Checks: not `PAUSE_ATTEST`; message ticket/mint/owner match; ticket `Open|Queued`; `ticket.sell_ts ≤ block_time ≤
 ticket.sell_ts + rebuy_window_secs`; `now − block_time ≤ max_attest_age_secs`; `debit_tokens > 0`. Debits
 `min(debit, tokens)`; at 0 tokens (or 0 owed) → `Voided` and off the open list; a `Queued` ticket's queue entry is
-updated (lowered or removed) in the same ix. Event `TicketDebited`.
+updated (lowered or removed) in the same ix. The debited tokens' rate-cap capacity is released (§5.3). Event
+`TicketDebited`.
 
-`void_ticket(reason: u8)` — authority (s; guardian or admin), global, ticket (w), position (w) [ev]. Ticket `Open`
-and `now < attested_at + ticket_challenge_secs` (`ChallengeWindowOver` otherwise). → `Voided`. Event `TicketVoided`.
+`void_ticket(reason: u8, reopen: bool)` — authority (s; guardian or admin), global, coin (w; `["coin",
+ticket.mint]`), mint (= `ticket.mint`), ticket (w), position (w), consumed (w; = `ticket.consumed`, the sell marker)
+[ev]. Ticket `Open` and `now < attested_at + ticket_challenge_secs` (`ChallengeWindowOver` otherwise; `attested_at`
+is the effective time, so a deferred ticket's window ends later). → `Voided`; its tokens' rate-cap capacity is
+released. `reopen = true` (the attestation was wrong, the trade may be honest — engine bug): the sell marker becomes
+`kind = 2` so ONE corrected attestation of the same trade (any message except the voided one) can follow while
+`now − block_time ≤ max_attest_age_secs`; `reopen = false` (fraud) keeps the trade consumed forever. Event
+`TicketVoided` (`coin`, `reopened`).
 
 `close_consumed()` — caller (s), global, consumed (w; closed → rent_payer), rent_payer (w; = consumed.rent_payer),
 ticket (= consumed.ticket; must not be a live fumpad account) [ev]. Also requires `now > consumed.block_time +
-MAX_MAX_ATTEST_AGE_SECS` (7 days), so a closed marker can never let the same trade be attested again.
+MAX_MAX_ATTEST_AGE_SECS` (7 days), so a closed marker can never let the same trade be attested again (a reopened
+marker points at the voided ticket and follows the same rule).
 Event `ConsumedClosed`.
 
 ### Claims (v0.6 rules + challenge window; pay from the reward vault, signed by `reward_pool`)
@@ -261,7 +291,7 @@ Event `ConsumedClosed`.
 | `withdraw_escrow` | — | owner (s), global, mint, ticket (w), escrow (w), reward_pool, destination (w), escrow_payer (w), token_program [ev] |
 | `set_auto_claim` | `enabled: bool` | wallet (s), position (w) [ev] |
 | `close_ticket` | — | caller (s), global, ticket (w; closed → rent_payer), rent_payer (w; = ticket.rent_payer), position (w), claim_queue (optional, w), coin [ev] |
-| `close_position` | — | signer (s; the wallet or `position.rent_payer`), position (w; closed → rent_payer), rent_payer (w) [ev]; remaining = ticket PDAs seq `0..next_ticket_seq` (≤ 64), none live |
+| `close_position` | — | signer (s; the wallet, or `position.rent_payer` **only while `auto_claim_opt_out == 0`** — L-1), position (w; closed → rent_payer), rent_payer (w) [ev]; remaining = ticket PDAs seq `0..next_ticket_seq` (≤ 64), none live |
 
 `claim`/`claim_for` = v0.6 `decide_claim` plus: `now ≥ ticket.attested_at + ticket_challenge_secs`
 (`TicketInChallenge`). Pause `PAUSE_CLAIMS` (claim, claim_for, process_queue, withdraw_escrow). `close_ticket` is
@@ -319,7 +349,7 @@ sell attestation tx (Ed25519 ix + `attest_sell`, keeper fee payer) is ≈ 990 by
 
 ## 5. Account layouts (Anchor accounts: 8-byte discriminator + borsh)
 
-Sizes incl. discriminator: Global 1,044 · Coin 546 · Position 315 · Ticket 276 · Consumed 82 · ClaimQueue 81,976 ·
+Sizes incl. discriminator: Global 1,044 · Coin 546 · Position 315 · Ticket 276 · Consumed **98** · ClaimQueue 81,976 ·
 Observations 8,280 (unit test `state::size_tests::account_sizes`).
 
 ### 5.1 `Params` (borsh, in `Global.params` / `pending_params`)
@@ -331,13 +361,16 @@ oracle_min_samples u16, keeper_stale_secs i64, buyback_max_deviation_bps u16, bu
 `sol_usd_feed_id [u8;32]` (pinned Pyth SOL/USD) · `max_price_age_secs u64` (engine's max |block_time −
 publish_time|; default **60**, bounds 30–300) · `max_attest_age_secs i64` (default 86,400; bounds 3,600–604,800) ·
 `max_attest_tokens_per_hour_bps u16` (default 2,000; bounds 1–10,000) · `ticket_challenge_secs i64` (default 21,600;
-bounds 3,600–172,800) · `attest_threshold u8` (must be 2 in v1).
+bounds 3,600–172,800) · `attest_threshold u8` (must be 2 in v1) · **`launch_signer Pubkey`** (default
+`Pubkey::default()` = no launch co-signer; otherwise `register_coin` needs its signature — off-chain review L1;
+changed like every param: `queue_params` → 48 h → `execute_params`, guardian can cancel). `Params` = 168 bytes (was 136).
 
 ### 5.2 `Global` — PDA `["global"]`
 `bump u8, admin Pubkey, platform_treasury Pubkey, guardian Pubkey, keepers [Pubkey;3], keeper_added_at [i64;3],
 cluster_tag u8, paused u8, pause_expires_at i64, params Params, pending_params Params, pending_eta i64,
 pending_admin Pubkey, pending_treasury Pubkey, pending_guardian Pubkey, pending_admin_eta i64, configs [Pubkey;8],
-pending_config Pubkey, pending_config_add u8, pending_config_eta i64, reserved [u8;128]`.
+pending_config Pubkey, pending_config_add u8, pending_config_eta i64, reserved [u8;64]` (size unchanged: `Params`
+grew by 32 bytes, twice).
 Pause bits: `PAUSE_LAUNCH` 1, `PAUSE_TRADE` 2 (router buys, buybacks), `PAUSE_CLAIMS` 4, `PAUSE_GRADUATE` 8
 (`migrate_pool`, `graduate`), `PAUSE_ATTEST` 16.
 
@@ -349,13 +382,18 @@ buyback_lamports u64, fees_claimed_lamports u64, buyback_spent_lamports u64, buy
 router_volume_lamports u64, router_trade_count u64, tickets_created u64, tokens_paid_out u64,
 rewards RewardTerms {trigger_multiple_bps u32, claim_bps u16, max_claim_pool_bps u16, min_sell_usd_cents u64,
 min_hold_secs i64, rebuy_window_secs i64, claim_window_secs i64, max_open_tickets u8},
-fee_split {buyback_bps u16, platform_bps u16, creator_bps u16}, attest_bucket_start i64, attest_bucket_tokens u64,
-attest_prev_bucket_tokens u64, pregrad_sample_price_q64 u128, pregrad_sample_ts i64, migrator Pubkey,
+fee_split {buyback_bps u16, platform_bps u16, creator_bps u16}, attest_cursor i64, attest_tokens_total u64,
+attest_released_tokens u64, pregrad_sample_price_q64 u128, pregrad_sample_ts i64, migrator Pubkey,
 migrator_cost u64, migration_fee_lamports u64, leftover_tokens u64, reserved [u8;64]`.
 Lamport invariant: `lamports == rent_exempt_min + creator_fees_unclaimed + platform_fees_unclaimed +
 buyback_lamports` (tested).
-Rate cap (sliding hour): bucket = `now / 3600`; on a new bucket `prev = (bucket == old + 1) ? cur : 0`, `cur = 0`;
-allowed iff `prev × (3600 − now % 3600) / 3600 + cur + ticket_tokens ≤ total_supply × bps / 10,000`.
+Rate cap (M-1: leaky bucket, defers, never rejects): `cap = max(1, total_supply × max_attest_tokens_per_hour_bps /
+10,000)` tokens per 3,600 s. `attest_sell`: `cursor = max(attest_cursor, now) + ⌈tokens × 3600 / cap⌉`,
+`effective_at = max(now, cursor − 3600)` (a full hour's cap is effective at once, the rest is spread at the cap
+rate). `attest_rebuy` (debited tokens) and `void_ticket` (remaining tokens) release capacity when the coin has a
+backlog (`attest_cursor > now`) and the ticket's `attested_at + 3600 > now`: `attest_cursor = max(now, attest_cursor −
+⌊tokens × 3600 / cap⌋)` (re-used at the end of the backlog). `attest_tokens_total` / `attest_released_tokens` are
+cumulative stats.
 
 ### 5.4 Config allow-list validation (`queue_config` add / `execute_config` / `register_coin`)
 DBC `PoolConfig` (owner DBC, 1,048 bytes, discriminator `sha256("account:PoolConfig")[..8]`), byte offsets incl.
@@ -378,10 +416,14 @@ auto_claim_opt_out u8, rent_payer Pubkey, tickets_created u64, reserved [u8;32]`
 `bump u8, owner Pubkey, mint Pubkey, seq u64, tokens u64, original_tokens u64, sell_price_q64 u128,
 sell_usd_cents u64, sell_ts i64 (= attested block_time), status u8 (0 Open, 1 Queued, 2 Claimed, 3 Expired,
 4 Voided, 5 Escrowed), queued_at i64, claim_amount u64, claimed_at i64, escrow_payer Pubkey, source u8 (0 Outside,
-1 Router), venue u8 (0 DBC, 1 DAMM v2), attested_at i64, rent_payer Pubkey, consumed Pubkey, reserved [u8;16]`.
+1 Router), venue u8 (0 DBC, 1 DAMM v2), attested_at i64 (**effective** attestation time: the `attest_sell` time, or
+later when the rate cap deferred the ticket; claimable from `attested_at + ticket_challenge_secs`), rent_payer Pubkey,
+consumed Pubkey, reserved [u8;16]`.
 
 ### 5.7 `Consumed`
-`bump u8, kind u8 (0 sell, 1 rebuy), ticket Pubkey, rent_payer Pubkey, block_time i64`.
+`bump u8, kind u8 (0 sell, 1 rebuy, 2 sell reopened by the guardian), ticket Pubkey, rent_payer Pubkey,
+block_time i64, message_hash [u8;16]` (sell markers: `sha256(284-byte message)[..16]` of the attestation that created
+or last re-used it; zero for rebuy markers). 98 bytes.
 
 ### 5.8 `ClaimQueue`, `Observations` (zero-copy; unchanged from v0.6)
 ClaimQueue: `mint Pubkey, len u16, bump u8, _pad [u8;5], total_owed u64, entries [QueueEntry{ticket, owner,
@@ -410,9 +452,9 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 - `SampleRecorded { mint, venue u8, price_q64 u128, fallback bool, ts }`
 - `TicketAttested { mint, owner, ticket, seq u64, pool, venue u8, source u8, signature [u8;64], ix_key u32,
   base_amount, quote_gross, tokens, sell_price_q64 u128, sell_usd_cents, pyth_publish_time i64, slot u64,
-  sell_ts i64, keepers [Pubkey;2], submitter, ts }`
+  sell_ts i64, keepers [Pubkey;2], submitter, ts, effective_at i64 }` (`effective_at` = `Ticket.attested_at`)
 - `TicketDebited { ticket, mint, owner, signature [u8;64], ix_key u32, debited, remaining, voided bool, ts }`
-- `TicketVoided { ticket, mint, owner, reason u8, authority, ts }`
+- `TicketVoided { ticket, mint, owner, reason u8, authority, ts, coin, reopened bool }`
 - `ConsumedClosed { consumed, ticket, rent_payer, ts }`
 - `ClaimQueued { mint, ticket, owner, amount, queue_len u16, ts, triggered_by }`,
   `ClaimPaid { mint, ticket, owner, amount, from_queue bool, median_price_q64 u128, ts, triggered_by }`,
@@ -430,8 +472,29 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 6024 PriceDeviation · 6025 StaleSample · 6026 InsufficientSamples · 6027 SampleTooSoon · 6028 SampleTxNotIsolated ·
 6029 WouldCompleteCurve (reserved: buybacks cap the slice instead) · 6030 MissingAttestation · 6031 InvalidAttestation · 6032 NotEnoughKeeperSignatures ·
 6033 AttestationExpired · 6034 WrongCluster · 6035 PoolNotOfCoin · 6036 CreatorSell · 6037 BelowMinimumUsd ·
-6038 InvalidTicketAmount · 6039 StalePythPrice · 6040 AttestRateLimited · 6041 TooManyOpenTickets ·
+6038 InvalidTicketAmount · 6039 StalePythPrice · 6040 AttestRateLimited (reserved: no longer returned, M-1) ·
+6041 TooManyOpenTickets ·
 6042 AlreadyConsumed · 6043 ChallengeWindowOver · 6044 TicketInChallenge · 6045 TicketNotOpen · 6046 TicketExpired
 · 6047 TriggerNotMet · 6048 QueueFull · 6049 WalletQueueLimit · 6050 QueueAccountRequired · 6051 NoEscrow ·
 6052 AutoClaimDisabled · 6053 TicketNotClosable · 6054 ConsumedNotClosable · 6055 PositionNotEmpty ·
-6056 LamportInvariant · 6057 RebuyOutOfWindow.
+6056 LamportInvariant · 6057 RebuyOutOfWindow · **6058 PoolDisabled**.
+
+## 8. Changelog
+### 2026-10-13 — fixes of `REVIEW-v0.7.md` + off-chain review L1/L3 (services / app must follow)
+1. `register_coin`: optional trailing account `launch_signer` (signer) before the event-CPI pair; required when the
+   new param `Params.launch_signer` (appended Pubkey; `Params` 136 → 168 bytes, `Global.reserved` 128 → 64, Global
+   still 1,044) is set. Clients pass the fumpad program id when unset. `initialize_global` / `queue_params` /
+   `ParamsQueued` / `ParamsUpdated` / `GlobalInitialized` carry the longer `Params`.
+2. `void_ticket(reason u8, reopen bool)`: new arg `reopen`; accounts now authority, global, **coin (w), mint**,
+   ticket (w), position (w), **consumed (w)** [ev]. `TicketVoided` + trailing `coin Pubkey, reopened bool`.
+3. `attest_rebuy`: `coin` is now writable.
+4. `attest_sell` never returns `AttestRateLimited`; `Ticket.attested_at` / new trailing `TicketAttested.effective_at`
+   = effective time (may be in the future). Claimability and the void window run from it. Accepts a reopened marker.
+5. `Coin`: `attest_bucket_start/attest_bucket_tokens/attest_prev_bucket_tokens` → `attest_cursor i64,
+   attest_tokens_total u64, attest_released_tokens u64` (same offsets, same size).
+6. `Consumed`: + `message_hash [u8;16]` (82 → 98 bytes); `kind = 2` = reopened sell marker.
+7. `close_position`: the rent payer may sign only while `auto_claim_opt_out == 0`.
+8. `claim_lp_fees`: `damm_position` may be any `fee_claimer`-held position of the coin's pool (no `has_one`).
+9. `graduate`: no pool-share check; `leftover_tokens` recorded when a third party withdrew the leftover;
+   `Graduated.surplus` excludes a pre-funded `fee_wsol` balance (returned to the caller).
+10. Router: `PoolDisabled` (6058) for a disabled DAMM v2 pool. `record_samples`: `Complete` coins skipped.

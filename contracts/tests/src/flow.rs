@@ -98,6 +98,7 @@ impl Env {
                 token_2022_program: TOKEN_2022,
                 associated_token_program: ATA_PROGRAM,
                 system_program: SYSTEM,
+                launch_signer: None,
                 event_authority: ev_auth(),
                 program: fumpad::ID,
             },
@@ -369,7 +370,7 @@ impl Env {
                 coin: c.coin_pda(),
                 mint: c.mint,
                 damm_pool: coin.damm_pool,
-                damm_position: coin.damm_position,
+                damm_position: meteora::damm_position(nft_mint),
                 position_nft_account: meteora::damm_position_nft_account(nft_mint),
                 damm_token_a_vault: meteora::damm_vault(&c.mint, &coin.damm_pool),
                 damm_token_b_vault: meteora::damm_vault(&WSOL, &coin.damm_pool),
@@ -505,6 +506,25 @@ impl Env {
                 program: fumpad::ID,
             },
             fumpad::instruction::AttestRebuy {},
+        )
+    }
+
+    /// `void_ticket(reason, reopen)` signed by `authority` (accounts read from the ticket).
+    pub fn void_ticket_ix(&self, authority: &Pubkey, ticket: &Pubkey, reason: u8, reopen: bool) -> Instruction {
+        let t: fumpad::state::Ticket = self.fetch(ticket);
+        ix(
+            fumpad::accounts::VoidTicket {
+                authority: *authority,
+                global: self.global(),
+                coin: self.coin_pda(&t.mint),
+                mint: t.mint,
+                ticket: *ticket,
+                position: position_pda(&t.mint, &t.owner),
+                consumed: t.consumed,
+                event_authority: ev_auth(),
+                program: fumpad::ID,
+            },
+            fumpad::instruction::VoidTicket { reason, reopen },
         )
     }
 

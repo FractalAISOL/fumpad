@@ -26,7 +26,8 @@ pub struct AttestRebuy<'info> {
     pub keeper: Signer<'info>,
     #[account(seeds = [GLOBAL_SEED], bump = global.bump)]
     pub global: Box<Account<'info, Global>>,
-    #[account(seeds = [COIN_SEED, coin.mint.as_ref()], bump = coin.bump)]
+    /// Writable since M-1: a debit gives its tokens' rate-cap capacity back.
+    #[account(mut, seeds = [COIN_SEED, coin.mint.as_ref()], bump = coin.bump)]
     pub coin: Box<Account<'info, Coin>>,
     #[account(
         mut,
@@ -94,7 +95,14 @@ pub fn handle_attest_rebuy(ctx: Context<AttestRebuy>) -> Result<()> {
     )?;
     write_account(
         &consumed_info,
-        &Consumed { bump: consumed_bump, kind: CONSUMED_KIND_REBUY, ticket: ticket_key, rent_payer: keeper, block_time: r.block_time },
+        &Consumed {
+            bump: consumed_bump,
+            kind: CONSUMED_KIND_REBUY,
+            ticket: ticket_key,
+            rent_payer: keeper,
+            block_time: r.block_time,
+            message_hash: [0; 16],
+        },
     )?;
 
     // Debit (newest-first ordering across tickets is the engine's job; here: this ticket, capped at its tokens).
@@ -125,7 +133,10 @@ pub fn handle_attest_rebuy(ctx: Context<AttestRebuy>) -> Result<()> {
         t.status = TicketStatus::Voided;
         logic::remove_open(&mut ctx.accounts.position, &ticket_key);
     }
-    let (mint, owner, remaining) = (ctx.accounts.ticket.mint, ctx.accounts.ticket.owner, ctx.accounts.ticket.tokens);
+    let (mint, owner, remaining, effective_at) =
+        (ctx.accounts.ticket.mint, ctx.accounts.ticket.owner, ctx.accounts.ticket.tokens, ctx.accounts.ticket.attested_at);
+    // M-1: debited tokens no longer count toward the coin's hourly attestation cap.
+    ctx.accounts.coin.release_attest(now, debited, p.max_attest_tokens_per_hour_bps, effective_at);
     emit_event!(ctx, TicketDebited {
         ticket: ticket_key,
         mint,
