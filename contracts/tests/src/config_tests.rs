@@ -218,3 +218,46 @@ fn queue_config_rejects_non_fumpad_configs() {
     assert_eq!(d[m::CFG_MIGRATION_FEE_PCT], 1);
     assert_eq!(meteora::rd_u64(&d, m::CFG_PRE_MIGRATION_SUPPLY), meteora::TOTAL_SUPPLY);
 }
+
+/// `tests/vectors/dbc_config.json`: the exact DBC `create_config` instruction data (mainnet + devnet) the admin
+/// submits for the allow-listed FUMPAD configs, with the derived curve constants. Regenerate with
+/// `UPDATE_VECTORS=1 cargo test -p tests dbc_config_vectors`.
+#[test]
+fn dbc_config_vectors_match_checked_in_file() {
+    use anchor_lang::AnchorSerialize;
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let mut out = serde_json::Map::new();
+    out.insert(
+        "description".into(),
+        "DBC 0.2.1 create_config instruction data (discriminator + borsh ConfigParameters) for the FUMPAD configs. Accounts: config (new keypair, signer), fee_claimer = fumpad PDA [\"fee_claimer\"], leftover_receiver = fumpad PDA [\"reward_pool\"], quote_mint = WSOL, payer, system_program, DBC event authority, DBC program. Then queue_config(config, true) -> 48h -> execute_config.".into(),
+    );
+    out.insert("fee_claimer".into(), Pubkey::find_program_address(&[fumpad::FEE_CLAIMER_SEED], &fumpad::ID).0.to_string().into());
+    out.insert("leftover_receiver".into(), Pubkey::find_program_address(&[fumpad::REWARD_POOL_SEED], &fumpad::ID).0.to_string().into());
+    for (name, p, curve) in [
+        ("mainnet", meteora::mainnet_config_params(), meteora::MAINNET_CURVE),
+        ("devnet", meteora::devnet_config_params(), meteora::DEVNET_CURVE),
+    ] {
+        let mut data = meteora::IX_CREATE_CONFIG.to_vec();
+        p.serialize(&mut data).unwrap();
+        out.insert(
+            name.into(),
+            serde_json::json!({
+                "migration_quote_threshold": p.migration_quote_threshold.to_string(),
+                "migration_fee_percentage": p.migration_fee_percentage,
+                "sqrt_start_price": curve.0.to_string(),
+                "curve": [
+                    {"sqrt_price": curve.1.to_string(), "liquidity": curve.2.to_string()},
+                    {"sqrt_price": meteora::MAX_SQRT_PRICE.to_string(), "liquidity": curve.3.to_string()},
+                ],
+                "fee_scheduler": {"cliff_fee_numerator": meteora::SNIPE_CLIFF_FEE_NUMERATOR, "number_of_period": meteora::SNIPE_PERIODS, "period_frequency_slots": 1, "reduction_factor": meteora::SNIPE_REDUCTION},
+                "create_config_data_hex": hex(&data),
+            }),
+        );
+    }
+    let text = serde_json::to_string_pretty(&serde_json::Value::Object(out)).unwrap() + "\n";
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("vectors/dbc_config.json");
+    if std::env::var("UPDATE_VECTORS").is_ok() || !path.exists() {
+        std::fs::write(&path, &text).unwrap();
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}

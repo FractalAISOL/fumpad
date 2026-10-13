@@ -525,3 +525,5 @@ mod oracle_buyback_tests;
 pub(crate) mod rewards_tests;
 #[cfg(test)]
 mod router_tests;
+#[cfg(test)]
+mod vectors;
