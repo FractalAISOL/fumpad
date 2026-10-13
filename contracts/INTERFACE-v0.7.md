@@ -42,6 +42,18 @@ authority `["pool_authority"]`, DAMM pool `["pool", damm_config, max(mint, WSOL)
 `["position", nft_mint]`, NFT account `["position_nft_account", nft_mint]`; each program's `["__event_authority"]`.
 Mainnet DAMM v2 migration config used by DBC `Customizable`: `A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck`.
 
+Derived addresses for program id `5YMF…S9Fb` (they change with the program id): `global`
+`9FfSKTcQ5EiUs7JUtC7jMUcW8czCmi1D1ehqSvrTHLst`, `fee_claimer` `HMuSRiSV4PmiC4xkFbuqprXy7dY45C4mZQxDVqNTzJCk`,
+`reward_pool` `GAMMBr8LJLE2C1cuETe1dMY1XfzVmNdvEaRFeGi3chUv`, `buyback` `7b72kxr9g1cWsaW7LfDQGSHCHLX4goiYhqiGZc4v6GNF`,
+`fee_wsol` `J3gK9hWtupNTz95d5syFBW6VT3pzUVo5JuSFwezB6Yo6`, event authority `DpAyqXC6SwepXeUEBvxLsJ2UV6QQXjj1VsSxi9JLfbHw`.
+DBC event authority `8Ks12pbrD6PXxfty1hVQiE9sc289zgU1zHkvXhrSdriF`; DAMM v2 pool authority
+`HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC`, event authority `3rmHSu74h1ZcmAisVcWerTCiRDQbUrBKmcwptYGjHfet`.
+
+FUMPAD DBC configs: exact `create_config` instruction data for mainnet (85 SOL) and devnet (0.85 SOL) in
+`tests/vectors/dbc_config.json` (1% migration fee — DBC supports whole percents only; curve re-derived so the reward
+pool is exactly 80,000,000 tokens on a single-swap completion; extra swaps can only add rounding dust of a few base
+units on top).
+
 ## 2. Coin status machine
 
 ```
@@ -173,7 +185,8 @@ Checks: not `PAUSE_GRADUATE`; `virtual_pool == coin.dbc_pool`; payer == caller; 
 
 `graduate()` — caller (s,w), global, coin (w), mint, dbc_config, dbc_pool (w), dbc_quote_vault (w), dbc_base_vault
 (w), damm_config, damm_pool, damm_position, position_nft_account, fee_claimer (w), fee_wsol (w), reward_pool,
-reward_vault (w), wsol_mint, migrator (w; = `coin.migrator`, or the caller when none), observations (w, PDA),
+reward_vault (w), wsol_mint, migrator (w; = `coin.migrator`, or the caller's own key when none — may repeat the
+caller), observations (w, PDA),
 claim_queue (w, PDA), token_program, token_2022_program, system_program, dbc_pool_authority, dbc_event_authority,
 dbc_program [ev]. Permissionless; not `PAUSE_GRADUATE`; coin `Curve|Complete`.
 1. Requires the DBC pool migrated (`migration_progress == 3`, `is_migrated == 1`) — else `NotMigrated`.
@@ -183,11 +196,14 @@ dbc_program [ev]. Permissionless; not `PAUSE_GRADUATE`; coin `Curve|Complete`.
    `permanent_locked ≥ 99.99%` of pool liquidity (100% observed on mainnet DBC 0.2.1), NFT account =
    `PDA["position_nft_account", position.nft_mint]` with token owner `fee_claimer` and amount 1. Records
    `damm_pool`, `damm_position`, `status = Graduated`.
-3. `withdraw_leftover` if not yet withdrawn (DBC flag), measured as the reward-vault delta; `withdraw_migration_fee`
+3. `withdraw_leftover` if not yet withdrawn (DBC flag), measured as the reward-vault delta (`leftover_tokens` = 0 when
+   someone else already called DBC's permissionless `withdraw_leftover`); `withdraw_migration_fee`
    (partner) if not yet withdrawn; `partner_withdraw_surplus` if not yet withdrawn — both into `fee_wsol`, unwrapped.
 4. Spends migration fee + surplus (the "setup budget"), in order: migrator refund (`coin.migrator_cost`, capped)
    → caller's own net rent for this ix → observations rent (pre-funded into the PDA) → claim-queue rent
-   (pre-funded) → remainder `platform_fees_unclaimed`. Event `Graduated`.
+   (pre-funded) → remainder `platform_fees_unclaimed` (a step the budget can't fully fund is funded partially unless
+   that would leave a fresh PDA below the 0-byte rent minimum). `migrator_refund + caller_refund + setup_prefunded +
+   platform_fee = migration_fee + surplus` (tested). Event `Graduated`.
 
 `init_observations()` — payer (s,w), coin, observations (w, init), system_program. Requires `Graduated`.
 `init_claim_queue()` — payer (s,w), coin, claim_queue (w), system_program. Call 9× (one tx). Requires `Graduated`.
@@ -241,7 +257,7 @@ Event `ConsumedClosed`.
 |---|---|---|
 | `claim` | — | owner (s), global, coin (w), mint, ticket (w), position (w), claim_queue (w), observations, reward_pool, reward_vault (w), owner_token_account (w; any Token-2022 account of the owner for the mint), token_program (Token-2022) [ev] |
 | `claim_for` | — | keeper (s,w), global, coin (w), mint, ticket (w), position (w), claim_queue (w), observations, reward_pool, reward_vault (w), owner_ata (w; canonical ATA, may be missing), escrow (w; `["escrow", ticket]`), token_program, system_program [ev] |
-| `process_queue` | `max_entries: u8` | cranker (s,w), global, coin (w), mint, claim_queue (w), reward_pool, reward_vault (w), token_program, system_program [ev]; remaining = quadruples `[ticket (w), position (w), owner canonical ATA (w), escrow PDA (w)]` in queue order |
+| `process_queue` | `max_entries: u8` | cranker (s,w), global, coin (w), mint, claim_queue (w), reward_pool, reward_vault (w), token_program, system_program [ev]; remaining = quadruples `[ticket (w), position (w), owner canonical ATA (w), escrow PDA (w)]` in queue order (a legacy tx carries 5 quadruples; 13 need a v0 tx + ALT and ≈ 600k CU when all escrow) |
 | `withdraw_escrow` | — | owner (s), global, mint, ticket (w), escrow (w), reward_pool, destination (w), escrow_payer (w), token_program [ev] |
 | `set_auto_claim` | `enabled: bool` | wallet (s), position (w) [ev] |
 | `close_ticket` | — | caller (s), global, ticket (w; closed → rent_payer), rent_payer (w; = ticket.rent_payer), position (w), claim_queue (optional, w), coin [ev] |
@@ -302,6 +318,9 @@ by the signatures, pubkeys and **one** copy of the message all offsets point to 
 sell attestation tx (Ed25519 ix + `attest_sell`, keeper fee payer) is ≈ 990 bytes (legacy).
 
 ## 5. Account layouts (Anchor accounts: 8-byte discriminator + borsh)
+
+Sizes incl. discriminator: Global 1,044 · Coin 546 · Position 315 · Ticket 276 · Consumed 82 · ClaimQueue 81,976 ·
+Observations 8,280 (unit test `state::size_tests::account_sizes`).
 
 ### 5.1 `Params` (borsh, in `Global.params` / `pending_params`)
 `fee_buyback_share_bps u16, fee_platform_share_bps u16, fee_creator_share_bps u16` (sum 10,000; default 5,000 /
@@ -409,7 +428,7 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 · 6016 UnsupportedGlobalLayout · 6017 PoolNotFresh · 6018 NotMigrated · 6019 InvalidMigratedPool ·
 6020 LaunchWindowActive · 6021 NothingToClaim · 6022 LaunchFeesUnsettled · 6023 NothingToBuyBack ·
 6024 PriceDeviation · 6025 StaleSample · 6026 InsufficientSamples · 6027 SampleTooSoon · 6028 SampleTxNotIsolated ·
-6029 WouldCompleteCurve · 6030 MissingAttestation · 6031 InvalidAttestation · 6032 NotEnoughKeeperSignatures ·
+6029 WouldCompleteCurve (reserved: buybacks cap the slice instead) · 6030 MissingAttestation · 6031 InvalidAttestation · 6032 NotEnoughKeeperSignatures ·
 6033 AttestationExpired · 6034 WrongCluster · 6035 PoolNotOfCoin · 6036 CreatorSell · 6037 BelowMinimumUsd ·
 6038 InvalidTicketAmount · 6039 StalePythPrice · 6040 AttestRateLimited · 6041 TooManyOpenTickets ·
 6042 AlreadyConsumed · 6043 ChallengeWindowOver · 6044 TicketInChallenge · 6045 TicketNotOpen · 6046 TicketExpired
