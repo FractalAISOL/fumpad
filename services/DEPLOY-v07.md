@@ -164,6 +164,14 @@ setsecret() { railway variables --service "$1" --skip-deploys --set-from-stdin "
 ```
 1. The running v0.6 services keep serving the old program until each is redeployed below (devnet: a short mixed
    period is harmless). Have §2 done (program deployed, Global initialized, wallets funded) first.
+   **Except the indexer: stop it before the DB reset** (`railway down --service indexer`, or scale it to 0). A v0.6
+   indexer that is still running when the schema is dropped crashes, Railway restarts it, and it re-runs its own
+   migrations on the empty schema and backfills the OLD program from scratch. That is how the v0.6 coin
+   `SM5k4…fmbL` came back after the first v0.7 reset (its rows carry v0.6 data: `pool_seeded` 80M, trades from
+   `ASVE6…` transactions, `dbc_pool` NULL). Since then the v0.7 indexer binds the database to its program id
+   (meta `fumpad_program_id`; another program's DB is refused at start), deletes cursors of other program
+   versions instead of polling them, and logs an error listing coins it never registered. Leftovers:
+   `scripts/ops/purge-coin.ts <mint>` (dry run first; `--yes` applies; one mint per run).
 2. **DB reset** (§3), then **indexer**:
    ```sh
    railway variables --service indexer --skip-deploys --set "SERVICE_ENTRY=indexer/dist/main.js"

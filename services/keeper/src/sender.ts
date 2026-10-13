@@ -52,7 +52,7 @@ export function capPriority(microLamports: number, cuLimit: number, maxLamports:
 }
 
 export class Sender {
-  stats = { sent: 0, failed: 0, simulated: 0, lastPriority: 0, cappedPriority: 0 };
+  stats = { sent: 0, failed: 0, simulated: 0, quiet: 0, lastPriority: 0, cappedPriority: 0 };
 
   constructor(private conn: Connection, private payer: Keypair, private opts: SenderOpts, private log: Logger) {}
 
@@ -76,7 +76,11 @@ export class Sender {
     return [ComputeBudgetProgram.setComputeUnitPrice({ microLamports }), ...rest];
   }
 
-  async send(label: string, b: BuiltTx, o: { lookupTables?: AddressLookupTableAccount[]; retries?: number } = {}): Promise<SendResult> {
+  /**
+   * `quietCodes`: program errors that mean "nothing to do" for this job (e.g. NothingToClaim). They are still
+   * returned (`ok: false`, `code`) but logged at debug and not counted as failed sends.
+   */
+  async send(label: string, b: BuiltTx, o: { lookupTables?: AddressLookupTableAccount[]; retries?: number; quietCodes?: ReadonlySet<number> } = {}): Promise<SendResult> {
     const writable = [...new Map(b.instructions.flatMap((i) => i.keys.filter((k) => k.isWritable).map((k) => [k.pubkey.toBase58(), k.pubkey]))).values()];
     const want = await this.priorityFee(writable);
     const fee = capPriority(want, computeUnitLimit(b.instructions), this.opts.priorityMaxLamportsPerTx);
@@ -92,8 +96,12 @@ export class Sender {
         const sim = await this.conn.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
         this.stats.simulated++;
         const ok = !sim.value.err;
-        this.log.info({ job: label, dryRun: true, ok, err: sim.value.err, units: sim.value.unitsConsumed, ...(ok ? {} : { logs: (sim.value.logs ?? []).slice(-25) }) }, "simulated");
-        return { ok, simulated: true, code: customErrorCode(sim.value.err), error: ok ? undefined : JSON.stringify(sim.value.err), logs: sim.value.logs, unitsConsumed: sim.value.unitsConsumed };
+        const code = customErrorCode(sim.value.err);
+        if (!ok && code !== null && code !== undefined && o.quietCodes?.has(code)) {
+          this.stats.quiet++;
+          this.log.debug({ job: label, dryRun: true, code }, "nothing to do");
+        } else this.log.info({ job: label, dryRun: true, ok, err: sim.value.err, units: sim.value.unitsConsumed, ...(ok ? {} : { logs: (sim.value.logs ?? []).slice(-25) }) }, "simulated");
+        return { ok, simulated: true, code, error: ok ? undefined : JSON.stringify(sim.value.err), logs: sim.value.logs, unitsConsumed: sim.value.unitsConsumed };
       }
       try {
         const raw = tx.serialize();
@@ -106,6 +114,11 @@ export class Sender {
         if (e instanceof SendTransactionError || e instanceof TxFailedError) {
           const logs = e instanceof TxFailedError ? e.logs : e.logs;
           const code = customErrorCode(e instanceof TxFailedError ? e.err : e.message);
+          if (code !== null && code !== undefined && o.quietCodes?.has(code)) {
+            this.stats.quiet++;
+            this.log.debug({ job: label, code }, "nothing to do");
+            return { ok: false, code, error: e.message.split("\n")[0], logs };
+          }
           this.stats.failed++;
           // The simulation / execution logs are what explains a failure ("Simulation failed" alone
           // doesn't): keep the tail, where the failing program logs its error.

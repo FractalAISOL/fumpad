@@ -86,6 +86,15 @@ export interface ApiConfig {
    * logs it loudly; every other route keeps working.
    */
   waitlistDisabledReason?: string;
+  // ── Coin image proxy (GET /v1/img/:mint, V7-L6) ──────────────────────────
+  /** Per-IP image requests per minute (a board renders ~50 tiles). */
+  imgRateLimitPerMin: number;
+  /** Largest image accepted from a creator's host. */
+  imgMaxBytes: number;
+  /** In-memory image cache budget (bytes). */
+  imgCacheBytes: number;
+  /** ipfs:// images are fetched through this https gateway. */
+  ipfsGateway: string;
 }
 
 /** Outside production only: the ip_hash key when WAITLIST_IP_SALT is unset. */
@@ -148,6 +157,10 @@ export function loadApiConfig(env = process.env): ApiConfig {
     launchRpcTimeoutMs: Number(env.LAUNCH_RPC_TIMEOUT_MS ?? 5_000),
     waitlistRateLimitPerMin: Number(env.WAITLIST_RATE_LIMIT_PER_MIN ?? 5),
     waitlistPerIpPerDay: Number(env.WAITLIST_PER_IP_PER_DAY ?? 20),
+    imgRateLimitPerMin: Number(env.IMG_RATE_LIMIT_PER_MIN ?? 600),
+    imgMaxBytes: Number(env.IMG_MAX_BYTES ?? 2 * 1024 * 1024),
+    imgCacheBytes: Number(env.IMG_CACHE_MB ?? 64) * 1024 * 1024,
+    ipfsGateway: env.IPFS_GATEWAY || "https://ipfs.io/ipfs/",
     ...waitlistConfig(env, prod),
   };
 }

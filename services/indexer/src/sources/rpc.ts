@@ -58,6 +58,7 @@ export function cursorTarget(sigs: ConfirmedSignatureInfo[], missing: string[], 
 
 export class RpcSource {
   private running = false;
+  private pruned = false;
   private pending = false;
   stats = { polls: 0, fetched: 0, gapsFilled: 0, errors: 0, lastPollAt: 0, missing: 0, retried: 0, gaveUp: 0, hints: 0, hintsIngested: 0, hintsIgnored: 0 };
   /** signature → first time getTransaction returned nothing for it (retry queue). */
@@ -72,6 +73,12 @@ export class RpcSource {
       `INSERT INTO cursors (address, kind) VALUES ($1, 'program') ON CONFLICT DO NOTHING`,
       [FUMPAD_PROGRAM_ID.toBase58()],
     );
+    if (this.pruned) return;
+    // This source only ever follows the current program. Any other row is a previous program version's
+    // (v0.6: its program id, the LP locker, PumpSwap pools): polling it re-ingested old history and burned RPC.
+    const gone = await this.db.query<{ address: string; kind: string }>("DELETE FROM cursors WHERE address <> $1 RETURNING address, kind", [FUMPAD_PROGRAM_ID.toBase58()]);
+    if (gone.rows?.length) this.log.warn({ removed: gone.rows }, "removed cursors of another program version (not polled)");
+    this.pruned = true;
   }
 
   /** Signatures waiting in the retry queue (for tests / health). */
@@ -99,7 +106,8 @@ export class RpcSource {
       await this.ensureCursors();
       n += await this.retryMissing();
       const cursors = await this.db.query<{ address: string; last_signature: string | null; last_slot: string; backfill_done: boolean }>(
-        "SELECT address, last_signature, last_slot, backfill_done FROM cursors ORDER BY kind DESC, address",
+        "SELECT address, last_signature, last_slot, backfill_done FROM cursors WHERE address = $1",
+        [FUMPAD_PROGRAM_ID.toBase58()],
       );
       for (const cur of cursors.rows) {
         n += await this.pollAddress(cur.address, cur.last_signature, cur.backfill_done ? "rpc" : "backfill");
@@ -287,7 +295,7 @@ export class RpcSource {
 
   private async reconcileInner(): Promise<number> {
     let filled = 0;
-    const cursors = await this.db.query<{ address: string }>("SELECT address FROM cursors");
+    const cursors = await this.db.query<{ address: string }>("SELECT address FROM cursors WHERE address = $1", [FUMPAD_PROGRAM_ID.toBase58()]);
     for (const { address } of cursors.rows) {
       const sigs = await this.conn.getSignaturesForAddress(new PublicKey(address), { limit: this.opts.reconcileDepth }, this.opts.commitment);
       sigs.reverse();

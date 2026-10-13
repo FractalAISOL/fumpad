@@ -16,6 +16,11 @@
  * other origin, no `eval` in production, no plugins, no <base> hijack, no framing, and
  * `connect-src` limits where an injected script could send anything. React escapes all
  * rendered text and the review found no HTML injection, so `'unsafe-inline'` has no sink.
+ *
+ * `img-src` (V7-L6): only our origin, data:/blob: (wallet icons, the launch form's local preview), our API
+ * (coin images come through its proxy, `GET /v1/img/<mint>`, see `design/image.ts`) and the WalletConnect
+ * registry Privy already reads wallet listings from. No `https:` wildcard, so an injected script can't
+ * smuggle data out through an image URL on a host of its choosing.
  */
 
 export interface SecurityEnv {
@@ -39,6 +44,8 @@ const DEFAULT_RPC = "https://api.mainnet-beta.solana.com";
  */
 export const PRIVY_CONNECT = ["https://auth.privy.io", "wss://*.privy.io", "https://*.rpc.privy.systems", "https://explorer-api.walletconnect.com"];
 export const PRIVY_FRAMES = ["https://auth.privy.io"];
+/** Wallet logos in Privy's wallet list come from the registry it already fetches listings from (connect-src). */
+export const PRIVY_IMAGES = ["https://explorer-api.walletconnect.com"];
 /** Cloudflare Turnstile, Privy's bot check on login (script + iframe). */
 export const TURNSTILE = "https://challenges.cloudflare.com";
 
@@ -74,6 +81,7 @@ export function cspMode(env: SecurityEnv): CspMode {
 export function contentSecurityPolicy(env: SecurityEnv): string {
   const dev = env.NODE_ENV !== "production";
   const api = withSocket(env.NEXT_PUBLIC_FUMPAD_API);
+  const apiOrigin = origin(env.NEXT_PUBLIC_FUMPAD_API);
   const ws = origin(env.NEXT_PUBLIC_FUMPAD_WS);
   const rpc = withSocket(env.NEXT_PUBLIC_SOLANA_RPC || DEFAULT_RPC);
   const connect = uniq([
@@ -92,8 +100,8 @@ export function contentSecurityPolicy(env: SecurityEnv): string {
     ["style-src", ["'self'", "'unsafe-inline'"]],
     // next/font self-hosts the fonts; Privy's modal uses data: fonts/icons.
     ["font-src", ["'self'", "data:"]],
-    // Coin images come from creators' metadata (https / IPFS / Arweave gateways), wallet icons are data: URIs.
-    ["img-src", ["'self'", "data:", "blob:", "https:"]],
+    // V7-L6: coin images only through our API's image proxy; wallet icons are data: URIs; blob: = launch preview.
+    ["img-src", uniq(["'self'", "data:", "blob:", ...(apiOrigin && apiOrigin.startsWith("http") ? [apiOrigin] : []), ...PRIVY_IMAGES])],
     ["connect-src", connect],
     ["frame-src", [...PRIVY_FRAMES, TURNSTILE]],
     ["child-src", [...PRIVY_FRAMES, TURNSTILE]],

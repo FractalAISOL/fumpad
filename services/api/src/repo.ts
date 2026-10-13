@@ -460,6 +460,13 @@ export class Repo {
     return c ? this.detail(c) : null;
   }
 
+  /** The coin's creator image URL (metadata.image) for the image proxy (`GET /v1/img/:mint`), or null. */
+  async coinImageUrl(mint: string): Promise<string | null> {
+    const r = await this.db.query<{ image: string | null }>("SELECT metadata->>'image' AS image FROM coins WHERE mint = $1", [mint]);
+    const v = r.rows[0]?.image;
+    return typeof v === "string" && v.trim() ? v.trim() : null;
+  }
+
   /** FumpadData.getCoin: exact mint, else a unique symbol (see resolveCoinId). */
   async getCoin(symbolOrMint: string): Promise<CoinDetail | null> {
     const mint = await this.resolveCoinId(symbolOrMint);
