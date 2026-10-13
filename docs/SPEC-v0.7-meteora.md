@@ -193,8 +193,8 @@ decision; each pins down something the spec left open or that the mainnet binari
    (`keeper_added_at = 0`, no 6 h freeze) and the initial configs register coins immediately (no 48 h timelock).
    Only the program's upgrade authority can initialize, and it could replace the program anyway; the timelocks and
    freezes protect an already-running system, so every later `set_keepers` (6 h freeze for new keys) and config
-   change (48 h) keeps them. Three keeper slots means the jobs keeper (samples, `claim_for`, pre-graduation
-   buybacks) shares a key with one attestor (devnet: attestor-1).
+   change (48 h) keeps them. (Superseded by 25: the jobs keeper no longer shares a key with an
+   attestor; `initialize_global` also bootstraps the operators.)
 24. **Pre-graduation buyback guard = median of keeper samples (security-review L5).** The Coin keeps its last 5
    keeper pre-graduation samples (`pregrad_ring`, carved out of reserved bytes — Coin size unchanged). A pre-grad
    buyback needs ≥ 4 of them within the last 5 min spanning ≥ 60 s; the guard price is their median, and spot must
@@ -202,3 +202,35 @@ decision; each pins down something the spec left open or that the mainnet binari
    ratchet of in-band moves sampled one after another, can't move the guard; the price must be held through a
    majority of the window's samples. Fixed constants, not params. After a keeper outage > 5 min (or at the first
    samples of a coin) buybacks wait for a 60 s warm-up. Post-graduation guard unchanged.
+25. **Operators ≠ attestors (pre-audit, THREAT-MODEL G6).** `Global.keepers` (3) are attestors ONLY: their signatures
+   count toward the 2-of-3 and they submit `attest_sell` / `attest_rebuy`. The jobs keeper runs with its own key from
+   `Global.operators` (≤ 2, carved from Global's reserved bytes — same 1,044-byte layout), which alone may take
+   keeper samples (`record_samples`), `claim_for` and pre-graduation buybacks. The two sets are disjoint on chain
+   (`initialize_global`, `set_operators`, `set_keepers` refuse an overlap), so a compromised jobs box holds no
+   attestation key and an attestor box no jobs key. `set_operators` is admin, immediate, no freeze (operators never
+   create tickets; their powers are bounded as before: sample timing, buyback timing within the guards, auto-claim to
+   the owner). A Global from before this change is migrated in place by `migrate_global`: `operators[0] = keepers[0]`
+   (the old jobs key, so jobs keep running across the upgrade), then `set_operators` moves the role to a fresh key —
+   the devnet bootstrap does both in one transaction. The keeper service refuses to run jobs with a key that isn't
+   (only) an operator and to attest with an operator key. Deployment: each attestor on its own cloud project /
+   account and RPC provider, ideally attestor-2 and attestor-3 owned by different people (services/DEPLOY-v07.md §1).
+26. **DAMM v2 pool status (D38).** A pool disabled by its DAMM v2 operator is never sampled (`record_samples` skips it,
+   keeper or fallback, like a `Complete` coin), never bought on (`execute_buyback` → `PoolDisabled`) and never traded
+   through the router (`PoolDisabled`). Claims are not checked against the pool directly; they wait because the
+   30-min median loses its coverage once samples stop (≤ ≈ 10 min at defaults; samples taken before the disable were
+   real market prices). Re-enabled → samples resume → claims resume once the window refills.
+27. **D12 floor on chain.** The engine's ticket price is max(execution, capped reference floor) with execution =
+   ⌊quote_gross × 2⁶⁴ / base_amount⌋, so `attest_sell` requires `ticket_price_q64 ≥` that exact value
+   (`TicketPriceBelowExecution`; no tolerance — same integer formula). Defense in depth against an engine bug or a
+   2-of-3 forgery that keeps the trade's real amounts; it can't help against a forgery that also fakes
+   `quote_gross` (the watcher compares every field with its own derivation).
+28. **Stranded value.** (a) Partner trading fees of a pool on a FUMPAD-shaped config whose mint never registered:
+   `claim_unregistered_fees` (permissionless) pays them to `platform_treasury` (no coin accounting, no split; the
+   config must pass the structural checks, it needn't be allow-listed). The migration fee / surplus / leftover / LP of
+   such a pool, should it ever graduate, stay unclaimed (accepted: needs an 85 SOL raise outside FUMPAD). (b) DAMM v2
+   farming rewards accrued to a `fee_claimer`-held position of a graduated coin's pool: `claim_position_rewards`
+   (permissionless) pays coin-mint rewards into the coin's reward vault (they add to the reward pool) and any other
+   mint into the platform treasury's ATA for it. Opening a reward needs the pool creator (DBC's pool authority, which never
+   signs it) or a DAMM admin (UNVERIFIED: DAMM v2 access rules, not tested on the binary), so (b) is normally
+   idle. DBC partner pool-creation fees: none to claim — FUMPAD configs set `pool_creation_fee = 0` (`tests/vectors/dbc_config.json`; not a structural check, the admin sets it, 48 h timelocked).
+

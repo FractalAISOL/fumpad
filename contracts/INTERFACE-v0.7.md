@@ -26,8 +26,8 @@ prefix `interface:` and a one-line note. Anything not yet verified on the mainne
 | PDA | Seeds | What |
 |---|---|---|
 | `global` | `["global"]` | singleton config |
-| `fee_claimer` | `["fee_claimer"]` | system account, no data. DBC config `fee_claimer`; owner of the DAMM v2 position NFT; signs DBC `claim_trading_fee` / `withdraw_migration_fee` / `partner_withdraw_surplus` and DAMM `claim_position_fee` |
-| `fee_wsol` | `["fee_wsol"]` | transient SPL-Token WSOL account (authority `fee_claimer`) created and closed inside `claim_fees` / `claim_lp_fees` / `graduate`; never exists between instructions |
+| `fee_claimer` | `["fee_claimer"]` | system account, no data. DBC config `fee_claimer`; owner of the DAMM v2 position NFT; signs DBC `claim_trading_fee` / `withdraw_migration_fee` / `partner_withdraw_surplus` and DAMM `claim_position_fee` / `claim_reward` |
+| `fee_wsol` | `["fee_wsol"]` | transient SPL-Token WSOL account (authority `fee_claimer`) created and closed inside `claim_fees` / `claim_lp_fees` / `claim_unregistered_fees` / `graduate`; never exists between instructions |
 | `reward_pool` | `["reward_pool"]` | system account, no data. DBC config `leftover_receiver`; authority of every reward vault and escrow |
 | reward vault | `ATA(reward_pool, mint, Token-2022)` | the coin's reward pool (created by `register_coin`); DBC `withdraw_leftover` pays the 8% here; buybacks land here; claims pay from here |
 | `buyback` | `["buyback"]` | system account, no data. DBC/DAMM swap `payer` for buybacks; owns only `ATA(buyback, WSOL)` |
@@ -67,7 +67,7 @@ units on top).
                              │  graduate (DBC pool migrated, any path)  │ graduate
                              └──────────────────────► Graduated ◄───────┘
 ```
-- `Curve` (0): DBC pool trading. Router uses DBC `swap2`. Pre-grad buybacks (keeper-only) and pre-grad samples allowed.
+- `Curve` (0): DBC pool trading. Router uses DBC `swap2`. Pre-grad buybacks and pre-grad samples (operator-only) allowed.
 - `Complete` (1): the router observed the curve completing (DBC rejects swaps). Third-party completions leave the
   coin in `Curve` until `graduate`; consumers should also read the DBC pool (`migration_progress ≥ 2` = complete).
 - `Graduated` (2): `graduate` verified + recorded the DAMM v2 pool and the locked position. Router uses DAMM
@@ -78,24 +78,32 @@ units on top).
 
 ## 3. Instructions
 
+**Roles (2026-10-13 d).** `Global.keepers` (3 slots) = **attestors**: their Ed25519 signatures count toward
+`attest_sell` / `attest_rebuy` (2-of-3) and only they may submit those two instructions — no other power.
+`Global.operators` (2 slots) = **operators** (the jobs keeper's key): `record_samples` keeper (non-fallback) samples,
+`claim_for`, pre-graduation `execute_buyback`. The two sets are disjoint (`KeeperOperatorOverlap`): an operator key
+can neither submit nor co-sign an attestation, and an attestor key has no jobs power. Everything else a keeper does
+(fee claims, graduation, queue, closes, params execution) is permissionless.
+
 Notation: `(s)` signer, `(w)` writable, `[ev]` = trailing `event_authority`, `program`. Accounts are listed in order.
 
 ### Admin / governance
 | Ix | Args | Accounts | Notes |
 |---|---|---|---|
-| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3]` | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the 48h timelock**. Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper) and one `ConfigUpdated { add: true }` per config |
+| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3], operators: [Pubkey; 2]` | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the 48h timelock**. Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `operators` (non-default keys distinct, else `InvalidParams`; none may be a keeper, else `KeeperOperatorOverlap`) are set at once. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper), `OperatorsSet` (if any operator) and one `ConfigUpdated { add: true }` per config |
 | `queue_params` | `params: Params` | admin (s), global (w) [ev] | 48h timelock (D15). `Params::is_valid`. Event `ParamsQueued` |
 | `execute_params` | — | caller (s), global (w) [ev] | permissionless after eta. Event `ParamsUpdated` |
 | `cancel_params` | — | authority (s; admin or guardian), global (w) [ev] | Event `ParamsCancelled` |
 | `set_pause` | `paused: u8` | authority (s; admin or guardian), global (w) [ev] | bits ⊆ `PAUSE_ALL` (0b1_1111); non-zero lapses after 7 days. Event `PauseSet` |
-| `set_keepers` | `keepers: [Pubkey; 3]` | admin (s), global (w) [ev] | immediate. A key not in the previous set gets `keeper_added_at = now` (never 0): its attestation signatures count only from `now + 6h` (`KEEPER_ATTEST_FREEZE_SECS`). Keys that stay keep their timestamp (a bootstrap key stays at 0 = no freeze; removed and re-added = a new key, frozen). Event `KeepersSet` |
+| `set_keepers` | `keepers: [Pubkey; 3]` | admin (s), global (w) [ev] | immediate. A key not in the previous set gets `keeper_added_at = now` (never 0): its attestation signatures count only from `now + 6h` (`KEEPER_ATTEST_FREEZE_SECS`). Keys that stay keep their timestamp (a bootstrap key stays at 0 = no freeze; removed and re-added = a new key, frozen). A key that is a current operator → `KeeperOperatorOverlap` (move the jobs key with `set_operators` first). Event `KeepersSet` |
+| `set_operators` | `operators: [Pubkey; 2]` | admin (s), global (w) [ev] | immediate, no freeze (operators never create tickets). Non-default keys distinct (`InvalidParams`), none a current keeper (`KeeperOperatorOverlap`); all-default = no operator (jobs stop: pre-grad samples / buybacks and `claim_for` refuse everyone, post-grad samples become fallback-only). Event `OperatorsSet` |
 | `propose_admin` | `new_admin, platform_treasury, guardian: Pubkey` | admin (s), global (w) [ev] | 48h. Event `AdminProposed` |
 | `accept_admin` | — | new_admin (s; = pending_admin), global (w) [ev] | Event `AdminAccepted` |
 | `cancel_admin` | — | authority (s; admin or guardian), global (w) [ev] | Event `AdminProposalCancelled` |
 | `queue_config` | `config: Pubkey, add: bool` | admin (s), global (w), dbc_config (= `config`; DBC-owned `PoolConfig`, validated when `add`) [ev] | allow-list change, 48h (`CONFIG_TIMELOCK_SECS`). Replaces any pending config change. Validation §5.4. Event `ConfigQueued` |
 | `execute_config` | — | caller (s), global (w), dbc_config (= pending; re-validated on add) [ev] | permissionless after eta. Add: into the first empty slot of `Global.configs` (8 slots; `ConfigListFull`), duplicate → `InvalidParams`. Remove: clears the slot (registered coins keep working). Event `ConfigUpdated` |
 | `cancel_config` | — | authority (s; admin or guardian), global (w) [ev] | Event `ConfigCancelled` |
-| `migrate_global` | — | admin (s,w), global (w, raw), system_program [ev] | layout-upgrade hook (D39 keeps only the mechanism). No-op on a current Global; any other length → `UnsupportedGlobalLayout`. Event `GlobalMigrated` |
+| `migrate_global` | — | admin (s,w), global (w, raw), system_program [ev] | layout-upgrade hook. On the current 1,044-byte layout: if `operators` is all default (a Global initialized before operators existed — those bytes were `reserved`) and `keepers[0]` is set, fills `operators[0] = keepers[0]` (the key that ran the jobs keeper; the ONE way a key can be both, until `set_operators` moves it) and emits `OperatorsSet`; otherwise a no-op. Any other length → `UnsupportedGlobalLayout`. Event `GlobalMigrated` |
 
 ### Launch
 `register_coin()` — the 3rd instruction of the launch tx (`initialize_virtual_pool_with_token2022` → creator's
@@ -166,6 +174,38 @@ destination), wsol_mint, token_program, token_2022_program, system_program, damm
 damm_event_authority, damm_program [ev]. CPI `claim_position_fee` signed by `fee_claimer`; split as above.
 Event `FeesClaimed`.
 
+`claim_unregistered_fees()` — DBC partner trading fees of a pool on a FUMPAD-shaped config whose base mint never
+called `register_coin` (permissionless, never paused; THREAT-MODEL G4 a). Accounts: caller (s,w; pays the transient
+`fee_wsol` rent, refunded), global, mint (= pool base mint), coin (`["coin", mint]`; must NOT exist — system-owned,
+no data — else `PoolIsRegistered`), dbc_config (must pass the §5.4 structural checks: fee claimer = our PDA, quote-only
+fees — else `InvalidConfig`; it need not be allow-listed), dbc_pool (w; `pool.config == dbc_config`, `pool.base_mint
+== mint`), dbc_base_vault (w), dbc_quote_vault (w), fee_claimer (w), fee_wsol (w), reward_vault (w; `ATA(reward_pool,
+mint, Token-2022)` = DBC's base-side destination, receives 0; **must exist** — create it idempotently in the same tx),
+wsol_mint, platform_treasury (w; = `Global.platform_treasury`), token_program, token_2022_program, system_program,
+dbc_pool_authority, dbc_event_authority, dbc_program [ev]. CPI `claim_trading_fee(u64::MAX, u64::MAX)` with the same
+pinned 14-account list as `claim_fees`; the claimed WSOL is unwrapped and paid **entirely to `platform_treasury`** (no
+coin, no split); 0 claimed → `NothingToClaim`. Event `UnregisteredFeesClaimed`. Not covered (documented, rare): the
+partner migration fee / surplus, the 8% leftover (DBC pays it to `ATA(reward_pool, mint)`, which has no claim path
+without a Coin) and the LP position of an unregistered pool that graduates. A pool registered later (only possible
+while `migration_progress == 0`, creator-signed, with the launch co-signer when set) keeps only the fees accrued after
+the sweep.
+
+`claim_position_rewards(reward_index: u8)` — DAMM v2 farming rewards (`claim_reward`) of a `fee_claimer`-held position
+of a graduated coin's pool (permissionless, never paused; THREAT-MODEL G4 b). Accounts: caller (s), global, coin
+(`has_one` mint, damm_pool; `Graduated` else `WrongCoinStatus`), mint, damm_pool (w), damm_position (w; any position of
+the pool whose NFT `fee_claimer` holds, like `claim_lp_fees`; `position.pool != damm_pool` → `WrongVenue`),
+position_nft_account (= `["position_nft_account", nft_mint]`), damm_reward_vault (w; = `pool.reward_infos[i].vault`),
+reward_mint (= `pool.reward_infos[i].mint`), destination (w), fee_claimer, reward_token_program (SPL Token if the slot's
+`reward_token_flag` = 0, Token-2022 if 1), damm_pool_authority, damm_event_authority, damm_program [ev]. Checks:
+`reward_index < 2`, slot initialized, mint / vault / token program match the slot (`WrongVenue`); destination =
+**`ATA(reward_pool, mint, Token-2022)` (the coin's reward vault) when `reward_mint == mint`**, else
+**`ATA(Global.platform_treasury, reward_mint, reward_token_program)`** (must exist) — anything else `InvalidAccount`.
+CPI DAMM `claim_reward(reward_index, skip_reward = 0)` (disc `[149,95,181,242,94,90,158,162]`, exact pinned 11-account
+list) signed by `fee_claimer`; the amount is the destination's measured balance delta; 0 → `NothingToClaim`. Event
+`PositionRewardClaimed`. Pool reward slots: `Pool.reward_infos[2]` at offset 728, 192 bytes each (initialized u8 @0,
+reward_token_flag u8 @1, mint @16, vault @48). On FUMPAD pools only a DAMM admin can initialize a reward (UNVERIFIED; the pool
+creator is DBC's pool authority), so this is normally idle.
+
 `withdraw_creator_fees()` — creator (s,w), coin (w) [ev]; never paused. Event `FeesWithdrawn`.
 `withdraw_platform_fees()` — caller (s), global, coin (w), platform_treasury (w; = `Global.platform_treasury`) [ev].
 
@@ -175,13 +215,14 @@ the PDA address pre-graduation, unused), buyback (w, PDA), buyback_wsol (w; `ATA
 cranker pays), reward_vault (w), wsol_mint, venue_program, token_program, token_2022_program,
 associated_token_program, system_program [ev]; remaining = the venue's `swap2` accounts **exactly** (DBC 15 / DAMM
 14, every key pinned: payer = `buyback`, input = `buyback_wsol`, output = `reward_vault`, referral = None).
-- Not `PAUSE_TRADE`. `Curve` (pre-grad): **keeper-only**; `slot ≥ launch_slot + launch_window_slots`; the coin's
+- Not `PAUSE_TRADE`. `Curve` (pre-grad): **operator-only** (`Global.operators`; attestor keys → `Unauthorized`); `slot ≥ launch_slot + launch_window_slots`; the coin's
   last keeper pre-grad sample must be ≤ 60 s old (`PREGRAD_SAMPLE_MAX_AGE_SECS`, else `StaleSample`); **guard price
   = median of `coin.pregrad_ring`** (samples with `ts ∈ [now − 300, now]`, ≥ 4 of them spanning ≥ 60 s, even count
   → mean of the two middle values; else `InsufficientSamples`); spot (DBC `sqrt_price`) within
   ±`buyback_max_deviation_bps` of BOTH that median and the last sample (`PriceDeviation`; L5, §8 2026-10-13 c); slice ≤ `buyback_max_pool_bps` of the curve's `quote_reserve`; and
   `quote_reserve + slice < migration_quote_threshold` (a buyback never completes the curve).
-- `Graduated`: permissionless; spot within ±band of the 30-min keeper median (coverage as v0.6); slice ≤
+- `Graduated`: permissionless; the DAMM v2 pool must be enabled (`pool_status == 0`, else `PoolDisabled` — a disabled
+  pool's spot is frozen, not a market); spot within ±band of the 30-min keeper median (coverage as v0.6); slice ≤
   `buyback_max_pool_bps` of the pool's `token_b_amount`.
 - Both: received tokens ≥ fair amount at the guard price less (band + 200 bps fee allowance + 2 × slice);
   spend = min(max_in, buyback_lamports, slice cap) > 0 (`NothingToBuyBack`). Event `BuybackExecuted`.
@@ -230,10 +271,16 @@ dbc_program [ev]. Permissionless; not `PAUSE_GRADUATE`; coin `Curve|Complete`.
 ### Oracle
 `record_samples()` — sampler (s), global, instructions sysvar [ev]; remaining = 1–10 groups of
 `[coin (w), pool, observations (w)]`. Tx must contain only compute-budget instructions besides this one.
+- "Keeper sample" = a sample by an **operator** key (`Global.operators`); attestor keys sample like anyone else.
 - `Graduated`: pool == `coin.damm_pool`; `price_q64` from DAMM `sqrt_price` (offset 456); ring push; keeper or
   fallback rules exactly as v0.6 (keeper spacing vs keeper samples, fallback after `keeper_stale_secs`, fallback
-  samples never count).
-- `Curve`: pool == `coin.dbc_pool`; **keeper only**; spacing ≥ `oracle_min_spacing_secs` vs the previous pre-grad
+  samples never count). **A pool disabled by its DAMM v2 operator (`pool_status` @481 ≠ 0) is skipped** — no sample
+  (keeper or fallback), no event, no error; the rest of the batch proceeds. Its frozen price never enters the ring, so
+  **claims on that coin wait**: with no new sample the 30-min median loses coverage (`InsufficientSamples` once 2 of
+  the 6 five-minute buckets are empty — at most ≈ 10 min at defaults, earlier when `oracle_min_samples` is no longer
+  met) until the pool is re-enabled and operator samples refill the window. Claims inside that window use samples
+  taken while the pool still traded.
+- `Curve`: pool == `coin.dbc_pool`; **operator only**; spacing ≥ `oracle_min_spacing_secs` vs the previous pre-grad
   sample; DBC `sqrt_price` (offset 280) → `coin.pregrad_sample_price_q64/ts` and pushed into `coin.pregrad_ring`
   (5 samples, in the Coin; the observations account in the group is ignored). Used only by the pre-grad buyback
   guard, never for claims (D1).
@@ -251,7 +298,9 @@ signature entries all reference data inside that instruction (`*_instruction_ind
 Checks (fail → error, nothing created): not `PAUSE_ATTEST`; `program_id`, `cluster_tag`; `mint == coin.mint`;
 venue bit0 = 0 → `pool == coin.dbc_pool`, 1 → `pool == coin.damm_pool ≠ default`; `trader ∉ {default,
 coin.creator}`; `usd_cents ≥ coin.rewards.min_sell_usd_cents`; `0 < ticket_tokens ≤ base_amount`; `quote_gross > 0`;
-`ticket_price_q64 > 0`; `slot ≥ coin.launch_slot`; `block_time ≥ coin.created_at − 60`; `block_time ≤ now + 60`;
+`ticket_price_q64 > 0` (`InvalidTicketAmount`); **`ticket_price_q64 ≥ ⌊quote_gross × 2⁶⁴ / base_amount⌋`** (the
+execution price, the engine's exact formula; D12 ticket price = max(execution, floor) ≥ execution — no tolerance;
+else `TicketPriceBelowExecution`); `slot ≥ coin.launch_slot`; `block_time ≥ coin.created_at − 60`; `block_time ≤ now + 60`;
 `now − block_time ≤ max_attest_age_secs`; `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs`;
 `position.open_count < coin.rewards.max_open_tickets`; replay: the sell marker must not exist — or be **reopened**
 (`kind = 2`, set by `void_ticket(.., reopen = true)`) with a `message_hash` different from this message's
@@ -261,7 +310,7 @@ live sell marker. **Rate cap (M-1): never rejects** — the per-coin leaky bucke
 over it). Creates the Ticket (`Open`, `attested_at = effective_at`, `rent_payer = keeper`). Event `TicketAttested`
 (`effective_at`).
 
-`attest_rebuy()` — no args. Accounts: keeper (s,w), global, coin (**w**), ticket (w), position (w), consumed (w; rebuy PDA,
+`attest_rebuy()` — no args. Accounts: keeper (s,w; ∈ `Global.keepers`), global, coin (**w**), ticket (w), position (w), consumed (w; rebuy PDA,
 created), claim_queue (w; **optional**: required iff the ticket is `Queued`, else pass the fumpad program id),
 instructions sysvar, system_program [ev]. Same Ed25519 scheme over the 236-byte rebuy message (§4.2).
 Checks: not `PAUSE_ATTEST`; message ticket/mint/owner match; ticket `Open|Queued`; `ticket.sell_ts ≤ block_time ≤
@@ -289,7 +338,7 @@ Event `ConsumedClosed`.
 | Ix | Args | Accounts |
 |---|---|---|
 | `claim` | — | owner (s), global, coin (w), mint, ticket (w), position (w), claim_queue (w), observations, reward_pool, reward_vault (w), owner_token_account (w; any Token-2022 account of the owner for the mint), token_program (Token-2022) [ev] |
-| `claim_for` | — | keeper (s,w), global, coin (w), mint, ticket (w), position (w), claim_queue (w), observations, reward_pool, reward_vault (w), owner_ata (w; canonical ATA, may be missing), escrow (w; `["escrow", ticket]`), token_program, system_program [ev] |
+| `claim_for` | — | keeper (s,w; **an operator**, `Global.operators`), global, coin (w), mint, ticket (w), position (w), claim_queue (w), observations, reward_pool, reward_vault (w), owner_ata (w; canonical ATA, may be missing), escrow (w; `["escrow", ticket]`), token_program, system_program [ev] |
 | `process_queue` | `max_entries: u8` | cranker (s,w), global, coin (w), mint, claim_queue (w), reward_pool, reward_vault (w), token_program, system_program [ev]; remaining = quadruples `[ticket (w), position (w), owner canonical ATA (w), escrow PDA (w)]` in queue order (a legacy tx carries 5 quadruples; 13 need a v0 tx + ALT and ≈ 600k CU when all escrow) |
 | `withdraw_escrow` | — | owner (s), global, mint, ticket (w), escrow (w), reward_pool, destination (w), escrow_payer (w), token_program [ev] |
 | `set_auto_claim` | `enabled: bool` | wallet (s), position (w) [ev] |
@@ -372,8 +421,9 @@ changed like every param: `queue_params` → 48 h → `execute_params`, guardian
 `bump u8, admin Pubkey, platform_treasury Pubkey, guardian Pubkey, keepers [Pubkey;3], keeper_added_at [i64;3],
 cluster_tag u8, paused u8, pause_expires_at i64, params Params, pending_params Params, pending_eta i64,
 pending_admin Pubkey, pending_treasury Pubkey, pending_guardian Pubkey, pending_admin_eta i64, configs [Pubkey;8],
-pending_config Pubkey, pending_config_add u8, pending_config_eta i64, reserved [u8;64]` (size unchanged: `Params`
-grew by 32 bytes, twice).
+pending_config Pubkey, pending_config_add u8, pending_config_eta i64, operators [Pubkey;2]` (1,044 bytes, unchanged:
+`Params` grew by 32 bytes twice and `operators` took the last 64 bytes of `reserved` at offset 980; **no reserved bytes
+remain** — the next Global change grows the account through `migrate_global`).
 Pause bits: `PAUSE_LAUNCH` 1, `PAUSE_TRADE` 2 (router buys, buybacks), `PAUSE_CLAIMS` 4, `PAUSE_GRADUATE` 8
 (`migrate_pool`, `graduate`), `PAUSE_ATTEST` 16.
 
@@ -438,7 +488,8 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 ## 6. Events (borsh fields in order)
 - `GlobalInitialized { admin, platform_treasury, guardian, cluster_tag u8, params, ts }`
 - `ParamsQueued { params, eta, ts }`, `ParamsUpdated { params, ts }`, `ParamsCancelled { authority, ts }`
-- `PauseSet { paused u8, expires_at, authority, ts }`, `KeepersSet { keepers [Pubkey;3], added_at [i64;3], ts }`
+- `PauseSet { paused u8, expires_at, authority, ts }`, `KeepersSet { keepers [Pubkey;3], added_at [i64;3], ts }`,
+  `OperatorsSet { operators [Pubkey;2], ts }`
 - `AdminProposed { admin, platform_treasury, guardian, eta, ts }`, `AdminAccepted { previous_admin, admin,
   platform_treasury, guardian, ts }`, `AdminProposalCancelled { authority, ts }`
 - `ConfigQueued { config, add bool, eta, ts }`, `ConfigUpdated { config, add bool, ts }`,
@@ -450,6 +501,9 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 - `CurveCompleted { mint, dbc_pool, ts }`
 - `FeesClaimed { mint, venue u8, claimed u64, to_buyback u64, to_platform u64, to_creator u64, launch_window bool, ts }`
 - `FeesWithdrawn { mint, recipient, lamports, creator bool, ts }`
+- `UnregisteredFeesClaimed { mint, dbc_pool, dbc_config, claimed u64, platform_treasury, ts }`
+- `PositionRewardClaimed { mint, damm_pool, damm_position, reward_index u8, reward_mint, destination, amount u64,
+  to_reward_pool bool, ts }`
 - `BuybackExecuted { mint, venue u8, lamports_in, tokens_out, guard_price_q64 u128, spot_price_q64 u128, ts }`
 - `PoolMigrated { mint, damm_pool, migrator, cost u64, ts }`
 - `Graduated { mint, damm_pool, damm_position, leftover_tokens, migration_fee u64, surplus u64, migrator_refund u64,
@@ -482,9 +536,26 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 6042 AlreadyConsumed · 6043 ChallengeWindowOver · 6044 TicketInChallenge · 6045 TicketNotOpen · 6046 TicketExpired
 · 6047 TriggerNotMet · 6048 QueueFull · 6049 WalletQueueLimit · 6050 QueueAccountRequired · 6051 NoEscrow ·
 6052 AutoClaimDisabled · 6053 TicketNotClosable · 6054 ConsumedNotClosable · 6055 PositionNotEmpty ·
-6056 LamportInvariant · 6057 RebuyOutOfWindow · **6058 PoolDisabled**.
+6056 LamportInvariant · 6057 RebuyOutOfWindow · 6058 PoolDisabled · **6059 TicketPriceBelowExecution ·
+6060 KeeperOperatorOverlap · 6061 PoolIsRegistered**.
 
 ## 8. Changelog
+### 2026-10-13 d — pre-audit fixes: operators, DAMM pool status, D12 price floor, stranded value (services follow)
+1. **Operators.** `Global.reserved [u8;64]` → `operators [Pubkey;2]` (same offset 980, Global still 1,044 bytes).
+   `record_samples` keeper samples, `claim_for` and pre-graduation `execute_buyback` require an operator (were: a
+   keeper); `attest_sell` / `attest_rebuy` still require a keeper (attestor) submitter and attestor signatures.
+   `initialize_global` takes a trailing `operators: [Pubkey; 2]` arg; new `set_operators(operators)` (admin,
+   immediate, `OperatorsSet`); keepers and operators are disjoint (`KeeperOperatorOverlap` in `initialize_global`,
+   `set_operators`, `set_keepers`). `migrate_global` on a pre-operators Global fills `operators[0] = keepers[0]`.
+   SDK: `GlobalAccount.operators`, `isOperator` / `isAttestor` / `keyRole`, `setOperatorsIx`, `initializeGlobalIx({
+   operators })`. Keeper: jobs mode runs only with an operator key, attestor mode never with one.
+2. **DAMM v2 pool status.** `record_samples` skips a disabled pool (no sample); `execute_buyback` (graduated) →
+   `PoolDisabled`; claims wait (median coverage). The router already refused (`PoolDisabled`).
+3. **`attest_sell`**: `ticket_price_q64 ≥ ⌊quote_gross × 2⁶⁴ / base_amount⌋`, else `TicketPriceBelowExecution`.
+4. **New instructions** `claim_unregistered_fees` (unregistered pools' partner fees → platform treasury) and
+   `claim_position_rewards(reward_index)` (DAMM v2 farming rewards → the coin's reward vault / the treasury's ATA).
+   Events `UnregisteredFeesClaimed`, `PositionRewardClaimed`. Errors 6059–6061 appended.
+
 ### 2026-10-13 c — pre-graduation buyback guard on a median of keeper samples (security-review L5)
 1. `Coin.reserved [u8;64]` → `pregrad_ring PregradRing (62 B) + reserved [u8;2]` (same size and offsets). Zeroed bytes
    = empty ring, so existing Coins decode unchanged.
