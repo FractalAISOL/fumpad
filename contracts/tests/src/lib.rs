@@ -373,7 +373,7 @@ impl Env {
     /// Zero-copy accounts: skip the 8-byte discriminator and read.
     pub fn fetch_zc<T: bytemuck::Pod>(&self, key: &Pubkey) -> T {
         let d = self.data(key);
-        *bytemuck::from_bytes(&d[8..8 + std::mem::size_of::<T>()])
+        bytemuck::pod_read_unaligned(&d[8..8 + std::mem::size_of::<T>()])
     }
 
     pub fn lamports(&self, key: &Pubkey) -> u64 {
@@ -512,4 +512,12 @@ mod attest_tests;
 #[cfg(test)]
 mod config_tests;
 #[cfg(test)]
+mod fees_tests;
+#[cfg(test)]
 mod lifecycle_tests;
+#[cfg(test)]
+mod oracle_buyback_tests;
+#[cfg(test)]
+mod rewards_tests;
+#[cfg(test)]
+mod router_tests;
