@@ -67,7 +67,7 @@ pub fn handle_initialize_global(
     g.pending_config = Pubkey::default();
     g.pending_config_add = 0;
     g.pending_config_eta = 0;
-    g.reserved = [0; 128];
+    g.reserved = [0; 64];
     let ts = Clock::get()?.unix_timestamp;
     emit_event!(ctx, GlobalInitialized { admin, platform_treasury, guardian: admin, cluster_tag, params, ts });
     Ok(())

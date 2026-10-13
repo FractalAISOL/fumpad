@@ -7,7 +7,7 @@ Concept: `../docs/concept-overview.pdf`.
 ## Program
 | Program | Id | Upgradeable | What |
 |---|---|---|---|
-| `fumpad` | `5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb` (new in v0.7, D39; **not deployed anywhere**) | yes (Squads multisig) | coins on Meteora DBC → DAMM v2, router, fee claims + split, buybacks, graduation bookkeeping, attested tickets, claims/queue/escrow, oracle samples, governance |
+| `fumpad` | `5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb` (new in v0.7, D39; devnet/test id; mainnet gets its own keypair; **not deployed anywhere**) | yes (Squads multisig) | coins on Meteora DBC → DAMM v2, router, fee claims + split, buybacks, graduation bookkeeping, attested tickets, claims/queue/escrow, oracle samples, governance |
 
 `fumpad_lp_locker`, the own bonding curve, PumpSwap, graduate-to-PumpSwap, the D13 escape hatch, `register_holdings`
 and on-chain hold/rebuy/reference bookkeeping are **deleted** (SPEC v0.7 D30/D31). The program keypair is
@@ -46,7 +46,9 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
   `register_coin` requires the pool's config on `Global.configs` (48h-timelocked allow-list; every config re-checked
   for the FUMPAD shape: fee claimer / leftover receiver = our PDAs, WSOL, Token-2022 6 dec, immutable authority, 100%
   partner permanent lock, Customizable DAMM v2 `OnlyB`, creator fee 0, fixed supply, slot activation), signer = pool
-  creator, pool not completed; it creates the reward vault ATA and snapshots reward terms + fee split.
+  creator, pool not completed; it creates the reward vault ATA and snapshots reward terms + fee split. With
+  `Params.launch_signer` set, the API's launch key must co-sign `register_coin` (off-chain review L1). DBC gives
+  the min fee to one swap per pool-creation tx only (verified on the mainnet binary), so no tx introspection.
 - **DBC config** (`tests/vectors/dbc_config.json`): 1B supply, 85 SOL raise (devnet 0.85), 99% → 1.25% fee scheduler
   over 8 × 1 slot, `enable_first_swap_with_min_fee`, **1% migration fee** (DBC only supports whole percents; D34 said
   ≈0.75%), migrated pool 125 bps `OnlyB`. The curve is re-derived on the real binary so the reward pool is **exactly
@@ -56,20 +58,25 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
   tests assert ≤ 1,000 base units).
 - **Router** `buy`/`sell`: user-signed DBC/DAMM `swap2` pass-through (15/14 ≤ n ≤ 24 accounts), canonical base ATA,
   trader-owned WSOL, referral None, measured deltas + `RoutedTrade`. `PAUSE_TRADE` stops buys only.
-- **Fees**: `claim_fees` (DBC partner fees) / `claim_lp_fees` (DAMM v2 locked position) signed by `fee_claimer` with
+- **Fees**: `claim_fees` (DBC partner fees) / `claim_lp_fees` (any `fee_claimer`-held position of the coin's DAMM v2
+  pool — normally the DBC-created locked one; REVIEW-v0.7 H-1) signed by `fee_claimer` with
   pinned account lists, claimed into a transient WSOL PDA and unwrapped into the Coin. First DBC claim after the 8-slot
   window → 100% buyback (D33); then 50/30/20 (platform + creator exact floors, remainder buyback).
 - **Buyback**: `buyback` PDA as payer, output straight into the reward vault, venue list pinned exactly. Pre-grad:
   keeper-only, ±3% of the coin's last keeper sample (≤ 60 s), slice ≤ 0.5% of the curve's quote reserve, never
   completes the curve. Post-grad: v0.6 rules on the DAMM v2 pool (30-min median ±3%, 0.5% of `token_b_amount`).
 - **Graduation**: `migrate_pool` (our wrapper of DBC `migration_damm_v2`, records the caller's flash-rent cost) and
-  `graduate` (verifies the DAMM v2 pool + our 100% locked position, `withdraw_leftover`, partner migration fee +
+  `graduate` (verifies the DAMM v2 pool + our position — pool, `fee_claimer`-held NFT, fully permanently locked; never
+  its share of the pool (REVIEW-v0.7 H-1) — `withdraw_leftover` (recorded even if a third party withdrew it), partner migration fee +
   surplus, then refunds → prefunds observations + claim queue → platform). Split in two because the combined account
   list (≈ 37 keys) doesn't fit a legacy transaction; each fits (1,081 / 1,045 bytes). Meteora's keepers may migrate
   directly; `graduate` then skips that step.
 - **Tickets** (D31): `attest_sell` / `attest_rebuy` read the record from the Ed25519 precompile instruction right
-  before them (2 distinct active keepers; new keys frozen 6h), consumed-marker PDAs, per-coin sliding-hour cap,
-  challenge window (`void_ticket`), `close_consumed` only after the ticket is closed and the trade is older than 7 days.
+  before them (2 distinct active keepers; new keys frozen 6h), consumed-marker PDAs, per-coin rate cap as a leaky
+  bucket that defers tickets over 20%/h of supply (their challenge window starts later) and never rejects (M-1),
+  challenge window (`void_ticket`; `reopen` lets the corrected record of the same trade be attested once, L-2),
+  `close_consumed` only after the ticket is closed and the trade is older than 7 days. Rebuy debits and voids release
+  rate-cap capacity. Only the wallet closes a Position that opted out of auto-claim (L-1).
 - **Claims / queue / escrow / auto-claim**: v0.6 rules, paying from `ATA(reward_pool, mint)`, plus the challenge window.
 
 ## Sizes and rent (fresh layouts, D39)
@@ -78,35 +85,35 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 
 | Account | Bytes | Rent (SOL) | Paid by |
 |---|---|---|---|
-| `fumpad.so` program data (`anchor build`, inliner flags) | 738,952 (+45) | 3.7548 | deployer |
+| `fumpad.so` program data (`anchor build`, inliner flags) | 747,616 (+45) | 3.7988 | deployer |
 | Global | 1,044 | 0.00595 | admin (init) |
 | Coin | 546 | 0.00342 | creator (`register_coin`) |
 | Reward vault (Token-2022 ATA) | 170 | ≈0.00207 | creator (`register_coin`) |
 | Position | 315 | 0.00225 | attesting keeper |
 | Ticket | 276 | 0.00205 | attesting keeper |
-| Consumed | 82 | 0.00107 | attesting keeper |
+| Consumed | 98 | 0.00115 | attesting keeper (re-used by a corrected re-attestation) |
 | ClaimQueue (1024) | 81,976 | 0.41709 | prefunded by `graduate` from the migration fee (D34) |
 | Observations (256) | 8,280 | 0.04271 | prefunded by `graduate` |
 
 ## Compute units (worst cases, `cu_report`, mainnet binaries; ±2k run to run from PDA bumps)
 | Instruction | CU | Tx bytes | Compute budget |
 |---|---|---|---|
-| launch tx (DBC init + ATA + creator swap2 + `register_coin`) | 182k | 1,057 | 300k |
+| launch tx (DBC init + ATA + creator swap2 + `register_coin`) | 182k | 1,058 (+32 with a launch co-signer key, +64 its signature) | 300k |
 | `buy` router DBC / DBC PartialFill completing the curve / DAMM v2 | 94k / 94k / 55k | — | default (200k) |
 | `sell` router DBC / DAMM v2 | 62k / 47k | — | default |
 | `claim_fees` (DBC) | 62k | — | default |
-| `claim_lp_fees` (DAMM v2) | 66k | — | default |
+| `claim_lp_fees` (DAMM v2) | 67k | — | default |
 | `execute_buyback` DBC (pre-grad, creates the WSOL ATA) / DAMM v2 (full 30-min median) | 114k / 89k | — | default |
 | `migrate_pool` (DBC migration CPI incl. DAMM v2 pool + lock) | 176k | 1,081 | set ≥ 400k |
 | `graduate` | 110k | 1,045 | set ≥ 200k |
 | `init_observations` / `init_claim_queue` × 9 (one tx) | 13k / 61k | — | default |
 | `record_samples` 1 coin (pre-grad / DAMM) / 5 coins / 10 coins | 14k / 15k / 45k / 83k | — / — / 773 / 1,268 | 10 coins need v0 + ALT |
 | `attest_sell` new position / existing position | 40k / 35k | 985 (with the Ed25519 ix) | default |
-| `attest_rebuy` queued ticket on a 1023-entry queue / voiding the front entry | 35k / 32k | — | default |
+| `attest_rebuy` queued ticket on a 1023-entry queue / voiding the front entry | 40k / 34k | — | default |
 | `claim` paid now behind 1022 entries / queued at the end / queued at the FRONT of 1023 | 72k / 72k / 71k | — | default |
 | `claim_for` paid now / escrowed (1022 scanned) | 79k / 88k | — | default |
 | `process_queue` full-queue walk / 13 paid / 13 escrowed on a full queue | 97k / 225k / 415k | — / — / 1,849 | 13 entries need v0 + ALT and ≥ 600k; a legacy tx carries 5 entries |
-| `withdraw_escrow` / `close_ticket` (full queue) / `void_ticket` / `close_consumed` / `close_position` / `set_auto_claim` | 27k / 20k / 15k / 9k / 9k / 7k | — | default |
+| `withdraw_escrow` / `close_ticket` (full queue) / `void_ticket` (reopen) / `close_consumed` / `close_position` / `set_auto_claim` | 27k / 20k / 25k / 10k / 9k / 7k | — | default |
 
 ## Build profile & program size (approach unchanged; the measurements below are v0.5/v0.6 history)
 `anchor build` = `cargo build-sbf --tools-version v1.57 --arch v3` (Anchor 1.2.1 defaults; platform-tools v1.57).
@@ -145,10 +152,17 @@ CU before → after (chosen build, same keys): curve `buy` 45,674 → 46,619 (+2
 
 **v0.7:** same profile and `.cargo/config.toml` inliner flags (kept; `anchor build` picks them up); `fumpad.so` =
 **738,952 bytes** (v0.6: 835,544 with the curve + PumpSwap code; the locker is gone). 0 warnings.
+After the REVIEW-v0.7 fixes: **747,616 bytes** (+8,664; rent +0.044 SOL). CU deltas of the fixes (same machine,
+`cu_report`, ±2k PDA-bump noise): `void_ticket` 15.4k → 24.8k (coin + consumed accounts, rate-cap release, reopen),
+`attest_rebuy` +2.9k (rate-cap release), `claim_lp_fees` +3.2k (pool check of the position), `graduate` +3k,
+`attest_sell` unchanged within noise (the bucket arithmetic is cheaper than the sliding hour; +sha256 of the message),
+everything else within noise.
 
 ## Deploy (v0.7, order matters — nothing is deployed yet)
-1. Deploy `fumpad` (fresh id `5YMF…S9Fb`, upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock), then
-   `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params)` from the upgrade-authority key.
+1. Deploy `fumpad` (devnet: id `5YMF…S9Fb`; **mainnet: its own fresh keypair + `declare_id!`** — never the devnet
+   id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock), then `initialize_global(admin, treasury,
+   cluster_tag (0 mainnet / 1 devnet), params)` from the upgrade-authority key. Set `params.launch_signer` to the
+   API's launch co-signer key (or queue it later: 48h) so only API-built launch txs register.
 2. `set_keepers` (3 keys, separate infra/RPCs); their attestation signatures count 6h later.
 3. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair), then
    `queue_config(config, true)` → 48h → `execute_config` (permissionless).
@@ -165,10 +179,24 @@ CU before → after (chosen build, same keys): curve `buy` 45,674 → 46,619 (+2
   through the buyback is not caught on-chain (the 0.5%-of-quote-reserve slice bounds it).
 - Tickets are only as good as the 2-of-3 keeper re-derivation (D31): the 6h challenge window + guardian `void_ticket`
   and the per-coin rate cap bound a compromised keeper pair; nothing on-chain re-checks hold time, rebuys or the
-  D10/D12 ticket price.
-- `register_coin` accepts any pool on an allow-listed config whose creator signs (not only API-built launches).
+  D10/D12 ticket price. Since M-1 the cap defers instead of rejecting: a compromised pair can push every later ticket
+  of a coin back (claimable later, never lost) until the guardian pauses `PAUSE_ATTEST`; capacity released by voids
+  and rebuy debits is re-used at the end of the backlog, so a single hour can briefly see up to ≈ 2× the cap.
+- `register_coin` accepts any pool on an allow-listed config whose creator signs unless `Params.launch_signer` is
+  set (off-chain review L1) — set it before opening launches.
+- `graduate` may record a third-party position that was locked and handed to `fee_claimer` before it (the DAMM NFT
+  account has no ImmutableOwner); harmless for fees (`claim_lp_fees` takes any `fee_claimer` position of the pool),
+  but `Coin.damm_position` is then not "the" 100% position — keepers claim LP fees with the NFT from the migration.
+- A deferred ticket whose guardian void comes late may leave less than `max_attest_age` for the corrected
+  re-attestation (the trade's age counts from `block_time`).
 - The 8% reward pool is exact for a single-swap completion; real paths add rounding dust on top (tests: ≤ 1,000 units).
 - Mainnet rent rate at deploy time (sizes table) — UNVERIFIED.
+
+## v0.7 review fixes (REVIEW-v0.7.md, 2026-10-13)
+H-1, M-1, L-1, L-2, I-1 fixed, plus the review notes (samples skip `Complete` coins, `Graduated.surplus` with a
+pre-funded `fee_wsol`, router `PoolDisabled`, cluster ids) and the contract items of the off-chain review (L1 launch
+co-signer `Params.launch_signer`; L3 `void_ticket` references `coin` + `mint`, `TicketVoided.coin`). Interface
+changes: `INTERFACE-v0.7.md` §8 (changelog). Tests: `tests/src/review_v07.rs` (`regression_*`, `verify_*`).
 
 ## Archive: v0.3–v0.6 notes (superseded by the v0.7 fresh layouts, D39 — kept for history only)
 ### v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)

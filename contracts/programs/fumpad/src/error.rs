@@ -83,6 +83,7 @@ pub enum FumpadError {
     InvalidTicketAmount,
     #[msg("Pyth price too far from the trade's block time")]
     StalePythPrice,
+    /// Reserved since the M-1 fix: the rate cap defers tickets instead of rejecting them.
     #[msg("Attestation rate cap reached for this coin: retry later")]
     AttestRateLimited,
     #[msg("Wallet has the maximum number of open tickets on this coin")]
@@ -119,4 +120,6 @@ pub enum FumpadError {
     LamportInvariant,
     #[msg("Rebuy is outside the ticket's rebuy window")]
     RebuyOutOfWindow,
+    #[msg("The DAMM v2 pool is disabled by its operator")]
+    PoolDisabled,
 }

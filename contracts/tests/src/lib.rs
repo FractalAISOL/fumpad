@@ -529,3 +529,5 @@ pub(crate) mod rewards_tests;
 mod router_tests;
 #[cfg(test)]
 mod vectors;
+#[cfg(test)]
+mod review_v07;

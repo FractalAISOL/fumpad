@@ -297,7 +297,8 @@ fn graduation_adversarial_and_migration_fee_accounting() {
     let caller_before = env.lamports(&kp_pk(&k));
     let meta = ok(env.graduate(&c, &k, &kp_pk(&nft)));
     let ev: Graduated = event(&meta);
-    assert_eq!(ev.leftover_tokens, 0, "someone else withdrew it");
+    // Someone else withdrew it; still recorded (REVIEW-v0.7 I-1).
+    crate::lifecycle_tests::assert_reward_pool_8pct(ev.leftover_tokens);
     assert_eq!(ev.migrator_refund, 0, "no migrate_pool record");
     assert_eq!(ev.migration_fee, meteora::MAINNET_THRESHOLD / 100);
     assert_eq!(ev.migrator_refund + ev.caller_refund + ev.setup_prefunded + ev.platform_fee, ev.migration_fee + ev.surplus);

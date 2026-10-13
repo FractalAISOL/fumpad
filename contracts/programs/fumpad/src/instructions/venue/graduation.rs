@@ -176,15 +176,14 @@ pub fn handle_graduate(ctx: Context<Graduate>) -> Result<()> {
         damm.token_a_mint == mint && damm.token_b_mint == WSOL_MINT && damm.creator == meteora::DBC_POOL_AUTHORITY,
         FumpadError::InvalidMigratedPool
     );
+    // REVIEW-v0.7 H-1: our position is identified by what it is, never by its share of the pool (anyone can add or
+    // lock liquidity in the pool): a position of this pool whose NFT the `fee_claimer` PDA holds, all of its
+    // liquidity permanently locked. (`claim_lp_fees` accepts every such position of the pool, so a third-party
+    // position handed to `fee_claimer` can't divert the LP fees of ours.)
     let position = meteora::read_damm_position(&a.damm_position)?;
     require_keys_eq!(position.pool, a.damm_pool.key(), FumpadError::InvalidMigratedPool);
     require!(
-        position.unlocked_liquidity == 0
-            && position.vested_liquidity == 0
-            && position.permanent_locked_liquidity > 0
-            && position.permanent_locked_liquidity.checked_mul(BPS_DENOM as u128).is_some_and(|x| {
-                damm.liquidity.checked_mul(MIN_LOCKED_LIQUIDITY_BPS as u128).is_some_and(|y| x >= y)
-            }),
+        position.unlocked_liquidity == 0 && position.vested_liquidity == 0 && position.permanent_locked_liquidity > 0,
         FumpadError::InvalidMigratedPool
     );
     require_keys_eq!(
@@ -219,7 +218,13 @@ pub fn handle_graduate(ctx: Context<Graduate>) -> Result<()> {
         ];
         meteora::invoke_passthrough(&a.dbc_program.to_account_info(), &accounts, meteora::IX_DBC_WITHDRAW_LEFTOVER.to_vec(), None)?;
     }
-    let leftover_tokens = token_amount(&a.reward_vault)?.saturating_sub(vault_before);
+    // REVIEW-v0.7 I-1: when someone else already called DBC's permissionless `withdraw_leftover`, the leftover is
+    // what the vault holds beyond this coin's buybacks (the only other pre-graduation inflow; donations count too).
+    let leftover_tokens = if pool.is_withdraw_leftover == 0 {
+        token_amount(&a.reward_vault)?.saturating_sub(vault_before)
+    } else {
+        vault_before.saturating_sub(a.coin.buyback_tokens)
+    };
 
     // 3b. Partner migration fee + partner surplus into the transient WSOL account (fee_claimer signs).
     let (caller, fee_claimer, fee_wsol) =
@@ -256,8 +261,11 @@ pub fn handle_graduate(ctx: Context<Graduate>) -> Result<()> {
             signer,
         )?;
     }
-    let surplus = token_amount(&fee_wsol)?.saturating_sub(migration_fee);
-    let (budget, wsol_rent) = close_fee_wsol(&fee_wsol, &fee_claimer, ctx.bumps.fee_claimer, &token_program)?;
+    let surplus = token_amount(&fee_wsol)?.saturating_sub(migration_fee_before).saturating_sub(migration_fee);
+    // WSOL that sat in a pre-funded `fee_wsol` before this ix is nobody's fee: it goes back with the account's rent.
+    let (closed, wsol_rent) = close_fee_wsol(&fee_wsol, &fee_claimer, ctx.bumps.fee_claimer, &token_program)?;
+    let budget = closed.saturating_sub(migration_fee_before);
+    let wsol_rent = wsol_rent.saturating_add(closed - budget);
 
     // 4. Spend the budget (migration fee + surplus), in order: migrator refund → caller's net rent → observations
     //    rent → claim-queue rent → remainder platform. Lamports sit in `fee_claimer`; it pays each out.
