@@ -3,7 +3,8 @@
  *
  * Env: RPC_URL (this keeper's own provider), KEEPER_SECRET_KEY | KEEPER_KEYPAIR, DATABASE_URL (shared
  * signature board; required in production), ATTEST_LOOP_MS (15 s), PYTH_SOURCE=hermes|constant
- * (HERMES_URL, HERMES_API_KEY, HERMES_API_KEY_HEADER; PYTH_CONSTANT_USD for local chains only),
+ * (HERMES_URL, PYTH_API_KEY (alias HERMES_API_KEY; sent as `Authorization: Bearer`), HERMES_API_KEY_HEADER
+ * (other header name, raw key); PYTH_CONSTANT_USD for local chains only),
  * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, PORT / HEALTH_PORT, DRY_RUN.
  * Liveness (V7-M6): ATTEST_COIN_CONCURRENCY (4), ATTEST_TICK_BUDGET_MS (60 s), ATTEST_COIN_RPC_BUDGET
  * (5,000 calls per coin per tick), ATTEST_TX_CACHE (200k txs), ATTEST_BLOCK_CACHE (50k slots).
@@ -31,7 +32,12 @@ import { guardHistory } from "./history-check.js";
 
 export function pythSourceFromEnv(env = process.env): PythSource {
   const kind = env.PYTH_SOURCE ?? (env.NODE_ENV === "production" ? "hermes" : "constant");
-  if (kind === "hermes") return new HermesPythSource({ baseUrl: env.HERMES_URL || undefined, apiKey: env.HERMES_API_KEY || undefined, apiKeyHeader: env.HERMES_API_KEY_HEADER || undefined });
+  if (kind === "hermes") {
+    const apiKey = env.PYTH_API_KEY || env.HERMES_API_KEY || undefined;
+    // Hermes refuses unauthenticated requests since 2026-10: without a key every sell would go unattested.
+    if (!apiKey && env.NODE_ENV === "production" && !env.HERMES_URL) throw new Error("PYTH_SOURCE=hermes needs PYTH_API_KEY (public Hermes answers 401 without it)");
+    return new HermesPythSource({ baseUrl: env.HERMES_URL || undefined, apiKey, apiKeyHeader: env.HERMES_API_KEY_HEADER || undefined });
+  }
   if (kind === "constant") {
     if (env.NODE_ENV === "production") throw new Error("PYTH_SOURCE=constant is for local chains only");
     const usd = Number(env.PYTH_CONSTANT_USD ?? 150);

@@ -306,6 +306,7 @@ local validator.
 | `BUYBACK_JITTER` (1), `PREGRAD_TWAP_SAMPLES` (8), `PREGRAD_TWAP_SPACING_SECS` (15) | keeper | L5 pre-grad buyback guard |
 | `ATTEST_COIN_CONCURRENCY` (4), `ATTEST_TICK_BUDGET_MS` (60000), `ATTEST_COIN_RPC_BUDGET` (5000), `ATTEST_TX_CACHE` (200k), `ATTEST_BLOCK_CACHE` (50k), `ATTEST_PRICE_CACHE` (100k) | attestor, watcher | V7-M6 liveness |
 | `ATTEST_BOARD_REQUIRE_RLS` | attestor | `1` = refuse to start without per-keeper roles (mainnet) |
+| `PYTH_SOURCE` (`hermes` in production), `PYTH_API_KEY` (alias `HERMES_API_KEY`), `HERMES_URL`, `HERMES_API_KEY_HEADER` | attestor, watcher | **sealed** key, sent as `Authorization: Bearer` (Hermes answers 401 without it since 2026-10; verified). Production attestors refuse to start without it. Same source on every attestor + the watcher |
 | `RPC_HISTORY_CHECK` (on) | attestor, watcher | `off` disables the L8 first-available-block check |
 | `WATCH_ALERT_COOLDOWN_MS` (30 min) | watcher | re-alert interval per item |
 | `LAUNCH_SIGNER_KEY` | api | **sealed**; 64-byte secret (base58 or JSON array) whose pubkey is `Params.launch_signer`; co-signs `register_coin` (L1). Separate from `MINT_POOL_KEY` |
@@ -351,6 +352,7 @@ The validator loads `fumpad` as upgradeable (authority = `.local/upgrade-authori
 2 s hold, 60 s oracle window, 3 min samples, 2 s spacing (`scripts/local/actors.ts`).
 
 ## Railway deployment (devnet: project `fumpad-devnet`)
+**v0.7 (fresh program + Global, attestors, watcher, DB reset): `DEPLOY-v07.md`** — the table below is the v0.6 layout.
 One project, one Postgres (`postgres-ssl`), four services. Deploy from `services/`, in this order:
 `railway up --service indexer --detach`, then `api`, then `keeper`, then
 `railway up grinder --path-as-root --service grinder --detach`. Set new variables first with

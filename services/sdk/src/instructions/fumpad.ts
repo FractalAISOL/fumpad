@@ -7,7 +7,7 @@ import { type AccountMeta, PublicKey, type TransactionInstruction } from "@solan
 
 import { toIdl } from "../borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "../coder.js";
-import { DAMM_V2_MIGRATION_CONFIG, DAMM_V2_PROGRAM_ID, DBC_PROGRAM_ID, FUMPAD_PROGRAM_ID, MAX_KEEPERS, WSOL_MINT } from "../constants.js";
+import { DAMM_V2_MIGRATION_CONFIG, DAMM_V2_PROGRAM_ID, DBC_PROGRAM_ID, FUMPAD_PROGRAM_ID, MAX_CONFIGS, MAX_KEEPERS, WSOL_MINT } from "../constants.js";
 import { dammSwapAccounts, dbcMigrationAccounts, dbcSwapAccounts } from "../meteora/instructions.js";
 import { type Params, paramsToIdl } from "../params.js";
 import {
@@ -58,12 +58,35 @@ const dbcPoolOf = (c: CoinRefs) => c.dbcPool ?? dbcPoolPda(c.dbcConfig, c.mint);
 const dammPoolOf = (c: CoinRefs) => c.dammPool ?? dammPoolPda(c.mint);
 
 // ── admin / governance ──────────────────────────────────────────────────────
-/** `initialize_global` — payer must be the fumpad program's upgrade authority. */
-export function initializeGlobalIx(a: { payer: PublicKey; admin: PublicKey; platformTreasury: PublicKey; clusterTag: number; params: Params }): TransactionInstruction {
+/**
+ * `initialize_global` — payer must be the fumpad program's upgrade authority. Bootstrap: `keepers` (≤ 3) start
+ * with NO 6h attest freeze and `configs` (≤ 8 FUMPAD DBC configs, validated like `execute_config` add, passed as
+ * remaining accounts) are allow-listed with NO 48h timelock. Later changes keep their freeze / timelock.
+ */
+export function initializeGlobalIx(a: {
+  payer: PublicKey;
+  admin: PublicKey;
+  platformTreasury: PublicKey;
+  clusterTag: number;
+  params: Params;
+  keepers?: PublicKey[];
+  configs?: PublicKey[];
+}): TransactionInstruction {
+  const keepers = a.keepers ?? [];
+  if (keepers.length > MAX_KEEPERS) throw new Error(`at most ${MAX_KEEPERS} keepers`);
+  const configs = a.configs ?? [];
+  if (configs.length > MAX_CONFIGS) throw new Error(`at most ${MAX_CONFIGS} configs`);
   return ix(
     "initialize_global",
     { payer: a.payer, global: globalPda(), programData: programDataPda() },
-    { admin: a.admin, platformTreasury: a.platformTreasury, clusterTag: a.clusterTag, params: paramsToIdl(a.params) },
+    {
+      admin: a.admin,
+      platformTreasury: a.platformTreasury,
+      clusterTag: a.clusterTag,
+      params: paramsToIdl(a.params),
+      keepers: [...keepers, ...Array(MAX_KEEPERS - keepers.length).fill(PublicKey.default)],
+    },
+    configs.map((pubkey) => r(pubkey)),
   );
 }
 export const queueParamsIx = (admin: PublicKey, params: Params) => ix("queue_params", { admin, global: globalPda() }, { params: paramsToIdl(params) });

@@ -32,6 +32,18 @@ describe("HermesPythSource", () => {
     expect(calls).toBe(c); // success cached
   });
 
+  it("sends the API key as Authorization: Bearer (Hermes 2026-10); a custom header gets the raw key", async () => {
+    const seen: Record<string, string>[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen.push({ ...(init?.headers as Record<string, string>) });
+      return new Response("nf", { status: 404 });
+    }) as unknown as typeof fetch;
+    await new HermesPythSource({ now: () => 1_800_000_000, apiKey: "k1", fetchImpl }).priceAt(1_700_000_000, 0);
+    await new HermesPythSource({ now: () => 1_800_000_000, apiKey: "k2", apiKeyHeader: "x-api-key", fetchImpl }).priceAt(1_700_000_000, 0);
+    await new HermesPythSource({ now: () => 1_800_000_000, fetchImpl }).priceAt(1_700_000_000, 0);
+    expect(seen).toEqual([{ Authorization: "Bearer k1" }, { "x-api-key": "k2" }, {}]);
+  });
+
   it("a 404 for an old second is final", async () => {
     let calls = 0;
     const src = new HermesPythSource({ now: () => 1_800_000_000, fetchImpl: (async () => (calls++, new Response("nf", { status: 404 }))) as unknown as typeof fetch });

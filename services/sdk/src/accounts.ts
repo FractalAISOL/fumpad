@@ -167,9 +167,12 @@ export function isPaused(g: Pick<GlobalAccount, "paused" | "pauseExpiresAt">, fl
   return (g.paused & flag) !== 0 && BigInt(now) < g.pauseExpiresAt;
 }
 
-/** Active keepers at `now`: in the set and past their 6 h attestation freeze. */
+/**
+ * Active keepers at `now`: in the set and past their 6 h attestation freeze, or bootstrap keepers set by
+ * `initialize_global` (`keeper_added_at == 0`: no freeze; `set_keepers` never stores 0).
+ */
 export function activeKeepers(g: Pick<GlobalAccount, "keepers" | "keeperAddedAt">, now: bigint | number, freezeSecs = 6n * 3_600n): PublicKey[] {
-  return g.keepers.filter((k, i) => !k.equals(PublicKey.default) && BigInt(now) >= g.keeperAddedAt[i] + freezeSecs);
+  return g.keepers.filter((k, i) => !k.equals(PublicKey.default) && (g.keeperAddedAt[i] === 0n || BigInt(now) >= g.keeperAddedAt[i] + freezeSecs));
 }
 
 // ── zero-copy ───────────────────────────────────────────────────────────────

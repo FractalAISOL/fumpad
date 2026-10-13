@@ -27,6 +27,7 @@ import {
   executeConfigIx,
   executeParamsIx,
   FUMPAD_IDL,
+  fumpadCoder,
   fumpadConfigParams,
   graduateIx,
   initClaimQueueIx,
@@ -78,7 +79,7 @@ const built: Record<string, { keys: unknown[] }> = {
   graduate: graduateIx({ caller: k(), coin, dammPosition: k(), positionNftMint: k() }),
   init_claim_queue: initClaimQueueIx(k(), mint),
   init_observations: initObservationsIx(k(), mint),
-  initialize_global: initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 2, params: DEFAULT_PARAMS }),
+  initialize_global: initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 2, params: DEFAULT_PARAMS, keepers: [k(), k(), k()], configs: [k()] }),
   migrate_global: migrateGlobalIx(k()),
   migrate_pool: migratePoolIx({ caller: k(), coin, nftMint: k() }),
   process_queue: processQueueIx({ cranker: k(), mint, entries: [{ ticket: k(), owner: k() }] }),
@@ -97,7 +98,7 @@ const built: Record<string, { keys: unknown[] }> = {
   withdraw_platform_fees: withdrawPlatformFeesIx(k(), mint, k()),
 };
 /** Remaining accounts the builders append (INTERFACE §3). */
-const REMAINING: Record<string, number> = { buy: 15, sell: 14, execute_buyback: 14, migrate_pool: 26, process_queue: 4, record_samples: 3 };
+const REMAINING: Record<string, number> = { initialize_global: 1, buy: 15, sell: 14, execute_buyback: 14, migrate_pool: 26, process_queue: 4, record_samples: 3 };
 
 describe("instruction builders vs IDL", () => {
   const idlIxs = (FUMPAD_IDL.instructions as unknown as { name: string; accounts: unknown[] }[]).map((i) => [i.name, i.accounts.length] as const);
@@ -105,6 +106,20 @@ describe("instruction builders vs IDL", () => {
   for (const [name, n] of idlIxs) {
     it(`${name}: ${n} IDL accounts (+ remaining)`, () => expect(built[name].keys.length).toBe(n + (REMAINING[name] ?? 0)));
   }
+});
+
+describe("initialize_global bootstrap", () => {
+  it("encodes 3 keeper slots (padded) and passes configs as read-only remaining accounts", () => {
+    const [a, b, c1, c2] = [k(), k(), k(), k()];
+    const i = initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [a, b], configs: [c1, c2] });
+    const d = fumpadCoder().instruction.decode(Buffer.from(i.data)) as { name: string; data: { keepers: PublicKey[]; cluster_tag: number } };
+    expect(d.name).toBe("initialize_global");
+    expect(d.data.keepers.map((x) => x.toBase58())).toEqual([a, b, PublicKey.default].map((x) => x.toBase58()));
+    expect(d.data.cluster_tag).toBe(1);
+    expect(i.keys.slice(-2).map((m) => [m.pubkey.toBase58(), m.isSigner, m.isWritable])).toEqual([[c1.toBase58(), false, false], [c2.toBase58(), false, false]]);
+    expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [k(), k(), k(), k()] })).toThrow();
+    expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, configs: Array.from({ length: 9 }, k) })).toThrow();
+  });
 });
 
 describe("DBC config parameters", () => {

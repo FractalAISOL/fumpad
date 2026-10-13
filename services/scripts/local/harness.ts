@@ -1,9 +1,13 @@
 /**
  * Local stack harness (v0.7): solana-test-validator with the built FUMPAD v0.7 program, the MAINNET
  * Meteora DBC 0.2.1 + DAMM v2 0.2.4 binaries and the mainnet DAMM v2 migration config
- * (contracts/tests/fixtures, dumped read-only), a Pyth SOL/USD account, a pre-seeded Global (short local
- * windows + the FUMPAD DBC config already allow-listed: the 48 h config/params timelocks can't elapse on a
- * test chain), and a Postgres (DATABASE_URL, docker compose, or a throwaway `initdb` cluster).
+ * (contracts/tests/fixtures, dumped read-only), a Pyth SOL/USD account, optionally a pre-seeded Global, and a
+ * Postgres (DATABASE_URL, docker compose, or a throwaway `initdb` cluster).
+ * Global: the e2e / app stacks still seed it into the genesis ONLY because their windows (10 s ticket challenge,
+ * 5 s hold, 60 s oracle window) are outside `Params::is_valid` and the 48 h params timelock can't elapse on a test
+ * chain; keepers + the DBC config no longer need seeding since `initialize_global` takes them (bootstrap: no 6 h
+ * freeze, no 48 h timelock). The real `initialize_global` path is exercised by `npm run bootstrap:rehearsal`
+ * (scripts/devnet/bootstrap-v07.ts on a validator started WITHOUT `global`).
  */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -72,7 +76,7 @@ export function writePythFixture(usd: number): string {
   return out;
 }
 
-/** A Global written into the genesis (short windows are outside `Params::is_valid`; configs skip the 48 h timelock). */
+/** A Global written into the genesis: only for local windows outside `Params::is_valid` (see the file header). */
 export interface GlobalPreload {
   admin: PublicKey;
   platformTreasury: PublicKey;

@@ -4,9 +4,10 @@
  * source, or they will disagree and not reach 2-of-3.
  *
  * - HermesPythSource: Pyth Hermes historical API (`/v2/updates/price/{publish_time}`), as specified.
- *   UNVERIFIED: since 2026-10 Hermes answers 401 "unauthorized" to unauthenticated requests (checked
- *   2026-10-13 for /latest and historical, also benchmarks.pyth.network). The API-key header name is
- *   configurable (`apiKeyHeader`, default `x-api-key`) — UNVERIFIED until a key is provisioned.
+ *   Since 2026-10 Hermes answers 401 "unauthorized" to unauthenticated requests. The key is sent as
+ *   `Authorization: Bearer <key>` (verified 2026-10-13 with the provisioned key on the historical endpoint:
+ *   Bearer → 200, `x-api-key` → 401, none → 401). `apiKeyHeader` overrides the header name for other
+ *   providers (the value is then the raw key).
  *   The endpoint's exact semantics (first update at/after the timestamp) are UNVERIFIED as well, so the
  *   source walks back second by second until it gets an update with publish_time ≤ block_time.
  * - StaticPythSource: a fixed table (tests, local e2e, replays of recorded prices).
@@ -85,7 +86,10 @@ export class HermesPythSource implements PythSource {
     const base = this.o.baseUrl ?? "https://hermes.pyth.network";
     const feed = this.o.feedId ?? PYTH_SOL_USD_FEED_ID;
     const headers: Record<string, string> = {};
-    if (this.o.apiKey) headers[this.o.apiKeyHeader ?? "x-api-key"] = this.o.apiKey;
+    if (this.o.apiKey) {
+      if (this.o.apiKeyHeader && this.o.apiKeyHeader.toLowerCase() !== "authorization") headers[this.o.apiKeyHeader] = this.o.apiKey;
+      else headers.Authorization = `Bearer ${this.o.apiKey}`;
+    }
     const res = await (this.o.fetchImpl ?? fetch)(`${base}/v2/updates/price/${t}?ids%5B%5D=${feed}&parsed=true`, {
       headers,
       signal: AbortSignal.timeout(this.o.timeoutMs ?? 15_000),

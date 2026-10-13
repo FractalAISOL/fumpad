@@ -82,6 +82,31 @@ export const PARAM_BOUNDS = {
   ticketChallengeSecs: [3_600n, 172_800n],
 } as const;
 
+const ORACLE_MIN_SAMPLE_EVERY_SECS = 60n;
+const OBSERVATION_CAPACITY = 256;
+const BUYBACK_VENUE_FEE_ALLOWANCE_BPS = 200;
+
+/** Why `Params::is_valid` (state/global.rs) would reject `p`; empty = valid. Mirrors the contract check by check. */
+export function paramsProblems(p: Params): string[] {
+  const out: string[] = [];
+  const within = (k: keyof typeof PARAM_BOUNDS) => {
+    const [lo, hi] = PARAM_BOUNDS[k] as readonly [number | bigint, number | bigint];
+    const v = p[k] as number | bigint;
+    if (v < lo || v > hi) out.push(`${k}=${v} outside [${lo}, ${hi}]`);
+  };
+  if (p.feeBuybackShareBps + p.feePlatformShareBps + p.feeCreatorShareBps !== 10_000) out.push("fee shares must sum to 10,000 bps");
+  for (const k of Object.keys(PARAM_BOUNDS) as (keyof typeof PARAM_BOUNDS)[]) within(k);
+  const n = BigInt(p.oracleMinSamples);
+  if (n * ORACLE_MIN_SAMPLE_EVERY_SECS < p.oracleWindowSecs) out.push("oracleMinSamples × 60 s must cover oracleWindowSecs");
+  if (p.oracleMinSpacingSecs > 0n && n > p.oracleWindowSecs / p.oracleMinSpacingSecs) out.push("oracleMinSamples > oracleWindowSecs / oracleMinSpacingSecs");
+  if (p.oracleMinSamples > OBSERVATION_CAPACITY) out.push(`oracleMinSamples > ${OBSERVATION_CAPACITY}`);
+  if (p.keeperStaleSecs <= p.oracleMinSpacingSecs) out.push("keeperStaleSecs must exceed oracleMinSpacingSecs");
+  if (p.buybackMaxDeviationBps + BUYBACK_VENUE_FEE_ALLOWANCE_BPS + 2 * p.buybackMaxPoolBps >= 10_000) out.push("buyback haircut ≥ 100%");
+  if (p.solUsdFeedId.replace(/^0x/, "").toLowerCase() !== PYTH_SOL_USD_FEED_ID) out.push("solUsdFeedId must be the pinned Pyth SOL/USD feed");
+  if (p.attestThreshold !== 2) out.push("attestThreshold must be 2");
+  return out;
+}
+
 export function paramsToIdl(p: Params): Record<string, unknown> {
   const { solUsdFeedId, ...rest } = p;
   return { ...(toIdl(rest) as Record<string, unknown>), sol_usd_feed_id: hexToBytes(solUsdFeedId) };

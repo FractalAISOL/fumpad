@@ -22,6 +22,7 @@
     "local": "tsx scripts/local-e2e.ts",
     "local:app": "tsx scripts/local/app-stack.ts",
     "validator": "tsx scripts/local/dev-chain.ts",
+    "bootstrap:rehearsal": "tsx scripts/local/bootstrap-rehearsal.ts",
     "api-types": "node scripts/gen-api-types.mjs",
     "test:all": "vitest run"
   },
