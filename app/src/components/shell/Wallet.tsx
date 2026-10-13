@@ -191,8 +191,8 @@ export function WalletButton({ compact }: { compact?: boolean }) {
               {spentSol >= instant.sessionCapSol ? " The cap is reached, so every transaction asks first until you close this tab." : ""}
             </p>
             <p className={s.fine}>
-              Buys, sells, claims and launches from the Trading wallet sign without a popup, and only if they are FUMPAD transactions. The per-transaction limit counts the
-              1% fee, network fees and first-time account rent. Withdrawals and key export always ask.
+              Buys, sells, claims and launches from the Trading wallet sign without a popup, and only if they are FUMPAD transactions on the coin you&apos;re trading. The
+              per-transaction limit counts the pool fee, network fees and first-time account rent. Withdrawals and key export always ask.
             </p>
           </section>
         )}

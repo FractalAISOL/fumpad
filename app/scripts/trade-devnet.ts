@@ -1,7 +1,7 @@
 /**
  * Send real devnet trades exactly as the app builds them (src/chain/build.ts), to watch the
  * live UI move: the coin page's chart/price/trades, the trade panel's balances and My
- * Fumbles (a sell worth the minimum files a ticket). Devnet only (checks the genesis hash).
+ * Fumbles (a sell worth the minimum is attested into a ticket by the keepers). Devnet only (checks the genesis hash).
  *
  *   RPC_URL=… npx tsx scripts/trade-devnet.ts <mint> [plan] [gapSecs]
  *
@@ -15,9 +15,9 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { coinAta } from "@fumpad/sdk";
 import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, sendAndConfirmTransaction, SystemProgram, Transaction, VersionedTransaction } from "@solana/web3.js";
-import { buildBuyTx, buildSellTx, fumpadClient } from "../src/chain/build";
+import { buildBuyTx, buildSellTx, fumpadClient, minOutFromQuote } from "../src/chain/build";
+import { coinAta } from "../src/chain/v07/ids";
 
 const API = (process.env.NEXT_PUBLIC_FUMPAD_API ?? "").replace(/\/+$/, "");
 const RPC = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";
@@ -68,16 +68,20 @@ async function main() {
       continue;
     }
     if (!mint) throw new Error("no mint yet: start the plan with a launch step or pass a mint");
+    // Slippage bounds from the API's quote, as in the app (M-9).
+    if (!API) throw new Error("trades need NEXT_PUBLIC_FUMPAD_API (for the quote)");
+    const quoteMin = async (s: "buy" | "sell", amount: number) =>
+      minOutFromQuote(((await (await fetch(`${API}/v1/quote?mint=${mint!.toBase58()}&side=${s}&amount=${amount}`)).json()) as { amountOut: number }).amountOut);
     let built;
-    if (side === "buy") built = await buildBuyTx(client, kp.publicKey, { mint: mint.toBase58(), solIn: Number(amt) });
+    if (side === "buy") built = await buildBuyTx(client, kp.publicKey, { mint: mint.toBase58(), solIn: Number(amt), minTokensOut: await quoteMin("buy", Number(amt)) });
     else {
-      const bal = Number(await client.tokenBalance(coinAta(kp.publicKey, mint))) / 1e6;
+      const bal = (await connection.getTokenAccountBalance(coinAta(kp.publicKey, mint)).catch(() => null))?.value.uiAmount ?? 0;
       const tokens = amt === "all" ? bal : amt === "half" ? Math.floor(bal / 2) : Number(amt);
       if (tokens <= 0) {
         console.log(`${i + 1}. ${name} sell skipped (no tokens)`);
         continue;
       }
-      built = await buildSellTx(client, kp.publicKey, { mint: mint.toBase58(), tokensIn: tokens });
+      built = await buildSellTx(client, kp.publicKey, { mint: mint.toBase58(), tokensIn: tokens, minSolOut: await quoteMin("sell", tokens) });
     }
     const { tx } = await client.toTransaction(kp.publicKey, built);
     tx.sign([kp, ...(built.signers ?? [])]);

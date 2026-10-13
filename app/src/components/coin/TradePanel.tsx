@@ -109,7 +109,7 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
     const minOut = minOutFromQuote(quote.amountOut);
     const res =
       side === "buy"
-        ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: minOut, openTickets: [], expectedOut: quote.amountOut })
+        ? await tx.buy({ mint: coin.mint, solIn: amount, minTokensOut: minOut, expectedOut: quote.amountOut })
         : await tx.sell({ mint: coin.mint, tokensIn: amount, minSolOut: minOut, expectedOut: quote.amountOut });
     if (!res) {
       toast(tx.lastError() ?? "The transaction didn't go through.");

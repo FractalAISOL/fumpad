@@ -529,8 +529,8 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
       try {
         const quote = await data.quoteTrade({ mint: c.mint, side: "buy", amount, wallet: address });
         // M-9: the bound is this quote (fetched on click) minus the slippage, not a later re-quote.
-        const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: minOutFromQuote(quote.amountOut), openTickets: [], expectedOut: quote.amountOut });
-        if (res) toast(`Bought ${f.tokens(quote.amountOut)} ${c.symbol}.`);
+        const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: minOutFromQuote(quote.amountOut), expectedOut: quote.amountOut });
+        if (res) toast(quote.partialFill ? `Bought the last ${f.tokens(quote.amountOut)} ${c.symbol}. That completed the curve.` : `Bought ${f.tokens(quote.amountOut)} ${c.symbol}.`);
         else toast(lastError() ?? "The buy didn't go through.");
       } catch {
         toast(`Couldn't price $${c.symbol} right now. Nothing was sent. Try again.`);
