@@ -108,6 +108,13 @@ export interface SilentPolicy {
   /** Launch only: the reserved mint, which the API already signed as (D18). */
   coSigner?: string;
   /**
+   * Launch only (INTERFACE-v0.7 §8.1): `Params.launch_signer` as read from the chain's Global by the
+   * app (never from the API), when one is configured. The API co-signs `register_coin` with it; the
+   * transaction must then carry exactly that extra signer, with a valid signature, in register_coin's
+   * `launch_signer` slot. Unset: no extra signer, and the slot holds the program id.
+   */
+  launchSigner?: string;
+  /**
    * Buys and sells (required, V7-M3): the router's exact `amount_in` (lamports / base units) and the
    * lowest `min_out` the app accepts, i.e. its own quote of the trade from the pool accounts minus
    * the max slippage (`./build.ts` `prepareBuy` / `prepareSell`), never the API's number.
@@ -344,6 +351,24 @@ function vetDbcFirstBuy(ix: Ix, wallet: PublicKey, mint: PublicKey, config: Publ
   return { amountIn, minOut, mode };
 }
 
+/**
+ * `register_coin` as the program now takes it (INTERFACE-v0.7 §8.1: an optional `launch_signer` signer
+ * before the event-CPI pair, the program id when unset). ASSUMPTION until @fumpad/sdk is repacked
+ * with that IDL: its `registerCoinIx` takes `launchSigner?: PublicKey | null`. With the SDK's
+ * current (pre-§8) IDL there is no slot: a launch with a configured launch signer is refused.
+ */
+const REGISTER_HAS_LAUNCH_SIGNER = (FUMPAD_IDL.instructions as unknown as { name: string; accounts: { name: string }[] }[])
+  .find((i) => i.name === "register_coin")!
+  .accounts.some((a) => a.name === "launch_signer");
+function expectedRegisterCoin(creator: PublicKey, mint: PublicKey, dbcConfig: PublicKey, launchSigner: PublicKey | null): TransactionInstruction {
+  if (REGISTER_HAS_LAUNCH_SIGNER) {
+    const build = registerCoinIx as unknown as (a: { creator: PublicKey; mint: PublicKey; dbcConfig: PublicKey; launchSigner: PublicKey | null }) => TransactionInstruction;
+    return build({ creator, mint, dbcConfig, launchSigner });
+  }
+  if (launchSigner) refuse("this app version can't check the launch co-signer yet");
+  return registerCoinIx({ creator, mint, dbcConfig });
+}
+
 /** The exact SDK instruction a claim-side action must be (accounts re-derived, data re-encoded). */
 function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_fees" | "withdraw_escrow", wallet: PublicKey, mint: PublicKey, ticket: PublicKey | null): void {
   switch (main) {
@@ -386,8 +411,17 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
   } catch {
     return refuse("unknown coin");
   }
-  if (action === "launch" ? policy.coSigner !== policy.mint : policy.coSigner !== undefined)
+  if (action === "launch" ? policy.coSigner !== policy.mint : policy.coSigner !== undefined || policy.launchSigner !== undefined)
     refuse(action === "launch" ? "a launch needs its reserved mint" : "it asks for unexpected signers");
+  let launchSigner: PublicKey | null = null;
+  if (policy.launchSigner !== undefined) {
+    try {
+      launchSigner = new PublicKey(policy.launchSigner);
+    } catch {
+      return refuse("unknown launch co-signer");
+    }
+    if (launchSigner.equals(PublicKey.default) || policy.launchSigner === policy.mint) refuse("unknown launch co-signer");
+  }
   if (WRAPS.includes(action) && policy.maxSolInLamports === undefined) refuse("a buy needs a spending limit");
   if ((action === "buy" || action === "sell") && (policy.amountIn === undefined || policy.minOut === undefined || policy.minOut <= BigInt(0)))
     refuse("a trade needs its amount and a minimum output");
@@ -399,7 +433,8 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
       return refuse("a claim needs its ticket");
     }
   }
-  const { ixs, isSigner } = open(tx, wallet, policy.coSigner ? [policy.coSigner] : []);
+  // Co-signers: the reserved mint and, when configured, the launch signer; each signature verified (L-7).
+  const { ixs, isSigner } = open(tx, wallet, [...(policy.coSigner ? [policy.coSigner] : []), ...(launchSigner ? [launchSigner.toBase58()] : [])]);
   const rest = vetComputeBudget(ixs);
   if (!isSigner(wallet)) refuse("your wallet isn't a signer");
 
@@ -442,7 +477,7 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
       if (!ix.keys[0]?.equals(wallet) || !isSigner(ix.keys[0])) refuse("it acts for another wallet");
       if (main === "buy" || main === "sell") buys += vetRouterTrade(ix, main, wallet, mint, policy);
       else if (main === "register_coin") {
-        if (!isExactly(ix, registerCoinIx({ creator: wallet, mint, dbcConfig: init!.config }))) refuse("it registers a different coin");
+        if (!isExactly(ix, expectedRegisterCoin(wallet, mint, init!.config, launchSigner))) refuse("it registers a different coin");
       } else vetUserIx(ix, main, wallet, mint, ticket);
     } else {
       refuse(`it calls a program FUMPAD doesn't use (${p.toBase58().slice(0, 8)}…)`);

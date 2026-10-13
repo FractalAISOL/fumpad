@@ -232,7 +232,9 @@ export function postText(t: Ticket, own: boolean) {
     case "gone":
       return t.state === "voided"
         ? t.voidReason === "guardian"
-          ? `${who} sold $${t.symbol}; the ticket was voided in its challenge window.`
+          ? t.reopened
+            ? `${who} sold $${t.symbol}; the ticket was reopened for correction in its challenge window.`
+            : `${who} sold $${t.symbol}; the ticket was voided in its challenge window.`
           : `${who} sold $${t.symbol}, bought back in, and the ticket went to zero. Fumbled. Fully.`
         : `${who} sold $${t.symbol}. It peaked at ${multipleText(t.peakMultiple)} and never held 10×. Fumbled. Fully. Sometimes selling was right.`;
   }

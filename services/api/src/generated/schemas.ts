@@ -2003,7 +2003,7 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "claimableFrom": {
         "$ref": "#/components/schemas/Millis",
-        "description": "attestedAt + the challenge window: the earliest time a claim can pay."
+        "description": "effectiveAt (else attestedAt) + the challenge window: the earliest time a claim can pay."
       },
       "claimedAt": {
         "$ref": "#/components/schemas/Millis"
@@ -2021,6 +2021,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "crossedMultiple": {
         "description": "Multiple at the crossing sample, when the indexer saw it (absent if only the claim proved it).",
         "type": "number"
+      },
+      "effectiveAt": {
+        "$ref": "#/components/schemas/Millis",
+        "description": "When the ticket takes effect (`TicketAttested.effective_at`, INTERFACE-v0.7 §8.4): the attestation time, or later when the coin's attestation rate cap deferred it. Absent from older APIs (= attestedAt)."
       },
       "escrowed": {
         "description": "D16: the payout went to the ticket's escrow (the owner's token account refused it) and waits to be withdrawn (`chainStatus` \"escrowed\", shown as state \"claimed\"). False once withdrawn.",
@@ -2070,6 +2074,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "rebuyDebited": {
         "description": "Debits applied by rebuys within 7 days.",
         "type": "number"
+      },
+      "reopened": {
+        "description": "Guardian void with `reopen` (`TicketVoided.reopened`, INTERFACE-v0.7 §8.2): the sell was reopened for correction, so the keepers can attest it again (a corrected ticket replaces this one).",
+        "type": "boolean"
       },
       "sellPrice": {
         "description": "Ticket price, SOL per token: max(execution, D12 floor).",

@@ -325,12 +325,12 @@ export function mockSetAutoClaim(owner: Address, mint: Address, enabled: boolean
  * `claimableFrom`, then takes its usual state. The mock attests exactly `attestDelaySecs` after
  * the sell, so a ticket filed in this session walks through every phase as the clock runs.
  */
-function attestPhase(sellTs: number, settled: Ticket["state"], now = mockNow()): Pick<Ticket, "state" | "attestedAt" | "claimableFrom"> {
+function attestPhase(sellTs: number, settled: Ticket["state"], now = mockNow()): Pick<Ticket, "state" | "attestedAt" | "effectiveAt" | "claimableFrom"> {
   const attestedAt = sellTs + PARAMS.attestDelaySecs * 1000;
   if (now < attestedAt) return { state: "verifying", attestedAt: undefined, claimableFrom: undefined };
   const claimableFrom = attestedAt + PARAMS.ticketChallengeSecs * 1000;
   const open = settled === "claimable" || settled === "tracking" || settled === "awaiting-graduation";
-  return { state: open && now < claimableFrom ? "challenge" : settled, attestedAt, claimableFrom };
+  return { state: open && now < claimableFrom ? "challenge" : settled, attestedAt, effectiveAt: attestedAt, claimableFrom };
 }
 
 function buildTicket(owner: Address, t: TicketSpec): Ticket {
@@ -380,6 +380,7 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
     app: source === "router" ? "fumpad" : app,
     sellSignature: signature(`sell:${id}`),
     attestedAt: phase.attestedAt,
+    effectiveAt: phase.effectiveAt,
     claimableFrom: phase.claimableFrom,
     execPrice,
     sellSol: t.originalTokens * execPrice,

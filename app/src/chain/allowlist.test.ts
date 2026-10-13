@@ -497,6 +497,22 @@ describe("vetFumpadTx: launch", () => {
     refused(() => vetFumpadTx(replay, wallet, launchPolicy(k)), /signature doesn't match/);
   });
 
+  it("§8.1 launch co-signer: only the one read from chain, with its own valid signature", () => {
+    const k = Keypair.generate();
+    const signerKp = Keypair.generate();
+    // An extra signer the app didn't expect (none configured on chain).
+    const extra = new TransactionInstruction({ programId: FUMPAD_PROGRAM_ID, keys: [{ pubkey: signerKp.publicKey, isSigner: true, isWritable: false }], data: Buffer.alloc(0) });
+    const t = tx([...cb(400_000), dbcInitPoolIx({ config, creator: wallet, mint: k.publicKey, name: "P", symbol: "P", uri: "u" }), registerCoinIx({ creator: wallet, mint: k.publicKey, config }), extra]);
+    t.sign([k, signerKp]);
+    refused(() => vetFumpadTx(t, wallet, launchPolicy(k)), /unexpected signers/);
+    // Configured on chain: the launch must carry it (a plain launch lacks the signer).
+    refused(() => vetFumpadTx(launchTx(k), wallet, { ...launchPolicy(k), launchSigner: signerKp.publicKey.toBase58() }), /unexpected signers/);
+    // A launch signer outside a launch, the default key, or the mint itself.
+    refused(() => vetFumpadTx(buyTx(), wallet, { ...buyPolicy(), launchSigner: signerKp.publicKey.toBase58() }), /unexpected signers/);
+    refused(() => vetFumpadTx(launchTx(k), wallet, { ...launchPolicy(k), launchSigner: PublicKey.default.toBase58() }), /launch co-signer/);
+    refused(() => vetFumpadTx(launchTx(k), wallet, { ...launchPolicy(k), launchSigner: k.publicKey.toBase58() }), /launch co-signer/);
+  });
+
   it("refuses a first buy above the amount entered, or one the user didn't ask for", () => {
     const k = Keypair.generate();
     refused(() => vetFumpadTx(launchTx(k, { buy: SOL }), wallet, launchPolicy(k, TENTH)), /more SOL/);

@@ -37,10 +37,12 @@ import {
   type DbcPoolConfig,
   decodeCoin,
   decodeDammPool,
+  decodeGlobal,
   decodeDbcConfig,
   decodeDbcPool,
   decodeTicket,
   FUMPAD_PROGRAM_ID,
+  globalPda,
   quoteDammBuy,
   quoteDammSell,
   quoteDbcBuy,
@@ -257,6 +259,22 @@ export class FumpadClient {
     if (!pool.tokenAMint.equals(a.mint) || !pool.tokenBMint.equals(WSOL_MINT)) throw new LayoutError("pool");
     const q = a.side === "buy" ? quoteDammBuy(pool, a.amountIn) : quoteDammSell(pool, a.amountIn);
     return { venue: r.venue, amountOut: q.amountOut, partialFill: false };
+  }
+
+  /**
+   * `Params.launch_signer` from the chain's Global (INTERFACE-v0.7 §8.1), or undefined when unset.
+   * ASSUMPTION until @fumpad/sdk is repacked with the §8 IDL: `decodeGlobal().params.launchSigner`.
+   */
+  async launchSigner(): Promise<string | undefined> {
+    const info = await this.connection.getAccountInfo(globalPda(), this.commitment);
+    if (!info || !info.owner.equals(FUMPAD_PROGRAM_ID)) throw new Error("Couldn't read FUMPAD's settings.");
+    let k: PublicKey | undefined;
+    try {
+      k = (decodeGlobal(new Uint8Array(info.data)).params as { launchSigner?: PublicKey }).launchSigner;
+    } catch {
+      throw new LayoutError("settings");
+    }
+    return k && !k.equals(PublicKey.default) ? k.toBase58() : undefined;
   }
 
   /** A FUMPAD DBC config (for the launch's first-buy check). */

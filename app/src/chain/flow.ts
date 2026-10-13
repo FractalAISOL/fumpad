@@ -179,15 +179,17 @@ export async function signAndSendLaunch(
 ): Promise<{ signature: string; tx: VersionedTransaction }> {
   const s = o.signer;
   const tx = VersionedTransaction.deserialize(Uint8Array.from(atob(p.transaction), (ch) => ch.charCodeAt(0)));
+  // §8.1: the launch co-signer the program requires, from the chain's Global (not from the API).
+  const launchSigner = await o.client.launchSigner();
   await checkLaunchBinding(
     tx,
-    { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: args.name, symbol: args.symbol, uri: args.uri, initialBuyLamports: args.initialBuyLamports },
+    { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: args.name, symbol: args.symbol, uri: args.uri, initialBuyLamports: args.initialBuyLamports, launchSigner },
     (config) => o.client.dbcConfig(config),
   );
   await o.beforeSign?.(tx);
   o.onSigning?.();
   // A wallet that rewrites the message would void the mint's signature: signFumpadTx refuses it.
-  const signed = await signFumpadTx(s, tx, { action: "launch", mint: p.mint, coSigner: p.mint, maxSolInLamports: args.initialBuyLamports }, o.instant);
+  const signed = await signFumpadTx(s, tx, { action: "launch", mint: p.mint, coSigner: p.mint, maxSolInLamports: args.initialBuyLamports, launchSigner }, o.instant);
   o.onConfirming?.();
   const signature = await o.connection.sendRawTransaction(signed.serialize(), { maxRetries: 3 });
   o.onSent?.(signature);

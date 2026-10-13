@@ -76,6 +76,8 @@ export interface LaunchIntent {
   uri: string;
   /** The first buy the user typed, lamports (fee included); 0 = none. */
   initialBuyLamports: bigint;
+  /** `Params.launch_signer` read from chain (INTERFACE-v0.7 §8.1), when configured. */
+  launchSigner?: string;
 }
 
 class LaunchRefused extends Error {
@@ -99,7 +101,7 @@ export async function checkLaunchBinding(
   readCurve: (config: PublicKey) => Promise<DbcPoolConfig>,
 ): Promise<LaunchShape> {
   // Shape, accounts, signers (the mint's signature verified), summed SOL ≤ the amount typed.
-  const shape = checkPreparedLaunch(tx, intent.wallet, intent.mint, intent.suffix, intent.initialBuyLamports);
+  const shape = checkPreparedLaunch(tx, intent.wallet, intent.mint, intent.suffix, intent.initialBuyLamports, intent.launchSigner);
   if (shape.name !== intent.name || shape.symbol !== intent.symbol || shape.uri !== intent.uri)
     refuse("the coin's name, symbol or metadata differ from what you entered");
 

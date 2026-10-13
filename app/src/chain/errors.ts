@@ -28,6 +28,7 @@ export const FUMPAD_ERROR_MESSAGES: Record<string, string> = {
   QueueFull: "The claim queue for this coin is full. Try again after it moves.",
   WalletQueueLimit: "You already have the most claims allowed in this coin's queue.",
   NoEscrow: "This ticket has nothing in escrow.",
+  PoolDisabled: "Trading is paused on this pool by Meteora. Nothing traded; try again later.",
 };
 
 /** The program whose instruction failed, from `Program <id> failed: …` in the logs. */
@@ -46,7 +47,8 @@ export function txErrorMessage(raw: string, logs?: string[]): string {
   if (code !== null && (prog === DBC_PROGRAM_ID.toBase58() || prog === DAMM_V2_PROGRAM_ID.toBase58()))
     return "Meteora rejected the swap, usually because the price moved or the curve just completed. Nothing traded; check the quote and try again.";
   if (code !== null && (!prog || prog === FUMPAD_PROGRAM_ID.toBase58())) {
-    const name = errorName(code);
+    // 6058 PoolDisabled (INTERFACE-v0.7 §8.10) until the SDK's IDL carries it.
+    const name = errorName(code) ?? (code === 6058 ? "PoolDisabled" : undefined);
     if (name) return FUMPAD_ERROR_MESSAGES[name] ?? `The transaction failed (${name}).`;
   }
   return raw || "Transaction failed.";

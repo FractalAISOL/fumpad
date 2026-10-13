@@ -34,8 +34,9 @@ export function checkPreparedLaunch(
   mint: string,
   suffix = VANITY_SUFFIX,
   maxSolInLamports = BigInt(0),
+  launchSigner?: string,
 ): LaunchShape {
   if (!isFumpadVanityMint(mint, suffix)) throw new Error("Refusing to sign: the mint address isn't a FUMPAD address.");
-  const { launch } = vetFumpadTx(tx, wallet, { action: "launch", mint, coSigner: mint, maxSolInLamports });
+  const { launch } = vetFumpadTx(tx, wallet, { action: "launch", mint, coSigner: mint, maxSolInLamports, launchSigner });
   return launch!;
 }
