@@ -1,124 +1,137 @@
 /**
- * FUMPAD keeper (SPEC §5.4 keeper policy, §7). One loop, chain state only (no DB):
+ * FUMPAD keeper jobs, v0.7 (SPEC v0.7 §3–§6, INTERFACE-v0.7 §3). One loop, chain state only:
  *
- *  sample    record_samples: heartbeat EVERY graduated coin < 10 min (batched); full rate
- *            (15 s) for coins whose spot ≥ 50% of their lowest open trigger and coins with
- *            buyback_lamports ≥ threshold. ≤5 coins per legacy tx, 6–10 via v0 + ALT.
- *            Isolated tx (compute-budget ixs only besides record_samples).
- *  graduate  Complete coins → graduate (400k CU), then init_observations, 9× init_claim_queue (one tx)
- *            and (once) PumpSwap user_volume_accumulator for the pool authority.
- *            D20 (v0.5): graduate refunds the caller's rent and pre-funds the observations +
- *            claim-queue PDAs out of the coin's graduation fee (default 0.65 SOL), so this
- *            whole step costs the keeper only tx fees (it still advances graduate's 0.05 SOL
- *            rent loan, returned in-instruction). Coins whose snapshotted fee is lower
- *            (devnet scaled params, pre-v0.5 coins) leave the shortfall to the keeper.
- *  buyback   execute_buyback when buyback_lamports ≥ threshold, a keeper median exists and
- *            spot is within the program's ±deviation band (pre-checked → no failing txs).
- *  queue     process_queue: simulates the program's skip-ahead walk and passes accounts for
- *            exactly the entries that will be paid (H-4); no keeper-paid owner ATAs (a
- *            missing/closed ATA escrows on chain, rent refundable to the keeper); zero-pay
- *            runs alert and back off.
- *  autoclaim (D17, v0.4) claim_for every Open ticket whose trigger holds on the covered
- *            keeper median, unless its owner opted out (Position.auto_claim_opt_out); oldest
- *            first; skips wallets at the D16 queue limit unless the claim pays now; the
- *            owner's ATA is created (keeper-paid, idempotent) in the same tx. Respects pause.
- *  skim      create ATA(coin, WSOL) + skim + settle_lp_fees per graduated coin periodically
- *            (simulated first; NothingToSkim = skip).
- *  fees      withdraw_platform_fees above a threshold (permissionless, pays the treasury).
- *  params    execute_params once a queued change's 48 h timelock has elapsed.
- *
- * Idempotency: every action is derived from fresh chain state and guarded by an in-flight
- * key, so a restart at worst sends a tx the program rejects. Single instance (L-10): with
- * DATABASE_URL the keeper holds a Postgres advisory lock before its first send.
- * Spend (M-7): per-tx priority-fee cap, daily budget (essential jobs only once exceeded),
- * persisted lookup table, status-filtered scans.
+ *  fees      claim_fees: the coin's FIRST claim right after the launch window (slot ≥ launch_slot +
+ *            launch_window_slots, D33: 100% → buyback), then whenever the DBC pool's unclaimed partner
+ *            fee ≥ FEES_MIN_LAMPORTS (every FEES_INTERVAL_SECS at most); claim_lp_fees on graduated coins
+ *            every LP_FEES_INTERVAL_SECS (simulated first; NothingToClaim = skip).
+ *  graduate  a completed DBC pool that Meteora's keepers haven't migrated within MIGRATE_GRACE_SECS →
+ *            migrate_pool (fresh position-NFT keypair, 600k CU); a migrated pool → graduate (finds the
+ *            locked DAMM v2 position), then init_observations + 9× init_claim_queue.
+ *  sample    record_samples: graduated coins heartbeat < 10 min (EVERY coin), full rate (15 s) when spot
+ *            ≥ 50% of the lowest open trigger or buyback_lamports ≥ threshold; curve coins only right
+ *            before a pre-grad buyback (its guard needs a keeper sample ≤ 60 s old). ≤ 8 coins / legacy tx.
+ *  buyback   execute_buyback: pre-grad (keeper-only) within ±band of the fresh pre-grad sample, slice ≤
+ *            0.5% of the curve's quote reserve and never completing the curve; post-grad within ±band of
+ *            the covered 30-min keeper median, slice ≤ 0.5% of the pool's SOL. Pre-checked like the program.
+ *  autoclaim claim_for every attested Open ticket past its challenge window whose trigger holds on the
+ *            covered median (owner not opted out; D16 wallet queue limit respected).
+ *  queue     process_queue for exactly the entries the program's skip-ahead walk pays (H-4).
+ *  close     close_ticket for terminal tickets (rent back to the attesting keeper) and Open tickets past
+ *            the claim window (→ Expired); close_consumed for this keeper's markers older than 7 days
+ *            whose ticket is gone.
+ *  platform  withdraw_platform_fees above a threshold.  params  execute_params / execute_config after
+ *            their 48 h timelocks.
+ * Budget (M-7): per-tx priority cap, daily spend budget (essential jobs only once exceeded), low-balance
+ * alarm. Single instance per key (L-10): Postgres advisory lock when DATABASE_URL is set.
  */
 import { createServer, type Server } from "node:http";
 
-import {
-  type AddressLookupTableAccount,
-  AddressLookupTableProgram,
-  Connection,
-  PublicKey,
-} from "@solana/web3.js";
+import { ComputeBudgetProgram, Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { pino, type Logger } from "pino";
 
 import {
-  OBSERVATIONS_ACCOUNT_SIZE,
   accountDiscriminator,
   BPS_DENOM,
-  computeBudgetIxs,
-  CU,
-  FUMPAD_PROGRAM_ID,
-  processQueueIx,
+  claimFeesIx,
+  claimForIx,
+  claimLpFeesIx,
+  claimQueuePda,
+  closeConsumedIx,
+  closeTicketIx,
   type CoinAccount,
-  coinAddresses,
-  coinRewardParams,
+  type CoinRefs,
+  coinPda,
+  dammPoolPda,
+  createAtaIdempotentIx,
+  DAMM_V2_PROGRAM_ID,
+  type DammPool,
+  type DbcVirtualPool,
+  decodeClaimQueue,
   decodeCoin,
+  decodeConsumed,
+  decodeDammPool,
+  decodeDbcPool,
+  decodeGlobal,
   decodeObservations,
-  decodePumpPool,
+  decodePosition,
+  decodeTicket,
   decodeTokenAccount,
-  FumpadClient,
-  isPaused,
-  LOCKER_ERROR,
+  executeBuybackIx,
+  executeConfigIx,
+  executeParamsIx,
   FUMPAD_ERROR,
-  MAX_SAMPLE_COINS,
-  MAX_SAMPLE_COINS_LEGACY,
-  MAX_QUEUED_PER_WALLET,
+  FUMPAD_PROGRAM_ID,
+  type GlobalAccount,
+  globalPda,
+  graduateIx,
+  initClaimQueueIx,
+  initObservationsIx,
+  isPaused,
   medianPriceQ64,
   meetsMultiple,
+  migratePoolIx,
   type ObservationsAccount,
-  PAUSE_CLAIMS,
-  type Params,
-  type PoolReserves,
-  decodePosition,
+  observationsPda,
+  PAUSE,
+  planQueuePayments,
   positionPda,
-  priceQ64,
+  priceQ64FromSqrt,
+  processQueueIx,
+  recordSamplesIx,
+  rewardVault,
   type TicketAccount,
-} from "@fumpad/sdk/v06";
+  TICKET_STATUS,
+  TICKET_STATUS_OFFSET,
+  TOKEN_2022_PROGRAM_ID,
+  withdrawPlatformFeesIx,
+  CLAIM_QUEUE_CAPACITY,
+  MAX_QUEUED_PER_WALLET,
+} from "@fumpad/sdk";
 
 import { Alerter } from "./alerts.js";
 import type { KeeperConfig } from "./config.js";
-import { planQueuePayments, type SpendState, trackSpend } from "./policy.js";
+import { type SpendState, trackSpend } from "./policy.js";
 import { Sender } from "./sender.js";
 import { KeeperStore } from "./store.js";
 
-/** Byte offset of `Coin.status` (8 disc + bump + mint + creator). */
-const COIN_STATUS_OFFSET = 8 + 1 + 32 + 32;
-const COIN_STATUS_BYTE = { curve: 0, complete: 1, graduated: 2 } as const;
-/** Jobs that keep running over the daily budget (oracle liveness, graduation, timelocked params). */
-const ESSENTIAL_JOBS = new Set(["sample", "graduate", "params"]);
+const ESSENTIAL_JOBS = new Set(["sample", "graduate", "params", "fees"]);
+const OBSERVATIONS_SIZE = 8_280;
+const CLAIM_QUEUE_SIZE = 81_976;
+const DAMM_POSITION_SIZE = 408;
+const MAX_SAMPLE_COINS = 8;
+const STARTED_AT = new Date().toISOString();
+const cu = (units: number) => ComputeBudgetProgram.setComputeUnitLimit({ units });
 
 interface CoinState {
-  mint: PublicKey;
   coin: CoinAccount;
+  dbc?: DbcVirtualPool | null;
+  damm?: DammPool | null;
   obs?: ObservationsAccount | null;
-  pool?: PoolReserves | null;
-  /** Lowest trigger price (Q64) among open tickets, if any. */
+  queueReady?: boolean;
+  positionNftMint?: PublicKey;
+  /** Lowest trigger price (Q64) among open tickets. */
   minTriggerQ64?: bigint;
   openTickets: number;
-  lastSkimAt: number;
-  lastBuybackAt: number;
   lastFeesAt: number;
+  lastLpFeesAt: number;
+  lastBuybackAt: number;
   lastQueueAt: number;
-  /** Queue runs to skip after zero-pay runs (exponential backoff). */
-  queueBackoff?: number;
+  lastAutoClaimAt: number;
   queueSkip?: number;
-  lastAutoClaimAt?: number;
-  setupDone: boolean;
+  queueBackoff?: number;
 }
 
 export interface AutoClaimCandidate {
   key: PublicKey;
-  ticket: Pick<TicketAccount, "owner" | "tokens" | "sellPriceQ64" | "sellTs" | "status">;
+  ticket: Pick<TicketAccount, "owner" | "tokens" | "sellPriceQ64" | "sellTs" | "status" | "attestedAt">;
 }
 
 /**
- * Which open tickets the keeper should `claim_for` now (pure; mirrors claim.rs): Open,
- * inside the claim window, covered median ≥ trigger, non-zero claim, owner not opted out,
- * and not a wallet already at the D16 queue limit unless the claim would pay right away.
- * Oldest sell first (the queue's own order).
+ * Which tickets to claim_for now (pure; mirrors claim.rs + the v0.7 challenge window): Open, past
+ * attested_at + challenge, inside the claim window, covered median ≥ trigger, non-zero claim, owner not
+ * opted out, not a wallet already at the D16 queue limit unless the claim pays now. Oldest sell first.
  */
 export function planAutoClaims(a: {
   tickets: AutoClaimCandidate[];
@@ -126,31 +139,44 @@ export function planAutoClaims(a: {
   queuedPerOwner: Map<string, number>;
   medianQ64: bigint;
   now: bigint;
-  params: Pick<Params, "claimWindowSecs" | "triggerMultipleBps" | "claimBps" | "maxClaimPoolBps">;
+  rewards: { claimWindowSecs: bigint; triggerMultipleBps: number; claimBps: number; maxClaimPoolBps: number };
+  challengeSecs: bigint;
   poolTokens: bigint;
 }): AutoClaimCandidate[] {
-  const p = a.params;
+  const r = a.rewards;
   return a.tickets
     .filter((t) => {
       const owner = t.ticket.owner.toBase58();
       if (t.ticket.status !== "open" || a.optedOut.has(owner)) return false;
-      if (t.ticket.sellTs + p.claimWindowSecs < a.now) return false;
-      if (!meetsMultiple(a.medianQ64, t.ticket.sellPriceQ64, p.triggerMultipleBps)) return false;
-      const amount = (t.ticket.tokens * BigInt(p.claimBps)) / BPS_DENOM;
+      if (t.ticket.attestedAt + a.challengeSecs > a.now) return false;
+      if (t.ticket.sellTs + r.claimWindowSecs < a.now) return false;
+      if (!meetsMultiple(a.medianQ64, t.ticket.sellPriceQ64, BigInt(r.triggerMultipleBps))) return false;
+      const amount = (t.ticket.tokens * BigInt(r.claimBps)) / BPS_DENOM;
       if (amount === 0n) return false;
-      const fits = amount * BPS_DENOM <= a.poolTokens * BigInt(p.maxClaimPoolBps);
+      const fits = amount * BPS_DENOM <= a.poolTokens * BigInt(r.maxClaimPoolBps);
       return fits || (a.queuedPerOwner.get(owner) ?? 0) < MAX_QUEUED_PER_WALLET;
     })
     .sort((x, y) => (x.ticket.sellTs < y.ticket.sellTs ? -1 : x.ticket.sellTs > y.ticket.sellTs ? 1 : 0));
 }
 
+/**
+ * Pre-graduation buyback slice (INTERFACE §3 Buyback): min(balance, quote_reserve × bps, room before the
+ * migration threshold − 1); 0 = nothing to do.
+ */
+export function pregradBuybackSlice(a: { buybackLamports: bigint; quoteReserve: bigint; threshold: bigint; maxPoolBps: number }): bigint {
+  const cap = (a.quoteReserve * BigInt(a.maxPoolBps)) / BPS_DENOM;
+  const room = a.threshold > a.quoteReserve + 1n ? a.threshold - a.quoteReserve - 1n : 0n;
+  let s = a.buybackLamports;
+  if (cap < s) s = cap;
+  if (room < s) s = room;
+  return s > 0n ? s : 0n;
+}
+
+/** |spot − guard| ≤ band (bps) — the program's PriceDeviation check. */
+export const withinBand = (spot: bigint, guard: bigint, bps: number) => (spot > guard ? spot - guard : guard - spot) * BPS_DENOM <= guard * BigInt(bps);
+
 /** claim_for outcomes that mean "not now" rather than a keeper fault. */
-const AUTOCLAIM_SKIP = () =>
-  new Set(
-    ["TriggerNotMet", "InsufficientSamples", "WalletQueueLimit", "AutoClaimDisabled", "TicketNotOpen", "TicketExpired", "Paused", "QueueFull", "ZeroAmount", "WrongCoinStatus"]
-      .map((n) => FUMPAD_ERROR[n])
-      .filter((c): c is number => c !== undefined),
-  );
+const SKIP = (names: string[]) => new Set(names.map((n) => FUMPAD_ERROR[n]).filter((c): c is number => c !== undefined));
 
 interface JobHealth {
   lastOkAt?: number;
@@ -164,50 +190,43 @@ interface JobHealth {
 export class Keeper {
   readonly log: Logger;
   readonly conn: Connection;
-  readonly client: FumpadClient;
   readonly sender: Sender;
   readonly alerts: Alerter;
+  readonly store?: KeeperStore;
+  readonly jobs: Record<string, JobHealth> = {};
   private coins = new Map<string, CoinState>();
-  private params?: Params;
-  private pendingEta = 0n;
-  private paused = 0;
-  private pauseExpiresAt = 0n;
+  private global?: GlobalAccount;
+  private chainNow = 0n;
+  private slot = 0n;
   private lastScan = 0;
   private lastTicketScan = 0;
-  private chainNow = 0n;
+  private lastCloseScan = 0;
   private inflight = new Set<string>();
   private stopped = false;
   private timer?: NodeJS.Timeout;
   private server?: Server;
-  private alt?: { table: AddressLookupTableAccount; addresses: Set<string> };
-  private altLoaded = false;
   private loopAt = 0;
   private balance = 0n;
-  private lastFullScan = 0;
   private spend: SpendState | null = null;
-  readonly store?: KeeperStore;
-  readonly jobs: Record<string, JobHealth> = {};
-  stats = { zeroPayRuns: 0, queuePaid: 0, overBudgetSkips: 0 };
+  private openTickets: { key: PublicKey; ticket: TicketAccount }[] = [];
+  stats = { zeroPayRuns: 0, queuePaid: 0, overBudgetSkips: 0, migrations: 0, graduations: 0, feeClaims: 0 };
 
   constructor(readonly cfg: KeeperConfig, log?: Logger) {
     this.log = log ?? pino({ name: "keeper", level: cfg.logLevel, base: { service: "keeper" }, timestamp: pino.stdTimeFunctions.isoTime, formatters: { level: (l) => ({ level: l }) } });
     this.conn = new Connection(cfg.rpcUrl, "confirmed");
-    this.client = new FumpadClient(this.conn);
     this.sender = new Sender(this.conn, cfg.keeper, cfg, this.log);
     this.alerts = new Alerter(this.log, { botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId });
     if (cfg.databaseUrl) this.store = new KeeperStore(cfg.databaseUrl, this.log);
   }
 
+  get keeperKey() {
+    return this.cfg.keeper.publicKey;
+  }
   private get metaKey() {
     return `keeper:${this.keeperKey.toBase58()}`;
   }
-
   get overBudget(): boolean {
     return !!this.spend && BigInt(this.spend.lamports) >= this.cfg.dailyBudgetLamports;
-  }
-
-  get keeperKey() {
-    return this.cfg.keeper.publicKey;
   }
 
   async start(): Promise<void> {
@@ -215,7 +234,6 @@ export class Keeper {
     if (this.cfg.healthPort) {
       this.server = createServer((req, res) => {
         if (req.url?.startsWith("/health")) {
-          // L-5: slim (no balance, no raw errors); details go to the logs every scan.
           const h = this.health();
           res.writeHead(h.ok ? 200 : 503, { "content-type": "application/json" }).end(JSON.stringify(h));
         } else res.writeHead(404).end();
@@ -233,7 +251,6 @@ export class Keeper {
         },
         { signal: { get stopped() { return self.stopped; } } },
       );
-      this.log.info("keeper lock acquired (single instance)");
       this.spend = await this.store.getMeta<SpendState>(`${this.metaKey}:spend`);
     }
     const tick = async () => {
@@ -257,42 +274,27 @@ export class Keeper {
     const failing = Object.entries(this.jobs).filter(([, j]) => j.failures >= 3).map(([k]) => k);
     return {
       ok: loopFresh && failing.length === 0,
-      version: { sha: process.env.GIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || null, deploymentId: process.env.RAILWAY_DEPLOYMENT_ID || null, startedAt: STARTED_AT },
+      version: { sha: process.env.GIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || null, startedAt: STARTED_AT },
       msSinceLoop: now - this.loopAt,
       failingJobs: failing,
       overBudget: this.overBudget,
-    };
-  }
-
-  /** Operator detail (logged each full scan; never served). */
-  detail() {
-    return {
-      keeper: this.keeperKey.toBase58(),
-      dryRun: this.cfg.dryRun,
-      balanceSol: Number(this.balance) / 1e9,
-      spentTodaySol: this.spend ? Number(this.spend.lamports) / 1e9 : 0,
-      budgetSol: Number(this.cfg.dailyBudgetLamports) / 1e9,
       coins: this.coins.size,
-      graduated: [...this.coins.values()].filter((c) => c.coin.status === "graduated").length,
-      jobs: Object.fromEntries(Object.entries(this.jobs).map(([k, j]) => [k, { runs: j.runs, actions: j.actions, failures: j.failures }])),
-      sender: this.sender.stats,
-      stats: this.stats,
-      alertsSent: this.alerts.sent,
+      postGraduationSetupFailing: failing.includes("graduate"),
     };
   }
 
   // ── loop ─────────────────────────────────────────────────────────────────
-
   async loopOnce(): Promise<void> {
     await this.refresh();
     const j = this.cfg.jobs;
-    if (j.sample) await this.job("sample", () => this.runSampling());
+    if (j.fees) await this.job("fees", () => this.runFees());
     if (j.graduate) await this.job("graduate", () => this.runGraduate());
+    if (j.sample) await this.job("sample", () => this.runSampling());
     if (j.buyback) await this.job("buyback", () => this.runBuybacks());
     if (j.autoclaim) await this.job("autoclaim", () => this.runAutoClaims());
     if (j.queue) await this.job("queue", () => this.runQueues());
-    if (j.skim) await this.job("skim", () => this.runSkims());
-    if (j.fees) await this.job("fees", () => this.runPlatformFees());
+    if (j.close) await this.job("close", () => this.runClose());
+    if (j.platform) await this.job("platform", () => this.runPlatformFees());
     if (j.params) await this.job("params", () => this.runParams());
     this.loopAt = Date.now();
   }
@@ -318,99 +320,6 @@ export class Keeper {
     }
   }
 
-  /** Re-read chain state: coins (gPA), open tickets (gPA), observations + pools (batched). */
-  async refresh(): Promise<void> {
-    const now = Date.now();
-    this.chainNow = await this.client.chainTime();
-    if (now - this.lastScan > this.cfg.scanIntervalSecs * 1000 || !this.params) {
-      const g = await this.client.global(0);
-      this.params = g.params;
-      this.pendingEta = g.pendingEta;
-      this.paused = g.paused;
-      this.pauseExpiresAt = g.pauseExpiresAt;
-      // M-7 scan limits: only complete/graduated coins every scan; every coin (curve coins
-      // matter only for platform-fee withdrawals) on the slow full scan.
-      const full = now - this.lastFullScan > this.cfg.fullScanIntervalSecs * 1000;
-      const all = full ? await this.client.scanCoins() : [...(await this.scanCoinsByStatus("complete")), ...(await this.scanCoinsByStatus("graduated"))];
-      if (full) this.lastFullScan = now;
-      for (const c of all) {
-        const k = c.mint.toBase58();
-        const prev = this.coins.get(k);
-        this.coins.set(k, prev ? { ...prev, coin: c } : { mint: c.mint, coin: c, openTickets: 0, lastSkimAt: 0, lastBuybackAt: 0, lastFeesAt: 0, lastQueueAt: 0, setupDone: false });
-      }
-      this.balance = BigInt(await this.conn.getBalance(this.keeperKey));
-      if (this.balance < this.cfg.minKeeperLamports) await this.alerts.alert("balance", `keeper balance low: ${Number(this.balance) / 1e9} SOL`);
-      const wasOver = this.overBudget;
-      this.spend = trackSpend(this.spend, this.balance);
-      await this.store?.setMeta(`${this.metaKey}:spend`, this.spend);
-      if (this.overBudget && !wasOver)
-        await this.alerts.alert(
-          "budget",
-          `keeper spent ${Number(this.spend.lamports) / 1e9} SOL today (budget ${Number(this.cfg.dailyBudgetLamports) / 1e9}); only sample/graduate/params run until 00:00 UTC`,
-        );
-      if (full) this.log.info(this.detail(), "keeper status");
-      this.lastScan = now;
-    } else {
-      // Cheap refresh of known coins' accounts (not curve coins: the full scan covers them).
-      const list = [...this.coins.values()].filter((c) => c.coin.status !== "curve");
-      for (let i = 0; i < list.length; i += 100) {
-        const chunk = list.slice(i, i + 100);
-        const infos = await this.conn.getMultipleAccountsInfo(chunk.map((c) => coinAddresses(c.mint).coin));
-        infos.forEach((a, j) => {
-          if (a) chunk[j].coin = decodeCoinSafe(a.data) ?? chunk[j].coin;
-        });
-      }
-    }
-    if (now - this.lastTicketScan > this.cfg.ticketScanIntervalSecs * 1000) {
-      const open = await this.client.scanOpenTickets();
-      const byMint = new Map<string, { min: bigint; n: number }>();
-      for (const { ticket } of open) {
-        const k = ticket.mint.toBase58();
-        // v0.6 (M-1): each coin's snapshotted trigger, not the global one.
-        const known = this.coins.get(k);
-        const trig = BigInt((known ? coinRewardParams(known.coin, this.params!) : this.params!).triggerMultipleBps);
-        const t = (ticket.sellPriceQ64 * trig) / BPS_DENOM;
-        const e = byMint.get(k);
-        byMint.set(k, { min: e && e.min < t ? e.min : t, n: (e?.n ?? 0) + 1 });
-      }
-      for (const [k, c] of this.coins) {
-        c.minTriggerQ64 = byMint.get(k)?.min;
-        c.openTickets = byMint.get(k)?.n ?? 0;
-      }
-      this.lastTicketScan = now;
-    }
-    const grads = [...this.coins.values()].filter((c) => c.coin.status === "graduated");
-    for (let i = 0; i < grads.length; i += 25) {
-      const chunk = grads.slice(i, i + 25);
-      const keys = chunk.flatMap((c) => {
-        const a = coinAddresses(c.mint);
-        return [a.observations, a.pool, a.poolBase, a.poolQuote];
-      });
-      const infos = await this.conn.getMultipleAccountsInfo(keys);
-      chunk.forEach((c, j) => {
-        const [o, p, b, q] = infos.slice(j * 4, j * 4 + 4);
-        // D20: graduate pre-funds the PDA before init_observations, so a short account = not initialised.
-        c.obs = o && o.data.length >= OBSERVATIONS_ACCOUNT_SIZE ? decodeObservations(new Uint8Array(o.data)) : null;
-        if (p && b && q) {
-          const pool = decodePumpPool(new Uint8Array(p.data));
-          c.pool = { base: decodeTokenAccount(new Uint8Array(b.data)).amount, quote: decodeTokenAccount(new Uint8Array(q.data)).amount + pool.virtualQuoteReserves };
-        }
-      });
-    }
-  }
-
-  /** getProgramAccounts for Coin accounts with one status (memcmp on the status byte). */
-  private async scanCoinsByStatus(status: keyof typeof COIN_STATUS_BYTE): Promise<CoinAccount[]> {
-    const res = await this.conn.getProgramAccounts(FUMPAD_PROGRAM_ID, {
-      commitment: "confirmed",
-      filters: [
-        { memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Coin")) } },
-        { memcmp: { offset: COIN_STATUS_OFFSET, bytes: bs58.encode(Uint8Array.from([COIN_STATUS_BYTE[status]])) } },
-      ],
-    });
-    return res.map((r) => decodeCoinSafe(r.account.data)).filter((c): c is CoinAccount => !!c);
-  }
-
   private async guard(key: string, fn: () => Promise<number>): Promise<number> {
     if (this.inflight.has(key)) return 0;
     this.inflight.add(key);
@@ -421,47 +330,234 @@ export class Keeper {
     }
   }
 
-  // ── sampling ─────────────────────────────────────────────────────────────
+  private paused(flag: number) {
+    return !!this.global && isPaused(this.global, flag, this.chainNow);
+  }
 
-  /** Seconds between keeper samples this coin needs right now. */
+  private refs(c: CoinState): CoinRefs {
+    const k = c.coin;
+    return { mint: k.mint, dbcConfig: k.dbcConfig, dbcPool: k.dbcPool, dammPool: k.dammPool.equals(PublicKey.default) ? undefined : k.dammPool, creator: k.creator };
+  }
+
+  /** Re-read chain state. */
+  async refresh(): Promise<void> {
+    const now = Date.now();
+    const slot = await this.conn.getSlot("confirmed");
+    this.slot = BigInt(slot);
+    this.chainNow = BigInt((await this.conn.getBlockTime(slot).catch(() => null)) ?? Math.floor(now / 1000));
+    if (!this.global || now - this.lastScan > this.cfg.scanIntervalSecs * 1000) {
+      const g = await this.conn.getAccountInfo(globalPda());
+      if (!g) throw new Error("Global not initialized");
+      this.global = decodeGlobal(g.data);
+      const res = await this.conn.getProgramAccounts(FUMPAD_PROGRAM_ID, { filters: [{ memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Coin")) } }] });
+      for (const r of res) {
+        const coin = decodeCoin(r.account.data);
+        const k = coin.mint.toBase58();
+        const prev = this.coins.get(k);
+        this.coins.set(k, prev ? { ...prev, coin } : { coin, openTickets: 0, lastFeesAt: 0, lastLpFeesAt: 0, lastBuybackAt: 0, lastQueueAt: 0, lastAutoClaimAt: 0 });
+      }
+      this.balance = BigInt(await this.conn.getBalance(this.keeperKey));
+      if (this.balance < this.cfg.minKeeperLamports) await this.alerts.alert("balance", `keeper balance low: ${Number(this.balance) / 1e9} SOL`);
+      const wasOver = this.overBudget;
+      this.spend = trackSpend(this.spend, this.balance);
+      await this.store?.setMeta(`${this.metaKey}:spend`, this.spend);
+      if (this.overBudget && !wasOver)
+        await this.alerts.alert("budget", `keeper spent ${Number(this.spend.lamports) / 1e9} SOL today (budget ${Number(this.cfg.dailyBudgetLamports) / 1e9}); only essential jobs run until 00:00 UTC`);
+      this.lastScan = now;
+    } else {
+      const list = [...this.coins.values()];
+      for (let i = 0; i < list.length; i += 100) {
+        const chunk = list.slice(i, i + 100);
+        const infos = await this.conn.getMultipleAccountsInfo(chunk.map((c) => this.coinPdaOf(c)));
+        infos.forEach((a, j) => {
+          if (a) chunk[j].coin = decodeCoin(a.data);
+        });
+      }
+    }
+    // Venue + oracle accounts.
+    const list = [...this.coins.values()];
+    for (let i = 0; i < list.length; i += 25) {
+      const chunk = list.slice(i, i + 25);
+      const keys = chunk.flatMap((c) => [c.coin.dbcPool, c.coin.dammPool.equals(PublicKey.default) ? c.coin.dbcPool : c.coin.dammPool, observationsPda(c.coin.mint), claimQueuePda(c.coin.mint)]);
+      const infos = await this.conn.getMultipleAccountsInfo(keys);
+      chunk.forEach((c, j) => {
+        const [d, a, o, q] = infos.slice(j * 4, j * 4 + 4);
+        c.dbc = d ? decodeDbcPool(new Uint8Array(d.data)) : null;
+        c.damm = c.coin.status === "graduated" && a ? decodeDammPool(new Uint8Array(a.data)) : null;
+        c.obs = o && o.data.length >= OBSERVATIONS_SIZE && o.owner.equals(FUMPAD_PROGRAM_ID) ? decodeObservations(new Uint8Array(o.data)) : null;
+        c.queueReady = !!q && q.data.length >= CLAIM_QUEUE_SIZE && q.owner.equals(FUMPAD_PROGRAM_ID);
+      });
+    }
+    if (now - this.lastTicketScan > this.cfg.ticketScanIntervalSecs * 1000) {
+      this.openTickets = await this.scanTickets(TICKET_STATUS.open);
+      const byMint = new Map<string, { min: bigint; n: number }>();
+      for (const { ticket } of this.openTickets) {
+        const c = this.coins.get(ticket.mint.toBase58());
+        if (!c) continue;
+        const t = (ticket.sellPriceQ64 * BigInt(c.coin.rewards.triggerMultipleBps)) / BPS_DENOM;
+        const e = byMint.get(ticket.mint.toBase58());
+        byMint.set(ticket.mint.toBase58(), { min: e && e.min < t ? e.min : t, n: (e?.n ?? 0) + 1 });
+      }
+      for (const [k, c] of this.coins) {
+        c.minTriggerQ64 = byMint.get(k)?.min;
+        c.openTickets = byMint.get(k)?.n ?? 0;
+      }
+      this.lastTicketScan = now;
+    }
+  }
+
+  private coinPdaOf(c: CoinState) {
+    return coinPda(c.coin.mint);
+  }
+
+  private async scanTickets(status: number, mint?: PublicKey): Promise<{ key: PublicKey; ticket: TicketAccount }[]> {
+    const filters = [
+      { memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Ticket")) } },
+      { memcmp: { offset: TICKET_STATUS_OFFSET, bytes: bs58.encode(Uint8Array.from([status])) } },
+      ...(mint ? [{ memcmp: { offset: 8 + 1 + 32, bytes: mint.toBase58() } }] : []),
+    ];
+    const res = await this.conn.getProgramAccounts(FUMPAD_PROGRAM_ID, { filters });
+    return res.map((r) => ({ key: r.pubkey, ticket: decodeTicket(r.account.data) }));
+  }
+
+  // ── fees ─────────────────────────────────────────────────────────────────
+  async runFees(): Promise<number> {
+    let n = 0;
+    const skip = SKIP(["NothingToClaim", "LaunchWindowActive", "LaunchFeesUnsettled"]);
+    for (const c of this.coins.values()) {
+      const k = c.coin;
+      const windowEnd = k.launchSlot + k.launchWindowSlots;
+      const first = !k.launchFeesSettled && this.slot >= windowEnd;
+      const due = k.launchFeesSettled && c.dbc && c.dbc.partnerQuoteFee >= this.cfg.feesMinLamports && Date.now() - c.lastFeesAt > this.cfg.feesIntervalSecs * 1000;
+      if (first || due) {
+        n += await this.guard(`fees:${k.mint.toBase58()}`, async () => {
+          c.lastFeesAt = Date.now();
+          const r = await this.sender.send(first ? "claim_fees(launch window)" : "claim_fees", { instructions: [cu(200_000), claimFeesIx(this.keeperKey, this.refs(c))] }, { retries: 1 });
+          if (!r.ok) {
+            if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
+            throw new Error(`claim_fees failed: ${r.error}`);
+          }
+          this.stats.feeClaims++;
+          return 1;
+        });
+      }
+      if (k.status === "graduated" && k.launchFeesSettled && Date.now() - c.lastLpFeesAt > this.cfg.lpFeesIntervalSecs * 1000) {
+        n += await this.guard(`lpfees:${k.mint.toBase58()}`, async () => {
+          c.lastLpFeesAt = Date.now();
+          const nft = await this.positionNftMint(c);
+          if (!nft) return 0;
+          const r = await this.sender.send("claim_lp_fees", { instructions: [cu(200_000), claimLpFeesIx(this.keeperKey, { ...this.refs(c), dammPosition: k.dammPosition, positionNftMint: nft })] }, { retries: 0 });
+          if (!r.ok) {
+            if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
+            throw new Error(`claim_lp_fees failed: ${r.error}`);
+          }
+          return 1;
+        });
+      }
+    }
+    return n;
+  }
+
+  private async positionNftMint(c: CoinState): Promise<PublicKey | null> {
+    if (c.positionNftMint) return c.positionNftMint;
+    if (c.coin.dammPosition.equals(PublicKey.default)) return null;
+    const a = await this.conn.getAccountInfo(c.coin.dammPosition);
+    if (!a) return null;
+    c.positionNftMint = new PublicKey(a.data.subarray(40, 72));
+    return c.positionNftMint;
+  }
+
+  /** The locked DAMM v2 position the migration created for `pool` (first position with locked liquidity). */
+  private async findDammPosition(pool: PublicKey): Promise<{ position: PublicKey; nftMint: PublicKey } | null> {
+    const res = await this.conn.getProgramAccounts(DAMM_V2_PROGRAM_ID, { filters: [{ dataSize: DAMM_POSITION_SIZE }, { memcmp: { offset: 8, bytes: pool.toBase58() } }] });
+    const locked = (d: Buffer) => d.readBigUInt64LE(8 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 16) | (d.readBigUInt64LE(8 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 16 + 8) << 64n);
+    const best = res.filter((r) => locked(r.account.data) > 0n).sort((a, b) => (locked(b.account.data) > locked(a.account.data) ? 1 : -1))[0];
+    return best ? { position: best.pubkey, nftMint: new PublicKey(best.account.data.subarray(40, 72)) } : null;
+  }
+
+  // ── graduation ───────────────────────────────────────────────────────────
+  async runGraduate(): Promise<number> {
+    if (this.paused(PAUSE.graduate)) return 0;
+    let n = 0;
+    for (const c of this.coins.values()) {
+      const k = c.coin;
+      const mint = k.mint.toBase58();
+      if (k.status !== "graduated" && c.dbc) {
+        if (c.dbc.isMigrated === 1) {
+          n += await this.guard(`graduate:${mint}`, async () => {
+            const dammPool = dammPoolPda(k.mint);
+            const pos = await this.findDammPosition(dammPool);
+            if (!pos) throw new Error(`graduate ${mint}: no locked DAMM v2 position found for ${dammPool.toBase58()}`);
+            const migrator = k.migrator.equals(PublicKey.default) ? this.keeperKey : k.migrator;
+            const r = await this.sender.send("graduate", { instructions: [cu(400_000), graduateIx({ caller: this.keeperKey, coin: { ...this.refs(c), dammPool }, dammPosition: pos.position, positionNftMint: pos.nftMint, migrator })] });
+            if (!r.ok) throw new Error(`graduate failed: ${r.error}`);
+            this.stats.graduations++;
+            c.positionNftMint = pos.nftMint;
+            this.log.info({ mint, signature: r.signature }, "graduated");
+            return 1;
+          });
+        } else if (c.dbc.migrationProgress >= 2 || k.status === "complete") {
+          const finished = Number(c.dbc.finishCurveTimestamp);
+          if (finished && Number(this.chainNow) - finished < this.cfg.migrateGraceSecs) continue;
+          n += await this.guard(`migrate:${mint}`, async () => {
+            const nft = Keypair.generate();
+            const r = await this.sender.send("migrate_pool", { instructions: [cu(600_000), migratePoolIx({ caller: this.keeperKey, coin: this.refs(c), nftMint: nft.publicKey })], signers: [nft] });
+            if (!r.ok) throw new Error(`migrate_pool failed: ${r.error}`);
+            this.stats.migrations++;
+            this.log.info({ mint, signature: r.signature }, "migrated (DBC → DAMM v2)");
+            return 1;
+          });
+        }
+      }
+      if (k.status === "graduated" && (!c.obs || !c.queueReady)) {
+        n += await this.guard(`setup:${mint}`, async () => {
+          const ixs = [cu(400_000)];
+          if (!c.obs) ixs.push(initObservationsIx(this.keeperKey, k.mint));
+          if (!c.queueReady) for (let i = 0; i < 9; i++) ixs.push(initClaimQueueIx(this.keeperKey, k.mint));
+          const r = await this.sender.send("post-graduation setup", { instructions: ixs });
+          if (!r.ok) throw new Error(`post-graduation setup failed: ${r.error}`);
+          return 1;
+        });
+      }
+    }
+    return n;
+  }
+
+  // ── sampling ─────────────────────────────────────────────────────────────
+  private spotQ64(c: CoinState): bigint | null {
+    if (c.coin.status === "graduated") return c.damm ? priceQ64FromSqrt(c.damm.sqrtPrice) : null;
+    return c.dbc ? priceQ64FromSqrt(c.dbc.sqrtPrice) : null;
+  }
+
   sampleInterval(c: CoinState): number {
-    const spot = c.pool && c.pool.base > 0n ? priceQ64(c.pool.quote, c.pool.base) : null;
-    const nearTrigger =
-      c.minTriggerQ64 !== undefined && spot !== null && spot * 1000n >= c.minTriggerQ64 * BigInt(Math.round(this.cfg.nearTriggerRatio * 1000));
+    const spot = this.spotQ64(c);
+    const near = c.minTriggerQ64 !== undefined && spot !== null && spot * 1000n >= c.minTriggerQ64 * BigInt(Math.round(this.cfg.nearTriggerRatio * 1000));
     const buyback = c.coin.buybackLamports >= this.cfg.buybackMinLamports;
-    return nearTrigger || buyback ? this.cfg.fullRateSecs : this.cfg.heartbeatSecs;
+    return near || buyback ? this.cfg.fullRateSecs : this.cfg.heartbeatSecs;
   }
 
   async runSampling(): Promise<number> {
-    const p = this.params!;
+    const g = this.global!;
     const now = this.chainNow;
-    const due: { c: CoinState; overdue: bigint }[] = [];
-    const fill: { c: CoinState; overdue: bigint }[] = [];
+    const due: { c: CoinState; pool: PublicKey }[] = [];
     for (const c of this.coins.values()) {
-      if (c.coin.status !== "graduated" || !c.obs || !c.pool) continue;
-      const lastKeeper = c.obs.keeperSampled ? c.obs.lastKeeperSampleTs : 0n;
-      const since = now - lastKeeper;
-      const want = BigInt(this.sampleInterval(c));
-      if (since < p.oracleMinSpacingSecs) continue;
-      if (since >= want) due.push({ c, overdue: since - want });
-      // Past half their interval: ride along in a batch that is going out anyway (fewer txs,
-      // and heartbeats of many coins converge into shared batches).
-      else if (since * 2n >= want) fill.push({ c, overdue: since - want });
+      const k = c.coin;
+      if (k.status === "graduated") {
+        if (!c.obs || !c.damm) continue;
+        const last = c.obs.keeperSampled ? c.obs.lastKeeperSampleTs : 0n;
+        const since = now - last;
+        if (since >= g.params.oracleMinSpacingSecs && since >= BigInt(this.sampleInterval(c))) due.push({ c, pool: k.dammPool });
+      } else if (k.status === "curve" && c.dbc && k.buybackLamports >= this.cfg.buybackMinLamports && k.launchFeesSettled && !this.paused(PAUSE.trade)) {
+        // pre-grad buyback guard: keep a keeper sample ≤ 60 s old
+        const since = now - k.pregradSampleTs;
+        if (since >= g.params.oracleMinSpacingSecs && since >= 40n) due.push({ c, pool: k.dbcPool });
+      }
     }
-    if (!due.length) return 0;
-    due.sort((a, b) => (a.overdue > b.overdue ? -1 : 1));
-    fill.sort((a, b) => (a.overdue > b.overdue ? -1 : 1));
-    const cap = this.cfg.useLookupTable && !this.cfg.dryRun ? MAX_SAMPLE_COINS : MAX_SAMPLE_COINS_LEGACY;
-    const room = (cap - (due.length % cap)) % cap;
-    due.push(...fill.slice(0, room));
     let sent = 0;
-    const alt = this.cfg.useLookupTable && due.length > MAX_SAMPLE_COINS_LEGACY ? await this.ensureAlt(due.map((d) => d.c.mint)) : undefined;
-    const size = alt ? MAX_SAMPLE_COINS : MAX_SAMPLE_COINS_LEGACY;
-    for (let i = 0; i < due.length; i += size) {
-      const batch = due.slice(i, i + size).map((d) => d.c.mint);
-      const key = `sample:${batch.map((m) => m.toBase58()).join(",")}`;
-      sent += await this.guard(key, async () => {
-        const r = await this.sender.send("record_samples", this.client.buildRecordSamples({ sampler: this.keeperKey, mints: batch }), { lookupTables: alt ? [alt] : undefined });
+    for (let i = 0; i < due.length; i += MAX_SAMPLE_COINS) {
+      const batch = due.slice(i, i + MAX_SAMPLE_COINS);
+      sent += await this.guard(`sample:${batch.map((b) => b.c.coin.mint.toBase58()).join(",")}`, async () => {
+        const r = await this.sender.send("record_samples", { instructions: [cu(60_000 + 25_000 * batch.length), recordSamplesIx(this.keeperKey, batch.map((b) => ({ mint: b.c.coin.mint, pool: b.pool })))] });
         if (!r.ok) {
           if (r.code === FUMPAD_ERROR.SampleTooSoon) return 0;
           throw new Error(`record_samples failed: ${r.error}`);
@@ -472,138 +568,39 @@ export class Keeper {
     return sent;
   }
 
-  /** Lookup table holding [coin, observations, pool, base, quote] for each sampled coin. */
-  private async ensureAlt(mints: PublicKey[]): Promise<AddressLookupTableAccount | undefined> {
-    if (this.cfg.dryRun) return undefined;
-    const want = mints.flatMap((m) => {
-      const a = coinAddresses(m);
-      return [a.coin, a.observations, a.pool, a.poolBase, a.poolQuote];
-    });
-    if (!this.altLoaded) {
-      this.altLoaded = true;
-      await this.loadAlt();
-    }
-    const missingNow = this.alt ? want.filter((k) => !this.alt!.addresses.has(k.toBase58())) : want;
-    if (this.alt && this.alt.addresses.size + missingNow.length > 256) {
-      // Full: retire it (deactivate now, close later to recover the rent) and start a new one.
-      await this.retireAlt(this.alt.table.key);
-      this.alt = undefined;
-    }
-    if (!this.alt) {
-      const slot = await this.conn.getSlot("finalized");
-      const [ix, table] = AddressLookupTableProgram.createLookupTable({ authority: this.keeperKey, payer: this.keeperKey, recentSlot: slot });
-      const r = await this.sender.send("alt-create", { instructions: [ix] });
-      if (!r.ok) return undefined;
-      this.alt = { table: { key: table, state: { addresses: [] } } as unknown as AddressLookupTableAccount, addresses: new Set() };
-      // M-7: persist so restarts reuse it instead of paying for a new table each boot.
-      await this.store?.setMeta(`${this.metaKey}:alt`, { address: table.toBase58() });
-      if (!this.store) this.log.warn({ table: table.toBase58() }, "lookup table created; set KEEPER_LOOKUP_TABLE to reuse it after a restart");
-    }
-    const missing = want.filter((k) => !this.alt!.addresses.has(k.toBase58()));
-    if (this.alt.addresses.size + missing.length > 256) return undefined;
-    for (let i = 0; i < missing.length; i += 25) {
-      const chunk = missing.slice(i, i + 25);
-      const ix = AddressLookupTableProgram.extendLookupTable({ lookupTable: this.alt.table.key, authority: this.keeperKey, payer: this.keeperKey, addresses: chunk });
-      const r = await this.sender.send("alt-extend", { instructions: [ix] });
-      if (!r.ok) return undefined;
-      for (const k of chunk) this.alt.addresses.add(k.toBase58());
-    }
-    if (missing.length) await new Promise((r) => setTimeout(r, 1_000)); // new entries usable from the next slot
-    const fresh = (await this.conn.getAddressLookupTable(this.alt.table.key)).value;
-    if (!fresh) return undefined;
-    this.alt.table = fresh;
-    return fresh;
-  }
-
-  /** Reuse KEEPER_LOOKUP_TABLE or the persisted table if it is ours and active. */
-  private async loadAlt(): Promise<void> {
-    const addr = this.cfg.lookupTable ?? (await this.store?.getMeta<{ address: string }>(`${this.metaKey}:alt`))?.address;
-    await this.closeRetiredAlts();
-    if (!addr) return;
-    try {
-      const t = (await this.conn.getAddressLookupTable(new PublicKey(addr))).value;
-      if (!t || !t.isActive() || !t.state.authority?.equals(this.keeperKey)) {
-        this.log.warn({ table: addr }, "configured/persisted lookup table unusable (missing, deactivated or another authority); creating a new one");
-        return;
-      }
-      this.alt = { table: t, addresses: new Set(t.state.addresses.map((a) => a.toBase58())) };
-      this.log.info({ table: addr, entries: t.state.addresses.length }, "reusing lookup table");
-    } catch (e) {
-      this.log.warn({ table: addr, err: String(e) }, "lookup table load failed");
-    }
-  }
-
-  private async retireAlt(table: PublicKey): Promise<void> {
-    const ix = AddressLookupTableProgram.deactivateLookupTable({ lookupTable: table, authority: this.keeperKey });
-    const r = await this.sender.send("alt-deactivate", { instructions: [ix] });
-    if (!r.ok) this.log.warn({ table: table.toBase58(), err: r.error }, "lookup table deactivate failed");
-    const retired = (await this.store?.getMeta<string[]>(`${this.metaKey}:alt-retired`)) ?? [];
-    await this.store?.setMeta(`${this.metaKey}:alt-retired`, [...new Set([...retired, table.toBase58()])]);
-  }
-
-  /** Close deactivated tables once their cool-down passed (refunds the rent to the keeper). */
-  private async closeRetiredAlts(): Promise<void> {
-    const retired = (await this.store?.getMeta<string[]>(`${this.metaKey}:alt-retired`)) ?? [];
-    if (!retired.length || this.cfg.dryRun) return;
-    const left: string[] = [];
-    for (const a of retired) {
-      const ix = AddressLookupTableProgram.closeLookupTable({ lookupTable: new PublicKey(a), authority: this.keeperKey, recipient: this.keeperKey });
-      const r = await this.sender.send("alt-close", { instructions: [ix] }, { retries: 0 });
-      if (!r.ok) left.push(a); // still cooling down: try on a later restart
-    }
-    await this.store?.setMeta(`${this.metaKey}:alt-retired`, left);
-  }
-
-  // ── graduation + setup ───────────────────────────────────────────────────
-
-  async runGraduate(): Promise<number> {
-    let n = 0;
-    for (const c of this.coins.values()) {
-      if (c.coin.status === "complete") {
-        n += await this.guard(`graduate:${c.mint.toBase58()}`, async () => {
-          const r = await this.sender.send("graduate", this.client.buildGraduate({ payer: this.keeperKey, mint: c.mint }));
-          if (!r.ok) {
-            if (r.code === FUMPAD_ERROR.WrongCoinStatus) return 0; // someone else graduated it
-            await this.alerts.alert(`graduate:${c.mint.toBase58()}`, `graduate ${c.mint.toBase58()} failed: ${r.error}`);
-            throw new Error(`graduate failed: ${r.error}`);
-          }
-          this.lastScan = 0; // pick up the new status next loop
-          return 1;
-        });
-      }
-      if (c.coin.status === "graduated" && !c.setupDone) {
-        n += await this.guard(`setup:${c.mint.toBase58()}`, async () => {
-          const steps = await this.client.buildPostGraduation({ payer: this.keeperKey, mint: c.mint });
-          for (const s of steps) {
-            const r = await this.sender.send("post_graduation", s);
-            if (!r.ok) throw new Error(`post-graduation setup failed: ${r.error} :: ${(r.logs ?? []).slice(-4).join(" | ")}`);
-          }
-          c.setupDone = !this.cfg.dryRun || steps.length === 0;
-          return steps.length;
-        });
-      }
-    }
-    return n;
-  }
-
-  // ── buyback ──────────────────────────────────────────────────────────────
-
+  // ── buybacks ─────────────────────────────────────────────────────────────
   async runBuybacks(): Promise<number> {
-    const p = this.params!;
+    if (this.paused(PAUSE.trade)) return 0;
+    const p = this.global!.params;
+    const skip = SKIP(["PriceDeviation", "InsufficientSamples", "NothingToBuyBack", "StaleSample", "LaunchWindowActive"]);
     let n = 0;
     for (const c of this.coins.values()) {
-      if (c.coin.status !== "graduated" || c.coin.buybackLamports < this.cfg.buybackMinLamports || !c.obs || !c.pool) continue;
-      if (Date.now() - c.lastBuybackAt < this.cfg.buybackIntervalSecs * 1000) continue;
-      const median = medianPriceQ64(c.obs.samples, this.chainNow, p.oracleWindowSecs, p.oracleMinSamples);
-      const spot = priceQ64(c.pool.quote, c.pool.base);
-      if (!median || !spot) continue;
-      const diff = spot > median ? spot - median : median - spot;
-      if (diff * BPS_DENOM > median * BigInt(p.buybackMaxDeviationBps)) continue; // program would reject (PriceDeviation)
-      n += await this.guard(`buyback:${c.mint.toBase58()}`, async () => {
+      const k = c.coin;
+      if (k.buybackLamports < this.cfg.buybackMinLamports || Date.now() - c.lastBuybackAt < this.cfg.buybackIntervalSecs * 1000) continue;
+      let maxIn: bigint;
+      let venue: "dbc" | "damm_v2";
+      const spot = this.spotQ64(c);
+      if (spot === null) continue;
+      if (k.status === "curve") {
+        if (!c.dbc || this.slot < k.launchSlot + k.launchWindowSlots) continue;
+        if (this.chainNow - k.pregradSampleTs > 60n || !withinBand(spot, k.pregradSamplePriceQ64, p.buybackMaxDeviationBps)) continue;
+        const cfg = await this.dbcThreshold(c);
+        maxIn = pregradBuybackSlice({ buybackLamports: k.buybackLamports, quoteReserve: c.dbc.quoteReserve, threshold: cfg, maxPoolBps: p.buybackMaxPoolBps });
+        venue = "dbc";
+      } else if (k.status === "graduated") {
+        if (!c.obs || !c.damm) continue;
+        const med = medianPriceQ64(c.obs, this.chainNow, p.oracleWindowSecs, p.oracleMinSamples);
+        if (!med || !withinBand(spot, med, p.buybackMaxDeviationBps)) continue;
+        const cap = (c.damm.tokenBAmount * BigInt(p.buybackMaxPoolBps)) / BPS_DENOM;
+        maxIn = k.buybackLamports < cap ? k.buybackLamports : cap;
+        venue = "damm_v2";
+      } else continue;
+      if (maxIn <= 0n) continue;
+      n += await this.guard(`buyback:${k.mint.toBase58()}`, async () => {
         c.lastBuybackAt = Date.now();
-        const r = await this.sender.send("execute_buyback", await this.client.buildExecuteBuyback({ cranker: this.keeperKey, mint: c.mint, maxLamports: c.coin.buybackLamports }));
+        const r = await this.sender.send("execute_buyback", { instructions: [cu(250_000), executeBuybackIx({ cranker: this.keeperKey, coin: this.refs(c), venue, maxIn })] });
         if (!r.ok) {
-          if (r.code === FUMPAD_ERROR.PriceDeviation || r.code === FUMPAD_ERROR.InsufficientSamples || r.code === FUMPAD_ERROR.NothingToBuyBack) return 0;
+          if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
           throw new Error(`execute_buyback failed: ${r.error}`);
         }
         return 1;
@@ -612,93 +609,52 @@ export class Keeper {
     return n;
   }
 
-  // ── claim queue ──────────────────────────────────────────────────────────
-
-  async runQueues(): Promise<number> {
-    const p = this.params!;
-    if (isPaused({ paused: this.paused, pauseExpiresAt: this.pauseExpiresAt }, PAUSE_CLAIMS, this.chainNow)) return 0; // v0.6: pauses lapse
-    let n = 0;
-    for (const c of this.coins.values()) {
-      if (c.coin.status !== "graduated" || Date.now() - c.lastQueueAt < this.cfg.queueIntervalSecs * 1000) continue;
-      c.lastQueueAt = Date.now();
-      if (c.queueSkip && c.queueSkip > 0) {
-        c.queueSkip--;
-        continue;
-      }
-      const q = await this.client.claimQueue(c.mint);
-      if (!q || q.len === 0) continue;
-      const pool = await this.client.tokenBalance(coinAddresses(c.mint).rewardVault);
-      // H-4: pass accounts for exactly the entries the program's walk will pay (v0.6 M-1: the
-      // coin's snapshotted per-claim cap).
-      const plan = planQueuePayments(q.entries, pool, coinRewardParams(c.coin, p).maxClaimPoolBps);
-      if (!plan.pay.length) continue;
-      n += await this.guard(`queue:${c.mint.toBase58()}`, async () => {
-        // No keeper-paid owner ATAs (H-4: an owner could close its ATA between runs and farm
-        // the rent). A missing/closed ATA makes the program escrow the payout; the escrow rent
-        // is refunded to the keeper by withdraw_escrow.
-        const b = {
-          instructions: [
-            ...computeBudgetIxs(CU.processQueue),
-            processQueueIx({ cranker: this.keeperKey, mint: c.mint, maxEntries: plan.pay.length, entries: plan.pay.map((e) => ({ ticket: e.ticket, owner: e.owner })) }),
-          ],
-        };
-        const r = await this.sender.send("process_queue", b);
-        if (!r.ok) throw new Error(`process_queue failed: ${r.error}`);
-        if (r.simulated) return 1;
-        const after = await this.client.claimQueue(c.mint);
-        const left = new Set((after?.entries ?? []).map((e) => e.ticket.toBase58()));
-        const paid = plan.pay.filter((e) => !left.has(e.ticket.toBase58())).length;
-        this.stats.queuePaid += paid;
-        if (paid === 0) {
-          this.stats.zeroPayRuns++;
-          c.queueBackoff = Math.min(32, (c.queueBackoff ?? 0) * 2 || 1);
-          c.queueSkip = c.queueBackoff;
-          await this.alerts.alert(`queue-zero-pay:${c.mint.toBase58()}`, `process_queue on ${c.mint.toBase58()} paid nothing (planned ${plan.pay.length}); backing off ${c.queueBackoff} runs`);
-        } else {
-          c.queueBackoff = 0;
-          this.alerts.resolve(`queue-zero-pay:${c.mint.toBase58()}`);
-        }
-        this.log.info({ mint: c.mint.toBase58(), planned: plan.pay.length, paid, signature: r.signature }, "queue processed");
-        return 1;
-      });
+  private thresholds = new Map<string, bigint>();
+  private async dbcThreshold(c: CoinState): Promise<bigint> {
+    const k = c.coin.dbcConfig.toBase58();
+    if (!this.thresholds.has(k)) {
+      const a = await this.conn.getAccountInfo(c.coin.dbcConfig);
+      if (!a) throw new Error("DBC config missing");
+      this.thresholds.set(k, a.data.readBigUInt64LE(264));
     }
-    return n;
+    return this.thresholds.get(k)!;
   }
 
-  // ── auto-claim (D17) ─────────────────────────────────────────────────────
-
+  // ── claims ───────────────────────────────────────────────────────────────
   async runAutoClaims(): Promise<number> {
-    const p = this.params!;
-    if (isPaused({ paused: this.paused, pauseExpiresAt: this.pauseExpiresAt }, PAUSE_CLAIMS, this.chainNow)) return 0; // v0.6: pauses lapse
-    const skip = AUTOCLAIM_SKIP();
+    if (this.paused(PAUSE.claims)) return 0;
+    const g = this.global!;
+    const skip = SKIP(["TriggerNotMet", "InsufficientSamples", "WalletQueueLimit", "AutoClaimDisabled", "TicketNotOpen", "TicketExpired", "TicketInChallenge", "Paused", "QueueFull", "ZeroAmount", "WrongCoinStatus"]);
     let n = 0;
     for (const c of this.coins.values()) {
-      if (c.coin.status !== "graduated" || !c.setupDone || !c.openTickets || !c.obs) continue;
-      if (Date.now() - (c.lastAutoClaimAt ?? 0) < this.cfg.autoClaimIntervalSecs * 1000) continue;
-      const median = medianPriceQ64(c.obs.samples, this.chainNow, p.oracleWindowSecs, p.oracleMinSamples);
-      // Cheap pre-filter: nothing can trigger below the lowest open trigger.
+      const k = c.coin;
+      if (k.status !== "graduated" || !c.obs || !c.queueReady || !c.openTickets) continue;
+      if (Date.now() - c.lastAutoClaimAt < this.cfg.autoClaimIntervalSecs * 1000) continue;
+      const median = medianPriceQ64(c.obs, this.chainNow, g.params.oracleWindowSecs, g.params.oracleMinSamples);
       if (!median || (c.minTriggerQ64 !== undefined && median < c.minTriggerQ64)) continue;
       c.lastAutoClaimAt = Date.now();
-      const [open, queue, pool] = await Promise.all([
-        this.client.scanOpenTickets(c.mint),
-        this.client.claimQueue(c.mint),
-        this.client.tokenBalance(coinAddresses(c.mint).rewardVault),
-      ]);
-      if (!queue || !open.length) continue;
+      const open = this.openTickets.filter((t) => t.ticket.mint.equals(k.mint));
+      const [qa, va] = await this.conn.getMultipleAccountsInfo([claimQueuePda(k.mint), rewardVault(k.mint)]);
+      if (!qa || !va) continue;
+      const queue = decodeClaimQueue(new Uint8Array(qa.data));
+      if (queue.len >= CLAIM_QUEUE_CAPACITY) continue;
+      const pool = decodeTokenAccount(new Uint8Array(va.data)).amount;
       const owners = [...new Set(open.map((t) => t.ticket.owner.toBase58()))].map((o) => new PublicKey(o));
-      const infos = await this.conn.getMultipleAccountsInfo(owners.map((o) => positionPda(c.mint, o)));
+      const infos = owners.length ? await this.conn.getMultipleAccountsInfo(owners.map((o) => positionPda(k.mint, o))) : [];
       const optedOut = new Set(owners.filter((_, i) => infos[i] && decodePosition(new Uint8Array(infos[i]!.data)).autoClaimOptOut === 1).map((o) => o.toBase58()));
       const queuedPerOwner = new Map<string, number>();
       for (const e of queue.entries) queuedPerOwner.set(e.owner.toBase58(), (queuedPerOwner.get(e.owner.toBase58()) ?? 0) + 1);
-      const picks = planAutoClaims({ tickets: open, optedOut, queuedPerOwner, medianQ64: median, now: this.chainNow, params: coinRewardParams(c.coin, p), poolTokens: pool });
+      const picks = planAutoClaims({ tickets: open, optedOut, queuedPerOwner, medianQ64: median, now: this.chainNow, rewards: k.rewards, challengeSecs: g.params.ticketChallengeSecs, poolTokens: pool });
       for (const t of picks.slice(0, this.cfg.autoClaimMaxPerRun)) {
         n += await this.guard(`autoclaim:${t.key.toBase58()}`, async () => {
-          const r = await this.sender.send("claim_for", this.client.buildClaimFor({ keeper: this.keeperKey, mint: c.mint, ticket: t.key, owner: t.ticket.owner }));
+          const r = await this.sender.send("claim_for", {
+            instructions: [cu(250_000), createAtaIdempotentIx(this.keeperKey, t.ticket.owner, k.mint, TOKEN_2022_PROGRAM_ID), claimForIx({ keeper: this.keeperKey, mint: k.mint, ticket: t.key, owner: t.ticket.owner })],
+          });
           if (!r.ok) {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
             throw new Error(`claim_for failed: ${r.error}`);
           }
-          this.log.info({ mint: c.mint.toBase58(), ticket: t.key.toBase58(), owner: t.ticket.owner.toBase58(), simulated: r.simulated }, "auto-claimed");
+          this.log.info({ mint: k.mint.toBase58(), ticket: t.key.toBase58(), owner: t.ticket.owner.toBase58() }, "auto-claimed");
           return 1;
         });
       }
@@ -706,34 +662,96 @@ export class Keeper {
     return n;
   }
 
-  // ── LP skim + settle ─────────────────────────────────────────────────────
-
-  async runSkims(): Promise<number> {
+  async runQueues(): Promise<number> {
+    if (this.paused(PAUSE.claims)) return 0;
     let n = 0;
     for (const c of this.coins.values()) {
-      if (c.coin.status !== "graduated" || Date.now() - c.lastSkimAt < this.cfg.skimIntervalSecs * 1000) continue;
-      n += await this.guard(`skim:${c.mint.toBase58()}`, async () => {
-        c.lastSkimAt = Date.now();
-        const r = await this.sender.send("skim_settle", this.client.buildSkimSettle({ payer: this.keeperKey, mint: c.mint }), { retries: 0 });
-        if (!r.ok) {
-          if (r.code === LOCKER_ERROR.NothingToSkim || r.code === FUMPAD_ERROR.NothingToSettle) return 0;
-          throw new Error(`skim failed: ${r.error}`);
-        }
+      const k = c.coin;
+      if (k.status !== "graduated" || !c.queueReady || Date.now() - c.lastQueueAt < this.cfg.queueIntervalSecs * 1000) continue;
+      c.lastQueueAt = Date.now();
+      if (c.queueSkip && c.queueSkip > 0) {
+        c.queueSkip--;
+        continue;
+      }
+      const [qa, va] = await this.conn.getMultipleAccountsInfo([claimQueuePda(k.mint), rewardVault(k.mint)]);
+      if (!qa || !va) continue;
+      const q = decodeClaimQueue(new Uint8Array(qa.data));
+      if (!q.len) continue;
+      const plan = planQueuePayments(q.entries, decodeTokenAccount(new Uint8Array(va.data)).amount, k.rewards.maxClaimPoolBps);
+      if (!plan.pay.length) continue;
+      n += await this.guard(`queue:${k.mint.toBase58()}`, async () => {
+        const r = await this.sender.send("process_queue", { instructions: [cu(600_000), processQueueIx({ cranker: this.keeperKey, mint: k.mint, entries: plan.pay.map((e) => ({ ticket: e.ticket, owner: e.owner })) })] });
+        if (!r.ok) throw new Error(`process_queue failed: ${r.error}`);
+        if (r.simulated) return 1;
+        const after = await this.conn.getAccountInfo(claimQueuePda(k.mint));
+        const left = new Set((after ? decodeClaimQueue(new Uint8Array(after.data)).entries : []).map((e) => e.ticket.toBase58()));
+        const paid = plan.pay.filter((e) => !left.has(e.ticket.toBase58())).length;
+        this.stats.queuePaid += paid;
+        if (paid === 0) {
+          this.stats.zeroPayRuns++;
+          c.queueBackoff = Math.min(32, (c.queueBackoff ?? 0) * 2 || 1);
+          c.queueSkip = c.queueBackoff;
+          await this.alerts.alert(`queue-zero-pay:${k.mint.toBase58()}`, `process_queue on ${k.mint.toBase58()} paid nothing (planned ${plan.pay.length}); backing off`);
+        } else c.queueBackoff = 0;
         return 1;
       });
     }
     return n;
   }
 
-  // ── platform fees + params ───────────────────────────────────────────────
+  // ── closing (rent back to the attesting keeper) ─────────────────────────
+  async runClose(): Promise<number> {
+    if (Date.now() - this.lastCloseScan < this.cfg.closeIntervalSecs * 1000) return 0;
+    this.lastCloseScan = Date.now();
+    let n = 0;
+    const terminal = [...(await this.scanTickets(TICKET_STATUS.claimed)), ...(await this.scanTickets(TICKET_STATUS.voided)), ...(await this.scanTickets(TICKET_STATUS.expired))];
+    const expiredOpen = this.openTickets.filter((t) => {
+      const c = this.coins.get(t.ticket.mint.toBase58());
+      return c && t.ticket.sellTs + c.coin.rewards.claimWindowSecs < this.chainNow;
+    });
+    for (const t of [...terminal, ...expiredOpen].slice(0, this.cfg.closeMaxPerRun)) {
+      n += await this.guard(`close:${t.key.toBase58()}`, async () => {
+        const r = await this.sender.send("close_ticket", { instructions: [closeTicketIx({ caller: this.keeperKey, ticket: t.key, rentPayer: t.ticket.rentPayer, mint: t.ticket.mint, owner: t.ticket.owner })] }, { retries: 0 });
+        if (!r.ok) {
+          if (r.code === FUMPAD_ERROR.TicketNotClosable) return 0;
+          throw new Error(`close_ticket failed: ${r.error}`);
+        }
+        return 1;
+      });
+    }
+    // Consumed markers this keeper paid for, older than 7 days, whose ticket is gone.
+    const consumed = await this.conn.getProgramAccounts(FUMPAD_PROGRAM_ID, {
+      filters: [
+        { memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Consumed")) } },
+        { memcmp: { offset: 8 + 1 + 1 + 32, bytes: this.keeperKey.toBase58() } },
+      ],
+    });
+    const old = consumed.map((r) => ({ key: r.pubkey, c: decodeConsumed(r.account.data) })).filter((x) => x.c.blockTime + 7n * 86_400n < this.chainNow);
+    for (let i = 0; i < old.length && n < this.cfg.closeMaxPerRun; i += 100) {
+      const chunk = old.slice(i, i + 100);
+      const live = await this.conn.getMultipleAccountsInfo(chunk.map((x) => x.c.ticket));
+      for (let j = 0; j < chunk.length; j++) {
+        if (live[j] && live[j]!.owner.equals(FUMPAD_PROGRAM_ID)) continue;
+        const x = chunk[j];
+        n += await this.guard(`consumed:${x.key.toBase58()}`, async () => {
+          const r = await this.sender.send("close_consumed", { instructions: [closeConsumedIx(this.keeperKey, x.key, x.c.rentPayer, x.c.ticket)] }, { retries: 0 });
+          if (!r.ok) {
+            if (r.code === FUMPAD_ERROR.ConsumedNotClosable) return 0;
+            throw new Error(`close_consumed failed: ${r.error}`);
+          }
+          return 1;
+        });
+      }
+    }
+    return n;
+  }
 
   async runPlatformFees(): Promise<number> {
     let n = 0;
     for (const c of this.coins.values()) {
-      if (c.coin.platformFeesUnclaimed < this.cfg.platformFeesMinLamports || Date.now() - c.lastFeesAt < this.cfg.platformFeesIntervalSecs * 1000) continue;
-      n += await this.guard(`fees:${c.mint.toBase58()}`, async () => {
-        c.lastFeesAt = Date.now();
-        const r = await this.sender.send("withdraw_platform_fees", await this.client.buildWithdrawPlatformFees({ caller: this.keeperKey, mint: c.mint }));
+      if (c.coin.platformFeesUnclaimed < this.cfg.platformFeesMinLamports) continue;
+      n += await this.guard(`platform:${c.coin.mint.toBase58()}`, async () => {
+        const r = await this.sender.send("withdraw_platform_fees", { instructions: [withdrawPlatformFeesIx(this.keeperKey, c.coin.mint, this.global!.platformTreasury)] }, { retries: 0 });
         if (!r.ok) throw new Error(`withdraw_platform_fees failed: ${r.error}`);
         return 1;
       });
@@ -742,26 +760,23 @@ export class Keeper {
   }
 
   async runParams(): Promise<number> {
-    if (this.pendingEta === 0n || this.chainNow < this.pendingEta) return 0;
-    return this.guard("params", async () => {
-      const r = await this.sender.send("execute_params", this.client.buildExecuteParams(this.keeperKey));
-      if (!r.ok) {
-        if (r.code === FUMPAD_ERROR.NoPendingParams) return 0;
-        throw new Error(`execute_params failed: ${r.error}`);
-      }
-      this.pendingEta = 0n;
-      await this.alerts.alert("params", "executed queued params change (D15 timelock elapsed)");
-      return 1;
-    });
+    const g = this.global!;
+    let n = 0;
+    if (g.pendingEta > 0n && this.chainNow >= g.pendingEta) {
+      n += await this.guard("params", async () => {
+        const r = await this.sender.send("execute_params", { instructions: [executeParamsIx(this.keeperKey)] }, { retries: 0 });
+        if (!r.ok && r.code !== FUMPAD_ERROR.NoPendingParams && r.code !== FUMPAD_ERROR.TimelockNotElapsed) throw new Error(`execute_params failed: ${r.error}`);
+        return r.ok ? 1 : 0;
+      });
+    }
+    if (!g.pendingConfig.equals(PublicKey.default) && g.pendingConfigEta > 0n && this.chainNow >= g.pendingConfigEta) {
+      n += await this.guard("config", async () => {
+        const r = await this.sender.send("execute_config", { instructions: [executeConfigIx(this.keeperKey, g.pendingConfig)] }, { retries: 0 });
+        if (!r.ok && r.code !== FUMPAD_ERROR.NoPendingConfig && r.code !== FUMPAD_ERROR.TimelockNotElapsed) throw new Error(`execute_config failed: ${r.error}`);
+        return r.ok ? 1 : 0;
+      });
+    }
+    return n;
   }
 }
 
-const STARTED_AT = Date.now();
-
-function decodeCoinSafe(data: Uint8Array): CoinAccount | null {
-  try {
-    return decodeCoin(new Uint8Array(data));
-  } catch {
-    return null;
-  }
-}

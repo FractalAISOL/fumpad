@@ -10,7 +10,7 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { MAX_QUEUE_ENTRIES_PER_TX, type QueueEntry } from "@fumpad/sdk/v06";
+import { MAX_QUEUE_ENTRIES_PER_LEGACY_TX as MAX_QUEUE_ENTRIES_PER_TX, type QueueEntry } from "@fumpad/sdk";
 
 import { fitsPool, planQueuePayments, trackSpend, utcDay } from "../src/policy.js";
 import { capPriority, computeUnitLimit } from "../src/sender.js";
@@ -82,9 +82,9 @@ describe("H-4 process_queue planning", () => {
     }
   });
 
-  it("respects the 13-entry tx limit and the shrinking pool", () => {
+  it("respects the per-tx entry limit (5 in a legacy tx) and the shrinking pool", () => {
     const q = Array.from({ length: 30 }, () => entry(1_000n));
-    expect(planQueuePayments(q, 10_000_000n, bps).pay).toHaveLength(13);
+    expect(planQueuePayments(q, 10_000_000n, bps).pay).toHaveLength(MAX_QUEUE_ENTRIES_PER_TX);
     // Pool 20k, cap 10%: 2k, then 1.9k… — each payment shrinks what the next may take.
     const shrink = planQueuePayments([entry(2_000n), entry(1_900n), entry(1_800n)], 20_000n, bps);
     expect(shrink.pay.map((e) => e.amount)).toEqual([2_000n, 1_800n]);

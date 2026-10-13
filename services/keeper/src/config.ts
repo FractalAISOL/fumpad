@@ -16,7 +16,14 @@ export interface KeeperConfig {
   nearTriggerRatio: number;
   buybackMinLamports: bigint;
   buybackIntervalSecs: number;
-  skimIntervalSecs: number;
+  /** claim_fees once the DBC pool's unclaimed partner fee reaches this (after the launch-window claim). */
+  feesMinLamports: bigint;
+  feesIntervalSecs: number;
+  lpFeesIntervalSecs: number;
+  /** Wait this long after the curve completes for Meteora's keepers before migrating ourselves. */
+  migrateGraceSecs: number;
+  closeIntervalSecs: number;
+  closeMaxPerRun: number;
   platformFeesMinLamports: bigint;
   platformFeesIntervalSecs: number;
   queueIntervalSecs: number;
@@ -55,7 +62,7 @@ export interface KeeperConfig {
   /** D17 auto-claim: how often each graduated coin is checked, and the most claim_for txs per coin per run. */
   autoClaimIntervalSecs: number;
   autoClaimMaxPerRun: number;
-  jobs: Record<"sample" | "graduate" | "buyback" | "skim" | "queue" | "fees" | "params" | "autoclaim", boolean>;
+  jobs: Record<"fees" | "graduate" | "sample" | "buyback" | "autoclaim" | "queue" | "close" | "platform" | "params", boolean>;
 }
 
 /** KEEPER_KEYPAIR = path to a solana-keygen JSON file; KEEPER_SECRET_KEY = JSON array or base58 (for hosted secrets). */
@@ -91,7 +98,12 @@ export function loadKeeperConfig(env = process.env): KeeperConfig {
     nearTriggerRatio: n(env.NEAR_TRIGGER_RATIO, 0.5),
     buybackMinLamports: BigInt(env.BUYBACK_MIN_LAMPORTS ?? 50_000_000),
     buybackIntervalSecs: n(env.BUYBACK_INTERVAL_SECS, 60),
-    skimIntervalSecs: n(env.SKIM_INTERVAL_SECS, 1_800),
+    feesMinLamports: BigInt(env.FEES_MIN_LAMPORTS ?? 50_000_000),
+    feesIntervalSecs: n(env.FEES_INTERVAL_SECS, 600),
+    lpFeesIntervalSecs: n(env.LP_FEES_INTERVAL_SECS, 1_800),
+    migrateGraceSecs: n(env.MIGRATE_GRACE_SECS, 60),
+    closeIntervalSecs: n(env.CLOSE_INTERVAL_SECS, 600),
+    closeMaxPerRun: n(env.CLOSE_MAX_PER_RUN, 20),
     platformFeesMinLamports: BigInt(env.PLATFORM_FEES_MIN_LAMPORTS ?? 100_000_000),
     platformFeesIntervalSecs: n(env.PLATFORM_FEES_INTERVAL_SECS, 3_600),
     queueIntervalSecs: n(env.QUEUE_INTERVAL_SECS, 30),
@@ -114,14 +126,15 @@ export function loadKeeperConfig(env = process.env): KeeperConfig {
     autoClaimIntervalSecs: n(env.AUTOCLAIM_INTERVAL_SECS, 15),
     autoClaimMaxPerRun: n(env.AUTOCLAIM_MAX_PER_RUN, 20),
     jobs: {
-      sample: on(env.JOB_SAMPLE),
-      graduate: on(env.JOB_GRADUATE),
-      buyback: on(env.JOB_BUYBACK),
-      skim: on(env.JOB_SKIM),
-      queue: on(env.JOB_QUEUE),
       fees: on(env.JOB_FEES),
-      params: on(env.JOB_PARAMS),
+      graduate: on(env.JOB_GRADUATE),
+      sample: on(env.JOB_SAMPLE),
+      buyback: on(env.JOB_BUYBACK),
       autoclaim: on(env.JOB_AUTOCLAIM),
+      queue: on(env.JOB_QUEUE),
+      close: on(env.JOB_CLOSE),
+      platform: on(env.JOB_PLATFORM),
+      params: on(env.JOB_PARAMS),
     },
   };
 }

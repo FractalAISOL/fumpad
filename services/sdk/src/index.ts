@@ -26,6 +26,7 @@ export * from "./meteora/instructions.js";
 export * from "./meteora/quote.js";
 export * from "./params.js";
 export * from "./pda.js";
+export * from "./tx.js";
 export * from "./units.js";
 
 export const SDK_VERSION = "0.7.0";
