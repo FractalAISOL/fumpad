@@ -506,7 +506,7 @@ fn process_queue_rejects_spoofing() {
 }
 
 #[test]
-fn escrow_for_missing_or_memo_requiring_atas() {
+fn regression_memo_refusing_or_missing_atas_are_escrowed_and_leave_the_queue() {
     let mut w = World::new();
     let (a, b) = (w.user(), w.user());
     let ta = w.ticket_at(&kp_pk(&a), 2_000 * M, w.low_price(), 200);
@@ -581,7 +581,7 @@ fn auto_claim_pays_only_the_owner_and_respects_opt_out() {
 }
 
 #[test]
-fn rebuy_on_queued_ticket_updates_its_queue_entry() {
+fn regression_rebuy_updates_queue_entry_so_order_holds() {
     let mut w = World::new();
     let (a, b) = (w.user(), w.user());
     let ta = w.ticket_at(&kp_pk(&a), 2_000 * M, w.low_price(), 300);
@@ -641,7 +641,7 @@ fn queue_full_reverts_and_ticket_stays_open() {
 }
 
 #[test]
-fn close_paths_and_close_position() {
+fn regression_positions_can_be_closed_when_empty() {
     let mut w = World::new();
     let a = w.user();
     let t = w.ticket(&kp_pk(&a), 1_000 * M);

@@ -146,7 +146,7 @@ fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
 }
 
 #[test]
-fn buyback_pinned_accounts_and_pause() {
+fn regression_pda_signed_cpis_carry_no_foreign_accounts() {
     let (mut env, c) = funded_curve_coin();
     let k = env.keepers[0].insecure_clone();
     ok(env.sample(0, &[&c]));

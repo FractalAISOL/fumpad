@@ -66,7 +66,7 @@ fn damm_router_after_graduation() {
 }
 
 #[test]
-fn router_rejects_spoofed_accounts() {
+fn regression_router_requires_canonical_ata_and_rejects_spoofed_accounts() {
     let (mut env, c) = setup();
     let other = env.launch(0);
     env.skip_launch_window();
@@ -124,7 +124,7 @@ fn router_rejects_spoofed_accounts() {
 }
 
 #[test]
-fn pause_trade_stops_router_buys_never_sells_and_lapses() {
+fn regression_pause_never_freezes_router_sells_and_lapses() {
     let (mut env, c) = setup();
     let alice = env.new_user(100);
     ok(env.router_buy(&c, &alice, SOL));
