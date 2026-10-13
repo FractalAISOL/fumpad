@@ -508,13 +508,15 @@ pub fn event<E: anchor_lang::AnchorDeserialize + anchor_lang::Discriminator>(met
 pub mod flow;
 
 #[cfg(test)]
+mod admin_tests;
+#[cfg(test)]
 mod attest_tests;
 #[cfg(test)]
 mod config_tests;
 #[cfg(test)]
 mod fees_tests;
 #[cfg(test)]
-mod lifecycle_tests;
+pub(crate) mod lifecycle_tests;
 #[cfg(test)]
 mod oracle_buyback_tests;
 #[cfg(test)]
