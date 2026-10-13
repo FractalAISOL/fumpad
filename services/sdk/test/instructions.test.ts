@@ -136,12 +136,13 @@ describe("initialize_global bootstrap", () => {
 });
 
 describe("operators (jobs keys)", () => {
-  it("initialize_global pads 2 operator slots and refuses an operator that is also a keeper", () => {
+  it("initialize_global passes the operators as a list (≤ 2) and refuses an operator that is also a keeper", () => {
     const [a, b, o] = [k(), k(), k()];
     const i = initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [a, b], operators: [o] });
     const d = fumpadCoder().instruction.decode(Buffer.from(i.data)) as unknown as { data: { operators: PublicKey[] } };
-    expect(d.data.operators.map((x) => x.toBase58())).toEqual([o, PublicKey.default].map((x) => x.toBase58()));
+    expect(d.data.operators.map((x) => x.toBase58())).toEqual([o.toBase58()]);
     expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [a, b], operators: [b] })).toThrow(/attestor and an operator/);
+    expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, operators: [k(), k(), k()] })).toThrow();
     expect(() => setOperatorsIx(k(), [k(), k(), k()])).toThrow();
   });
   it("set_operators encodes exactly 2 slots", () => {

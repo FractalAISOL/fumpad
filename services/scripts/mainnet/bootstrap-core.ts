@@ -332,7 +332,11 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
         say(`  contracts/program-ids/mainnet.txt = ${committed ?? "UNSET"} ≠ ${FUMPAD_PROGRAM_ID.toBase58()}: commit the id there and build verifiably from that commit`);
         if (o.cluster === "mainnet") failures.push("contracts/program-ids/mainnet.txt does not hold the program id (verifiable build input)");
       }
-      else if (st.deployed) {
+      // (a separate check, not part of the chain below: on a local fork the stand-in id is never committed, and the
+      // deploy must still run — 13bfa7b had chained it, so the rehearsal never deployed)
+      if (o.cluster === "mainnet" && committed !== FUMPAD_PROGRAM_ID.toBase58()) {
+        // refused above
+      } else if (st.deployed) {
         const same = elfMatches(st.elf, so);
         say(`  deployed already: authority ${st.authority?.toBase58() ?? "none"}, bytecode ${same ? "= this .so (skip)" : "≠ this .so"}`);
         if (!same) failures.push("program deployed with different bytes: upgrades go through the admin multisig (MULTISIG.md), not this step");

@@ -1,6 +1,7 @@
 //! Admin / governance. Roles (M-2): `admin` queues params/configs (48h), proposes authority changes (48h), sets
-//! keepers (attestors) and operators (jobs keys), pauses, migrates the layout; `guardian` can only stop things (pause, cancel_*, void_ticket); anyone
-//! executes a queued change after its timelock. Every instruction emits an event (L-3).
+//! keepers (attestors) and operators (jobs keys), pauses, migrates the layout; `guardian` can only stop things
+//! (pause, cancel_*, void_ticket); anyone executes a queued change after its timelock. Every instruction emits an
+//! event (L-3).
 
 use anchor_lang::prelude::*;
 
@@ -48,9 +49,13 @@ pub fn handle_initialize_global<'info>(
     cluster_tag: u8,
     params: Params,
     keepers: [Pubkey; MAX_KEEPERS],
-    operators: [Pubkey; MAX_OPERATORS],
+    operators: Vec<Pubkey>,
 ) -> Result<()> {
     require!(params.is_valid(), FumpadError::InvalidParams);
+    require!(operators.len() <= MAX_OPERATORS, FumpadError::InvalidParams);
+    let mut ops = [Pubkey::default(); MAX_OPERATORS];
+    ops[..operators.len()].copy_from_slice(&operators);
+    let operators = ops;
     require_keys_neq!(admin, Pubkey::default(), FumpadError::InvalidParams);
     require_keys_neq!(platform_treasury, Pubkey::default(), FumpadError::InvalidParams);
     validate_keeper_set(&keepers)?;

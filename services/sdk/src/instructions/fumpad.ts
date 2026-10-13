@@ -100,7 +100,8 @@ export function initializeGlobalIx(a: {
 }): TransactionInstruction {
   const keepers = a.keepers ?? [];
   if (keepers.length > MAX_KEEPERS) throw new Error(`at most ${MAX_KEEPERS} keepers`);
-  const operators = pad(a.operators ?? [], MAX_OPERATORS, "operators");
+  const operators = a.operators ?? [];
+  if (operators.length > MAX_OPERATORS) throw new Error(`at most ${MAX_OPERATORS} operators`);
   assertDisjoint(keepers, operators);
   const configs = a.configs ?? [];
   if (configs.length > MAX_CONFIGS) throw new Error(`at most ${MAX_CONFIGS} configs`);

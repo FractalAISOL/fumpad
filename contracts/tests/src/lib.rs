@@ -257,7 +257,7 @@ impl Env {
                 cluster_tag: CLUSTER_TAG,
                 params,
                 keepers,
-                operators,
+                operators: operators.iter().copied().filter(|k| *k != Pubkey::default()).collect(),
             },
         );
         i.accounts.extend(configs.iter().map(|c| ro(*c)));

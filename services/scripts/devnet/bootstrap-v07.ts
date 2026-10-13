@@ -252,9 +252,11 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
   log(`cluster ${o.cluster} (cluster_tag ${tag}) · mode ${o.mode} · deployer/admin ${deployer.publicKey.toBase58()}${bal}`);
 
   /** Build, then plan / simulate / send. `accounts`: addresses whose post-state the simulation returns. */
-  const execute = async (name: string, ixs: TransactionInstruction[], signers: Signer[], accounts: PublicKey[] = []) => {
+  /** `cu = 0`: no compute-budget instruction (only the bundled create_config + initialize_global simulation, which
+   * would otherwise exceed 1,232 bytes; 200k default CU per instruction is enough for both). */
+  const execute = async (name: string, ixs: TransactionInstruction[], signers: Signer[], accounts: PublicKey[] = [], cu = 400_000) => {
     const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
-    const msg = new TransactionMessage({ payerKey: deployer.publicKey, recentBlockhash: blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...ixs] }).compileToV0Message();
+    const msg = new TransactionMessage({ payerKey: deployer.publicKey, recentBlockhash: blockhash, instructions: [...(cu ? [ComputeBudgetProgram.setComputeUnitLimit({ units: cu })] : []), ...ixs] }).compileToV0Message();
     const tx = new VersionedTransaction(msg);
     tx.sign([deployer, ...signers]);
     const raw = tx.serialize();
@@ -350,7 +352,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
         failures.push("config missing: run --step config --yes first");
         log("  config missing: run --step config --yes first");
       } else if (!cfg) {
-        await execute("create_config + initialize_global (bundled for simulation)", [createConfigIx(), initIx], [keys.get("dbc-config")], [globalPda()]);
+        await execute("create_config + initialize_global (bundled for simulation)", [createConfigIx(), initIx], [keys.get("dbc-config")], [globalPda()], 0);
       } else {
         await execute("initialize_global", [initIx], [], [globalPda()]);
       }

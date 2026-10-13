@@ -46,6 +46,8 @@ pub mod fumpad {
 
     // ── admin / governance ──────────────────────────────────────────────────
     /// remaining_accounts = the initial DBC config allow-list (0..=8, validated like `execute_config` add).
+    /// `operators`: 0..=2 jobs keys (a Vec, not a fixed array: the bundled create_config + initialize_global
+    /// simulation of the bootstrap scripts must fit one 1,232-byte transaction).
     pub fn initialize_global<'info>(
         ctx: Context<'info, InitializeGlobal<'info>>,
         admin: Pubkey,
@@ -53,7 +55,7 @@ pub mod fumpad {
         cluster_tag: u8,
         params: Params,
         keepers: [Pubkey; MAX_KEEPERS],
-        operators: [Pubkey; MAX_OPERATORS],
+        operators: Vec<Pubkey>,
     ) -> Result<()> {
         instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params, keepers, operators)
     }
