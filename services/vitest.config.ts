@@ -8,7 +8,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          include: ["sdk/test/**/*.test.ts", "indexer/test/**/*.test.ts", "api/test/**/*.test.ts", "keeper/test/**/*.test.ts"],
+          include: ["sdk/test/**/*.test.ts", "meteora/test/**/*.test.ts", "indexer/test/**/*.test.ts", "api/test/**/*.test.ts", "keeper/test/**/*.test.ts"],
           environment: "node",
         },
       },

@@ -1,0 +1,32 @@
+{
+  "name": "@fumpad/meteora",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Meteora DBC + DAMM v2 trade parser (any app / router / aggregator) for FUMPAD outside-trade attestations. Browser-safe.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "sync-idl": "node scripts/sync-idl.mjs",
+    "fixtures": "tsx scripts/fetch-fixtures.ts"
+  },
+  "dependencies": {
+    "@anchor-lang/core": "1.2.1",
+    "bn.js": "^5.2.1",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.6"
+  },
+  "files": [
+    "dist"
+  ]
+}

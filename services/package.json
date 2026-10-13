@@ -4,6 +4,7 @@
   "type": "module",
   "workspaces": [
     "sdk",
+    "meteora",
     "indexer",
     "api",
     "keeper"
@@ -12,8 +13,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -b sdk indexer api keeper",
-    "typecheck": "tsc -b sdk indexer api keeper && tsc -p tsconfig.scripts.json",
+    "build": "tsc -b sdk meteora indexer api keeper",
+    "typecheck": "tsc -b sdk meteora indexer api keeper && tsc -p tsconfig.scripts.json",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "sync-idl": "node scripts/sync-idl.mjs",
