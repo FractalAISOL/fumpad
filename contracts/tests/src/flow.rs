@@ -311,14 +311,14 @@ impl Env {
         ok(self.send_as(payer, &qs, &[payer]));
     }
 
-    /// Complete → migrate (keeper 0) → graduate → setup. Returns the NFT mint.
+    /// Complete → migrate (operator 0) → graduate → setup. Returns the NFT mint.
     pub fn graduate_coin(&mut self, c: &TCoin) -> Pubkey {
         if self.coin(c).status == fumpad::state::CoinStatus::Curve
             && meteora::rd_u64(&self.dbc_pool_data(c), m::DBC_POOL_QUOTE_RESERVE) < meteora::MAINNET_THRESHOLD
         {
             self.complete_curve(c);
         }
-        let k = self.keepers[0].insecure_clone();
+        let k = self.op();
         let (r, nft) = self.migrate(c, &k);
         ok(r);
         ok(self.graduate(c, &k, &nft));
@@ -356,7 +356,7 @@ impl Env {
     }
 
     pub fn claim_fees(&mut self, c: &TCoin) -> TransactionResult {
-        let k = self.keepers[0].insecure_clone();
+        let k = self.op();
         let i = self.claim_fees_ix(c, &kp_pk(&k));
         self.send_as(&k, &[i], &[&k])
     }
@@ -392,7 +392,7 @@ impl Env {
     }
 
     pub fn claim_lp_fees(&mut self, c: &TCoin, nft_mint: &Pubkey) -> TransactionResult {
-        let k = self.keepers[0].insecure_clone();
+        let k = self.op();
         let i = self.claim_lp_fees_ix(c, &kp_pk(&k), nft_mint);
         self.send_as(&k, &[i], &[&k])
     }
@@ -430,13 +430,14 @@ impl Env {
         )
     }
 
-    pub fn sample(&mut self, keeper: usize, coins: &[&TCoin]) -> TransactionResult {
-        let k = self.keepers[keeper].insecure_clone();
+    /// `record_samples` by operator `operator` (the jobs keeper's key; attestor keys only fallback-sample).
+    pub fn sample(&mut self, operator: usize, coins: &[&TCoin]) -> TransactionResult {
+        let k = self.operators[operator].insecure_clone();
         let i = self.record_samples_ix(&kp_pk(&k), coins);
         self.send_as(&k, &[i], &[&k])
     }
 
-    /// L5: keeper pre-grad samples every 20 s until the buyback guard's median exists (4 samples over 60 s); the
+    /// L5: operator pre-grad samples every 20 s until the buyback guard's median exists (4 samples over 60 s); the
     /// last sample is taken now.
     pub fn pregrad_warmup(&mut self, c: &TCoin) {
         for i in 0..fumpad::PREGRAD_MIN_SAMPLES {
@@ -552,7 +553,9 @@ impl Env {
         self.send_as(&sub, &ixs, &[&sub])
     }
 
-    /// A valid sell record for `trader` on `c` (current pool, now − 30 s), `tokens` at `price_q64`.
+    /// A valid sell record for `trader` on `c` (current pool, now − 30 s), `tokens` at `price_q64`. The trade's
+    /// `quote_gross` / `base_amount` are consistent with the price (execution ≤ ticket price, D12); for prices so low
+    /// that `tokens` would be worth < 1 lamport, the sold `base_amount` is raised (ticket_tokens stay `tokens`).
     pub fn sell_record(&self, c: &TCoin, trader: &Pubkey, tokens: u64, price_q64: u128) -> SellRecord {
         let coin = self.coin(c);
         let graduated = coin.status == fumpad::state::CoinStatus::Graduated;
@@ -568,8 +571,8 @@ impl Env {
             signature: sig,
             ix_key: (1 << 16) | 1,
             trader: *trader,
-            base_amount: tokens,
-            quote_gross: fumpad::math::lamports_for(tokens, price_q64).unwrap_or(1).max(1),
+            base_amount: sold_for(tokens, price_q64).0,
+            quote_gross: sold_for(tokens, price_q64).1,
             ticket_tokens: tokens,
             ticket_price_q64: price_q64,
             usd_cents: 10_000,
@@ -578,6 +581,13 @@ impl Env {
             block_time: now - 30,
         }
     }
+}
+
+/// (base_amount, quote_gross) of a sell of ≥ `tokens` at `price_q64` with ⌊quote × 2⁶⁴ / base⌋ ≤ price.
+pub fn sold_for(tokens: u64, price_q64: u128) -> (u64, u64) {
+    let min_base = (fumpad::Q64.div_ceil(price_q64.max(1))).min(u64::MAX as u128) as u64;
+    let base = tokens.max(min_base);
+    (base, fumpad::math::lamports_for(base, price_q64).unwrap_or(1).max(1))
 }
 
 pub fn rebuy_record(t: &fumpad::state::Ticket, ticket: Pubkey, debit: u64, block_time: i64) -> RebuyRecord {

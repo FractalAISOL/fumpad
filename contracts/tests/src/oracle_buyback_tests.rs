@@ -83,13 +83,16 @@ fn pre_graduation_samples_are_keeper_only_and_spaced() {
     assert_fumpad_err(env.sample(1, &[&c]), FumpadError::SampleTooSoon);
     env.warp(5);
     ok(env.sample(1, &[&c]));
-    // Not a keeper → Unauthorized (no fallback pre-graduation).
+    // Not an operator → Unauthorized (no fallback pre-graduation) — attestor keys included (jobs ≠ attestors).
     env.warp(3_600);
     let rando = env.new_user(1);
     let i = env.record_samples_ix(&kp_pk(&rando), &[&c]);
     assert_fumpad_err(env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
+    let attestor = env.keepers[0].insecure_clone();
+    let i = env.record_samples_ix(&kp_pk(&attestor), &[&c]);
+    assert_fumpad_err(env.send_as(&attestor, &[i], &[&attestor]), FumpadError::Unauthorized);
     // Isolation: no other instruction in the sampling transaction.
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     let i = env.record_samples_ix(&kp_pk(&k), &[&c]);
     let alice = env.new_user(10);
     let mut ixs = meteora::wrap_sol_ixs(&kp_pk(&k), SOL / 100);
@@ -102,7 +105,7 @@ fn pre_graduation_samples_are_keeper_only_and_spaced() {
 #[test]
 fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
     let (mut env, c) = funded_curve_coin();
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     // No sample yet → StaleSample.
     assert_fumpad_err(env.buyback(&c, &k, SOL), FumpadError::StaleSample);
     ok(env.sample(0, &[&c]));
@@ -112,9 +115,11 @@ fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
         env.warp(20);
         ok(env.sample(0, &[&c]));
     }
-    // Not a keeper → Unauthorized.
+    // Not an operator → Unauthorized; an attestor key has no buyback power either.
     let rando = env.new_user(10);
     assert_fumpad_err(env.buyback(&c, &rando, SOL), FumpadError::Unauthorized);
+    let attestor = env.keepers[1].insecure_clone();
+    assert_fumpad_err(env.buyback(&c, &attestor, SOL), FumpadError::Unauthorized);
     let quote = env.dbc_quote_reserve(&c);
     let vault = env.reward_vault(&c.mint);
     let before = env.coin(&c).buyback_lamports;
@@ -161,7 +166,7 @@ fn pre_graduation_buyback_keeper_only_guarded_and_never_completes() {
 #[test]
 fn regression_pda_signed_cpis_carry_no_foreign_accounts() {
     let (mut env, c) = funded_curve_coin();
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     env.pregrad_warmup(&c);
     let good = env.buyback_ix(&c, &kp_pk(&k), SOL);
     let n = 16; // named accounts incl. event-CPI pair
@@ -266,7 +271,7 @@ fn push_spot_to(env: &mut Env, c: &TCoin, who: &Keypair, target: u128) {
 #[test]
 fn regression_l5_one_moved_sample_cannot_steer_the_pregrad_guard() {
     let (mut env, c) = funded_curve_coin();
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     env.pregrad_warmup(&c);
     let honest = env.dbc_spot_q64(&c);
     let attacker = env.new_user(500);
@@ -302,7 +307,7 @@ fn regression_l5_one_moved_sample_cannot_steer_the_pregrad_guard() {
 #[test]
 fn regression_l5_in_band_ratchet_cannot_make_the_buyback_overpay() {
     let (mut env, c) = funded_curve_coin();
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     env.pregrad_warmup(&c);
     let honest = env.dbc_spot_q64(&c);
     let attacker = env.new_user(1_000);
@@ -334,7 +339,7 @@ fn regression_l5_in_band_ratchet_cannot_make_the_buyback_overpay() {
 #[test]
 fn pregrad_buyback_liveness_under_honest_sampling() {
     let (mut env, c) = funded_curve_coin();
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     let trader = env.new_user(100);
     let mut executed = 0;
     for step in 0..15usize {

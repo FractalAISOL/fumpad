@@ -220,6 +220,8 @@ fn program_accepts_vector_style_attestation() {
     let (price, conf, expo, _) = pyth_fixture();
     let mut r = env.sell_record(&c, &Pubkey::new_from_array([0x44; 32]), 25_000_000_000_000, 1 << 40);
     r.quote_gross = 1_250_000_000;
+    // D12: the attested price is never below the execution price (the vectors use exactly the execution price).
+    r.ticket_price_q64 = fumpad::math::price_q64(r.quote_gross, r.base_amount).unwrap();
     r.usd_cents = usd_cents(r.quote_gross, price, conf, expo);
     ok(env.attest_sell(&r, &[0, 1]));
 }

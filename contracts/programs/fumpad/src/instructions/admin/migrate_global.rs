@@ -1,12 +1,24 @@
-//! `migrate_global`: the layout-upgrade hook (D39 keeps only the mechanism). v0.7 starts a fresh layout, so there
-//! is no legacy layout to upgrade from: on a current-size Global this is a no-op, anything else is rejected
-//! (`UnsupportedGlobalLayout`). A future layout change adds its old length here and grows the account in place
-//! (copying every existing byte verbatim and filling only new fields — never a timelock bypass).
+//! `migrate_global`: the layout-upgrade hook (D39 keeps the mechanism). Admin only.
+//!
+//! * Operators (2026-10-13 d): `Global.operators` was carved out of `reserved [u8; 64]` (same offset, same 1,044
+//!   bytes), so a Global initialized before it reads `operators == [default; 2]`. On such a Global this fills
+//!   `operators[0] = keepers[0]` — the key that ran the jobs keeper until now — so jobs keep running across the
+//!   program upgrade (`OperatorsSet`). That is the one place where a key may be both attestor and operator; the
+//!   admin then moves the jobs keeper to a fresh key with `set_operators` (and `set_keepers` refuses to keep an
+//!   overlap). With operators already set, or no `keepers[0]`, it changes nothing.
+//! * Any other length → `UnsupportedGlobalLayout`. A future layout change adds its old length here and grows the
+//!   account in place (copying every existing byte verbatim and filling only new fields — never a timelock bypass).
 
 use anchor_lang::prelude::*;
 use anchor_lang::Discriminator;
 
-use crate::{constants::*, error::FumpadError, events::GlobalMigrated, state::Global};
+use crate::{
+    constants::*,
+    error::FumpadError,
+    events::{GlobalMigrated, OperatorsSet},
+    instructions::rewards::util::write_account,
+    state::Global,
+};
 
 /// Account length (with discriminator) of the current Global.
 pub const GLOBAL_LEN: usize = 8 + Global::INIT_SPACE;
@@ -35,7 +47,15 @@ pub fn handle_migrate_global(ctx: Context<MigrateGlobal>) -> Result<()> {
         require_keys_eq!(admin, ctx.accounts.admin.key(), FumpadError::Unauthorized);
     }
     require!(len == GLOBAL_LEN, FumpadError::UnsupportedGlobalLayout);
+    let mut global = Global::try_deserialize(&mut &g.try_borrow_data()?[..])?;
+    let fill = global.operators.iter().all(|k| *k == Pubkey::default()) && global.keepers[0] != Pubkey::default();
     let ts = Clock::get()?.unix_timestamp;
     emit_event!(ctx, GlobalMigrated { old_len: len as u32, new_len: len as u32, ts });
+    if fill {
+        global.operators = [Pubkey::default(); MAX_OPERATORS];
+        global.operators[0] = global.keepers[0];
+        write_account(&g, &global)?;
+        emit_event!(ctx, OperatorsSet { operators: global.operators, ts });
+    }
     Ok(())
 }

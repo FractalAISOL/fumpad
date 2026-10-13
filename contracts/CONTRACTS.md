@@ -66,10 +66,18 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
   pool — normally the DBC-created locked one; REVIEW-v0.7 H-1) signed by `fee_claimer` with
   pinned account lists, claimed into a transient WSOL PDA and unwrapped into the Coin. First DBC claim after the 8-slot
   window → 100% buyback (D33); then 50/30/20 (platform + creator exact floors, remainder buyback).
+- **Roles** (2026-10-13 d): `Global.keepers` (3) = attestors only (sign + submit attestations); `Global.operators`
+  (2) = the jobs keeper's key(s): keeper samples, `claim_for`, pre-grad buybacks. Disjoint on chain
+  (`KeeperOperatorOverlap`); `set_operators` (admin, immediate); `migrate_global` fills `operators[0]` from
+  `keepers[0]` on a Global from before the split.
 - **Buyback**: `buyback` PDA as payer, output straight into the reward vault, venue list pinned exactly. Pre-grad:
-  keeper-only, spot ±3% of BOTH the median of the coin's recent keeper samples (`Coin.pregrad_ring`: ≥ 4 within 5 min
+  operator-only, spot ±3% of BOTH the median of the coin's recent keeper samples (`Coin.pregrad_ring`: ≥ 4 within 5 min
   spanning ≥ 60 s) and its last keeper sample (≤ 60 s), slice ≤ 0.5% of the curve's quote reserve, never
-  completes the curve. Post-grad: v0.6 rules on the DAMM v2 pool (30-min median ±3%, 0.5% of `token_b_amount`).
+  completes the curve. Post-grad: v0.6 rules on the DAMM v2 pool (30-min median ±3%, 0.5% of `token_b_amount`);
+  a pool disabled by its DAMM operator → `PoolDisabled` (samples skip it too, so claims wait for coverage).
+- **Stranded value**: `claim_unregistered_fees` (partner fees of pools on a FUMPAD-shaped config that never
+  registered → platform treasury) and `claim_position_rewards` (DAMM v2 farming rewards of our locked position →
+  the coin's reward vault for coin-mint rewards, else the treasury's ATA). Both permissionless, pinned lists.
 - **Graduation**: `migrate_pool` (our wrapper of DBC `migration_damm_v2`, records the caller's flash-rent cost) and
   `graduate` (verifies the DAMM v2 pool + our position — pool, `fee_claimer`-held NFT, fully permanently locked; never
   its share of the pool (REVIEW-v0.7 H-1) — `withdraw_leftover` (recorded even if a third party withdrew it), partner migration fee +
@@ -79,6 +87,7 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
 - **Tickets** (D31): `attest_sell` / `attest_rebuy` read the record from the Ed25519 precompile instruction right
   before them (2 distinct active keepers; new keys frozen 6h), consumed-marker PDAs, per-coin rate cap as a leaky
   bucket that defers tickets over 20%/h of supply (their challenge window starts later) and never rejects (M-1),
+  `ticket_price_q64 ≥ ⌊quote_gross·2⁶⁴/base_amount⌋` (D12: never below the trade's own execution price),
   challenge window (`void_ticket`; `reopen` lets the corrected record of the same trade be attested once, L-2),
   `close_consumed` only after the ticket is closed and the trade is older than 7 days. Rebuy debits and voids release
   rate-cap capacity. Only the wallet closes a Position that opted out of auto-claim (L-1).
@@ -90,7 +99,7 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 
 | Account | Bytes | Rent (SOL) | Paid by |
 |---|---|---|---|
-| `fumpad.so` program data (`anchor build`, inliner flags) | 754,288 (+45) | ≈3.833 | deployer |
+| `fumpad.so` program data (`anchor build`, inliner flags) | 804,472 (+45) | ≈4.088 | deployer |
 | Global | 1,044 | 0.00595 | admin (init) |
 | Coin | 546 | 0.00342 | creator (`register_coin`) |
 | Reward vault (Token-2022 ATA) | 170 | ≈0.00207 | creator (`register_coin`) |
@@ -119,6 +128,8 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 | `claim_for` paid now / escrowed (1022 scanned) | 79k / 88k | — | default |
 | `process_queue` full-queue walk / 13 paid / 13 escrowed on a full queue | 97k / 225k / 415k | — / — / 1,849 | 13 entries need v0 + ALT and ≥ 600k; a legacy tx carries 5 entries |
 | `withdraw_escrow` / `close_ticket` (full queue) / `void_ticket` (reopen) / `close_consumed` / `close_position` / `set_auto_claim` | 27k / 20k / 25k / 10k / 9k / 7k | — | default |
+| `claim_unregistered_fees` / `claim_position_rewards` (Token-2022 coin mint / SPL WSOL) | 81k / 46k / 57k | — | default |
+| `set_operators` / `migrate_global` (fills operators) | 13k / 28k | — | default |
 
 ## Build profile & program size (approach unchanged; the measurements below are v0.5/v0.6 history)
 `anchor build` = `cargo build-sbf --tools-version v1.57 --arch v3` (Anchor 1.2.1 defaults; platform-tools v1.57).
@@ -167,17 +178,18 @@ everything else within noise.
 1. Deploy `fumpad` (devnet: id `5YMF…S9Fb`; **mainnet: its own fresh keypair + `declare_id!`** — never the devnet
    id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock — transfer it AFTER step 3, init needs the key).
 2. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair).
-3. `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params, keepers)` from the
+3. `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params, keepers, operators)` from the
    upgrade-authority key, with the DBC config as a remaining account. **Bootstrap:** the 3 keepers (separate
    infra/RPCs) attest at once (`keeper_added_at = 0`, no 6h freeze) and the config is allow-listed at once (no 48h
    timelock; validated like `execute_config` add) — only the upgrade authority can initialize and it could replace
    the program anyway. Every later `set_keepers` (6h freeze for new keys) and `queue_config` (48h) keeps its delay.
+   `operators` = the jobs keeper's own hot key (never one of the 3 attestor keys; the program refuses an overlap).
    Set `params.launch_signer` to the API's launch co-signer key (or queue it later: 48h) so only API-built launch txs
    register. Devnet: `services/scripts/devnet/bootstrap-v07.ts` does 2–3 (+ funding, verification); runbook
    `services/DEPLOY-v07.md`; rehearsed locally by `npm run bootstrap:rehearsal` (services/).
 4. `propose_admin(admin, treasury, guardian)` → 48h → `accept_admin` to hand the guardian to its own multisig.
-5. Open launches. Keepers: `claim_fees` right after each coin's 8-slot window, pre-grad samples + buybacks, attestations
-   (finalized txs only), `migrate_pool` + `graduate` + `init_observations` + 9 × `init_claim_queue`, post-grad samples,
+5. Open launches. Attestors (3 separate hosts / providers): attestations only (finalized txs). Jobs keeper (operator
+   key): `claim_fees` right after each coin's 8-slot window, pre-grad samples + buybacks, `migrate_pool` + `graduate` + `init_observations` + 9 × `init_claim_queue`, post-grad samples,
    `claim_lp_fees`, buybacks, auto-claim, `process_queue`, `close_ticket`, `close_consumed`.
 
 ## Open risks (v0.7)
@@ -188,10 +200,11 @@ everything else within noise.
   ≥ 60 s) and spot must also agree with the latest sample, so one sample at a moved spot (or a +band ratchet per
   sample) can't steer it. A pump held through ≥ 3 keeper samples (≥ ~40 s at a 20 s cadence; ~80 s at the keeper's
   40 s cadence) does move the median; the 0.5%-of-quote-reserve slice and the ±3% band bound each buyback. Samples
-  stay keeper-only: a compromised keeper key can still push 4 samples over 60 s (REVIEW-v0.7 note).
+  stay operator-only: a compromised operator key can still push 4 samples over 60 s (REVIEW-v0.7 note) — it no
+  longer holds an attestation key (2026-10-13 d).
 - Tickets are only as good as the 2-of-3 keeper re-derivation (D31): the 6h challenge window + guardian `void_ticket`
   and the per-coin rate cap bound a compromised keeper pair; nothing on-chain re-checks hold time, rebuys or the
-  D10/D12 ticket price. Since M-1 the cap defers instead of rejecting: a compromised pair can push every later ticket
+  D10 reference (the D12 floor is checked only against the attested trade's own execution price). Since M-1 the cap defers instead of rejecting: a compromised pair can push every later ticket
   of a coin back (claimable later, never lost) until the guardian pauses `PAUSE_ATTEST`; capacity released by voids
   and rebuy debits is re-used at the end of the backlog, so a single hour can briefly see up to ≈ 2× the cap.
 - `register_coin` accepts any pool on an allow-listed config whose creator signs unless `Params.launch_signer` is
@@ -203,6 +216,12 @@ everything else within noise.
   re-attestation (the trade's age counts from `block_time`).
 - The 8% reward pool is exact for a single-swap completion; real paths add rounding dust on top (tests: ≤ 1,000 units).
 - Mainnet rent rate at deploy time (sizes table) — UNVERIFIED.
+- Global has no reserved bytes left after `operators`: the next Global field needs a `migrate_global` that grows the
+  account (the mechanism exists; admin pays the rent).
+- A disabled DAMM v2 pool stops samples, buybacks and router trades, but claims inside the first ≈ 10 min after the
+  disable still use the samples taken while it traded (then `InsufficientSamples` until re-enabled).
+- An unregistered pool that graduates leaves its migration fee / surplus / 8% leftover / LP position unclaimed
+  (accepted; `claim_unregistered_fees` covers its trading fees only).
 
 ## v0.7 review fixes (REVIEW-v0.7.md, 2026-10-13)
 H-1, M-1, L-1, L-2, I-1 fixed, plus the review notes (samples skip `Complete` coins, `Graduated.surplus` with a
@@ -219,6 +238,17 @@ stays 546 bytes, Global unchanged. Tests: `tests/src/oracle_buyback_tests.rs` (`
 **Devnet:** a program upgrade is needed (the deployed program data is 749,800 bytes →
 `solana program extend 5YMF… 4488` first, ≈ +0.031 SOL rent); **no Global/Coin migration** — existing Coins read an
 empty ring (zeroed reserved bytes) and their pre-grad buybacks resume after the keeper's next 4 samples (≥ 60 s).
+
+## Pre-audit fixes (2026-10-13 d; audit package "first questions")
+Operators separate from attestors (`Global.operators`, `set_operators`, `KeeperOperatorOverlap`, `migrate_global`
+fill), DAMM v2 `pool_status` in `record_samples` / `execute_buyback`, the D12 execution-price floor in `attest_sell`
+(`TicketPriceBelowExecution`), `claim_unregistered_fees` + `claim_position_rewards` (`PoolIsRegistered`), every error
+code asserted (`tests/src/error_coverage.rs` enforces it) and a two-coin shared-PDA test (`two_coin_tests.rs`).
+Interface: `INTERFACE-v0.7.md` §8 2026-10-13 d. Tests: `tests/src/audit_prep_tests.rs`, `two_coin_tests.rs`,
+`error_coverage.rs`. Program 754,288 → **804,472 bytes** (+50,184: two instructions with full pinned account lists).
+**Devnet upgrade** (program data allocated 770,280 bytes): `solana program extend 5YMF… 40000` (≈ +0.28 SOL rent),
+`solana program deploy`, then the bootstrap's `operators` step (`migrate_global` + `set_operators([operator])` in ONE
+transaction, admin = deployer) — services/DEPLOY-v07.md §6. Existing Coins / tickets are unchanged.
 
 ## Archive: v0.3–v0.6 notes (superseded by the v0.7 fresh layouts, D39 — kept for history only)
 ### v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)

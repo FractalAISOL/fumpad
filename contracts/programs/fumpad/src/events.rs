@@ -3,7 +3,7 @@ use anchor_lang::{
     solana_program::{instruction::Instruction, program::invoke_signed},
 };
 
-use crate::constants::MAX_KEEPERS;
+use crate::constants::{MAX_KEEPERS, MAX_OPERATORS};
 use crate::state::Params;
 
 // Every state change emits an event via `emit_event!(ctx, Event { .. })` (needs `#[event_cpi]`). The indexer treats
@@ -63,6 +63,13 @@ pub struct PauseSet {
 pub struct KeepersSet {
     pub keepers: [Pubkey; MAX_KEEPERS],
     pub added_at: [i64; MAX_KEEPERS],
+    pub ts: i64,
+}
+
+/// `initialize_global` (bootstrap), `set_operators`, `migrate_global` (fill from `keepers[0]`).
+#[event]
+pub struct OperatorsSet {
+    pub operators: [Pubkey; MAX_OPERATORS],
     pub ts: i64,
 }
 
@@ -349,5 +356,32 @@ pub struct AutoClaimSet {
     pub mint: Pubkey,
     pub wallet: Pubkey,
     pub enabled: bool,
+    pub ts: i64,
+}
+
+/// `claim_unregistered_fees`: partner trading fees of a DBC pool on a FUMPAD-shaped config whose mint never called
+/// `register_coin` (no coin accounting) → `platform_treasury`.
+#[event]
+pub struct UnregisteredFeesClaimed {
+    pub mint: Pubkey,
+    pub dbc_pool: Pubkey,
+    pub dbc_config: Pubkey,
+    pub claimed: u64,
+    pub platform_treasury: Pubkey,
+    pub ts: i64,
+}
+
+/// `claim_position_rewards`: DAMM v2 farming rewards of a `fee_claimer`-held position of a coin's pool. Rewards in
+/// the coin's own mint go to its reward vault (`to_reward_pool`), any other mint to the platform treasury's ATA.
+#[event]
+pub struct PositionRewardClaimed {
+    pub mint: Pubkey,
+    pub damm_pool: Pubkey,
+    pub damm_position: Pubkey,
+    pub reward_index: u8,
+    pub reward_mint: Pubkey,
+    pub destination: Pubkey,
+    pub amount: u64,
+    pub to_reward_pool: bool,
     pub ts: i64,
 }

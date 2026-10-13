@@ -118,7 +118,10 @@ pub struct Env {
     pub payer: Keypair,
     pub admin: Keypair,
     pub treasury: Keypair,
+    /// Attestors (`Global.keepers`).
     pub keepers: [Keypair; 3],
+    /// Jobs keys (`Global.operators`): samples, `claim_for`, pre-graduation buybacks.
+    pub operators: [Keypair; 2],
     /// The allow-listed FUMPAD DBC config (mainnet parameters).
     pub config: Pubkey,
 }
@@ -173,16 +176,27 @@ impl Env {
         env
     }
 
-    /// Global + keepers only (no DBC config). Keepers go through `set_keepers` + the 6h freeze (the running-system
-    /// path); `uninit` + `initialize_global_ix` cover the bootstrap path.
+    /// Global + keepers + operators only (no DBC config). Keepers go through `set_keepers` + the 6h freeze (the
+    /// running-system path), operators through `set_operators`; `uninit` + `initialize_global_ix` cover the bootstrap
+    /// path.
     pub fn bare(params: fumpad::state::Params) -> Self {
         let mut env = Self::uninit();
         let init = env.initialize_global_ix(params, [Pubkey::default(); 3], &[]);
         ok(env.send(&[init], &[]));
         let keepers = [kp_pk(&env.keepers[0]), kp_pk(&env.keepers[1]), kp_pk(&env.keepers[2])];
         ok(env.set_keepers(keepers));
+        ok(env.set_operators(env.operator_keys()));
         env.warp(fumpad::KEEPER_ATTEST_FREEZE_SECS);
         env
+    }
+
+    pub fn operator_keys(&self) -> [Pubkey; 2] {
+        [kp_pk(&self.operators[0]), kp_pk(&self.operators[1])]
+    }
+
+    /// Operator 0 (the jobs keeper).
+    pub fn op(&self) -> Keypair {
+        self.operators[0].insecure_clone()
     }
 
     /// Programs + funded keys, Global NOT initialized (payer = fumpad upgrade authority).
@@ -192,7 +206,8 @@ impl Env {
         let admin = Keypair::new();
         let treasury = Keypair::new();
         let keepers = [Keypair::new(), Keypair::new(), Keypair::new()];
-        for k in [&payer, &admin, &treasury].into_iter().chain(keepers.iter()) {
+        let operators = [Keypair::new(), Keypair::new()];
+        for k in [&payer, &admin, &treasury].into_iter().chain(keepers.iter()).chain(operators.iter()) {
             svm.airdrop(&k.pubkey(), 10_000 * SOL).unwrap();
         }
         let so = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/fumpad.so");
@@ -204,16 +219,27 @@ impl Env {
         load_account_fixture(&mut svm, "wsol_mint.json");
         // DBC fronts DAMM v2 rent from its pool authority during migration ("flash rent"); mainnet keeps it funded.
         svm.airdrop(&addr(&fumpad::external::meteora::DBC_POOL_AUTHORITY), 100 * SOL).unwrap();
-        Env { svm, payer, admin, treasury, keepers, config: Pubkey::default() }
+        Env { svm, payer, admin, treasury, keepers, operators, config: Pubkey::default() }
     }
 
     /// `initialize_global` signed by `self.payer` (the upgrade authority): admin/treasury from the Env, cluster tag
-    /// `CLUSTER_TAG`, the given bootstrap keepers and configs (remaining accounts).
+    /// `CLUSTER_TAG`, the given bootstrap keepers and configs (remaining accounts), no operators.
     pub fn initialize_global_ix(&self, params: fumpad::state::Params, keepers: [Pubkey; 3], configs: &[Pubkey]) -> Instruction {
         self.initialize_global_ix_by(&kp_pk(&self.payer), params, keepers, configs)
     }
 
     pub fn initialize_global_ix_by(&self, payer: &Pubkey, params: fumpad::state::Params, keepers: [Pubkey; 3], configs: &[Pubkey]) -> Instruction {
+        self.initialize_global_ix_full(payer, params, keepers, [Pubkey::default(); 2], configs)
+    }
+
+    pub fn initialize_global_ix_full(
+        &self,
+        payer: &Pubkey,
+        params: fumpad::state::Params,
+        keepers: [Pubkey; 3],
+        operators: [Pubkey; 2],
+        configs: &[Pubkey],
+    ) -> Instruction {
         let program_data =
             Pubkey::find_program_address(&[fumpad::ID.as_ref()], &anchor_lang::solana_program::bpf_loader_upgradeable::ID).0;
         let mut i = ix(
@@ -231,6 +257,7 @@ impl Env {
                 cluster_tag: CLUSTER_TAG,
                 params,
                 keepers,
+                operators,
             },
         );
         i.accounts.extend(configs.iter().map(|c| ro(*c)));
@@ -241,6 +268,15 @@ impl Env {
         let i = ix(
             fumpad::accounts::AdminOnly { admin: kp_pk(&self.admin), global: self.global(), event_authority: ev_auth(), program: fumpad::ID },
             fumpad::instruction::SetKeepers { keepers },
+        );
+        let admin = self.admin.insecure_clone();
+        self.send(&[i], &[&admin])
+    }
+
+    pub fn set_operators(&mut self, operators: [Pubkey; 2]) -> TransactionResult {
+        let i = ix(
+            fumpad::accounts::AdminOnly { admin: kp_pk(&self.admin), global: self.global(), event_authority: ev_auth(), program: fumpad::ID },
+            fumpad::instruction::SetOperators { operators },
         );
         let admin = self.admin.insecure_clone();
         self.send(&[i], &[&admin])
@@ -500,6 +536,8 @@ mod smoke {
         assert_eq!(g.admin, kp_pk(&env.admin));
         assert_eq!(g.cluster_tag, CLUSTER_TAG);
         assert!(g.is_keeper(&kp_pk(&env.keepers[2])));
+        assert!(g.is_operator(&kp_pk(&env.operators[1])) && !g.is_operator(&kp_pk(&env.keepers[0])));
+        assert!(!g.is_keeper(&kp_pk(&env.operators[0])));
         assert!(g.is_allowed_config(&env.config));
     }
 }
@@ -528,6 +566,8 @@ pub mod flow;
 #[cfg(test)]
 mod admin_tests;
 #[cfg(test)]
+mod audit_prep_tests;
+#[cfg(test)]
 mod attest_tests;
 #[cfg(test)]
 mod config_tests;
@@ -535,6 +575,8 @@ mod config_tests;
 mod cu_report;
 #[cfg(test)]
 mod e2e_tests;
+#[cfg(test)]
+mod error_coverage;
 #[cfg(test)]
 mod fees_tests;
 #[cfg(test)]
@@ -545,6 +587,8 @@ mod oracle_buyback_tests;
 pub(crate) mod rewards_tests;
 #[cfg(test)]
 mod router_tests;
+#[cfg(test)]
+mod two_coin_tests;
 #[cfg(test)]
 mod vectors;
 #[cfg(test)]

@@ -36,10 +36,10 @@ fn full_lifecycle_one_coin() {
     let meta = ok(env.claim_fees(&c));
     let ev: FeesClaimed = event(&meta);
     assert!(ev.launch_window && ev.to_buyback == ev.claimed);
-    // Pre-graduation sample + keeper buyback into the reward vault.
+    // Pre-graduation operator samples + operator buyback into the reward vault.
     env.pregrad_warmup(&c);
-    let k0 = env.keepers[0].insecure_clone();
-    ok(env.buyback(&c, &k0, u64::MAX));
+    let op = env.op();
+    ok(env.buyback(&c, &op, u64::MAX));
     let pre_grad_bought = env.token_balance(&env.reward_vault(&c.mint));
     assert!(pre_grad_bought > 0);
 
@@ -78,7 +78,7 @@ fn full_lifecycle_one_coin() {
     let g: Graduated = event(&meta);
     crate::lifecycle_tests::assert_reward_pool_8pct(g.leftover_tokens);
     assert_eq!(env.token_balance(&env.reward_vault(&c.mint)), pre_grad_bought + g.leftover_tokens);
-    env.post_grad_setup(&c, &k0);
+    env.post_grad_setup(&c, &op);
 
     // Post-graduation volume (router + third party) → LP fees → split.
     ok(env.router_buy(&c, &carol, 5 * SOL));
@@ -96,9 +96,9 @@ fn full_lifecycle_one_coin() {
     let damm_spot = sqrt_to_q64(meteora::rd_u128(&env.data(&env.coin(&c).damm_pool), m::DAMM_POOL_SQRT_PRICE));
     assert!(damm_spot >= spot_q64 * 10, "pool trades ≥ 10x the curve sell price");
     // Post-grad buyback against the median.
-    ok(env.buyback(&c, &k0, u64::MAX));
+    ok(env.buyback(&c, &op, u64::MAX));
 
-    // Alice claims herself; Bob's ticket is auto-claimed by a keeper.
+    // Alice claims herself; Bob's ticket is auto-claimed by the operator (jobs keeper).
     let w_a = env.base_balance(&kp_pk(&alice), &c.mint);
     let claim = |env: &Env, owner: &Pubkey, t: &Pubkey| {
         ix(
@@ -128,7 +128,7 @@ fn full_lifecycle_one_coin() {
     assert_eq!(env.base_balance(&kp_pk(&alice), &c.mint), w_a + paid.amount);
     let ck = ix(
         fumpad::accounts::ClaimFor {
-            keeper: kp_pk(&k1),
+            keeper: kp_pk(&op),
             global: env.global(),
             coin: c.coin_pda(),
             mint: c.mint,
@@ -147,7 +147,7 @@ fn full_lifecycle_one_coin() {
         },
         fumpad::instruction::ClaimFor {},
     );
-    let meta = ok(env.send_as(&k1, &[ck], &[&k1]));
+    let meta = ok(env.send_as(&op, &[ck], &[&op]));
     let ev = events::<ClaimPaid>(&meta);
     let evq = events::<ClaimQueued>(&meta);
     assert!(ev.len() + evq.len() == 1);

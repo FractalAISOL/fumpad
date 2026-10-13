@@ -14,7 +14,8 @@ pub struct Global {
     pub platform_treasury: Pubkey,
     /// M-2: may only stop things (`set_pause`, `cancel_*`, `void_ticket`).
     pub guardian: Pubkey,
-    /// Keeper keys (samples, auto-claim, attestations). Pubkey::default() = empty slot.
+    /// Attestor keys: their Ed25519 signatures count toward `attest_sell` / `attest_rebuy` (2-of-3) and only they may
+    /// submit those two instructions. No other power. Pubkey::default() = empty slot. Disjoint from `operators`.
     pub keepers: [Pubkey; MAX_KEEPERS],
     /// When each keeper slot got its current key (`set_keepers`); its attestation signatures count only after
     /// `KEEPER_ATTEST_FREEZE_SECS`.
@@ -39,7 +40,12 @@ pub struct Global {
     pub pending_config: Pubkey,
     pub pending_config_add: u8,
     pub pending_config_eta: i64,
-    pub reserved: [u8; 64],
+    /// Jobs keys ("operators"): keeper price samples (`record_samples`), auto-claim (`claim_for`) and pre-graduation
+    /// buybacks. Never attestors (disjoint from `keepers`), so the hot jobs box holds no attestation key. Set by
+    /// `initialize_global` / `set_operators` (admin, immediate). Pubkey::default() = empty slot. Carved out of the
+    /// former `reserved [u8; 64]` (same offset 980, Global size unchanged): a pre-operators Global reads as "no
+    /// operators" until `migrate_global` fills slot 0 from `keepers[0]`.
+    pub operators: [Pubkey; MAX_OPERATORS],
 }
 
 pub const PAUSE_LAUNCH: u8 = 1 << 0;
@@ -207,8 +213,14 @@ pub struct FeeSplitBps {
 }
 
 impl Global {
+    /// An attestor key (`keepers`): may submit attestations. Attestor signatures additionally need
+    /// `is_active_attester`.
     pub fn is_keeper(&self, key: &Pubkey) -> bool {
         *key != Pubkey::default() && self.keepers.iter().any(|k| k == key)
+    }
+    /// A jobs key (`operators`): keeper samples, `claim_for`, pre-graduation buybacks.
+    pub fn is_operator(&self, key: &Pubkey) -> bool {
+        *key != Pubkey::default() && self.operators.iter().any(|k| k == key)
     }
     /// A keeper whose key may count toward an attestation at `now`: past its 6h freeze, or a bootstrap keeper set by
     /// `initialize_global` (`keeper_added_at == 0`, no freeze; `set_keepers` never stores 0).

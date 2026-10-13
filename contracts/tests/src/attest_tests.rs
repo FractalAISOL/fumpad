@@ -176,7 +176,7 @@ fn replayed_and_duplicate_attestations_are_rejected() {
     // Same record again (another keeper pair) → consumed.
     assert_fumpad_err(env.attest_sell(&r, &[1, 2]), FumpadError::AlreadyConsumed);
     // Same trade (signature, ix_key) for another trader/amount → consumed.
-    let r2 = SellRecord { trader: Pubkey::new_unique(), ticket_tokens: 1, base_amount: 1, ..r };
+    let r2 = SellRecord { trader: Pubkey::new_unique(), ticket_tokens: 1, ..r };
     assert_fumpad_err(env.attest_sell(&r2, &[0, 2]), FumpadError::AlreadyConsumed);
     // Same tx signature, another swap instruction in it (ix_key) → a separate ticket.
     let r3 = SellRecord { ix_key: r.ix_key + 1, ..r };

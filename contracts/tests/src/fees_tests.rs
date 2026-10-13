@@ -29,7 +29,7 @@ fn launch_window_fees_go_100_percent_to_buyback_then_split_50_30_20() {
     env.skip_launch_window();
     let accrued = partner_fee(&env, &c);
     assert!(accrued > SOL, "99% fees accrued to the partner: {accrued}");
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     let k_before = env.lamports(&kp_pk(&k));
     let meta = ok(env.claim_fees(&c));
     let ev: FeesClaimed = event(&meta);
@@ -108,7 +108,7 @@ fn fee_claims_reject_spoofed_accounts() {
     let c = env.launch(SOL / 10);
     let other = env.launch(SOL / 10);
     env.skip_launch_window();
-    let k = env.keepers[0].insecure_clone();
+    let k = env.op();
     // Another coin's pool under this coin.
     let mut i = env.claim_fees_ix(&c, &kp_pk(&k));
     i.accounts[5].pubkey = addr(&other.pool);

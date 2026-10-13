@@ -16,12 +16,14 @@ use super::{
     process_queue::{check_destination, open_escrow, Dest},
 };
 
-/// D17 auto-claim: a registered keeper claims a ticket on its owner's behalf (same rules as `claim`). Funds go
+/// D17 auto-claim: an operator (`Global.operators`, the jobs keeper — never an attestor key) claims a ticket on its
+/// owner's behalf (same rules as `claim`). Funds go
 /// only to the owner's canonical Token-2022 ATA, or — if it can't receive — the ticket's D16 escrow (keeper pays
 /// its rent, refunded by `withdraw_escrow`). Owners can opt out per coin (`set_auto_claim(false)`).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct ClaimFor<'info> {
+    /// An operator key (`Global.operators`). Pays the escrow rent if one is needed.
     #[account(mut)]
     pub keeper: Signer<'info>,
     #[account(seeds = [GLOBAL_SEED], bump = global.bump)]
@@ -72,7 +74,7 @@ pub struct ClaimFor<'info> {
 pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let keeper = ctx.accounts.keeper.key();
-    require!(ctx.accounts.global.is_keeper(&keeper), FumpadError::Unauthorized);
+    require!(ctx.accounts.global.is_operator(&keeper), FumpadError::Unauthorized);
     require!(ctx.accounts.position.auto_claim_enabled(), FumpadError::AutoClaimDisabled);
     let ticket_key = ctx.accounts.ticket.key();
     let mint = ctx.accounts.mint.key();

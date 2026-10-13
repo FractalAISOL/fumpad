@@ -27,6 +27,8 @@ pub const IX_DBC_WITHDRAW_MIGRATION_FEE: [u8; 8] = [237, 142, 45, 23, 129, 6, 22
 pub const IX_DBC_PARTNER_WITHDRAW_SURPLUS: [u8; 8] = [168, 173, 72, 100, 201, 98, 38, 92];
 pub const IX_DBC_MIGRATION_DAMM_V2: [u8; 8] = [156, 169, 230, 103, 53, 228, 80, 64];
 pub const IX_DAMM_CLAIM_POSITION_FEE: [u8; 8] = [180, 38, 154, 17, 133, 33, 162, 211];
+/// DAMM v2 `claim_reward(reward_index: u8, skip_reward: u8)`.
+pub const IX_DAMM_CLAIM_REWARD: [u8; 8] = [149, 95, 181, 242, 94, 90, 158, 162];
 
 // sha256("account:<Name>")[..8]
 pub const ACC_DBC_VIRTUAL_POOL: [u8; 8] = [213, 224, 5, 209, 98, 69, 119, 92];
@@ -116,11 +118,22 @@ pub const DAMM_POOL_TOKEN_B_VAULT: usize = 264;
 pub const DAMM_POOL_LIQUIDITY: usize = 360;
 pub const DAMM_POOL_SQRT_PRICE: usize = 456;
 pub const DAMM_POOL_STATUS: usize = 481;
+/// `pool_status` values: 0 = enabled; anything else (1 = disabled by the DAMM v2 operator) = no trading.
+pub const DAMM_POOL_STATUS_ENABLED: u8 = 0;
 /// `metrics.total_lp_b_fee` (u128) @584, `metrics.total_protocol_b_fee` (u64) @608.
 pub const DAMM_POOL_TOTAL_LP_B_FEE: usize = 584;
 pub const DAMM_POOL_TOTAL_PROTOCOL_B_FEE: usize = 608;
 pub const DAMM_POOL_CREATOR: usize = 648;
 pub const DAMM_POOL_TOKEN_B_AMOUNT: usize = 688;
+/// `reward_infos: [RewardInfo; 2]` @728, 192 bytes each: initialized u8 @0, reward_token_flag u8 @1 (0 SPL Token,
+/// 1 Token-2022), mint @16, vault @48 (farming rewards; set up by the DAMM v2 admin / pool creator, funded by a funder).
+pub const DAMM_POOL_REWARD_INFOS: usize = 728;
+pub const DAMM_REWARD_INFO_LEN: usize = 192;
+pub const DAMM_NUM_REWARDS: usize = 2;
+pub const DAMM_REWARD_INITIALIZED: usize = 0;
+pub const DAMM_REWARD_TOKEN_FLAG: usize = 1;
+pub const DAMM_REWARD_MINT: usize = 16;
+pub const DAMM_REWARD_VAULT: usize = 48;
 
 // ── DAMM v2 Position (8 + 400 bytes) ─────────────────────────────────────────
 pub const DAMM_POSITION_LEN: usize = 408;
@@ -279,6 +292,28 @@ pub fn read_damm_pool(info: &AccountInfo) -> Result<DammPool> {
         total_b_fee: rd_u128(&d, DAMM_POOL_TOTAL_LP_B_FEE)
             .wrapping_add(rd_u64(&d, DAMM_POOL_TOTAL_PROTOCOL_B_FEE) as u128),
         pool_status: d[DAMM_POOL_STATUS],
+    })
+}
+
+/// One of a DAMM v2 pool's two farming-reward slots.
+#[derive(Clone, Copy, Debug)]
+pub struct DammRewardInfo {
+    pub initialized: bool,
+    /// 0 = SPL Token, 1 = Token-2022.
+    pub token_flag: u8,
+    pub mint: Pubkey,
+    pub vault: Pubkey,
+}
+
+pub fn read_damm_reward_info(info: &AccountInfo, index: usize) -> Result<DammRewardInfo> {
+    require!(index < DAMM_NUM_REWARDS, FumpadError::WrongVenue);
+    let d = checked_data(info, &DAMM_V2_PROGRAM_ID, &ACC_DAMM_POOL, DAMM_POOL_LEN)?;
+    let o = DAMM_POOL_REWARD_INFOS + index * DAMM_REWARD_INFO_LEN;
+    Ok(DammRewardInfo {
+        initialized: d[o + DAMM_REWARD_INITIALIZED] != 0,
+        token_flag: d[o + DAMM_REWARD_TOKEN_FLAG],
+        mint: rd_pubkey(&d, o + DAMM_REWARD_MINT),
+        vault: rd_pubkey(&d, o + DAMM_REWARD_VAULT),
     })
 }
 

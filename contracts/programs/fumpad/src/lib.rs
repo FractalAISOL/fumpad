@@ -53,8 +53,9 @@ pub mod fumpad {
         cluster_tag: u8,
         params: Params,
         keepers: [Pubkey; MAX_KEEPERS],
+        operators: [Pubkey; MAX_OPERATORS],
     ) -> Result<()> {
-        instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params, keepers)
+        instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params, keepers, operators)
     }
 
     pub fn queue_params(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
@@ -75,6 +76,10 @@ pub mod fumpad {
 
     pub fn set_keepers(ctx: Context<AdminOnly>, keepers: [Pubkey; MAX_KEEPERS]) -> Result<()> {
         instructions::handle_set_keepers(ctx, keepers)
+    }
+
+    pub fn set_operators(ctx: Context<AdminOnly>, operators: [Pubkey; MAX_OPERATORS]) -> Result<()> {
+        instructions::handle_set_operators(ctx, operators)
     }
 
     pub fn propose_admin(
@@ -131,6 +136,14 @@ pub mod fumpad {
 
     pub fn claim_lp_fees(ctx: Context<ClaimLpFees>) -> Result<()> {
         instructions::handle_claim_lp_fees(ctx)
+    }
+
+    pub fn claim_unregistered_fees(ctx: Context<ClaimUnregisteredFees>) -> Result<()> {
+        instructions::handle_claim_unregistered_fees(ctx)
+    }
+
+    pub fn claim_position_rewards(ctx: Context<ClaimPositionRewards>, reward_index: u8) -> Result<()> {
+        instructions::handle_claim_position_rewards(ctx, reward_index)
     }
 
     pub fn withdraw_creator_fees(ctx: Context<WithdrawCreatorFees>) -> Result<()> {

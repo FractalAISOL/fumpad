@@ -84,9 +84,10 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
     // Guard price, spot, slice cap and the exact venue account list.
     let (venue, guard, spot, cap, expected): (u8, u128, u128, u64, Vec<Pubkey>) = match a.coin.status {
         CoinStatus::Curve => {
-            // Pre-graduation: keeper-only, after the anti-snipe window, spot within ±band of BOTH the median of the
-            // recent keeper samples (the guard price) and the last keeper sample (≤ 60 s old).
-            require!(a.global.is_keeper(&a.cranker.key()), FumpadError::Unauthorized);
+            // Pre-graduation: operator-only (the jobs keeper; never an attestor key), after the anti-snipe window,
+            // spot within ±band of BOTH the median of the recent operator samples (the guard price) and the last
+            // operator sample (≤ 60 s old).
+            require!(a.global.is_operator(&a.cranker.key()), FumpadError::Unauthorized);
             require!(
                 slot >= a.coin.launch_slot.saturating_add(a.coin.launch_window_slots),
                 FumpadError::LaunchWindowActive
@@ -145,6 +146,8 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
             let pool_info = venue_accounts.get(1).ok_or(FumpadError::WrongVenue)?;
             require_keys_eq!(pool_info.key(), a.coin.damm_pool, FumpadError::WrongVenue);
             let pool = meteora::read_damm_pool(pool_info)?;
+            // D38: never buy on a pool its DAMM v2 operator disabled (its spot is frozen, not a market price).
+            require!(pool.pool_status == meteora::DAMM_POOL_STATUS_ENABLED, FumpadError::PoolDisabled);
             let median = {
                 let info = a.observations.to_account_info();
                 require_keys_eq!(*info.owner, crate::ID, FumpadError::InsufficientSamples);

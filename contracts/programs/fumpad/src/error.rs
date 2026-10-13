@@ -122,4 +122,10 @@ pub enum FumpadError {
     RebuyOutOfWindow,
     #[msg("The DAMM v2 pool is disabled by its operator")]
     PoolDisabled,
+    #[msg("Attested ticket price is below the trade's execution price (D12: ticket price >= execution)")]
+    TicketPriceBelowExecution,
+    #[msg("A key cannot be both an attestor (keeper) and an operator")]
+    KeeperOperatorOverlap,
+    #[msg("This DBC pool's coin is registered: use claim_fees")]
+    PoolIsRegistered,
 }

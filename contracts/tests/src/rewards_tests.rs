@@ -176,8 +176,9 @@ impl World {
         )
     }
 
-    pub fn claim_for(&mut self, keeper: usize, t: &Pubkey) -> TransactionResult {
-        let k = self.env.keepers[keeper].insecure_clone();
+    /// `claim_for` by operator `operator` (jobs key).
+    pub fn claim_for(&mut self, operator: usize, t: &Pubkey) -> TransactionResult {
+        let k = self.env.operators[operator].insecure_clone();
         let i = self.claim_for_ix(&kp_pk(&k), t);
         self.env.send_as(&k, &[i], &[&k])
     }
@@ -555,15 +556,18 @@ fn auto_claim_pays_only_the_owner_and_respects_opt_out() {
     w.ready();
     let meta = ok(w.claim_for(1, &t1));
     let ev: ClaimPaid = event(&meta);
-    assert_eq!((ev.amount, ev.triggered_by), (100 * M, kp_pk(&w.env.keepers[1])));
+    assert_eq!((ev.amount, ev.triggered_by), (100 * M, kp_pk(&w.env.operators[1])));
     assert_eq!(w.env.base_balance(&kp_pk(&a), &w.c.mint), 100 * M);
     println!("claim_for (paid) CU {}", meta.compute_units_consumed);
-    // Not a keeper.
+    // Not an operator → Unauthorized; attestor keys (Global.keepers) have no auto-claim power.
     let rando = w.env.new_user(1);
     let i = w.claim_for_ix(&kp_pk(&rando), &t2);
     assert_fumpad_err(w.env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
-    // The keeper can't redirect: owner_ata is address-checked.
-    let k = w.env.keepers[0].insecure_clone();
+    let attestor = w.env.keepers[0].insecure_clone();
+    let i = w.claim_for_ix(&kp_pk(&attestor), &t2);
+    assert_fumpad_err(w.env.send_as(&attestor, &[i], &[&attestor]), FumpadError::Unauthorized);
+    // The operator can't redirect: owner_ata is address-checked.
+    let k = w.env.op();
     let mut i = w.claim_for_ix(&kp_pk(&k), &t2);
     i.accounts[10].pubkey = addr(&base_ata(&kp_pk(&k), &w.c.mint));
     assert_fumpad_err(w.env.send_as(&k, &[i], &[&k]), FumpadError::InvalidAccount);

@@ -14,6 +14,7 @@ use crate::{
         logic,
         util::{create_pda_account, write_account},
     },
+    math::price_q64,
     state::*,
 };
 
@@ -91,6 +92,11 @@ pub fn handle_attest_sell(ctx: Context<AttestSell>) -> Result<()> {
         r.ticket_tokens > 0 && r.ticket_tokens <= r.base_amount && r.quote_gross > 0 && r.ticket_price_q64 > 0,
         FumpadError::InvalidTicketAmount
     );
+    // D12: ticket price = max(execution, capped reference floor) ≥ execution, where the engine's execution price is
+    // exactly ⌊quote_gross × 2⁶⁴ / base_amount⌋ (same integer formula, no tolerance needed). A ticket priced below
+    // its own trade is always an engine bug or a forgery; a lower price makes the 10× trigger easier.
+    let execution_q64 = price_q64(r.quote_gross, r.base_amount).ok_or(FumpadError::InvalidTicketAmount)?;
+    require!(r.ticket_price_q64 >= execution_q64, FumpadError::TicketPriceBelowExecution);
     require!(r.slot >= coin.launch_slot, FumpadError::InvalidAttestation);
     require!(
         r.block_time >= coin.created_at.saturating_sub(ATTEST_CLOCK_SKEW_SECS)

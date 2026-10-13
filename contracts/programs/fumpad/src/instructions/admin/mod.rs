@@ -1,5 +1,5 @@
 //! Admin / governance. Roles (M-2): `admin` queues params/configs (48h), proposes authority changes (48h), sets
-//! keepers, pauses, migrates the layout; `guardian` can only stop things (pause, cancel_*, void_ticket); anyone
+//! keepers (attestors) and operators (jobs keys), pauses, migrates the layout; `guardian` can only stop things (pause, cancel_*, void_ticket); anyone
 //! executes a queued change after its timelock. Every instruction emits an event (L-3).
 
 use anchor_lang::prelude::*;
@@ -14,7 +14,7 @@ use crate::{
     error::FumpadError,
     events::{
         AdminAccepted, AdminProposalCancelled, AdminProposed, ConfigUpdated, GlobalInitialized, KeepersSet,
-        ParamsCancelled, ParamsQueued, ParamsUpdated, PauseSet,
+        OperatorsSet, ParamsCancelled, ParamsQueued, ParamsUpdated, PauseSet,
     },
     state::{Global, Params, PAUSE_ALL},
 };
@@ -37,10 +37,10 @@ pub struct InitializeGlobal<'info> {
     pub event_authority: UncheckedAccount<'info>,
 }
 
-/// Bootstrap (initial keepers + config allow-list) with no timelock and no keeper freeze: only the program's upgrade
-/// authority can initialize, and it could replace the program anyway; the timelocks protect a running system. Every
-/// later change (`set_keepers`, `queue_config`) keeps its freeze / timelock. remaining_accounts = the initial DBC
-/// configs (0..=8, read-only), each validated exactly like `execute_config` add (INTERFACE §5.4).
+/// Bootstrap (initial keepers, operators + config allow-list) with no timelock and no keeper freeze: only the
+/// program's upgrade authority can initialize, and it could replace the program anyway; the timelocks protect a
+/// running system. Every later change (`set_keepers`, `queue_config`) keeps its freeze / timelock. remaining_accounts
+/// = the initial DBC configs (0..=8, read-only), each validated exactly like `execute_config` add (INTERFACE §5.4).
 pub fn handle_initialize_global<'info>(
     ctx: Context<'info, InitializeGlobal<'info>>,
     admin: Pubkey,
@@ -48,11 +48,13 @@ pub fn handle_initialize_global<'info>(
     cluster_tag: u8,
     params: Params,
     keepers: [Pubkey; MAX_KEEPERS],
+    operators: [Pubkey; MAX_OPERATORS],
 ) -> Result<()> {
     require!(params.is_valid(), FumpadError::InvalidParams);
     require_keys_neq!(admin, Pubkey::default(), FumpadError::InvalidParams);
     require_keys_neq!(platform_treasury, Pubkey::default(), FumpadError::InvalidParams);
     validate_keeper_set(&keepers)?;
+    validate_operator_set(&operators, &keepers)?;
     let mut configs = [Pubkey::default(); MAX_CONFIGS];
     require!(ctx.remaining_accounts.len() <= MAX_CONFIGS, FumpadError::ConfigListFull);
     for (i, info) in ctx.remaining_accounts.iter().enumerate() {
@@ -82,11 +84,14 @@ pub fn handle_initialize_global<'info>(
     g.pending_config = Pubkey::default();
     g.pending_config_add = 0;
     g.pending_config_eta = 0;
-    g.reserved = [0; 64];
+    g.operators = operators;
     let ts = Clock::get()?.unix_timestamp;
     emit_event!(ctx, GlobalInitialized { admin, platform_treasury, guardian: admin, cluster_tag, params, ts });
     if keepers.iter().any(|k| *k != Pubkey::default()) {
         emit_event!(ctx, KeepersSet { keepers, added_at: [0; MAX_KEEPERS], ts });
+    }
+    if operators.iter().any(|k| *k != Pubkey::default()) {
+        emit_event!(ctx, OperatorsSet { operators, ts });
     }
     for config in configs.into_iter().filter(|c| *c != Pubkey::default()) {
         emit_event!(ctx, ConfigUpdated { config, add: true, ts });
@@ -98,6 +103,19 @@ pub fn handle_initialize_global<'info>(
 fn validate_keeper_set(keepers: &[Pubkey; MAX_KEEPERS]) -> Result<()> {
     for (i, k) in keepers.iter().enumerate() {
         require!(*k == Pubkey::default() || !keepers[..i].contains(k), FumpadError::InvalidParams);
+    }
+    Ok(())
+}
+
+/// Operator list rule (`initialize_global`, `set_operators`): non-default keys are distinct and none is an
+/// attestor — the jobs key must never be able to count toward a 2-of-3 attestation.
+fn validate_operator_set(operators: &[Pubkey; MAX_OPERATORS], keepers: &[Pubkey; MAX_KEEPERS]) -> Result<()> {
+    for (i, k) in operators.iter().enumerate() {
+        if *k == Pubkey::default() {
+            continue;
+        }
+        require!(!operators[..i].contains(k), FumpadError::InvalidParams);
+        require!(!keepers.contains(k), FumpadError::KeeperOperatorOverlap);
     }
     Ok(())
 }
@@ -186,6 +204,12 @@ pub fn handle_set_keepers(ctx: Context<AdminOnly>, keepers: [Pubkey; MAX_KEEPERS
     validate_keeper_set(&keepers)?;
     let now = Clock::get()?.unix_timestamp;
     let g = &mut ctx.accounts.global;
+    // An attestor can never also be a jobs key (after `migrate_global` filled `operators[0]` from `keepers[0]`,
+    // `set_operators` must move the jobs key first).
+    require!(
+        keepers.iter().all(|k| *k == Pubkey::default() || !g.operators.contains(k)),
+        FumpadError::KeeperOperatorOverlap
+    );
     let mut added_at = [0i64; MAX_KEEPERS];
     for (i, k) in keepers.iter().enumerate() {
         if *k == Pubkey::default() {
@@ -200,6 +224,17 @@ pub fn handle_set_keepers(ctx: Context<AdminOnly>, keepers: [Pubkey; MAX_KEEPERS
     g.keepers = keepers;
     g.keeper_added_at = added_at;
     emit_event!(ctx, KeepersSet { keepers, added_at, ts: now });
+    Ok(())
+}
+
+/// Immediate (incident response), like `set_keepers` but with no freeze: operators sample, auto-claim and run
+/// pre-graduation buybacks — bounded powers that never create tickets. A key may not be an attestor.
+pub fn handle_set_operators(ctx: Context<AdminOnly>, operators: [Pubkey; MAX_OPERATORS]) -> Result<()> {
+    let g = &mut ctx.accounts.global;
+    validate_operator_set(&operators, &g.keepers)?;
+    g.operators = operators;
+    let ts = Clock::get()?.unix_timestamp;
+    emit_event!(ctx, OperatorsSet { operators, ts });
     Ok(())
 }
 

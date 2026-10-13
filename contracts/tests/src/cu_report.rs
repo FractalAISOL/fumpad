@@ -68,8 +68,9 @@ fn cu_report() {
     }
     let meta = ok(env.sample(0, &[&c]));
     r.add("record_samples (1 coin, pre-grad)", &meta, 0);
+    let op = env.op();
+    let meta = ok(env.buyback(&c, &op, u64::MAX));
     let k0 = env.keepers[0].insecure_clone();
-    let meta = ok(env.buyback(&c, &k0, u64::MAX));
     r.add("execute_buyback (DBC, pre-grad, 4-sample median; creates buyback WSOL ATA)", &meta, 0);
     // Attest on the curve: first ticket of a wallet (creates position + ticket + marker).
     env.warp(60);

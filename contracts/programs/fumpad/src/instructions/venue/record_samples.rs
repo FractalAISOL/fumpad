@@ -1,9 +1,14 @@
 //! SPEC v0.7 §6: keeper price samples. remaining_accounts = 1..=10 groups of `[coin (mut), pool, observations (mut)]`.
+//! "Keeper sample" = a sample by an OPERATOR key (`Global.operators`, the jobs keeper); attestor keys
+//! (`Global.keepers`) have no sampling power and sample like anyone else (fallback).
 //!
 //! * Graduated coin: pool = `coin.damm_pool`, price from DAMM v2 `sqrt_price` (offset 456), pushed into the ring
-//!   (`["observations", mint]`). v0.6 rules: keeper samples, or anyone once the coin had no keeper sample for
-//!   `keeper_stale_secs` (flagged fallback, never counted for medians); keeper spacing vs the previous keeper sample.
-//! * Curve coin: pool = `coin.dbc_pool`, DBC `sqrt_price` (offset 280); keeper only; stored in the Coin
+//!   (`["observations", mint]`). v0.6 rules: operator samples, or anyone once the coin had no operator sample for
+//!   `keeper_stale_secs` (flagged fallback, never counted for medians); spacing vs the previous operator sample.
+//!   A pool disabled by its DAMM v2 operator (`pool_status != 0`, D38) is skipped like a `Complete` coin: its frozen
+//!   price never enters the ring, so claims on the coin wait (the claim median loses coverage) until it is
+//!   re-enabled and the window refills.
+//! * Curve coin: pool = `coin.dbc_pool`, DBC `sqrt_price` (offset 280); operator only; stored in the Coin
 //!   (`pregrad_sample_*` = the latest, and pushed into the 5-sample `pregrad_ring`, L5) for the pre-graduation
 //!   buyback guard only (never for claims, D1). The observations account of the group is ignored.
 //! * Complete coin (curve done, not graduated): skipped (no sample, no event, no error).
@@ -65,7 +70,7 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
     require_isolated(&ctx.accounts.instructions.to_account_info())?;
     let now = Clock::get()?.unix_timestamp;
     let p = ctx.accounts.global.params;
-    let is_keeper = ctx.accounts.global.is_keeper(&ctx.accounts.sampler.key());
+    let is_keeper = ctx.accounts.global.is_operator(&ctx.accounts.sampler.key());
     let rem = ctx.remaining_accounts;
     require!(
         !rem.is_empty() && rem.len() % SAMPLE_GROUP_LEN == 0 && rem.len() / SAMPLE_GROUP_LEN <= MAX_SAMPLE_COINS,
@@ -84,7 +89,7 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
 
         match coin.status {
             CoinStatus::Curve => {
-                // Pre-graduation: keeper only, DBC spot, stored in the coin.
+                // Pre-graduation: operator only, DBC spot, stored in the coin.
                 require!(is_keeper, FumpadError::Unauthorized);
                 require_keys_eq!(pool_info.key(), coin.dbc_pool, FumpadError::WrongVenue);
                 let pool = meteora::read_dbc_pool(pool_info)?;
@@ -103,6 +108,11 @@ pub fn handle_record_samples<'info>(ctx: Context<'info, RecordSamples<'info>>) -
                 require_keys_eq!(pool_info.key(), coin.damm_pool, FumpadError::WrongVenue);
                 let pool = meteora::read_damm_pool(pool_info)?;
                 require!(pool.token_a_mint == coin.mint && pool.token_b_mint == WSOL_MINT, FumpadError::WrongVenue);
+                // D38: a disabled pool has no market; its frozen price must never count toward a claim median.
+                // Skip it (no sample, no event, no error) like a `Complete` coin; the rest of the batch proceeds.
+                if pool.pool_status != meteora::DAMM_POOL_STATUS_ENABLED {
+                    continue;
+                }
                 let price = price_q64_from_sqrt(pool.sqrt_price).ok_or(FumpadError::MathOverflow)?;
 
                 require_keys_eq!(*obs_info.owner, crate::ID, FumpadError::InvalidAccount);

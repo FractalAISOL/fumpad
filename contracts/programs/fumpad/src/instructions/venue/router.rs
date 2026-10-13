@@ -98,7 +98,10 @@ fn route<'info>(ctx: Context<'info, Route<'info>>, is_buy: bool, amount_in: u64,
     let pool_info = &rem[layout.pool];
     if venue == meteora::VENUE_DAMM {
         // D38: DAMM v2 operators can disable a pool; say so instead of surfacing Meteora's error.
-        require!(meteora::read_damm_pool(pool_info)?.pool_status == 0, FumpadError::PoolDisabled);
+        require!(
+            meteora::read_damm_pool(pool_info)?.pool_status == meteora::DAMM_POOL_STATUS_ENABLED,
+            FumpadError::PoolDisabled
+        );
     }
     let (pre_sqrt, pre_fee) = pool_state(venue, pool_info)?;
     let (base0, quote0) = (token_amount(base_acc)?, token_amount(quote_acc)?);

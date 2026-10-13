@@ -135,7 +135,10 @@ pub const MAX_ATTEST_TOKENS_PER_HOUR_BPS: u16 = 10_000;
 pub const MIN_TICKET_CHALLENGE_SECS: i64 = 3_600;
 pub const MAX_TICKET_CHALLENGE_SECS: i64 = 48 * 3_600;
 
+/// Attestor keys (`Global.keepers`): sign and submit `attest_sell` / `attest_rebuy` (2-of-3), nothing else.
 pub const MAX_KEEPERS: usize = 3;
+/// Jobs keys (`Global.operators`): keeper samples, `claim_for`, pre-graduation buybacks. Never attestors.
+pub const MAX_OPERATORS: usize = 2;
 /// Config allow-list slots (`Global.configs`).
 pub const MAX_CONFIGS: usize = 8;
 
