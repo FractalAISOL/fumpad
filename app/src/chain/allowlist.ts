@@ -56,8 +56,23 @@ import {
   WSOL_MINT,
   wsolAta,
 } from "@fumpad/sdk";
+import { FUMPAD_PROGRAM_ADDRESS } from "./cluster";
 
 export { ATA_PROGRAM_ID, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID };
+
+/**
+ * The one FUMPAD program this build signs for: NEXT_PUBLIC_FUMPAD_PROGRAM_ID (`./cluster.ts`). The SDK's id (its own
+ * FUMPAD_PROGRAM_ID, fed from the same variable by next.config.ts) builds every expected instruction and PDA, so the
+ * two must agree: if they don't, this module refuses to load (and `vetFumpadTx` re-checks on every call), so a
+ * mis-built app can never sign for a program other than the configured one.
+ */
+export function configuredProgram(sdkProgramId: PublicKey = FUMPAD_PROGRAM_ID, configured: string = FUMPAD_PROGRAM_ADDRESS): PublicKey {
+  const p = new PublicKey(configured);
+  if (p.toBase58() !== configured || !sdkProgramId.equals(p))
+    throw new Error(`FUMPAD program mismatch: the app is configured for ${configured} but @fumpad/sdk uses ${sdkProgramId.toBase58()} (NEXT_PUBLIC_FUMPAD_PROGRAM_ID / next.config.ts env)`);
+  return p;
+}
+const PROGRAM = configuredProgram();
 
 /** FUMPAD v0.7 instructions a user wallet signs. */
 type FumpadIxName = "buy" | "sell" | "register_coin" | "claim" | "set_auto_claim" | "withdraw_creator_fees" | "withdraw_escrow";
@@ -294,7 +309,7 @@ function vetRouterTrade(ix: Ix, side: "buy" | "sell", wallet: PublicKey, mint: P
     return refuse("it routes to an unknown venue");
   }
   // The router's own accounts: trader, global, this coin, the venue program, event authority, program.
-  if (!sameKeys(ix.keys.slice(0, 6), [wallet, globalPda(), coinPda(mint), venueProgram, eventAuthorityPda(), FUMPAD_PROGRAM_ID]))
+  if (!sameKeys(ix.keys.slice(0, 6), [wallet, globalPda(), coinPda(mint), venueProgram, eventAuthorityPda(), PROGRAM]))
     refuse(`unexpected ${side} accounts`);
   const coin = venue === "dbc" ? { mint, dbcConfig: remaining[1] } : { mint, dbcConfig: PublicKey.default, dammPool: remaining[1] };
   const want = rebuilt(() =>
@@ -403,6 +418,7 @@ function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_
  * and, for a launch, what it launches.
  */
 export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy: SilentPolicy): { solInLamports: bigint; launch?: LaunchShape } {
+  if (!FUMPAD_PROGRAM_ID.equals(PROGRAM)) refuse("the app and its SDK disagree on the FUMPAD program");
   const action = policy.action;
   if (!(action in ACTION_IX)) refuse("unknown action");
   let mint: PublicKey;
@@ -469,7 +485,7 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
         firstBuy = vetDbcFirstBuy(ix, wallet, mint, init.config);
         buys += firstBuy.amountIn;
       }
-    } else if (p.equals(FUMPAD_PROGRAM_ID)) {
+    } else if (p.equals(PROGRAM)) {
       if (beforeInit()) refuse("the launch is out of order");
       if (!startsWith(ix.data, FUMPAD_IX[main])) refuse("it contains a FUMPAD instruction this action doesn't use");
       if (mains++) refuse("it repeats the action");

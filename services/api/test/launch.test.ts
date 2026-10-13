@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
+import { DEFAULT_FUMPAD_PROGRAM_ID, FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
 
 import { parsePrepareBody, WindowLimiter } from "../src/launch/routes.js";
 import { keyFingerprint, MintVault, parsePoolKey } from "../src/launch/vault.js";
@@ -78,7 +78,9 @@ describe("POST /v1/launch/prepare body", () => {
 describe("app/src/chain stays in sync with the v0.7 program", () => {
   it("program id (cluster.ts; the rest from @fumpad/sdk), vanity suffix, IDL account lists the app relies on", () => {
     const chainDir = join(dirname(fileURLToPath(import.meta.url)), "../../../app/src/chain/");
-    expect(readFileSync(chainDir + "cluster.ts", "utf8")).toContain(`FUMPAD_PROGRAM_ADDRESS = "${FUMPAD_PROGRAM_ID.toBase58()}"`);
+    // the app's default (NEXT_PUBLIC_FUMPAD_PROGRAM_ID unset) = the SDK's default = the devnet build's declare_id!
+    expect(readFileSync(chainDir + "cluster.ts", "utf8")).toContain(`DEVNET_PROGRAM_ADDRESS = "${DEFAULT_FUMPAD_PROGRAM_ID}"`);
+    if (!process.env.FUMPAD_PROGRAM_ID) expect(FUMPAD_PROGRAM_ID.toBase58()).toBe(DEFAULT_FUMPAD_PROGRAM_ID);
     // The app's instruction encoders, PDAs and vanity suffix are the SDK's own (no app copies left).
     expect(readFileSync(chainDir + "program.ts", "utf8")).toContain("VANITY_SUFFIX = FUMPAD_VANITY_SUFFIX");
     expect(FUMPAD_VANITY_SUFFIX).toBe("fmbL");

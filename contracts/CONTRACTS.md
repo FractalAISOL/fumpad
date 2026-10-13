@@ -29,6 +29,10 @@ cargo test -p tests cu_report -- --nocapture   # CU + tx-size + rent tables
 cargo test -p tests derive_exact_curves -- --ignored --nocapture   # re-derive the exact-8% DBC curves (after a DBC upgrade)
 UPDATE_VECTORS=1 cargo test -p tests vectors   # regenerate tests/vectors/*.json (otherwise checked byte for byte)
 ```
+Program id: the default build declares the devnet id (`program-ids/devnet.txt`). `--features mainnet` (e.g.
+`cargo build-sbf --tools-version v1.57 --arch v3 --features mainnet`, or `solana-verify build … -- --features mainnet`)
+compiles in the id committed in `program-ids/mainnet.txt` via `programs/fumpad/build.rs`, and fails while it is
+`UNSET`. Launch-day procedure (commit the id → verifiable build → hash → deploy → verify): services/LAUNCH-DAY.md §10.
 Fixtures (`tests/fixtures/`, dumped read-only from mainnet; no mainnet transaction was sent):
 `dbc_mainnet.so` (sha256 `4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b`, programdata dump incl.
 padding), `damm_v2_mainnet.so` (`4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b`),

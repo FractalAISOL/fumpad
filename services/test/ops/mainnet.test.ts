@@ -1,5 +1,6 @@
 /** Mainnet launch path (scripts/mainnet): CLI safety gates, config bytes, params, manifests, program-id override. */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,7 +11,8 @@ import { DEFAULT_FUMPAD_PROGRAM_ID, DEFAULT_PARAMS, FUMPAD_PROGRAM_ID, FUMPAD_PR
 
 import { configBytesProblem, mainnetParams } from "../../scripts/mainnet/bootstrap-core.js";
 import { parseCli } from "../../scripts/mainnet/bootstrap-mainnet.js";
-import { compareManifests, type Manifest } from "../../scripts/mainnet/fork.js";
+import { committedMainnetId, executableHash } from "../../scripts/mainnet/build-program.js";
+import { compareManifests, type Manifest, SERVICES } from "../../scripts/mainnet/fork.js";
 import { ensureHotKeys, HOT_KEYS, loadConfig, programIdOf } from "../../scripts/mainnet/keys.js";
 
 const rpcEnv = () => {
@@ -55,6 +57,32 @@ describe("mainnet values", () => {
   it("without FUMPAD_PROGRAM_ID the SDK uses the compiled-in id", () => {
     expect(FUMPAD_PROGRAM_ID_SOURCE).toBe(process.env.FUMPAD_PROGRAM_ID ? "env" : "default");
     if (!process.env.FUMPAD_PROGRAM_ID) expect(FUMPAD_PROGRAM_ID.equals(new PublicKey(DEFAULT_FUMPAD_PROGRAM_ID))).toBe(true);
+  });
+});
+
+describe("program id files (verifiable build input)", () => {
+  const contracts = join(SERVICES, "../contracts");
+  it("SDK default = contracts/program-ids/devnet.txt = the default build's declare_id!", () => {
+    const devnet = readFileSync(join(contracts, "program-ids/devnet.txt"), "utf8").split("\n").find((l) => l.trim() && !l.startsWith("#"))!.trim();
+    expect(devnet).toBe(DEFAULT_FUMPAD_PROGRAM_ID);
+    const lib = readFileSync(join(contracts, "programs/fumpad/src/lib.rs"), "utf8");
+    expect(lib).toMatch(new RegExp(`#\\[cfg\\(not\\(feature = "mainnet"\\)\\)\\]\\ndeclare_id!\\("${devnet}"\\);`));
+    expect(lib).toContain('#[cfg(feature = "mainnet")]\ninclude!(concat!(env!("OUT_DIR"), "/mainnet_id.rs"));');
+  });
+  it("mainnet.txt: UNSET until launch day, then exactly one valid key", () => {
+    const d = mkdtempSync(join(tmpdir(), "fumpad-ids-"));
+    const f = join(d, "mainnet.txt");
+    writeFileSync(f, "# comment\nUNSET\n");
+    expect(committedMainnetId(f)).toBeNull();
+    const id = Keypair.generate().publicKey.toBase58();
+    writeFileSync(f, `# comment\n\n${id}\n`);
+    expect(committedMainnetId(f)).toBe(id);
+    const committed = committedMainnetId();
+    if (committed) expect(new PublicKey(committed).toBase58()).toBe(committed);
+  });
+  it("executable hash = sha256 without trailing zero bytes (solana-verify)", () => {
+    const b = Uint8Array.from([1, 2, 3, 0, 0]);
+    expect(executableHash(b)).toBe(createHash("sha256").update(Uint8Array.from([1, 2, 3])).digest("hex"));
   });
 });
 

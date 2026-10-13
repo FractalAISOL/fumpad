@@ -1,0 +1,3 @@
+# FUMPAD program id of the default build (declare_id! in programs/fumpad/src/lib.rs; deployed on devnet).
+# A unit test (lib.rs) keeps the two equal. Not read by the default build.
+5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb

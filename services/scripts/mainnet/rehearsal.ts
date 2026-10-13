@@ -39,6 +39,7 @@ const programId = programIdOf(KEYS)!;
 console.log(`rehearsal program id (stand-in for the mainnet keypair): ${programId}  [${keyPath(KEYS, "fumpad-program-keypair")}]`);
 const built = buildProgram(new PublicKey(programId));
 process.env.FUMPAD_PROGRAM_ID = programId;
+process.env.FUMPAD_CLUSTER = "mainnet"; // the fork's Global is initialized with cluster_tag 0, like mainnet
 const { runRehearsal } = await import("./rehearsal-core.js");
 const ok = await runRehearsal({ root: ROOT, keysDir: KEYS, so: built.so, soSha256: built.sha256, snapshotDir: get("--snapshot") ? resolve(get("--snapshot")!) : undefined, keep: argv.includes("--keep") });
 process.exit(ok ? 0 : 1);

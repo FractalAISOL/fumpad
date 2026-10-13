@@ -4,6 +4,8 @@
  *   attestor  D31 ticket attestations (run ×3: separate keys, RPC providers, machines)
  *   watcher   independent re-derivation of every attestation + public verification feed
  */
+import { requireFumpadDeployment } from "@fumpad/sdk";
+
 import { runAttestor } from "./attest/run.js";
 import { runWatcher } from "./watch/run.js";
 
@@ -12,6 +14,10 @@ const argMode = (() => {
   return i >= 0 ? process.argv[i + 1] : undefined;
 })();
 const mode = argMode ?? process.env.KEEPER_MODE ?? "jobs";
+if (!["jobs", "attestor", "watcher"].includes(mode)) throw new Error(`unknown keeper mode ${mode}`);
+// Every mode: FUMPAD_PROGRAM_ID / FUMPAD_CLUSTER must match the chain behind RPC_URL (program + Global.cluster_tag),
+// else exit 1. RPC_URL as each mode reads it (production requires it; local default the test validator).
+await requireFumpadDeployment(`keeper(${mode})`, process.env.RPC_URL || "http://127.0.0.1:8899");
 
 let stop: () => Promise<void>;
 if (mode === "attestor") {

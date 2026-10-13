@@ -21,7 +21,23 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
+// Program id per cluster without code edits (services/LAUNCH-DAY.md "Verifiable build"): the default build is the
+// devnet id (= contracts/program-ids/devnet.txt); `--features mainnet` compiles in the id committed in
+// contracts/program-ids/mainnet.txt instead (build.rs writes `declare_id!` for it; fails while it is unset).
+#[cfg(not(feature = "mainnet"))]
 declare_id!("5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb");
+#[cfg(feature = "mainnet")]
+include!(concat!(env!("OUT_DIR"), "/mainnet_id.rs"));
+
+#[cfg(all(test, not(feature = "mainnet")))]
+mod program_id_tests {
+    #[test]
+    fn default_build_declares_the_devnet_id_file() {
+        let file = include_str!("../../../program-ids/devnet.txt");
+        let id = file.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#')).unwrap();
+        assert_eq!(super::ID.to_string(), id);
+    }
+}
 
 /// FUMPAD v0.7 — Meteora DBC (curve) → DAMM v2 (pool); tickets by 2-of-3 keeper attestation. INTERFACE-v0.7.md.
 #[program]

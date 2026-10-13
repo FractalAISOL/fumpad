@@ -24,5 +24,6 @@ export const RENT_EXEMPT_LAMPORTS = 890_880;
 export const BASE_FEE_LAMPORTS = 5_000;
 
 export function explorerTx(signature: string): string {
-  return `https://explorer.solana.com/tx/${signature}${CLUSTER === "mainnet" ? "" : `?cluster=${CLUSTER}`}`;
+  const q = CLUSTER === "mainnet" ? "" : CLUSTER === "localnet" ? `?cluster=custom&customUrl=${encodeURIComponent(RPC)}` : `?cluster=${CLUSTER}`;
+  return `https://explorer.solana.com/tx/${signature}${q}`;
 }

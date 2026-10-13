@@ -1,0 +1,5 @@
+# FUMPAD MAINNET program id, compiled in by `--features mainnet` (programs/fumpad/build.rs).
+# Launch day (services/LAUNCH-DAY.md §1.11): `bootstrap-mainnet --step keys` generates fumpad-program-keypair.json;
+# replace the line below with `solana-keygen pubkey <it>` (only the pubkey: never commit the keypair), commit,
+# then build verifiably from that commit. Until then a mainnet build fails on purpose.
+UNSET

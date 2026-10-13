@@ -18,6 +18,8 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
+# Compile in the mainnet program id from contracts/program-ids/mainnet.txt (build.rs) instead of the devnet one.
+mainnet = []
 
 
 [dependencies]

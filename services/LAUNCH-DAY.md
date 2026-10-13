@@ -14,6 +14,7 @@ echoed (`envval` / `setsecret` helpers from DEPLOY-v07.md §4).
 cd ~/fumpad/services
 K=~/fumpad-keys/mainnet
 export FUMPAD_PROGRAM_ID=$(solana-keygen pubkey $K/fumpad-program-keypair.json)   # after `--step keys`; multisig.ts needs it
+export FUMPAD_CLUSTER=mainnet     # with a non-default FUMPAD_PROGRAM_ID it is required (multisig.ts, services)
 B="npx tsx scripts/mainnet/bootstrap-mainnet.ts --config $K/bootstrap.json --cluster mainnet"
 M="npx tsx scripts/ops/multisig.ts"; C="--cluster mainnet --rpc-env $K/rpc.env"
 SPEND="--send --i-understand-this-spends-real-sol"
@@ -77,15 +78,25 @@ Opening the app only after the handover means no hot key holds admin power while
     ```
     **Back up `fumpad-program-keypair.json` offline now** (USB + paper/password manager), and the attestor /
     launch-signer keys to the secret store. `$K/pubkeys.json` lists every public key.
-11. **Build for the mainnet id** (the devnet id `5YMF…` is compiled in; the mainnet .so needs its own `declare_id!`,
-    INTERFACE-v0.7.md): on a release branch set `declare_id!("<mainnet id>")` in `contracts/programs/fumpad/src/lib.rs`
-    (+ `Anchor.toml`), commit, and build that commit; `build-program.ts` does exactly this transformation in a temp
-    copy and verifies the .so embeds the id:
+11. **Verifiable build for the mainnet id** (details + rationale: §10). No code edit: the default build declares the
+    devnet id; `--features mainnet` compiles in the id committed in `contracts/program-ids/mainnet.txt`
+    (`programs/fumpad/build.rs`; the build fails while the file says `UNSET` or holds the devnet id).
     ```sh
-    npm run mainnet:build-program -- --program-keypair $K/fumpad-program-keypair.json
-    # → .local/program-build/<id>/deploy/fumpad.so  (749,800 B today; record the sha256)
+    # a) commit the program id (the PUBKEY only; the keypair never enters git)
+    cd ~/fumpad && solana-keygen pubkey $K/fumpad-program-keypair.json      # = $FUMPAD_PROGRAM_ID
+    #    replace the `UNSET` line of contracts/program-ids/mainnet.txt with it, then:
+    git add contracts/program-ids/mainnet.txt && git commit -m "mainnet program id $FUMPAD_PROGRAM_ID"
+    git tag fumpad-mainnet-v0.7 && git push origin HEAD --tags && REL=$(git rev-parse HEAD)
+    # b) verifiable build of that commit (docker; mount = contracts/, the cargo workspace)
+    cd ~/fumpad/contracts && solana-verify build --library-name fumpad --base-image <IMAGE> -- --features mainnet
+    solana-verify get-executable-hash target/deploy/fumpad.so                # = H (record it)
+    # c) cross-check with the local, non-docker path (same feature, platform-tools v1.57, sbpf v3)
+    cd ~/fumpad/services && npm run mainnet:build-program -- --program-keypair $K/fumpad-program-keypair.json
+    #    → "program-ids/mainnet.txt (committed) = <id>: this is the release build's input" + "executable hash H'"
     ```
-    (Better: `anchor build --verifiable` on the committed change, so anyone can reproduce the hash; pass it with `--so`.)
+    Deploy the docker-built `contracts/target/deploy/fumpad.so` (`--so` in §2). H ≠ H' means the image's toolchain
+    differs from ours (§10): pick the image that matches before day 0. `$B --step program` on mainnet refuses unless
+    the committed `mainnet.txt` holds `$FUMPAD_PROGRAM_ID`.
 12. **Plan + simulate** against mainnet (read-only):
     ```sh
     $B --step all              # plan: costs, keys, what's missing
@@ -95,7 +106,7 @@ Opening the app only after the handover means no hot key holds admin power while
     `waitlist-db`). Services as DEPLOY-v07.md §4, differences:
     | service | mainnet env |
     |---|---|
-    | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** (the SDK's id comes from this; missing = devnet id = sees nothing) |
+    | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
     | `Postgres` | new, empty (migrations run at the indexer's start) |
     | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan) |
     | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
@@ -105,20 +116,28 @@ Opening the app only after the handover means no hot key holds admin power while
     | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = D, `PYTH_*`, `TELEGRAM_*` (guardians' chat) |
     Create them with env set but **don't deploy the keeper/attestors before day 0** (no Global yet). Grinder +
     Postgres can start early (the vanity pool fills).
-14. **App (Vercel)**: the app has the devnet program id compiled in (`app/src/chain/cluster.ts`
-    `FUMPAD_PROGRAM_ADDRESS` + the vendored SDK `app/vendor/fumpad-sdk-0.7.0.tgz`): the mainnet release changes that
-    constant and re-packs the SDK with `DEFAULT_FUMPAD_PROGRAM_ID` = the mainnet id (or reads
-    `NEXT_PUBLIC_FUMPAD_PROGRAM` — not built yet, see open questions). Production env: `NEXT_PUBLIC_SOLANA_RPC` =
-    a **mainnet frontend key** restricted to our domains (no `devnet` in the URL: the app infers the cluster from
-    it), `NEXT_PUBLIC_FUMPAD_API` = the mainnet API URL, `API_SSR_SECRET` = the new one, `NEXT_PUBLIC_SITE_URL=https://fumpad.app`.
-    Keep `NEXT_PUBLIC_PRELAUNCH` unset (gate on) until T0. Preview deployment first; check CSP (app/LAUNCH.md).
+14. **App (Vercel)**: no code change, no SDK repack — build-time env only (Production; `NEXT_PUBLIC_*` are inlined at
+    build, so set them before the deploy and redeploy after any change):
+    | variable | mainnet value |
+    |---|---|
+    | `NEXT_PUBLIC_FUMPAD_PROGRAM_ID` | the mainnet id (`$FUMPAD_PROGRAM_ID`) |
+    | `NEXT_PUBLIC_FUMPAD_CLUSTER` | `mainnet` (required once the id is set: the build fails without it) |
+    | `NEXT_PUBLIC_SOLANA_RPC` | a **mainnet frontend key** restricted to our domains (no `devnet`/`testnet` in the URL: with cluster `mainnet` such a URL fails the build) |
+    | `NEXT_PUBLIC_FUMPAD_API` | the mainnet API URL |
+    | `API_SSR_SECRET` | the new one (= the mainnet API's) |
+    | `NEXT_PUBLIC_SITE_URL` | `https://fumpad.app` |
+    `app/next.config.ts` hands the id/cluster to the vendored SDK; the silent-signing allow-list signs for that id only
+    and the app refuses to load if the SDK and the app disagree (`app/src/chain/deployment.test.ts`). Check on the
+    preview: the footer's program link = `$FUMPAD_PROGRAM_ID`, no "Devnet" badge. Keep `NEXT_PUBLIC_PRELAUNCH` unset
+    (gate on) until T0. Preview deployment first; check CSP (app/LAUNCH.md).
 
 ## 2. Day 0 (T−3 d): program, config, Global, keepers, propose_admin
 
 Each `--send` prints a summary and asks you to type the phrase it shows (e.g. `program 7xKX9a`).
 ```sh
 $B --step verify                                     # pre-check: everything missing is listed, nothing ✗ besides that
-$B --step program       $SPEND --so <the .so>        # solana program deploy (≈ 760 write txs; resumable, see §8)
+$B --step program       $SPEND --so ~/fumpad/contracts/target/deploy/fumpad.so   # the §1.11 docker build (≈ 760 write txs; resumable, see §8)
+solana-verify get-program-hash -u "$(sed -n 's/^RPC_URL=//p' $K/rpc.env)" $FUMPAD_PROGRAM_ID   # must = H (§1.11); then §10 (verify + OtterSec) today, while the deployer is upgrade authority
 $B --step config        $SPEND                       # DBC create_config (mainnet vector bytes checked first)
 $B --step init          $SPEND                       # initialize_global: IRREVERSIBLE params/cluster_tag/keepers — read the summary
 $B --step fund          $SPEND                       # attestor-1 2 SOL, attestor-2/3 0.3 SOL
@@ -228,3 +247,51 @@ leave a few slots between `program` and `init` (on mainnet the commands are minu
 validator's default `--limit-ledger-size` (10,000 shreds) purged history after a ~1,500-shred deploy and broke
 `getSignaturesForAddress` for every service ("Transaction … not found"): the harness now keeps 50M shreds. Mainnet
 providers keep full history; `rpc-check` verifies it.
+
+## 10. Verifiable build (program id per cluster without code edits)
+
+**Mechanism.** `declare_id!` must equal the deployed id, and the mainnet program keypair only exists from launch day
+(`--step keys`). So the id is data, not code:
+- `contracts/program-ids/devnet.txt` = `5YMF…S9Fb` = the `declare_id!` of the default build (`anchor build`; a unit
+  test in `lib.rs` and `test/ops/mainnet.test.ts` keep them equal). Devnet/local builds are unchanged (same 754,288 B).
+- `contracts/program-ids/mainnet.txt` = `UNSET` until launch day. Cargo feature `mainnet` (`programs/fumpad/build.rs`)
+  reads it and compiles in `declare_id!("<it>")` instead; the build **fails** while it is `UNSET`, not a 32-byte
+  base58 key, or the devnet id. No environment variable is involved: the bytes depend only on the commit + the
+  feature, which is what makes the build reproducible by anyone.
+- Services and the app take the id from env (`FUMPAD_PROGRAM_ID`/`FUMPAD_CLUSTER`, `NEXT_PUBLIC_FUMPAD_*`, §1.13/§1.14).
+
+**Launch-day sequence** (commands in §1.11 / §2):
+1. `$B --step keys` generates `fumpad-program-keypair.json` (back it up offline).
+2. Commit its **pubkey** into `contracts/program-ids/mainnet.txt` (the keypair never enters git), tag, push. `REL` =
+   that commit. The release commit = the one the services/app are built from too.
+3. Verifiable build of `REL`: `cd contracts && solana-verify build --library-name fumpad --base-image <IMAGE> --
+   --features mainnet` (args after `--` go to cargo). `solana-verify get-executable-hash target/deploy/fumpad.so` = H.
+4. Compare: `npm run mainnet:build-program -- --program-keypair $K/fumpad-program-keypair.json` (local, non-docker,
+   same feature) prints its executable hash H′. `$B --step program` prints the sha256 of what it deploys.
+5. Deploy that .so (`$B --step program … --so contracts/target/deploy/fumpad.so`), then
+   `solana-verify get-program-hash -u <rpc> $FUMPAD_PROGRAM_ID` must print H.
+6. Verify against the repo and publish (day 0, **while the deployer is still the upgrade authority**: the
+   verification PDA is signed by the upgrade authority):
+   ```sh
+   RPC="$(sed -n 's/^RPC_URL=//p' $K/rpc.env)"
+   solana-verify verify-from-repo -u "$RPC" --program-id $FUMPAD_PROGRAM_ID https://github.com/<org>/fumpad \
+     --commit-hash $REL --library-name fumpad --mount-path contracts --base-image <IMAGE> \
+     -k $K/deployer.json -- --features mainnet        # rebuilds in docker, compares with the chain, asks to upload the PDA: yes
+   solana-verify remote submit-job --program-id $FUMPAD_PROGRAM_ID --uploader $(solana-keygen pubkey $K/deployer.json)
+   solana-verify remote get-job-status --job-id <id from the previous command>   # OtterSec API → verified
+   ```
+   The repo must be public at `REL` for OtterSec / explorers to rebuild it (otherwise keep steps 3–5 as the record
+   and publish H + `REL`). Later upgrades (upgrade authority = admin vault): build the new commit the same way and
+   `solana-verify export-pda-tx … --uploader <admin vault>` → a Squads proposal next to the upgrade (MULTISIG.md).
+
+**Status of this procedure (2026-10-13).** Tested here: the default `anchor build` (devnet id, 0 warnings, 754,288 B,
+contracts suite green) and the non-docker mainnet path (`build-program.ts`, `cargo build-sbf --features mainnet`,
+platform-tools v1.57, sbpf v3) with a stand-in id: the .so embeds the stand-in and not the devnet id; the build
+refuses `UNSET`, a malformed key and the devnet id. **UNVERIFIED: the docker steps** (3, 5's hash equality, 6) —
+docker and solana-verify are not installed on the build machine. Before T−3 d, on a machine with docker, rehearse
+steps 3–4 on a throwaway branch with a stand-in id in `mainnet.txt` and choose `<IMAGE>` (a
+`solanafoundation/solana-verifiable-build:<agave version>` tag) such that H = H′. Watch: our builds use platform-tools
+v1.57 + `--arch v3` (Anchor 1.2.1 defaults, CONTRACTS.md "Build profile"); an image whose `cargo build-sbf` defaults
+differ produces different bytes (use a solana-verify release that accepts `--arch v3` if needed, or
+`anchor build --verifiable -- --features mainnet`, which runs Anchor's image with Anchor's own flags, and compare
+again). `contracts/.cargo/config.toml` (inliner flags) is inside the mount, so docker builds read it too.

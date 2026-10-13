@@ -8,6 +8,7 @@ export * from "./attestation.js";
 export * from "./borsh.js";
 export * from "./coder.js";
 export * from "./constants.js";
+export * from "./deployment.js";
 export * from "./errors.js";
 export * from "./events.js";
 export * from "./hash.js";

@@ -186,7 +186,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     writeFileSync(rpcEnv, `RPC_URL=${v.rpcUrl}\n`, { mode: 0o600 });
     const cli = (args: string[], input = "") => {
       try {
-        return { ok: true, out: execFileSync("npx", ["tsx", "scripts/mainnet/bootstrap-mainnet.ts", "--config", configPath, "--so", o.so, ...args], { cwd: SERVICES, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, FUMPAD_PROGRAM_ID: "" } }) };
+        return { ok: true, out: execFileSync("npx", ["tsx", "scripts/mainnet/bootstrap-mainnet.ts", "--config", configPath, "--so", o.so, ...args], { cwd: SERVICES, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, FUMPAD_PROGRAM_ID: "", FUMPAD_CLUSTER: "" } }) };
       } catch (e) {
         const x = e as { stdout?: string; stderr?: string };
         return { ok: false, out: `${x.stdout ?? ""}${x.stderr ?? ""}` };
@@ -233,7 +233,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
       rpcPort,
       apiPort,
       log,
-      chain: { v, keeperKeyPaths: [keyPath(K, "attestor-1"), keyPath(K, "attestor-2"), keyPath(K, "attestor-3")], launchKey: kp("launch-signer"), config: kp("dbc-config").publicKey, solUsd },
+      chain: { v, keeperKeyPaths: [keyPath(K, "attestor-1"), keyPath(K, "attestor-2"), keyPath(K, "attestor-3")], launchKey: kp("launch-signer"), config: kp("dbc-config").publicKey, solUsd, cluster: "mainnet" },
     });
     const { api, get } = stack;
     const [creator, alice, bob, whale] = Array.from({ length: 4 }, () => Keypair.generate());

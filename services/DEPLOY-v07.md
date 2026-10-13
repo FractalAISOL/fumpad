@@ -139,6 +139,16 @@ One image (`services/Dockerfile`, `SERVICE_ENTRY` picks the entry; `keeper/dist/
 | `attestor-3` | **new** | same | attestor-3 key, role `fumpad_attestor_3`, … | **C** (third provider) | no |
 | `watcher` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=watcher` | `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `TELEGRAM_*` (guardian's chat), `PORT=8790`; no key, no DB | **D** (ideally 4th) | optional (`/v1/verification` public feed) |
 
+**Program id + cluster (every service except the grinder).** `FUMPAD_PROGRAM_ID` (base58) and `FUMPAD_CLUSTER`
+(`mainnet` | `devnet` | `localnet`) select the deployment; both **unset = the devnet deployment** (`5YMF…S9Fb`,
+cluster `devnet`), so the devnet services need no new variables. At start, indexer, api, keeper, attestors and watcher
+each check the chain behind their `RPC_URL` (`@fumpad/sdk` `requireFumpadDeployment`): the program account exists and
+is executable, Global exists under it, and `Global.cluster_tag` = `FUMPAD_CLUSTER` (0 mainnet, 1 devnet, 2 localnet).
+Any mismatch → one line `<service>: ✗ refusing to start: …` and exit 1 (Railway shows a crash loop; nothing ran). A
+non-default `FUMPAD_PROGRAM_ID` without `FUMPAD_CLUSTER` is refused too. On success the log says
+`FUMPAD deployment ok: program … (env|default), cluster … (env|default, cluster_tag n), Global …`.
+Mainnet values: LAUNCH-DAY.md §1.13.
+
 RPC per service (attestors must not share a provider, so one bad RPC can't make 2 of 3 sign the same wrong record):
 A = Helius (`~/fumpad-keys/devnet/rpc.env`); B, C, D = other providers, e.g. a second Helius account / QuickNode /
 Alchemy / Triton devnet endpoints; the public `https://api.devnet.solana.com` works for one attestor or the watcher
@@ -229,8 +239,12 @@ closed with `solana program close` to recover their rent ≈ 4–5 SOL — irrev
 ## 5. App (Vercel, project `fumpad`)
 
 No Vercel env var has to change for v0.7 devnet:
-- The program id is **not configurable**: `5YMF…S9Fb` is compiled into `app/src/chain/cluster.ts`
-  (`FUMPAD_PROGRAM_ADDRESS`) and the vendored SDK (`app/vendor/fumpad-sdk-0.7.0.tgz`, repacked on this branch).
+- The program id is build-time config: `NEXT_PUBLIC_FUMPAD_PROGRAM_ID` + `NEXT_PUBLIC_FUMPAD_CLUSTER`, both **unset
+  on devnet** (default `5YMF…S9Fb`; cluster inferred from `NEXT_PUBLIC_SOLANA_RPC`). `app/next.config.ts` inlines the
+  same two values into the vendored SDK (as `FUMPAD_PROGRAM_ID` / `FUMPAD_CLUSTER`), and the silent-signing allow-list
+  (`app/src/chain/allowlist.ts`) refuses to load if the SDK's id differs from the app's, and signs for that one id
+  only. A set program id without `NEXT_PUBLIC_FUMPAD_CLUSTER`, or `mainnet` with a devnet/testnet RPC URL, fails the
+  build. `NEXT_PUBLIC_*` are inlined at build time: changing them needs a redeploy (a rebuild), not just a restart.
 - `NEXT_PUBLIC_FUMPAD_API` unchanged (same Railway API URL). `API_SSR_SECRET` unchanged.
 - `NEXT_PUBLIC_SOLANA_RPC` unchanged as long as it is the domain-restricted **devnet** frontend key (the app infers
   the cluster from the URL: it must contain `devnet`).

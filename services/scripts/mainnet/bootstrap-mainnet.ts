@@ -104,6 +104,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const id = programIdOf(dir)!;
     if (process.env.FUMPAD_PROGRAM_ID && process.env.FUMPAD_PROGRAM_ID !== id) throw new Error(`FUMPAD_PROGRAM_ID=${process.env.FUMPAD_PROGRAM_ID} in the environment ≠ the program keypair ${id}`);
     process.env.FUMPAD_PROGRAM_ID = id;
+    // Global is (to be) initialized with cluster_tag 0 on mainnet and on the rehearsal's fork alike
+    if (process.env.FUMPAD_CLUSTER && process.env.FUMPAD_CLUSTER !== "mainnet") throw new Error(`FUMPAD_CLUSTER=${process.env.FUMPAD_CLUSTER} in the environment: the mainnet bootstrap needs mainnet (or unset)`);
+    process.env.FUMPAD_CLUSTER = "mainnet";
     const { runMainnetBootstrap } = await import("./bootstrap-core.js");
     const r = await runMainnetBootstrap({
       cluster: a.cluster,

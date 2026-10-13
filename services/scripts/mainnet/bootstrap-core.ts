@@ -68,6 +68,7 @@ import {
 import { configProblems, paramsDiff } from "../devnet/bootstrap-v07.js";
 import { GENESIS, redactText } from "../ops/common.js";
 import { executeVaultTx, proposalState, proposeVaultTx, readMultisig, setUpgradeAuthorityIx, SQUADS_PROGRAM_ID, vaultPdaOf } from "../ops/multisig.js";
+import { committedMainnetId } from "./build-program.js";
 import { type Manifest, SERVICES, TESTED_MANIFEST } from "./fork.js";
 import { DEFAULT_FUND_SOL, ensureHotKeys, type HotKey, keyPath, loadConfig, type MainnetConfig, type PartyConfig, readKeypairFile } from "./keys.js";
 
@@ -323,6 +324,12 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
       say(`  .so ${soPath}: ${so.length} B, sha256 ${sha(so)}${declares ? "" : " · DOES NOT EMBED THIS PROGRAM ID"}`);
       say(`  cost: program data rent ${sol(pdRent)} (${45 + maxLen} B) + program account ${sol(progRent)} SOL kept; buffer ${sol(bufRent)} SOL transient (refunded at the deploy); ≈ ${writes} write txs`);
       if (!declares) failures.push(".so does not embed the program id (build it with build-program.ts)");
+      // Verifiable build (LAUNCH-DAY.md §1.11): the release commit's contracts/program-ids/mainnet.txt holds this id
+      const committed = committedMainnetId();
+      if (committed !== FUMPAD_PROGRAM_ID.toBase58()) {
+        say(`  contracts/program-ids/mainnet.txt = ${committed ?? "UNSET"} ≠ ${FUMPAD_PROGRAM_ID.toBase58()}: commit the id there and build verifiably from that commit`);
+        if (o.cluster === "mainnet") failures.push("contracts/program-ids/mainnet.txt does not hold the program id (verifiable build input)");
+      }
       else if (st.deployed) {
         const same = elfMatches(st.elf, so);
         say(`  deployed already: authority ${st.authority?.toBase58() ?? "none"}, bytecode ${same ? "= this .so (skip)" : "≠ this .so"}`);

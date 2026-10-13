@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { Connection, Keypair, LAMPORTS_PER_SOL, type PublicKey } from "@solana/web3.js";
 
-import { DBC_POOL_AUTHORITY } from "@fumpad/sdk";
+import { type ClusterName, DBC_POOL_AUTHORITY } from "@fumpad/sdk";
 import { createPool, migrate } from "@fumpad/indexer";
 
 import { airdrop, createFumpadConfig, LOCAL_PARAMS, transferSol } from "./actors.js";
@@ -30,6 +30,8 @@ export interface ExistingChain {
   keeperKeyPaths: [string, string, string];
   launchKey: Keypair;
   config: PublicKey;
+  /** its Global.cluster_tag (FUMPAD_CLUSTER for every service) */
+  cluster: ClusterName;
   /** price the attestors / watcher / API use (PYTH_SOURCE=constant) */
   solUsd: number;
 }
@@ -135,7 +137,9 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
     }
     const conn = new Connection(v.rpcUrl, "confirmed");
 
-    const common = { DATABASE_URL: pg.url, RPC_URL: v.rpcUrl, LOG_LEVEL: "info" };
+    // the services refuse to start unless Global.cluster_tag = FUMPAD_CLUSTER (program id: inherited FUMPAD_PROGRAM_ID)
+    const dep = { FUMPAD_CLUSTER: opts.chain?.cluster ?? "localnet" };
+    const common = { ...dep, DATABASE_URL: pg.url, RPC_URL: v.rpcUrl, LOG_LEVEL: "info" };
     services.push(
       startService("indexer", "indexer/src/main.ts", {
         ...common,
@@ -155,6 +159,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
+        ...dep,
         RPC_URL: v.rpcUrl,
         KEEPER_KEYPAIR: keeperPaths[0],
         PORT: String(ports.keeper),
@@ -181,6 +186,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
     for (let i = 0; i < 3; i++) {
       services.push(
         startService(`attestor${i + 1}`, "keeper/src/main.ts", {
+          ...dep,
           KEEPER_MODE: "attestor",
           RPC_URL: v.rpcUrl,
           DATABASE_URL: pg.url,
@@ -193,7 +199,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
         }),
       );
     }
-    services.push(startService("watcher", "keeper/src/main.ts", { KEEPER_MODE: "watcher", RPC_URL: v.rpcUrl, PORT: String(ports.watcher), PYTH_SOURCE: "constant", PYTH_CONSTANT_USD: usd, WATCH_LOOP_MS: "3000", WATCH_GRACE_SECS: "120", LOG_LEVEL: "info" }));
+    services.push(startService("watcher", "keeper/src/main.ts", { ...dep, KEEPER_MODE: "watcher", RPC_URL: v.rpcUrl, PORT: String(ports.watcher), PYTH_SOURCE: "constant", PYTH_CONSTANT_USD: usd, WATCH_LOOP_MS: "3000", WATCH_GRACE_SECS: "120", LOG_LEVEL: "info" }));
     await waitFor("keeper health", async () => (await fetch(`http://127.0.0.1:${ports.keeper}/health`)).status > 0, 60_000);
     await waitFor("watcher health", async () => (await fetch(`http://127.0.0.1:${ports.watcher}/health`)).ok, 60_000);
     log("✓ indexer, api, grinder, keeper, 3 attestors, watcher running");

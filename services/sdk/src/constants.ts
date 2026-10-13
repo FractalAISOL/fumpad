@@ -1,19 +1,75 @@
 /** Program ids, seeds and protocol constants of FUMPAD v0.7 (contracts/INTERFACE-v0.7.md). */
 import { PublicKey } from "@solana/web3.js";
 
-// ── programs ────────────────────────────────────────────────────────────────
-/** The program id compiled into `contracts/programs/fumpad/src/lib.rs` (`declare_id!`), deployed on devnet. */
+// ── programs / deployment ───────────────────────────────────────────────────
+/** `Global.cluster_tag` (immutable; part of every attestation message). */
+export const CLUSTER_TAG = { mainnet: 0, devnet: 1, localnet: 2 } as const;
+export type ClusterName = keyof typeof CLUSTER_TAG;
+export const CLUSTER_NAMES = Object.keys(CLUSTER_TAG) as ClusterName[];
+
+/** The program id compiled into `contracts/programs/fumpad/src/lib.rs` (`declare_id!`, default build), deployed on devnet. */
 export const DEFAULT_FUMPAD_PROGRAM_ID = "5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb";
+/** The cluster of the default program id's deployment (its Global has `cluster_tag` 1). */
+export const DEFAULT_FUMPAD_CLUSTER: ClusterName = "devnet";
+
 /**
- * Node only: `FUMPAD_PROGRAM_ID` in the environment (read once, at import) selects another deployment of the same
- * program, e.g. the mainnet id built by `services/scripts/mainnet/build-program.ts` (LAUNCH-DAY.md). Every PDA,
- * instruction builder, event filter and attestation message of the SDK and the services follows it. Browsers
- * (no `process`) always get the default.
+ * Which FUMPAD deployment this process talks to. `programId` drives every PDA, instruction builder, event filter and
+ * attestation message of the SDK; `cluster` is what `Global.cluster_tag` must be (`verifyFumpadDeployment`).
  */
-const envProgramId = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.FUMPAD_PROGRAM_ID?.trim();
-export const FUMPAD_PROGRAM_ID = new PublicKey(envProgramId || DEFAULT_FUMPAD_PROGRAM_ID);
+export interface FumpadConfig {
+  programId: PublicKey;
+  cluster: ClusterName;
+  clusterTag: number;
+  /** "env" when FUMPAD_PROGRAM_ID set it (the app: NEXT_PUBLIC_FUMPAD_PROGRAM_ID), else the compiled-in devnet id. */
+  programIdSource: "env" | "default";
+  clusterSource: "env" | "default";
+}
+export interface FumpadEnv {
+  FUMPAD_PROGRAM_ID?: string;
+  FUMPAD_CLUSTER?: string;
+}
+
+/**
+ * Config factory: `FUMPAD_PROGRAM_ID` (base58) and `FUMPAD_CLUSTER` (mainnet | devnet | localnet). Both unset = the
+ * devnet deployment (backward compatible: the devnet stack and app need no env). Throws on an unparsable id or an
+ * unknown cluster name. A non-default id without an explicit cluster resolves to `devnet` here, but
+ * `verifyFumpadDeployment` refuses it (a mainnet id must say `FUMPAD_CLUSTER=mainnet`).
+ */
+export function resolveFumpadConfig(env: FumpadEnv = {}): FumpadConfig {
+  const id = env.FUMPAD_PROGRAM_ID?.trim();
+  const cl = env.FUMPAD_CLUSTER?.trim().toLowerCase();
+  let programId: PublicKey;
+  try {
+    programId = new PublicKey(id || DEFAULT_FUMPAD_PROGRAM_ID);
+  } catch {
+    throw new Error(`FUMPAD_PROGRAM_ID=${JSON.stringify(id)} is not a base58 public key`);
+  }
+  if (programId.toBase58() !== (id || DEFAULT_FUMPAD_PROGRAM_ID)) throw new Error(`FUMPAD_PROGRAM_ID=${JSON.stringify(id)} is not a canonical base58 public key`);
+  if (cl && !(CLUSTER_NAMES as string[]).includes(cl)) throw new Error(`FUMPAD_CLUSTER=${JSON.stringify(cl)}: expected one of ${CLUSTER_NAMES.join(", ")}`);
+  const cluster = (cl || DEFAULT_FUMPAD_CLUSTER) as ClusterName;
+  return { programId, cluster, clusterTag: CLUSTER_TAG[cluster], programIdSource: id ? "env" : "default", clusterSource: cl ? "env" : "default" };
+}
+
+declare const process: { env: Record<string, string | undefined> } | undefined;
+/**
+ * The process's environment, as literal `process.env.FUMPAD_*` reads so bundlers can inline them (the app maps
+ * NEXT_PUBLIC_FUMPAD_PROGRAM_ID / NEXT_PUBLIC_FUMPAD_CLUSTER onto these names in next.config.ts). A browser without
+ * `process` and nothing inlined gets the defaults (the app refuses to load if that disagrees with its own config).
+ */
+function processEnv(): FumpadEnv {
+  try {
+    return { FUMPAD_PROGRAM_ID: process!.env.FUMPAD_PROGRAM_ID, FUMPAD_CLUSTER: process!.env.FUMPAD_CLUSTER };
+  } catch {
+    return {};
+  }
+}
+
+/** This process's deployment, resolved once at import (`resolveFumpadConfig` of the environment). */
+export const FUMPAD_CONFIG: Readonly<FumpadConfig> = Object.freeze(resolveFumpadConfig(processEnv()));
+export const FUMPAD_PROGRAM_ID = FUMPAD_CONFIG.programId;
 /** "env" when `FUMPAD_PROGRAM_ID` overrode the default (services log it at start). */
-export const FUMPAD_PROGRAM_ID_SOURCE: "env" | "default" = envProgramId ? "env" : "default";
+export const FUMPAD_PROGRAM_ID_SOURCE: "env" | "default" = FUMPAD_CONFIG.programIdSource;
+export const FUMPAD_CLUSTER: ClusterName = FUMPAD_CONFIG.cluster;
 export const DBC_PROGRAM_ID = new PublicKey("dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN");
 export const DAMM_V2_PROGRAM_ID = new PublicKey("cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG");
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -95,10 +151,6 @@ export const MAX_MAX_ATTEST_AGE_SECS = 7 * 86_400;
 /** Pause bits (`Global.paused`). */
 export const PAUSE = { launch: 1, trade: 2, claims: 4, graduate: 8, attest: 16 } as const;
 export const PAUSE_ALL = 0b1_1111;
-
-/** `Global.cluster_tag` (immutable; part of every attestation message). */
-export const CLUSTER_TAG = { mainnet: 0, devnet: 1, localnet: 2 } as const;
-export type ClusterName = keyof typeof CLUSTER_TAG;
 
 /** Router `buy` mode. */
 export const SWAP_MODE = { exactIn: 0, partialFill: 1 } as const;

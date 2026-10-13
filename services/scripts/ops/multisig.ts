@@ -46,6 +46,7 @@ import {
   cancelAdminIx,
   cancelParamsIx,
   decodeGlobal,
+  FUMPAD_CONFIG,
   FUMPAD_PROGRAM_ID,
   globalPda,
   PAUSE_ALL,
@@ -201,7 +202,10 @@ export async function chainTime(conn: Connection): Promise<number> {
 export async function readGlobal(conn: Connection) {
   const a = await conn.getAccountInfo(globalPda(), "confirmed");
   if (!a) throw new Error(`no FUMPAD Global at ${globalPda().toBase58()} (program ${FUMPAD_PROGRAM_ID.toBase58()})`);
-  return decodeGlobal(a.data);
+  const g = decodeGlobal(a.data);
+  // an explicit FUMPAD_CLUSTER must be the Global's cluster_tag (as the services check at start)
+  if (FUMPAD_CONFIG.clusterSource === "env" && g.clusterTag !== FUMPAD_CONFIG.clusterTag) throw new Error(`Global.cluster_tag ${g.clusterTag} ≠ FUMPAD_CLUSTER=${FUMPAD_CONFIG.cluster} (${FUMPAD_CONFIG.clusterTag})`);
+  return g;
 }
 
 /** ProgramData: [u32 tag=3][u64 slot][u8 has_authority][32 authority]. */
@@ -515,7 +519,9 @@ async function main() {
   const conn = new Connection(rpcUrl, "confirmed");
   try {
     const cluster = await assertCluster(conn, args.get("cluster"));
+    if (cluster === "mainnet" && FUMPAD_CONFIG.programIdSource === "env" && FUMPAD_CONFIG.cluster !== "mainnet") throw new Error("--cluster mainnet with FUMPAD_PROGRAM_ID set needs FUMPAD_CLUSTER=mainnet too (LAUNCH-DAY.md)");
     log(`cluster ${cluster} via ${redactHost(rpcUrl)} · ${mode === "send" ? "SENDING" : "simulate only (add --yes to send)"}`);
+    log(`program ${FUMPAD_PROGRAM_ID.toBase58()} (${FUMPAD_CONFIG.programIdSource}) · FUMPAD_CLUSTER ${FUMPAD_CONFIG.cluster} (${FUMPAD_CONFIG.clusterSource})`);
     const msOf = (flag: string) => {
       const cfg = args.get(flag);
       return cfg ? multisigOfConfig(loadMultisigConfig(cfg)).multisig : undefined;
