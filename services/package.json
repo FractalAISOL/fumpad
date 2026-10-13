@@ -23,7 +23,6 @@
     "local": "tsx scripts/local-e2e.ts",
     "validator": "tsx scripts/local/dev-chain.ts",
     "api-types": "node scripts/gen-api-types.mjs",
-    "smoke": "tsx scripts/local/smoke.ts",
     "test:all": "vitest run"
   },
   "devDependencies": {

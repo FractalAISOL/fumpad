@@ -1,8 +1,9 @@
 /**
- * Local stack harness: solana-test-validator with the built FUMPAD programs + the real
- * PumpSwap / pump-fees programs and their account dumps (contracts/tests/fixtures), a
- * fresh Pyth SOL/USD account, and a Postgres (DATABASE_URL, docker compose, or a
- * throwaway `initdb` cluster). Used by scripts/local-e2e.ts and the integration test.
+ * Local stack harness (v0.7): solana-test-validator with the built FUMPAD v0.7 program, the MAINNET
+ * Meteora DBC 0.2.1 + DAMM v2 0.2.4 binaries and the mainnet DAMM v2 migration config
+ * (contracts/tests/fixtures, dumped read-only), a Pyth SOL/USD account, a pre-seeded Global (short local
+ * windows + the FUMPAD DBC config already allow-listed: the 48 h config/params timelocks can't elapse on a
+ * test chain), and a Postgres (DATABASE_URL, docker compose, or a throwaway `initdb` cluster).
  */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -14,19 +15,20 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 
 import {
   bn,
+  CLUSTER_TAG,
+  DAMM_V2_PROGRAM_ID,
+  DBC_PROGRAM_ID,
   DEFAULT_PARAMS,
   FUMPAD_PROGRAM_ID,
   fumpadCoder,
   globalPda,
-  LP_LOCKER_PROGRAM_ID,
+  MAX_CONFIGS,
   MAX_KEEPERS,
   type Params,
   paramsToIdl,
-  PUMP_FEES_PROGRAM_ID,
-  PUMPSWAP_PROGRAM_ID,
   PYTH_RECEIVER_PROGRAM_ID,
   PYTH_SOL_USD_ACCOUNT,
-} from "@fumpad/sdk/v06";
+} from "@fumpad/sdk";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const SERVICES = resolve(here, "../..");
@@ -56,46 +58,65 @@ export function writePythFixture(usd: number): string {
   data.writeBigInt64LE(price, m + 32);
   data.writeBigUInt64LE(price / 2000n, m + 40);
   data.writeInt32LE(-8, m + 48);
-  const future = 4_102_444_800n; // 2100-01-01
+  const future = 4_102_444_800n;
   data.writeBigInt64LE(future, m + 52);
   data.writeBigInt64LE(future - 1n, m + 60);
   v.account.data[0] = data.toString("base64");
   v.account.owner = PYTH_RECEIVER_PROGRAM_ID.toBase58();
-  v.account.rentEpoch = 0; // u64::MAX doesn't survive JSON.parse
-
+  v.account.rentEpoch = 0;
   v.pubkey = PYTH_SOL_USD_ACCOUNT.toBase58();
+  mkdirSync(LOCAL, { recursive: true });
   const out = join(LOCAL, "pyth_sol_usd_local.json");
   writeFileSync(out, JSON.stringify(v));
   return out;
 }
 
-/**
- * v0.6: `Params::is_valid` bounds (oracle window ≥ 10 min, hold ≥ 1 min, …) refuse the short test
- * windows a local run needs, so the local Global is written into the genesis instead of going
- * through `initialize_global` (the program stays strict; only this test chain is pre-seeded).
- */
+/** A Global written into the genesis (short windows are outside `Params::is_valid`; configs skip the 48 h timelock). */
 export interface GlobalPreload {
   admin: PublicKey;
   platformTreasury: PublicKey;
   keepers: PublicKey[];
   params: Params;
+  configs: PublicKey[];
 }
 
 export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
   const keepers = [...g.keepers];
   while (keepers.length < MAX_KEEPERS) keepers.push(PublicKey.default);
+  const configs = [...g.configs];
+  while (configs.length < MAX_CONFIGS) configs.push(PublicKey.default);
   const data = await fumpadCoder().accounts.encode("Global", {
     bump: PublicKey.findProgramAddressSync([Buffer.from("global")], FUMPAD_PROGRAM_ID)[1],
-    admin: g.admin, platform_treasury: g.platformTreasury, keepers, paused: 0, params: paramsToIdl(g.params),
-    guardian: g.admin, pause_expires_at: bn(0n), pending_admin_eta: bn(0n), reserved: new Array(80).fill(0),
-    pending_params: paramsToIdl(DEFAULT_PARAMS), pending_eta: bn(0n),
-    pending_admin: PublicKey.default, pending_treasury: PublicKey.default, pending_guardian: PublicKey.default,
+    admin: g.admin,
+    platform_treasury: g.platformTreasury,
+    guardian: g.admin,
+    keepers,
+    keeper_added_at: [bn(0n), bn(0n), bn(0n)],
+    cluster_tag: CLUSTER_TAG.localnet,
+    paused: 0,
+    pause_expires_at: bn(0n),
+    params: paramsToIdl(g.params),
+    pending_params: paramsToIdl(DEFAULT_PARAMS),
+    pending_eta: bn(0n),
+    pending_admin: PublicKey.default,
+    pending_treasury: PublicKey.default,
+    pending_guardian: PublicKey.default,
+    pending_admin_eta: bn(0n),
+    configs,
+    pending_config: PublicKey.default,
+    pending_config_add: 0,
+    pending_config_eta: bn(0n),
+    reserved: new Array(128).fill(0),
   });
+  mkdirSync(LOCAL, { recursive: true });
   const out = join(LOCAL, "global_local.json");
-  writeFileSync(out, JSON.stringify({
-    pubkey: globalPda().toBase58(),
-    account: { lamports: (data.length + 128) * 6960, data: [data.toString("base64"), "base64"], owner: FUMPAD_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0, space: data.length },
-  }));
+  writeFileSync(
+    out,
+    JSON.stringify({
+      pubkey: globalPda().toBase58(),
+      account: { lamports: (data.length + 128) * 6960, data: [data.toString("base64"), "base64"], owner: FUMPAD_PROGRAM_ID.toBase58(), executable: false, rentEpoch: 0, space: data.length },
+    }),
+  );
   return out;
 }
 
@@ -108,18 +129,13 @@ export interface Validator {
 
 export async function startValidator(opts: { rpcPort?: number; upgradeAuthority: Keypair; solUsd?: number; global?: GlobalPreload }): Promise<Validator> {
   const rpcPort = opts.rpcPort ?? 8899;
-  const deploy = join(CONTRACTS, "target/deploy");
-  for (const so of ["fumpad.so", "fumpad_lp_locker.so"]) {
-    if (!existsSync(join(deploy, so))) throw new Error(`missing ${so}: run \`anchor build\` in contracts/`);
-  }
-  // The validator's admin socket lives in the ledger dir and unix socket paths are
-  // limited to ~104 bytes, so keep the ledger on a short path.
+  const so = join(CONTRACTS, "target/deploy/fumpad.so");
+  if (!existsSync(so)) throw new Error("missing contracts/target/deploy/fumpad.so: run `anchor build -p fumpad` in contracts/");
+  for (const f of ["dbc_mainnet.so", "damm_v2_mainnet.so", "damm_v2_migration_config_mainnet.json"]) if (!existsSync(join(FIXTURES, f))) throw new Error(`missing fixture ${f}`);
   const ledger = process.env.FUMPAD_LEDGER_DIR ?? join(tmpdir(), `fumpad-ledger-${rpcPort}`);
   rmSync(ledger, { recursive: true, force: true });
   const probe = new Connection(`http://127.0.0.1:${rpcPort}`);
-  if (await probe.getSlot().then(() => true, () => false)) {
-    throw new Error(`something is already serving RPC on port ${rpcPort} (stop the other validator first)`);
-  }
+  if (await probe.getSlot().then(() => true, () => false)) throw new Error(`something is already serving RPC on port ${rpcPort} (stop the other validator first)`);
   const pyth = writePythFixture(opts.solUsd ?? 150);
   const authPath = join(LOCAL, "upgrade-authority.json");
   writeFileSync(authPath, JSON.stringify(Array.from(opts.upgradeAuthority.secretKey)));
@@ -129,14 +145,10 @@ export async function startValidator(opts: { rpcPort?: number; upgradeAuthority:
     "--ledger", ledger,
     "--rpc-port", String(rpcPort),
     "--faucet-port", String(rpcPort + 1001),
-    // fumpad: upgradeable (initialize_global checks the upgrade authority)
-    "--upgradeable-program", FUMPAD_PROGRAM_ID.toBase58(), join(deploy, "fumpad.so"), authPath,
-    // locker: immutable, as on mainnet (D11)
-    "--upgradeable-program", LP_LOCKER_PROGRAM_ID.toBase58(), join(deploy, "fumpad_lp_locker.so"), "none",
-    "--bpf-program", PUMPSWAP_PROGRAM_ID.toBase58(), join(FIXTURES, "pump_amm.so"),
-    "--bpf-program", PUMP_FEES_PROGRAM_ID.toBase58(), join(FIXTURES, "pump_fees.so"),
-    "--account", "-", join(FIXTURES, "pump_amm_global_config.json"),
-    "--account", "-", join(FIXTURES, "pump_fees_fee_config_amm.json"),
+    "--upgradeable-program", FUMPAD_PROGRAM_ID.toBase58(), so, authPath,
+    "--bpf-program", DBC_PROGRAM_ID.toBase58(), join(FIXTURES, "dbc_mainnet.so"),
+    "--bpf-program", DAMM_V2_PROGRAM_ID.toBase58(), join(FIXTURES, "damm_v2_mainnet.so"),
+    "--account", "-", join(FIXTURES, "damm_v2_migration_config_mainnet.json"),
     "--account", "-", pyth,
     ...(opts.global ? ["--account", "-", await writeGlobalFixture(opts.global)] : []),
   ];
@@ -150,8 +162,7 @@ export async function startValidator(opts: { rpcPort?: number; upgradeAuthority:
     if (proc.exitCode !== null) throw new Error(`validator exited: ${stderr}`);
     try {
       await conn.getLatestBlockhash();
-      const slot = await conn.getSlot();
-      if (slot > 2) break;
+      if ((await conn.getSlot()) > 2) break;
     } catch {
       /* not up yet */
     }
