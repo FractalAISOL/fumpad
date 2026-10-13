@@ -208,7 +208,7 @@ export function configProblems(owner: PublicKey | null, d: Uint8Array | null, ex
     ],
     [`migrated pool fee ${expect.migratedPoolFeeBps} bps`, c.migratedPoolFeeBps === expect.migratedPoolFeeBps],
     ["enable_first_swap_with_min_fee", c.enableFirstSwapWithMinFee === 1],
-    ["sqrt_start_price + curve = the exact-8% devnet curve", c.sqrtStartPrice === expect.sqrtStartPrice && c.curve.length === expect.curve.length && c.curve.every((p, i) => p.sqrtPrice === expect.curve[i].sqrtPrice && p.liquidity === expect.curve[i].liquidity)],
+    ["sqrt_start_price + curve = the expected exact-8% curve", c.sqrtStartPrice === expect.sqrtStartPrice && c.curve.length === expect.curve.length && c.curve.every((p, i) => p.sqrtPrice === expect.curve[i].sqrtPrice && p.liquidity === expect.curve[i].liquidity)],
   ];
   for (const [what, ok] of want) if (!ok) out.push(what);
   return out;

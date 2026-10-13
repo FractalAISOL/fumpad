@@ -24,6 +24,11 @@
     "validator": "tsx scripts/local/dev-chain.ts",
     "bootstrap:rehearsal": "tsx scripts/local/bootstrap-rehearsal.ts",
     "multisig:rehearsal": "tsx scripts/local/multisig-rehearsal.ts",
+    "mainnet:rehearsal": "tsx scripts/mainnet/rehearsal.ts",
+    "mainnet:bootstrap": "tsx scripts/mainnet/bootstrap-mainnet.ts",
+    "mainnet:snapshot": "tsx scripts/mainnet/fork.ts snapshot",
+    "mainnet:compare": "tsx scripts/mainnet/fork.ts compare",
+    "mainnet:build-program": "tsx scripts/mainnet/build-program.ts",
     "rpc-check": "tsx scripts/ops/rpc-check.ts",
     "api-types": "node scripts/gen-api-types.mjs",
     "test:all": "vitest run"

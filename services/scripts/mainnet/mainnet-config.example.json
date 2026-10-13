@@ -1,0 +1,21 @@
+{
+  "deployerKeypair": "deployer.json",
+  "admin": {
+    "kind": "squads",
+    "multisig": "<ADMIN_MULTISIG_PDA from: multisig.ts status>",
+    "address": "<ADMIN_VAULT = vault[0] of that multisig>",
+    "label": "admin 3-of-5, 48 h time lock"
+  },
+  "guardian": {
+    "kind": "squads",
+    "multisig": "<GUARDIAN_MULTISIG_PDA>",
+    "address": "<GUARDIAN_VAULT>",
+    "label": "guardian 2-of-3, no time lock"
+  },
+  "treasury": "<TREASURY_PUBKEY (a Squads vault or a hardware wallet)>",
+  "opsKeypair": "ops.json",
+  "computeUnitPriceMicroLamports": 20000,
+  "fund": { "attestor-1": 2, "attestor-2": 0.3, "attestor-3": 0.3 },
+  "budgetSol": 12,
+  "programHeadroomBytes": 0
+}

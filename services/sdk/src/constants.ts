@@ -2,8 +2,18 @@
 import { PublicKey } from "@solana/web3.js";
 
 // ── programs ────────────────────────────────────────────────────────────────
-/** fumpad v0.7 (D39: new program id, not deployed anywhere yet). */
-export const FUMPAD_PROGRAM_ID = new PublicKey("5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb");
+/** The program id compiled into `contracts/programs/fumpad/src/lib.rs` (`declare_id!`), deployed on devnet. */
+export const DEFAULT_FUMPAD_PROGRAM_ID = "5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb";
+/**
+ * Node only: `FUMPAD_PROGRAM_ID` in the environment (read once, at import) selects another deployment of the same
+ * program, e.g. the mainnet id built by `services/scripts/mainnet/build-program.ts` (LAUNCH-DAY.md). Every PDA,
+ * instruction builder, event filter and attestation message of the SDK and the services follows it. Browsers
+ * (no `process`) always get the default.
+ */
+const envProgramId = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.FUMPAD_PROGRAM_ID?.trim();
+export const FUMPAD_PROGRAM_ID = new PublicKey(envProgramId || DEFAULT_FUMPAD_PROGRAM_ID);
+/** "env" when `FUMPAD_PROGRAM_ID` overrode the default (services log it at start). */
+export const FUMPAD_PROGRAM_ID_SOURCE: "env" | "default" = envProgramId ? "env" : "default";
 export const DBC_PROGRAM_ID = new PublicKey("dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN");
 export const DAMM_V2_PROGRAM_ID = new PublicKey("cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG");
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
