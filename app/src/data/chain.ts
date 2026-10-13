@@ -9,19 +9,21 @@ const BASE_PER_TOKEN = 10 ** TOKEN_DECIMALS;
 const Q64 = BigInt(1) << BigInt(64);
 
 /**
- * Mainnet program defaults from `constants.rs` (v0.5). Only a fallback: views read the live
- * `Global.params` through `getParams()` (`useProtocolParams()`), and devnet runs its own scaled
- * curve. Keep in sync with contracts/CONTRACTS.md when the defaults change.
+ * Mainnet defaults (SPEC v0.7: the FUMPAD DBC config + `Global.params`). Only a fallback: views read
+ * the live values through `getParams()` (`useProtocolParams()`), and devnet runs its own scaled
+ * curve (0.85 SOL). Curve: D17 at F = 0 (DBC has no graduation fee), start MC ≈30.39 SOL,
+ * ×14.7 to graduation at 85 SOL (spike/meteora/REPORT.md §4).
  */
 export const PARAMS = {
   totalSupply: 1_000_000_000,
   rewardPoolSupply: 80_000_000,
-  curveSupply: 730_811_425.785218,
-  lpSupply: 189_188_574.214782,
+  curveSupply: 729_655_172.413793,
+  lpSupply: 190_344_827.586207,
   initialVirtualSol: 30,
-  initialVirtualTokens: 988_744_870.180001,
+  initialVirtualTokens: 987_180_527.383367,
   graduationSol: 85,
-  feeBps: 100,
+  feeBps: 125,
+  venueFeeShareBps: 2_000,
   feePoolShareBps: 5_000,
   feePlatformShareBps: 3_000,
   feeCreatorShareBps: 2_000,
@@ -35,9 +37,11 @@ export const PARAMS = {
   maxOpenTickets: 5,
   oracleWindowSecs: 1_800,
   oracleMinSamples: 84,
-  snipeWindowSlots: 4,
+  snipeWindowSlots: 8,
   snipeStartBps: 9_900,
-  graduationFeeSol: 0.65,
+  graduationFeeSol: 0.64,
+  ticketChallengeSecs: 6 * 3_600,
+  attestDelaySecs: 60,
 } as const;
 
 /** A coin's graduation target in SOL: from the data source when it has one (devnet runs a scaled-down curve). */
@@ -70,7 +74,7 @@ export const TICKET_STATUS = ["open", "queued", "claimed", "expired", "voided"] 
 /** `CoinStatus` enum index → app status. */
 export const COIN_STATUS = ["curve", "complete", "graduated"] as const;
 
-/* ── Curve math (constant product on virtual reserves, docs/SPEC.md §3) ───── */
+/* ── Curve math (DBC one-segment curve = constant product on virtual reserves; ./meteora.ts) ── */
 
 export function curvePrice(virtualSol: number, virtualTokens: number): number {
   return virtualSol / virtualTokens;

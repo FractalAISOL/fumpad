@@ -188,12 +188,12 @@ export function isClosedBook(b: MockBook, balance: number): boolean {
   return balance < 1 || balance * 10_000 < b.bought + b.payout;
 }
 
-/** Creator fees for the mock's launched coins: 20% of the 1% fee on the coin's lifetime volume. */
+/** Creator fees for the mock's launched coins: 20% of FUMPAD's 1.00% (the 1.25% fee minus Meteora's 20%) on lifetime volume, any app. */
 export function mockCreatorFees(c: CoinSpec): { earned: number; withdrawn: number } {
   const r = rng("fees:" + c.symbol);
   const days = Math.max(0.05, (EPOCH - c.createdAt) / DAY);
   const lifetimeSol = (c.volume24hUsd / 152.4) * Math.min(Math.max(days, 1), 30) * between(r, 0.4, 0.9);
-  const earned = lifetimeSol * (PARAMS.feeBps / 10_000) * (PARAMS.feeCreatorShareBps / 10_000);
+  const earned = lifetimeSol * (PARAMS.feeBps / 10_000) * (1 - PARAMS.venueFeeShareBps / 10_000) * (PARAMS.feeCreatorShareBps / 10_000);
   const withdrawn = c.status === "graduated" ? earned * between(r, 0.5, 0.8) : 0;
   return { earned, withdrawn };
 }

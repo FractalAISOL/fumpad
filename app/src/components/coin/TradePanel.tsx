@@ -15,13 +15,21 @@ import { minOutFromQuote } from "@/chain/build";
 const SLOT_SECS = 0.4;
 
 /**
- * Seconds until the snipe tax is gone, from the quoted rate: the D19 schedule is
- * min(start, ⌈100%·(W − d)/W⌉) at slot offset d, so ⌈bps·W/10,000⌉ slots remain.
+ * Seconds until the launch-window fee is gone, from the quoted rate. The DBC scheduler is linear,
+ * start − d·(start − end)/W at slot offset d, so W − d slots remain.
  */
-function snipeWaitSecs(bps: number, windowSlots: number): number {
-  const w = windowSlots > 0 ? windowSlots : 4;
-  return Math.max(1, Math.round(Math.ceil((bps * w) / 10_000) * SLOT_SECS));
+function snipeWaitSecs(bps: number, p: { snipeWindowSlots: number; snipeStartBps: number; feeBps: number }): number {
+  const w = p.snipeWindowSlots > 0 ? p.snipeWindowSlots : 8;
+  const span = Math.max(1, p.snipeStartBps - p.feeBps);
+  const d = Math.max(0, Math.floor(((p.snipeStartBps - bps) * w) / span));
+  return Math.max(1, Math.round((w - d) * SLOT_SECS));
 }
+
+/**
+ * Apps that also trade FUMPAD coins (they trade Meteora DBC and DAMM v2 pools). Named so people
+ * know a sell there counts too; not partners, and FUMPAD doesn't vouch for them.
+ */
+const ELSEWHERE = ["Axiom", "Jupiter", "GMGN", "Photon", "OKX"];
 
 /**
  * Buy/sell with a live ticket preview. The preview explains the ticket price in one
@@ -84,9 +92,11 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
   const over = balance !== undefined && amount > balance;
   const t = quote?.ticket;
   const files = side === "sell" && t?.files;
-  // D19: a curve buy in the launch window pays the snipe tax (quoted at the current slot).
-  const snipe = side === "buy" && quote?.snipeTaxSol && quote.snipeTaxBps ? { sol: quote.snipeTaxSol, pct: quote.snipeTaxBps / 100 } : null;
-  const snipeWait = snipe ? snipeWaitSecs(quote!.snipeTaxBps!, params.snipeWindowSlots) : 0;
+  // D33: a trade in the launch window pays the DBC scheduler's fee (quoted at the current slot), buys and sells alike.
+  const snipe = quote?.snipeTaxSol && quote.snipeTaxBps ? { sol: quote.snipeTaxSol, pct: quote.snipeTaxBps / 100 } : null;
+  const snipeWait = snipe ? snipeWaitSecs(quote!.snipeTaxBps!, params) : 0;
+  const feePct = snipe ? snipe.pct : params.feeBps / 100;
+  const completes = side === "buy" && !!quote?.partialFill;
 
   const submit = async () => {
     if (!quote || amount <= 0 || over) return;
@@ -112,15 +122,15 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
           : { sol: before.sol + quote.amountOut, tokens: Math.max(0, before.tokens - amount), maturedTokens: Math.max(0, before.maturedTokens - amount) };
       setOptimistic({ bal: next, before, until: Date.now() + 20_000 });
     }
-    if (side === "buy") toast(`Bought ${f.tokens(quote.amountOut)} ${coin.symbol}.`);
-    else toast(files ? `Sold. Ticket filed for $${coin.symbol}, claimable at 10×.` : `Sold ${f.tokens(amount)} ${coin.symbol}.`, files ? "money" : "ink");
+    if (side === "buy") toast(completes ? `Bought ${f.tokens(quote.amountOut)} ${coin.symbol}. That completed the curve.` : `Bought ${f.tokens(quote.amountOut)} ${coin.symbol}.`);
+    else toast(files ? `Sold. Your $${coin.symbol} ticket is being verified; it shows in My fumbles.` : `Sold ${f.tokens(amount)} ${coin.symbol}.`, files ? "money" : "ink");
     tx.reset();
   };
 
   const hold = f.duration(params.minHoldSecs);
   const median = `${f.durationShort(params.oracleWindowSecs)} median`;
   const rebuyWindow = f.duration(params.rebuyWindowSecs);
-  const label = side === "buy" ? `Buy $${coin.symbol}` : files ? "Sell and file a ticket" : `Sell $${coin.symbol}`;
+  const label = side === "buy" ? (completes ? "Buy and complete the curve" : `Buy $${coin.symbol}`) : files ? "Sell and file a ticket" : `Sell $${coin.symbol}`;
   const busy = tx.status === "building" || tx.status === "signing" || tx.status === "confirming";
 
   return (
@@ -134,7 +144,11 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
           <span>
             Your ticket, sold {f.date(myTicket.sellTs)}
             <small>
-              {myTicket.state === "claimable"
+              {myTicket.state === "verifying"
+                ? "Verifying the sell"
+                : myTicket.state === "challenge" && myTicket.claimableFrom
+                  ? `Claimable from ${f.dateTime(myTicket.claimableFrom)}`
+                  : myTicket.state === "claimable"
                 ? "Claimable now"
                 : myTicket.state === "queued"
                   ? `Queued, #${myTicket.queuePosition}`
@@ -179,10 +193,10 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
           className={s.quote}
           rows={[
             { k: "You receive", v: side === "buy" ? <Tokens value={quote.amountOut} symbol={coin.symbol} /> : <Sol value={quote.amountOut} /> },
-            { k: "Fee, 1%", v: <Sol value={quote.feeSol} /> },
-            { k: `Of which buys ${coin.symbol} for the pool`, v: <Sol value={quote.feePoolSol} /> },
-            ...(snipe ? [{ k: `Snipe tax, ${f.fixed(snipe.pct, 0)}%, to the pool`, v: <Sol value={snipe.sol} /> }] : []),
-            ...(quote.venueFeeSol > 0 ? [{ k: "PumpSwap fee, 0.25%", v: <Sol value={quote.venueFeeSol} /> }] : []),
+            ...(completes && quote.usedSol !== undefined ? [{ k: "You pay, curve's last tokens", v: <Sol value={quote.usedSol} /> }] : []),
+            { k: snipe ? `Fee, ${f.fixed(feePct, 1)}%, launch window` : `Fee, ${f.fixed(feePct, 2)}%`, v: <Sol value={quote.feeSol} /> },
+            // D33: in the launch window FUMPAD's whole share of the fee goes to the pool.
+            { k: `Of which buys ${coin.symbol} for the pool`, v: <Sol value={snipe ? quote.feePoolSol + quote.feePlatformSol + quote.feeCreatorSol : quote.feePoolSol} /> },
             { k: "Price impact", v: <span className="num">{f.fixed(Math.abs(quote.priceImpact), 2)}%</span> },
           ]}
         />
@@ -193,7 +207,7 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
           {t.files ? (
             <>
               <p className={s.pvLead}>
-                This sell files a <b>fumble ticket</b>.
+                This sell counts: it files a <b>fumble ticket</b>.
               </p>
               <dl className={s.pvRows}>
                 <div>
@@ -238,7 +252,8 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
                     Only {f.tokens(t.tokens)} of these tokens have been held {hold}; the ticket counts those.{" "}
                   </>
                 )}
-                You&apos;ll have {t.openTickets + 1} of {t.maxOpenTickets} open tickets on this coin.
+                You&apos;ll have {t.openTickets + 1} of {t.maxOpenTickets} open tickets on this coin. FUMPAD&apos;s keepers verify the sell in about{" "}
+                {f.duration(params.attestDelaySecs)}; claims open after a {f.duration(params.ticketChallengeSecs)} challenge window.
               </p>
             </>
           ) : (
@@ -261,11 +276,11 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
 
       {snipe && amount > 0 && (
         <p className={s.snipe} role="status">
-          <b>Snipe protection:</b> <span className={cx("num", s.snipePct)}>{f.fixed(snipe.pct, 0)}%</span> of this buy goes to the reward pool — wait ~
-          {snipeWait} s.
+          <b>Snipe protection:</b> this {side} pays a <span className={cx("num", s.snipePct)}>{f.fixed(snipe.pct, 0)}%</span> fee — wait ~{snipeWait} s.
           <small>
-            Buys in the first few slots after launch are taxed into ${coin.symbol}&apos;s reward pool; the tax steps down to zero in about{" "}
-            {f.fixed(Math.max(1, params.snipeWindowSlots) * SLOT_SECS, 1)} s.
+            Trades in the first {f.int(params.snipeWindowSlots)} slots after launch pay up to {f.fixed(params.snipeStartBps / 100, 0)}%, falling to{" "}
+            {f.fixed(params.feeBps / 100, 2)}% in about {f.fixed(Math.max(1, params.snipeWindowSlots) * SLOT_SECS, 1)} s. FUMPAD&apos;s share goes to $
+            {coin.symbol}&apos;s reward pool.
           </small>
         </p>
       )}
@@ -283,7 +298,13 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
               tickets after {hold}.
             </p>
           )}
-          {quote.partialFill && <p className={s.pvNote}>This buy completes the curve. You&apos;re charged only for the tokens left.</p>}
+          {completes && (
+            <p className={s.pvNote}>
+              <b>This buy completes the curve.</b> Only the last {f.tokens(quote.amountOut)} tokens are left, so you pay{" "}
+              {quote.usedSol !== undefined ? <span className="num">{f.sol(quote.usedSol)} SOL</span> : "less"} and keep the rest. Then ${coin.symbol} graduates to a
+              Meteora pool and claims can open.
+            </p>
+          )}
         </div>
       )}
 
@@ -304,6 +325,13 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
                 : ""}
       </p>
       {isDemo && <p className={s.demo}>Demo wallet. Trades are simulated until you log in.</p>}
+      <p className={s.elsewhere}>
+        Also trades on {ELSEWHERE.join(" · ")} and any app that routes Meteora. Every sell over {f.usdRule(params.minSellUsd)} counts, wherever you sell.{" "}
+        <InfoTip label="About other apps">
+          ${coin.symbol} trades on Meteora pools, so any Solana app can trade it. Those apps aren&apos;t affiliated with FUMPAD and FUMPAD doesn&apos;t vouch
+          for them; their own fees apply on top.
+        </InfoTip>
+      </p>
     </section>
   );
 }

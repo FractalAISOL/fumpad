@@ -11,10 +11,14 @@ import { useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Fumbles.module.css";
 
-type Filter = "all" | "claimable" | "tracking" | "waiting" | "queued" | "closed" | "flagged";
+type Filter = "all" | "new" | "claimable" | "tracking" | "waiting" | "queued" | "closed" | "flagged";
+
+/** States a ticket can still move out of (the views watch these coins and count them as open). */
+const LIVE: Ticket["state"][] = ["verifying", "challenge", "claimable", "tracking", "queued", "awaiting-graduation"];
 
 const MATCH: Record<Filter, (t: Ticket) => boolean> = {
   all: () => true,
+  new: (t) => t.state === "verifying" || t.state === "challenge",
   claimable: (t) => t.state === "claimable",
   tracking: (t) => t.state === "tracking",
   waiting: (t) => t.state === "awaiting-graduation",
@@ -23,13 +27,39 @@ const MATCH: Record<Filter, (t: Ticket) => boolean> = {
   flagged: () => false,
 };
 
-const ORDER: Record<Ticket["state"], number> = { claimable: 0, queued: 1, tracking: 2, "awaiting-graduation": 3, claimed: 4, expired: 5, voided: 6 };
+const ORDER: Record<Ticket["state"], number> = {
+  claimable: 0,
+  queued: 1,
+  verifying: 2,
+  challenge: 3,
+  tracking: 4,
+  "awaiting-graduation": 5,
+  claimed: 6,
+  expired: 7,
+  voided: 8,
+};
 
 /** One sentence for any ticket state that needs explaining. */
 function note(t: Ticket, p: ProtocolParams): React.ReactNode {
   const median = `${f.durationShort(p.oracleWindowSecs)} median`;
   const rebuy = f.duration(p.rebuyWindowSecs);
   const parts: React.ReactNode[] = [];
+  if (t.state === "verifying") {
+    parts.push(
+      <>
+        Your sell landed. FUMPAD&apos;s keepers check it against the chain and attest it, usually within {f.duration(p.attestDelaySecs)}; then the
+        ticket exists on chain.
+      </>,
+    );
+  }
+  if (t.state === "challenge") {
+    parts.push(
+      <>
+        Attested. It already counts toward 10×; claims open {t.claimableFrom ? <>at {f.dateTime(t.claimableFrom)} UTC</> : "after the challenge window"}, once the{" "}
+        {f.duration(p.ticketChallengeSecs)} window to catch a bad attestation has passed.
+      </>,
+    );
+  }
   if (t.state === "queued" && t.queueNeedsPool) {
     parts.push(
       <>
@@ -68,7 +98,16 @@ function note(t: Ticket, p: ProtocolParams): React.ReactNode {
       </>,
     );
   }
-  if (t.state === "voided") parts.push(<>Rebuys within {rebuy} brought this ticket to zero.</>);
+  if (t.state === "voided")
+    parts.push(
+      t.voidReason === "guardian" ? (
+        <>Voided in the challenge window: the attestation didn&apos;t match the chain, so this ticket never counted.</>
+      ) : (
+        <>Rebuys within {rebuy} brought this ticket to zero.</>
+      ),
+    );
+  if (t.state === "claimed" && t.escrowed)
+    parts.push(<>Your token account refused the payout, so it went to this ticket&apos;s escrow. It&apos;s yours to withdraw any time.</>);
   if (t.autoClaimed && (t.state === "claimed" || t.state === "queued")) parts.push(<>Auto-claimed: the keeper claimed it for you, straight to your wallet.</>);
   if (!parts.length) return undefined;
   return parts.map((p, i) => (
@@ -132,7 +171,7 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
       .catch(keepSnapshot);
   }, [data, address, applyOverrides, setClaimable]);
   const watchMints = useMemo(
-    () => [...new Set((tickets ?? []).filter((t) => ["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)).map((t) => t.mint))].sort(),
+    () => [...new Set((tickets ?? []).filter((t) => LIVE.includes(t.state)).map((t) => t.mint))].sort(),
     [tickets],
   );
   useRefresh(load, { wallets: [address], mints: watchMints, pollMs: 30_000, debounceMs: 1_000 });
@@ -149,17 +188,17 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
   }, [tickets]);
 
   const claimableSol = tickets?.filter((t) => t.state === "claimable").reduce((a, t) => a + t.claimValueSol, 0) ?? 0;
-  const open = tickets?.filter((t) => ["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)) ?? [];
+  const open = tickets?.filter((t) => LIVE.includes(t.state)) ?? [];
   const queued = tickets?.filter((t) => t.state === "queued") ?? [];
   const closest = tickets
-    ?.filter((t) => (t.state === "tracking" || t.state === "awaiting-graduation") && t.multiple < 10)
+    ?.filter((t) => (t.state === "tracking" || t.state === "awaiting-graduation" || t.state === "challenge") && t.multiple < 10)
     .sort((a, b) => b.multiple - a.multiple)[0];
 
   // D17: auto-claim is per coin (Position.auto_claim_opt_out); list coins with open tickets.
   const autoCoins = useMemo(() => {
     const m = new Map<string, { mint: string; symbol: string; autoClaim: boolean; open: number }>();
     for (const t of tickets ?? []) {
-      if (!["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)) continue;
+      if (!LIVE.includes(t.state) || t.state === "verifying") continue;
       const e = m.get(t.mint) ?? { mint: t.mint, symbol: t.symbol, autoClaim: t.autoClaim, open: 0 };
       e.open++;
       m.set(t.mint, e);
@@ -216,6 +255,7 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
 
   const FILTERS: { value: Filter; label: string; count: number }[] = [
     { value: "all", label: "All", count: counts.all },
+    { value: "new", label: "Verifying", count: counts.new },
     { value: "claimable", label: "Claimable", count: counts.claimable },
     { value: "tracking", label: "Tracking", count: counts.tracking },
     { value: "waiting", label: "Waiting to graduate", count: counts.waiting },
@@ -229,8 +269,8 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
       <div className={s.pageHead}>
         <h1 className={s.h1}>My fumbles</h1>
         <p className={s.lede}>
-          Every sell you made through FUMPAD, measured against 10× of your price. Claim 10% of what you sold once the {f.durationAdj(params.oracleWindowSecs)}{" "}
-          median holds there.
+          Every sell of a FUMPAD coin over {f.usdRule(params.minSellUsd)}, on any app, measured against 10× of your price. Claim 10% of what you sold once the{" "}
+          {f.durationAdj(params.oracleWindowSecs)} median holds there.
         </p>
         {isDemo && <p className={s.demo}>Showing a demo wallet. Log in to see your own tickets.</p>}
       </div>
@@ -354,7 +394,8 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
           </EmptyState>
         ) : tickets.length === 0 ? (
           <EmptyState title="No fumbles yet" action={<Button href="/launches">Browse launches</Button>}>
-            Sell {f.usdRule(params.minSellUsd)} or more of any coin through FUMPAD and the ticket shows up here, measured against 10× of your price.
+            Sell {f.usdRule(params.minSellUsd)} or more of any FUMPAD coin, here or on any other app, and the ticket shows up here about a minute later, measured
+            against 10× of your price.
           </EmptyState>
         ) : (
           <EmptyState

@@ -50,7 +50,7 @@ export interface CoinSummary {
   ticketsOpen: number;
   /** Last 24 points of price, oldest first, for sparklines. */
   spark: number[];
-  /** FUMPAD trades (curve + router) in the last 24 hours. */
+  /** Trades in the last 24 hours on the coin's own pools (DBC curve, then DAMM v2), from every app. */
   trades24h: number;
   /** Creator-supplied links from the metadata (http/https only). */
   socials?: CoinSocials;
@@ -59,11 +59,12 @@ export interface CoinSummary {
   /** The creator's wallet carries an indexer flag (linked wallets, rebuys elsewhere). */
   creatorFlagged: boolean;
   /**
-   * D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward
-   * pool as snipe tax, and how many buys paid it. Absent when none did.
+   * D33 snipe protection, early-launch stats: SOL of fees that trades (buys and sells, any app) paid
+   * in the launch window (the DBC fee scheduler, 99% → normal over ~3 s), and how many trades paid
+   * them. FUMPAD's whole share of these fees goes to the coin's reward pool. Absent when none did.
    */
   snipeTaxSol?: number;
-  snipeTaxedBuys?: number;
+  snipeTaxedTrades?: number;
 }
 
 export interface CoinSocials {
@@ -75,7 +76,7 @@ export interface CoinSocials {
 export interface CoinDetail extends CoinSummary {
   description: string;
   links: { label: string; href: string }[];
-  /** Tokens seeded to the pool at launch (8% of supply). */
+  /** D35: the DBC leftover (8% of supply) that lands in the reward pool at graduation; 0 before. */
   poolSeeded: number;
   poolBought24h: number;
   poolPaidOut: number;
@@ -86,18 +87,20 @@ export interface CoinDetail extends CoinSummary {
   ticketsPast10x: number;
   /** D10 reference average (10-min TWAP), SOL per token. Used only as the ticket floor. */
   referencePrice: number;
-  /** PumpSwap pool address after graduation. */
-  ammPool?: Address;
-  /** Virtual reserves, for curve quotes. */
+  /** Meteora DBC virtual pool (the bonding curve), from launch. */
+  dbcPool?: Address;
+  /** Meteora DAMM v2 pool after graduation (LP 100% permanently locked to FUMPAD's fee claimer). */
+  dammPool?: Address;
+  /** The DBC curve as constant-product virtual reserves (one curve segment is exactly that), for quotes. */
   virtualSol: number;
   virtualTokens: number;
-  /** Real tokens left on the curve. */
+  /** Tokens left before the curve completes (DBC `swap_base_amount` minus what has sold). */
   curveTokensLeft: number;
-  /** Graduated-coin pool reserves (quote side incl. virtual), for quotes. */
+  /** DAMM v2 virtual reserves (full-range constant product), for post-graduation quotes. */
   ammSol?: number;
   ammTokens?: number;
   curveSol1h: number;
-  /** SOL FUMPAD trades sent to the reward pool: the pool's fee share plus any snipe tax. */
+  /** SOL sent to the reward pool's buyback balance: half of FUMPAD's fee share plus its launch-window fees. */
   poolInflowSol?: number;
 }
 
@@ -116,19 +119,28 @@ export interface Holder {
 
 /* ── Tickets ───────────────────────────────────────────────────────────────── */
 
-/** Mirrors `TicketStatus`. */
-export type TicketChainStatus = "open" | "queued" | "claimed" | "expired" | "voided";
+/**
+ * Mirrors `TicketStatus`, plus `pending` for a qualifying sell the keepers haven't attested yet
+ * (no ticket account exists; SPEC v0.7 §5).
+ */
+export type TicketChainStatus = "pending" | "open" | "queued" | "claimed" | "expired" | "voided";
 
 /**
- * What the UI shows. Derived from chain status + coin status + oracle median:
- *  - claimable:   open, graduated, median ≥ 10× with coverage, inside 90 days
+ * What the UI shows. Derived from chain status + attestation + coin status + oracle median:
+ *  - verifying:   a sell over the minimum, on any app; the keepers attest it (~1 min after finality)
+ *  - challenge:   attested; inside the challenge window (`claimableFrom`), when the guardian can
+ *                 still void a bad attestation. It already counts toward 10×.
+ *  - claimable:   open, graduated, median ≥ 10× with coverage, past the challenge window, inside 90 days
  *  - queued:      waiting in the claim queue (clock stopped, never expires)
  *  - tracking:    open, graduated, below 10×
  *  - awaiting-graduation: open, coin still on the curve (may already be ≥ 10×)
- *  - claimed / expired / voided: closed
- * `rebuyReduced` is orthogonal: tokens < originalTokens after a rebuy inside 7 days.
+ *  - claimed / expired / voided: closed (`escrowed` marks a payout that waits in escrow)
+ * `rebuyDebited` is orthogonal: tokens < originalTokens after a rebuy inside 7 days.
  */
-export type TicketState = "claimable" | "queued" | "tracking" | "awaiting-graduation" | "claimed" | "expired" | "voided";
+export type TicketState = "verifying" | "challenge" | "claimable" | "queued" | "tracking" | "awaiting-graduation" | "claimed" | "expired" | "voided";
+
+/** Mirrors `TicketSource`: sold through the FUMPAD router, or on any other app (attested the same way). */
+export type TicketSource = "router" | "outside";
 
 export interface Ticket {
   id: Address; // ticket PDA
@@ -144,6 +156,20 @@ export interface Ticket {
   originalTokens: number;
   /** Ticket price, SOL per token: max(execution, D12 floor). */
   sellPrice: number;
+  /** Router (FUMPAD app) or outside (any other app). */
+  source: TicketSource;
+  /**
+   * The indexer's best-effort app label for the sell (`@fumpad/meteora` `appLabel`: "jupiter",
+   * "axiom", "okx", "dflow", "padre", "direct", "unknown_program"…). Display only, never a
+   * security input; absent when unknown.
+   */
+  app?: string;
+  /** The sell's transaction signature. */
+  sellSignature?: string;
+  /** When the 2-of-3 keeper attestation landed (absent while verifying). */
+  attestedAt?: Millis;
+  /** attestedAt + the challenge window: the earliest time a claim can pay. */
+  claimableFrom?: Millis;
   /** What the sell actually filled at. Differs from sellPrice when the floor applied. */
   execPrice: number;
   sellUsd: number;
@@ -178,6 +204,8 @@ export interface Ticket {
   escrowed?: boolean;
   /** Debits applied by rebuys within 7 days. */
   rebuyDebited: number;
+  /** Why a voided ticket was voided: rebuys took it to zero, or the guardian voided a bad attestation. */
+  voidReason?: "rebuy" | "guardian";
   /** D17: the keeper may claim this coin's tickets for the owner (per coin; on unless opted out). */
   autoClaim: boolean;
   /** The keeper claimed (or queued) this ticket on the owner's behalf. */
@@ -213,7 +241,15 @@ export interface FumbleRow {
   ts: Millis;
   multiple: number;
   isYou?: boolean;
+  source?: TicketSource;
+  /** App label of the sell (see `Ticket.app`). */
+  app?: string;
+  /** Still being attested (no ticket yet). */
+  verifying?: boolean;
 }
+
+/** Where a coin trades: its DBC bonding curve, then its DAMM v2 pool after graduation. */
+export type Venue = "dbc" | "damm";
 
 export interface TradeQuote {
   side: Side;
@@ -221,32 +257,39 @@ export interface TradeQuote {
   amountIn: number;
   /** Output before slippage (tokens for buys, SOL for sells), after the fee. */
   amountOut: number;
+  /** The whole pool fee (1.25%, D32; more in the launch window), SOL. */
   feeSol: number;
+  /** FUMPAD's 80% of the fee, split 50 / 30 / 20 (pool buyback / platform / creator). */
   feePoolSol: number;
   feePlatformSol: number;
   feeCreatorSol: number;
-  /** PumpSwap's own 0.25% (0.20% LP + 0.05% protocol) on graduated coins; 0 on the curve. */
+  /** Meteora's 20% of the fee (protocol share), SOL. Included in `feeSol`. */
   venueFeeSol: number;
   /** Spot before the trade. */
   spotBefore: number;
   /** Average execution price, SOL per token, before the fee. */
   execPrice: number;
   priceImpact: number; // percent
-  venue: "curve" | "pumpswap";
+  venue: Venue;
   ticket?: TicketPreview;
   rebuyWarning?: RebuyWarning;
-  /** Curve buys that would fill the curve are partially filled. */
-  partialFill?: boolean;
   /**
-   * D19: the buy lands in the coin's launch window, so part of it is snipe tax paid to the reward
-   * pool (SOL, included in amountIn) at `snipeTaxBps`. Absent outside the window.
+   * This buy completes the curve: DBC can't trade past the migration price, so the router sends
+   * it as PartialFill and only `usedSol` of `amountIn` is spent (the rest stays in the wallet).
+   */
+  partialFill?: boolean;
+  usedSol?: number;
+  /**
+   * D33: the trade lands in the launch window, so the DBC fee scheduler charges `snipeTaxBps`
+   * instead of the normal fee. `snipeTaxSol` is the part above the normal fee (included in
+   * `feeSol`); FUMPAD's share of it goes to the reward pool. Absent outside the window.
    */
   snipeTaxSol?: number;
   snipeTaxBps?: number;
 }
 
 export interface TicketPreview {
-  /** Whether this sell files a ticket, and why not when it doesn't. */
+  /** Whether this sell qualifies for a ticket (the keepers attest it after the sell), and why not when it doesn't. */
   files: boolean;
   reason?: "under-min" | "creator" | "max-open" | "not-matured" | "no-oracle";
   usdValue: number;
@@ -290,8 +333,9 @@ interface FeedBase {
 }
 export interface FeedLaunch extends FeedBase {
   kind: "launch";
+  /** D35: tokens the reward pool receives at graduation (8% of supply). */
   poolTokens: number;
-  /** D19: snipe tax that launch-window buys have paid into the pool so far (SOL). */
+  /** D33: launch-window fees trades have paid so far (SOL); FUMPAD's share goes to the pool. */
   snipeTaxSol?: number;
 }
 export interface FeedFumble extends FeedBase {
@@ -299,6 +343,9 @@ export interface FeedFumble extends FeedBase {
   tokens: number;
   sol: number;
   ticketPrice: number;
+  source?: TicketSource;
+  /** App label of the sell (see `Ticket.app`). */
+  app?: string;
 }
 export interface FeedCross extends FeedBase {
   kind: "cross";
@@ -391,7 +438,7 @@ export interface Profile {
 /* ── Portfolio (wallet profile) ────────────────────────────────────────────── */
 
 /**
- * Measured from FUMPAD trades (curve + router) with the average-cost method: a buy adds
+ * Measured from the wallet's trades on the coin's own pools (DBC curve + DAMM v2, any app) with the average-cost method: a buy adds
  * its tokens and the SOL it cost (fee included); a sell removes tokens at the running
  * average cost and books what it paid out (after the fee) minus that cost as realized
  * P&L. Fumble payouts (claims) arrive at zero cost. Balances come from the chain (the
@@ -416,7 +463,7 @@ export interface WalletPosition extends PortfolioCoin {
   price: number;
   /** balance × price, SOL. */
   valueSol: number;
-  /** Tokens FUMPAD trades and payouts account for: bought + payouts − sold. */
+  /** Tokens the wallet's trades and payouts account for: bought + payouts − sold. */
   trackedTokens: number;
   /** Average cost of the tracked tokens, SOL per token (payouts count at zero). */
   avgCost: number;
@@ -430,7 +477,7 @@ export interface WalletPosition extends PortfolioCoin {
   unrealizedPct?: number;
   /** Realized on sells so far (a position partly sold). */
   realizedSol: number;
-  /** The balance holds tokens acquired outside FUMPAD; the cost basis covers FUMPAD trades only. */
+  /** The balance holds tokens that arrived by transfer or another pool; the cost basis covers trades on the coin's pools only. */
   partialBasis: boolean;
   boughtTokens: number;
   /** Tokens received as fumble payouts (zero cost). */
@@ -455,7 +502,7 @@ export interface ClosedPosition extends PortfolioCoin {
   realizedSol: number;
   /** realized ÷ cost of the tokens sold, percent. Undefined at zero cost. */
   realizedPct?: number;
-  /** Sells exceeded what FUMPAD trades explain; P&L covers the explained part only. */
+  /** Sells exceeded what the wallet's trades explain; P&L covers the explained part only. */
   partialBasis: boolean;
   firstTs: Millis;
   lastTs: Millis;
@@ -489,19 +536,27 @@ export interface LaunchDraft {
 /* ── Protocol params ───────────────────────────────────────────────────────── */
 
 /**
- * `Global.params` in display units (SOL, whole tokens, seconds, USD). Mainnet runs the
- * program defaults; devnet runs a scaled-down curve and short windows (e.g. 30 s hold,
- * 0.85 SOL graduation). Copy that quotes a rule reads it from here, never a literal.
+ * `Global.params` plus the coin's DBC config, in display units (SOL, whole tokens, seconds, USD).
+ * Mainnet runs the program defaults; devnet runs a scaled-down curve and short windows (e.g. 30 s
+ * hold, 0.85 SOL graduation). Copy that quotes a rule reads it from here, never a literal.
  */
 export interface ProtocolParams {
   totalSupply: number;
+  /** D35: the DBC leftover that lands in the reward pool at graduation (8%). */
   rewardPoolSupply: number;
+  /** DBC `swap_base_amount`: tokens the curve sells before it completes. */
   curveSupply: number;
+  /** DBC `migration_base_threshold`: tokens deposited into the DAMM v2 pool at graduation. */
   lpSupply: number;
   initialVirtualSol: number;
   initialVirtualTokens: number;
+  /** DBC `migration_quote_threshold`: SOL the curve raises before it graduates. */
   graduationSol: number;
+  /** D32: the pool fee on every trade, any app, curve and DAMM v2 (125 = 1.25%). */
   feeBps: number;
+  /** Meteora's protocol share of that fee (2,000 = 20%); FUMPAD's share is the rest. */
+  venueFeeShareBps: number;
+  /** FUMPAD's share, split: buyback → reward pool / platform / creator. */
   feePoolShareBps: number;
   feePlatformShareBps: number;
   feeCreatorShareBps: number;
@@ -519,17 +574,21 @@ export interface ProtocolParams {
   /** The claim median's window. */
   oracleWindowSecs: number;
   oracleMinSamples: number;
-  /** D19: curve buys within this many slots of launch pay the snipe tax (0 = off). */
+  /** D33: trades within this many slots of launch pay the DBC scheduler's higher fee (0 = off). */
   snipeWindowSlots: number;
-  /** D19: snipe tax at the launch slot, bps (9,900 = 99%), decaying to 0 over the window. */
+  /** D33: the fee at the launch slot, bps (9,900 = 99%), falling linearly to `feeBps` over the window. */
   snipeStartBps: number;
-  /** D20: SOL taken at graduation to pay the pool's setup rent (remainder to FUMPAD). */
+  /** D34: DBC's migration fee to FUMPAD at graduation (≈0.75% of the raise), spent on the pool's setup rent. */
   graduationFeeSol: number;
+  /** D31: the challenge window after an attestation, before the ticket can be claimed. */
+  ticketChallengeSecs: number;
+  /** Typical time from a sell to its keeper attestation (finality + 2-of-3 signatures). Display only. */
+  attestDelaySecs: number;
 }
 
 /* ── Trades & live updates ─────────────────────────────────────────────────── */
 
-/** One FUMPAD trade on a coin (curve or PumpSwap via the router). */
+/** One trade on a coin's own pools (DBC curve or DAMM v2), from any app. */
 export interface TradeRow {
   signature: string;
   mint: Address;
@@ -541,9 +600,12 @@ export interface TradeRow {
   /** Spot after the trade, SOL per token. */
   price: number;
   ts: Millis;
-  /** D19: snipe tax this buy paid to the reward pool (SOL, on top of `sol`) and its rate. Absent when none. */
+  /** D33: the launch-window fee above the normal fee this trade paid (SOL) and the rate it paid. Absent when none. */
   snipeTaxSol?: number;
   snipeTaxBps?: number;
+  venue?: Venue;
+  /** App label (`@fumpad/meteora` `appLabel`; "fumpad" for router trades). Display only. */
+  app?: string;
 }
 
 /**
