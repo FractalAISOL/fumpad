@@ -29,6 +29,7 @@ import { MemoryBoard, PgBoard, type SignatureBoard } from "./board.js";
 import { RpcChainView, RpcSubmitter } from "./chain.js";
 import { type DeriveCaches, deriveCoin, newCaches } from "./derive.js";
 import { guardHistory } from "./history-check.js";
+import { requireKeyRole } from "../role.js";
 
 export function pythSourceFromEnv(env = process.env): PythSource {
   const kind = env.PYTH_SOURCE ?? (env.NODE_ENV === "production" ? "hermes" : "constant");
@@ -68,6 +69,8 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
   if (prod && (!env.RPC_URL || !env.DATABASE_URL)) throw new Error("attestor: RPC_URL and DATABASE_URL are required in production");
   const url = env.RPC_URL || "http://127.0.0.1:8899";
   const conn = new Connection(url, "confirmed");
+  // Never attest with the jobs keeper's (operator) key.
+  await requireKeyRole("attestor", conn, keeper.publicKey);
   const rpc = new MeteoraRpc(url, { minGapMs: Number(env.RPC_MIN_GAP_MS ?? 0) });
   const pool = env.DATABASE_URL ? new pg.Pool({ connectionString: env.DATABASE_URL, max: 3, application_name: "fumpad-attestor" }) : undefined;
   let board: SignatureBoard;

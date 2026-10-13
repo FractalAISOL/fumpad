@@ -12,7 +12,7 @@
  *      CLI) → simulate config/init/fund (nothing lands) → send config, init, fund → propose-admin through the CLI
  *      itself with a typed confirmation (a wrong phrase sends nothing) → verify → a 2nd run sends nothing.
  *      CLI safety: --cluster mainnet against this RPC, --send without the spend flag, mainnet --send without a TTY.
- *   3. smoke through the real service stack (indexer, API, grinder, jobs keeper = attestor-1, attestors 1–3,
+ *   3. smoke through the real service stack (indexer, API, grinder, jobs keeper = the operator key, attestors 1–3,
  *      watcher) with the bootstrap's keys, on mainnet params: API launch (…fmbL mint, launch co-signer) → buys →
  *      600 s hold → sells ≥ $50 → tickets attested 2-of-3 → a 90 SOL PartialFill buy completes the 85 SOL curve →
  *      keeper migrates + graduates (observations + claim queue) → watcher re-derives every attestation.
@@ -233,7 +233,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
       rpcPort,
       apiPort,
       log,
-      chain: { v, keeperKeyPaths: [keyPath(K, "attestor-1"), keyPath(K, "attestor-2"), keyPath(K, "attestor-3")], launchKey: kp("launch-signer"), config: kp("dbc-config").publicKey, solUsd, cluster: "mainnet" },
+      chain: { v, keeperKeyPaths: [keyPath(K, "attestor-1"), keyPath(K, "attestor-2"), keyPath(K, "attestor-3")], operatorKeyPath: keyPath(K, "operator"), launchKey: kp("launch-signer"), config: kp("dbc-config").publicKey, solUsd, cluster: "mainnet" },
     });
     const { api, get } = stack;
     const [creator, alice, bob, whale] = Array.from({ length: 4 }, () => Keypair.generate());
@@ -286,7 +286,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     const attAfter = await Promise.all([1, 2, 3].map((i) => conn.getBalance(kp(`attestor-${i}`).publicKey)));
     costs["attestation: keepers' outflow for 2 attested sells (Position + Ticket + Consumed rent + fees; rent refunded on close)"] = `${sol(attBefore.reduce((s, x) => s + x, 0) - attAfter.reduce((s, x) => s + x, 0))} SOL total (local rent)`;
 
-    const k1Before = BigInt(await conn.getBalance(kp("attestor-1").publicKey));
+    const k1Before = BigInt(await conn.getBalance(kp("operator").publicKey));
     await routedBuy(conn, whale, coin, "dbc", 90n * SOL, 1);
     log("✓ whale's 90 SOL PartialFill router buy completes the 85 SOL curve");
     const grad = await waitFor("keeper migrates + graduates", async () => {
@@ -300,8 +300,8 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
       return obs && q && q.data.length >= 81_976 ? true : null;
     }, 180_000, 3_000);
     await sleep(10_000);
-    const k1After = BigInt(await conn.getBalance(kp("attestor-1").publicKey));
-    costs["graduation: jobs keeper (attestor-1) net outflow for migrate + graduate + init_observations + 9× init_claim_queue (+ concurrent samples)"] = `${sol(k1Before - k1After)} SOL (local rent; graduate refunds the migrator and pre-funds both PDAs from the 0.85 SOL migration fee)`;
+    const k1After = BigInt(await conn.getBalance(kp("operator").publicKey));
+    costs["graduation: jobs keeper (operator key) net outflow for migrate + graduate + init_observations + 9× init_claim_queue (+ concurrent samples)"] = `${sol(k1Before - k1After)} SOL (local rent; graduate refunds the migrator and pre-funds both PDAs from the 0.85 SOL migration fee)`;
     check("graduation setup paid from the migration fee: the jobs keeper's net outflow < 0.05 SOL", k1Before - k1After < SOL / 20n, `${sol(k1Before - k1After)} SOL`);
     const feed = await waitFor("watcher verified both attestations", async () => {
       const f = await get<{ coins: { mint: string; verdicts: { verdict: string; kind: string }[] }[] }>(`/v1/verification?mint=${mint.toBase58()}`, `http://127.0.0.1:${stack!.ports.watcher}`);

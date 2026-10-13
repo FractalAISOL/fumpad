@@ -191,7 +191,18 @@ export interface DammPool {
   creator: PublicKey;
   tokenAAmount: bigint;
   tokenBAmount: bigint;
+  /** Farming-reward slots (`reward_infos[2]` @728, 192 B each). */
+  rewards: DammRewardSlot[];
 }
+export interface DammRewardSlot {
+  initialized: boolean;
+  /** 0 SPL Token, 1 Token-2022 */
+  tokenFlag: number;
+  mint: PublicKey;
+  vault: PublicKey;
+}
+/** `pool_status` 0 = enabled; anything else = disabled by the DAMM v2 operator (no trading, no samples, no buybacks). */
+export const DAMM_POOL_STATUS_ENABLED = 0;
 
 /** DAMM v2 Pool (zero-copy, 8 + 1104 bytes). */
 export function decodeDammPool(d: Uint8Array): DammPool {
@@ -216,6 +227,10 @@ export function decodeDammPool(d: Uint8Array): DammPool {
     creator: pk(d, 648),
     tokenAAmount: u64(d, 680),
     tokenBAmount: u64(d, 688),
+    rewards: [0, 1].map((i) => {
+      const o = 728 + i * 192;
+      return { initialized: d[o] !== 0, tokenFlag: d[o + 1], mint: pk(d, o + 16), vault: pk(d, o + 48) };
+    }),
   };
 }
 

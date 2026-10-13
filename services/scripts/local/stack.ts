@@ -6,7 +6,8 @@
  *   grinder (…fmbL mints) · keeper jobs · 3 attestors (separate keys, shared signature board) · watcher
  *
  * on a chain with the built fumpad v0.7 program, the MAINNET Meteora DBC 0.2.1 + DAMM v2 0.2.4 binaries,
- * a pre-seeded Global (local windows, 3 keepers, the FUMPAD DBC config allow-listed) and that config created.
+ * a pre-seeded Global (local windows, 3 attestor keepers + 1 operator = the jobs keeper's key, the FUMPAD DBC config
+ * allow-listed) and that config created.
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -22,12 +23,13 @@ import { buildGrinder, keypair, keypairPath, LOCAL, type Postgres, readKeypairFi
 
 /**
  * An already-running, already-bootstrapped chain (the mainnet-fork rehearsal: real `initialize_global`, mainnet
- * params): the stack then only starts Postgres + the services against it, with these keeper keys
- * (`[0]` = attestor-1 = the jobs keeper) and launch co-signer, and never stops the validator.
+ * params): the stack then only starts Postgres + the services against it, with these attestor keys, the operator
+ * key (the jobs keeper; never an attestor) and launch co-signer, and never stops the validator.
  */
 export interface ExistingChain {
   v: Validator;
   keeperKeyPaths: [string, string, string];
+  operatorKeyPath: string;
   launchKey: Keypair;
   config: PublicKey;
   /** its Global.cluster_tag (FUMPAD_CLUSTER for every service) */
@@ -55,6 +57,8 @@ export interface Stack {
   admin?: Keypair;
   treasury?: Keypair;
   keepers: Keypair[];
+  /** the jobs keeper's key (Global.operators[0]) */
+  operator: Keypair;
   config: { publicKey: PublicKey };
   /** The API's launch key = `Params.launch_signer` (off-chain review L1): the API co-signs every launch. */
   launchKey: Keypair;
@@ -106,6 +110,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
     let treasury: Keypair | undefined;
     let keepers: Keypair[];
     let keeperPaths: string[];
+    let operatorPath: string;
     let config: { publicKey: PublicKey };
     let launchKey: Keypair;
     const usd = String(opts.chain?.solUsd ?? 150);
@@ -113,6 +118,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       v = opts.chain.v;
       keeperPaths = [...opts.chain.keeperKeyPaths];
       keepers = keeperPaths.map(readKeypairFile);
+      operatorPath = opts.chain.operatorKeyPath;
       config = { publicKey: opts.chain.config };
       launchKey = opts.chain.launchKey;
       log("✓ chain: existing (bootstrapped) validator, its Global and config");
@@ -122,18 +128,21 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       treasury = Keypair.generate();
       keepers = [keypair("keeper"), keypair("keeper2"), keypair("keeper3")];
       keeperPaths = [keypairPath("keeper"), keypairPath("keeper2"), keypairPath("keeper3")];
+      // The jobs keeper's own key (Global.operators): never one of the attestor keys.
+      const operator = keypair("operator");
+      operatorPath = keypairPath("operator");
       const cfg = Keypair.generate();
       config = cfg;
       // Launch binding (off-chain review L1): only API-built launches (co-signed by its launch key) register.
       launchKey = Keypair.generate();
       const params = { ...LOCAL_PARAMS, launchSigner: launchKey.publicKey };
-      v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), params, configs: [cfg.publicKey] } });
+      v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), operators: [operator.publicKey], params, configs: [cfg.publicKey] } });
       const c0 = new Connection(v.rpcUrl, "confirmed");
-      for (const k of [auth, admin, ...keepers]) await airdrop(c0, k.publicKey, 20);
+      for (const k of [auth, admin, operator, ...keepers]) await airdrop(c0, k.publicKey, 20);
       // DBC's pool authority fronts the migration's flash rent (mainnet: Meteora keeps it funded).
       await transferSol(c0, admin, DBC_POOL_AUTHORITY, 10n * SOL);
       await createFumpadConfig(c0, admin, cfg);
-      log("✓ chain ready: Global seeded (local windows, 3 keepers, FUMPAD DBC config allow-listed), config created");
+      log("✓ chain ready: Global seeded (local windows, 3 attestors + 1 operator, FUMPAD DBC config allow-listed), config created");
     }
     const conn = new Connection(v.rpcUrl, "confirmed");
 
@@ -161,7 +170,8 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       startService("keeper", "keeper/src/main.ts", {
         ...dep,
         RPC_URL: v.rpcUrl,
-        KEEPER_KEYPAIR: keeperPaths[0],
+        // jobs mode runs with the operator key; it refuses an attestor key (keeper/src/role.ts)
+        KEEPER_KEYPAIR: operatorPath,
         PORT: String(ports.keeper),
         LOG_LEVEL: "info",
         LOOP_MS: "1000",
@@ -219,7 +229,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }
       return dir;
     };
-    return { v, pg, conn, services, admin, treasury, keepers, config, launchKey, api, ports, ssrSecret, get, dumpLogs, stop };
+    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, launchKey, api, ports, ssrSecret, get, dumpLogs, stop };
   } catch (e) {
     const dir = join(LOCAL, "stack-logs");
     mkdirSync(dir, { recursive: true });

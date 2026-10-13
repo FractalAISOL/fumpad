@@ -6,11 +6,12 @@
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step all                  # PLAN only (default: nothing simulated or sent)
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step all --simulate       # simulateTransaction only (nothing sent)
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step config --yes         # create the FUMPAD DBC config
- *   npx tsx scripts/devnet/bootstrap-v07.ts --step init --yes           # initialize_global (bootstrap keepers + config)
+ *   npx tsx scripts/devnet/bootstrap-v07.ts --step init --yes           # initialize_global (bootstrap keepers, operator, config)
+ *   npx tsx scripts/devnet/bootstrap-v07.ts --step operators --yes      # existing Global: migrate_global + set_operators
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes           # top up wallets (plan printed first)
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step verify               # read back Global/config/balances, checklist
  *
- * Steps: keys | config | init | fund | verify | all (= keys, config, init, fund, verify).
+ * Steps: keys | config | init | operators | fund | verify | all (= keys, config, init, operators, fund, verify).
  * Modes: (none) plan · --simulate (simulateTransaction, sigVerify on) · --yes (send). --simulate of `init` while the
  *   config doesn't exist yet simulates create_config + initialize_global in ONE transaction.
  * Options: --cluster devnet|local (local = rehearsal on solana-test-validator, scripts/local/bootstrap-rehearsal.ts),
@@ -19,9 +20,11 @@
  * RPC: RPC_URL from ~/fumpad-keys/devnet/rpc.env (never printed; errors are redacted). Secrets are never printed:
  *   keypair files are written mode 600 and only pubkeys are shown.
  *
- * Roles (DEPLOY-v07.md §1): admin = guardian = deployer (devnet). Keepers = attestor-1/2/3; the contract has 3 keeper
- * slots and the jobs keeper must be one of them (record_samples keeper samples, claim_for, pre-graduation buybacks,
- * attest submission all require `Global.keepers`), so the jobs keeper runs with attestor-1's key.
+ * Roles (DEPLOY-v07.md §1): admin = guardian = deployer (devnet). Keepers = attestor-1/2/3 (attestations ONLY);
+ * operators = [operator] = the jobs keeper's own key (record_samples keeper samples, claim_for, pre-graduation
+ * buybacks). The program refuses a key in both sets, so no host holds an attestation key AND the jobs key.
+ * `operators` step (a Global initialized before operators existed): one transaction `migrate_global` (fills
+ * operators[0] from keepers[0], the old jobs key) + `set_operators([operator])`, so the overlap never persists.
  */
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -63,6 +66,7 @@ import {
   hasMeteoraDiscriminator,
   initializeGlobalIx,
   MAX_CONFIGS,
+  migrateGlobalIx,
   type Params,
   paramsProblems,
   programDataPda,
@@ -70,6 +74,7 @@ import {
   SNIPE_CLIFF_FEE_NUMERATOR,
   SNIPE_PERIODS,
   SNIPE_REDUCTION,
+  setOperatorsIx,
   WSOL_MINT,
 } from "@fumpad/sdk";
 
@@ -82,21 +87,22 @@ const sol = (l: bigint | number) => (Number(l) / LAMPORTS_PER_SOL).toFixed(4);
 
 export type Cluster = "devnet" | "local";
 export type Mode = "plan" | "simulate" | "send";
-export type Step = "keys" | "config" | "init" | "fund" | "verify";
-export const STEPS: Step[] = ["keys", "config", "init", "fund", "verify"];
+export type Step = "keys" | "config" | "init" | "operators" | "fund" | "verify";
+export const STEPS: Step[] = ["keys", "config", "init", "operators", "fund", "verify"];
 
 /** Keypairs the bootstrap owns (keys dir, mode 600). `dbc-config` = the FUMPAD DBC config account's keypair. */
-export const KEY_NAMES = ["attestor-1", "attestor-2", "attestor-3", "launch-signer", "treasury", "guardian", "creator", "alice", "bob", "whale", "dbc-config"] as const;
+export const KEY_NAMES = ["attestor-1", "attestor-2", "attestor-3", "operator", "launch-signer", "treasury", "guardian", "creator", "alice", "bob", "whale", "dbc-config"] as const;
 export type KeyName = (typeof KEY_NAMES)[number];
 
 /**
- * Funding targets (lamports). attestor-1 doubles as the jobs keeper: graduation setup on devnet (claim queue
- * 0.417 SOL + observations rent) is mostly NOT covered by the 1% migration fee of a 0.85 SOL raise (0.0085 SOL), and
- * attestors pay position/ticket/marker rent (~0.0055 SOL per ticket, refunded on close). Test wallets: whale can
+ * Funding targets (lamports). The operator is the jobs keeper: graduation setup on devnet (claim queue 0.417 SOL +
+ * observations rent) is mostly NOT covered by the 1% migration fee of a 0.85 SOL raise (0.0085 SOL). Attestors pay
+ * position/ticket/marker rent (~0.0055 SOL per ticket, refunded on close). Test wallets: whale can
  * complete a 0.85 SOL curve alone. launch-signer only co-signs (never pays); guardian = admin on devnet (unused).
  */
 export const FUND_TARGETS: Partial<Record<KeyName, bigint>> = {
-  "attestor-1": 2n * SOL,
+  operator: 2n * SOL,
+  "attestor-1": SOL / 4n,
   "attestor-2": SOL / 4n,
   "attestor-3": SOL / 4n,
   treasury: SOL / 100n,
@@ -280,7 +286,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
   for (const n of KEY_NAMES) if (keys.has(n)) pubkeys[n] = keys.pub(n).toBase58();
   if (Object.keys(pubkeys).length) {
     pubkeys["admin (= deployer = guardian)"] = deployer.publicKey.toBase58();
-    pubkeys["jobs keeper (= attestor-1)"] = pubkeys["attestor-1"];
+    if (pubkeys.operator) pubkeys["jobs keeper (= operator)"] = pubkeys.operator;
     if (o.steps.includes("keys") || o.steps.includes("verify")) for (const [k, v] of Object.entries(pubkeys)) log(`  ${k.padEnd(30)} ${v}`);
     if (existsSync(o.keysDir)) {
       writeFileSync(join(o.keysDir, "pubkeys.json"), `${JSON.stringify({ cluster: o.cluster, program: FUMPAD_PROGRAM_ID.toBase58(), ...pubkeys }, null, 2)}\n`, { mode: 0o600 });
@@ -322,7 +328,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
   const expectedKeepers = () => [keys.pub("attestor-1"), keys.pub("attestor-2"), keys.pub("attestor-3")];
   const expectedParams = () => bootstrapParams(keys.pub("launch-signer"));
   if (o.steps.includes("init")) {
-    log("\n▶ init (initialize_global: bootstrap keepers attestor-1/2/3 with no 6 h freeze, bootstrap config with no 48 h timelock)");
+    log("\n▶ init (initialize_global: bootstrap keepers attestor-1/2/3 with no 6 h freeze, operators [operator], bootstrap config with no 48 h timelock)");
     const params = expectedParams();
     const bad = paramsProblems(params);
     if (bad.length) throw new Error(`bootstrap params invalid: ${bad.join("; ")}`);
@@ -338,7 +344,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       failures.push(`upgrade authority ${prog.authority?.toBase58() ?? "none"} ≠ deployer`);
       log(`  REFUSING: upgrade authority ${prog.authority?.toBase58() ?? "none"} is not the deployer (initialize_global would fail Unauthorized)`);
     } else {
-      const initIx = initializeGlobalIx({ payer: deployer.publicKey, admin: deployer.publicKey, platformTreasury: keys.pub("treasury"), clusterTag: tag, params, keepers: expectedKeepers(), configs: [config()] });
+      const initIx = initializeGlobalIx({ payer: deployer.publicKey, admin: deployer.publicKey, platformTreasury: keys.pub("treasury"), clusterTag: tag, params, keepers: expectedKeepers(), operators: [keys.pub("operator")], configs: [config()] });
       const cfg = await readConfig();
       if (!cfg && o.mode === "send") {
         failures.push("config missing: run --step config --yes first");
@@ -347,6 +353,34 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
         await execute("create_config + initialize_global (bundled for simulation)", [createConfigIx(), initIx], [keys.get("dbc-config")], [globalPda()]);
       } else {
         await execute("initialize_global", [initIx], [], [globalPda()]);
+      }
+    }
+  }
+
+  // ── operators (a Global initialized before operators existed, or one whose jobs key is still an attestor) ──
+  if (o.steps.includes("operators")) {
+    log("\n▶ operators (Global.operators = [operator]: the jobs keeper's own key, never an attestor)");
+    const ga = await conn.getAccountInfo(globalPda(), "confirmed");
+    if (!ga) {
+      log("  no Global yet: run --step init (it sets the operators)");
+    } else {
+      const g = decodeGlobal(new Uint8Array(ga.data));
+      const op = keys.pub("operator");
+      const empty = g.operators.every((k) => k.equals(PublicKey.default));
+      if (g.operators[0].equals(op) && g.operators.slice(1).every((k) => k.equals(PublicKey.default))) {
+        log("  operators = [operator] (skip)");
+      } else if (!g.admin.equals(deployer.publicKey)) {
+        failures.push("operators: the admin is not the deployer (the admin multisig must propose set_operators)");
+        log(`  REFUSING: admin ${g.admin.toBase58()} is not the deployer`);
+      } else if (g.keepers.some((k) => k.equals(op))) {
+        failures.push("operators: the operator key is one of the keepers");
+        log("  REFUSING: the operator key is an attestor (generate a fresh operator key)");
+      } else {
+        // pre-operators Global: migrate_global first (fills operators[0] = keepers[0], the old jobs key), then move the
+        // jobs role to the operator key in the SAME transaction, so no key is ever both on chain after it lands.
+        const ixs = empty ? [migrateGlobalIx(deployer.publicKey), setOperatorsIx(deployer.publicKey, [op])] : [setOperatorsIx(deployer.publicKey, [op])];
+        log(`  current operators ${g.operators.map((k) => k.toBase58()).join(", ")}${empty ? " (pre-operators layout: migrate_global first)" : ""}`);
+        await execute(empty ? "migrate_global + set_operators([operator])" : "set_operators([operator])", ixs, [], [globalPda()]);
       }
     }
   }
@@ -415,6 +449,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       checks.push(["admin = deployer, guardian = admin (devnet)", g.admin.equals(deployer.publicKey) && g.guardian.equals(g.admin)]);
       checks.push(["platform_treasury = treasury", g.platformTreasury.equals(keys.pub("treasury"))]);
       checks.push(["keepers = attestor-1/2/3", same(g.keepers, ks)]);
+      checks.push(["operators = [operator] (the jobs key), disjoint from the attestors", g.operators[0].equals(keys.pub("operator")) && g.operators.slice(1).every((k) => k.equals(PublicKey.default)) && !ks.some((k) => g.operators.some((x) => x.equals(k)))]);
       checks.push(["bootstrap keepers: keeper_added_at = 0 (no 6 h freeze), all 3 active now", g.keeperAddedAt.every((t) => t === 0n) && activeKeepers(g, now).length === 3, g.keeperAddedAt.join(",")]);
       checks.push(["configs = [FUMPAD DBC config] (no 48 h timelock)", keys.has("dbc-config") && g.configs[0].equals(config()) && g.configs.slice(1).every((c) => c.equals(PublicKey.default)) && g.configs.length === MAX_CONFIGS]);
       checks.push(["nothing pending (params / config / admin), not paused", g.pendingEta === 0n && g.pendingConfigEta === 0n && g.pendingAdminEta === 0n && g.paused === 0]);
@@ -459,7 +494,7 @@ function parseArgs(argv: string[]) {
   if (cluster !== "devnet" && cluster !== "local") throw new Error("--cluster devnet|local");
   const stepArg = get("--step") ?? "verify";
   const steps = stepArg === "all" ? STEPS : stepArg.split(",").map((s) => s.trim() as Step);
-  for (const s of steps) if (!STEPS.includes(s)) throw new Error(`unknown step ${s} (keys|config|init|fund|verify|all)`);
+  for (const s of steps) if (!STEPS.includes(s)) throw new Error(`unknown step ${s} (keys|config|init|operators|fund|verify|all)`);
   const simulate = argv.includes("--simulate");
   const yes = argv.includes("--yes");
   if (simulate && yes) throw new Error("--simulate and --yes are exclusive");

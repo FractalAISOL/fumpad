@@ -45,6 +45,11 @@ export interface AutoClaimSetEvent { mint: PK; wallet: PK; enabled: boolean; ts:
 export interface PauseSetEvent { paused: number; expiresAt: bigint; authority: PK; ts: bigint }
 export interface KeepersSetEvent { keepers: PK[]; addedAt: bigint[]; ts: bigint }
 export interface ConfigUpdatedEvent { config: PK; add: boolean; ts: bigint }
+export interface OperatorsSetEvent { operators: PK[]; ts: bigint }
+export interface UnregisteredFeesClaimedEvent { mint: PK; dbcPool: PK; dbcConfig: PK; claimed: bigint; platformTreasury: PK; ts: bigint }
+export interface PositionRewardClaimedEvent {
+  mint: PK; dammPool: PK; dammPosition: PK; rewardIndex: number; rewardMint: PK; destination: PK; amount: bigint; toRewardPool: boolean; ts: bigint;
+}
 
 export interface EventMap {
   CoinRegistered: CoinRegisteredEvent;
@@ -70,6 +75,9 @@ export interface EventMap {
   PauseSet: PauseSetEvent;
   KeepersSet: KeepersSetEvent;
   ConfigUpdated: ConfigUpdatedEvent;
+  OperatorsSet: OperatorsSetEvent;
+  UnregisteredFeesClaimed: UnregisteredFeesClaimedEvent;
+  PositionRewardClaimed: PositionRewardClaimedEvent;
 }
 /** Typed events; every other IDL event (governance) decodes generically. */
 export type EventName = keyof EventMap;

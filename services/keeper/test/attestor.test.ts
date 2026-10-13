@@ -183,6 +183,15 @@ describe("attestor 2-of-3", () => {
     expect(board.rows.size).toBe(0);
   });
 
+  it("an operator (jobs) key never attests, even while it is also in Global.keepers (after migrate_global)", async () => {
+    const { atts, board, sub } = setup({ g: global({ operators: [keepers[0].publicKey, PublicKeyDefault] }) });
+    for (const a of atts) await a.tick();
+    expect(atts[0].stats.state).toBe("wrong_role");
+    expect([...board.rows.values()].every((m) => !m.has(keepers[0].publicKey.toBase58()))).toBe(true);
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(1); // the two others still reach 2-of-3
+  });
+
   it("already consumed on chain → skipped", async () => {
     const { atts, chain, board } = setup();
     chain.consumed = true;

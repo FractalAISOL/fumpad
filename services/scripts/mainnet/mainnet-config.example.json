@@ -15,7 +15,7 @@
   "treasury": "<TREASURY_PUBKEY (a Squads vault or a hardware wallet)>",
   "opsKeypair": "ops.json",
   "computeUnitPriceMicroLamports": 20000,
-  "fund": { "attestor-1": 2, "attestor-2": 0.3, "attestor-3": 0.3 },
+  "fund": { "operator": 2, "attestor-1": 0.3, "attestor-2": 0.3, "attestor-3": 0.3 },
   "budgetSol": 12,
   "programHeadroomBytes": 0
 }

@@ -298,7 +298,7 @@ local validator.
 | `LAUNCH_REQUIRE_SIGNATURE` (true), `LAUNCH_SIGNATURE_MAX_AGE_SECS` (600), `LAUNCH_MIN_BALANCE_LAMPORTS` (0.01 SOL), `LAUNCH_POOL_RESERVE` (5), `LAUNCH_RPC_TIMEOUT_MS` (5000) | api | M-2 drain guards |
 | `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20), `WAITLIST_IP_SALT` | api | pre-launch waitlist |
 | `IMG_RATE_LIMIT_PER_MIN` (600), `IMG_MAX_BYTES` (2 MiB), `IMG_CACHE_MB` (64), `IPFS_GATEWAY` (`https://ipfs.io/ipfs/`) | api | coin image proxy `GET /v1/img/:mint` (V7-L6): SSRF-safe fetch of the coin's metadata image, PNG/JPEG/GIF/WebP only, bounded in-memory LRU |
-| `KEEPER_KEYPAIR` (path) or `KEEPER_SECRET_KEY` (JSON array / base58) | keeper | **required**, sealed; must be a registered keeper (`set_keepers`) |
+| `KEEPER_KEYPAIR` (path) or `KEEPER_SECRET_KEY` (JSON array / base58) | keeper | **required**, sealed. Jobs mode: an **operator** key (`set_operators`; refuses to start with an attestor key). Attestor mode: a keeper key (`set_keepers`; refuses an operator key). Never the same key in both |
 | `KEEPER_DAILY_BUDGET_SOL` (2) | keeper | over budget: alert, essential jobs only |
 | `PRIORITY_MIN_MICROLAMPORTS` (1000), `PRIORITY_MAX_MICROLAMPORTS` (1,000,000), `PRIORITY_MAX_LAMPORTS_PER_TX` (200,000), `PRIORITY_PERCENTILE` (75) | keeper | priority fee clamps |
 | `KEEPER_LOOKUP_TABLE` | keeper | reuse this ALT (else the one persisted in `meta`) |
@@ -398,11 +398,12 @@ The grinder connects with TLS by default (`DATABASE_SSL=prefer`; `require` on Ra
 serving reads. To stop new launches off-chain only: unset `MINT_POOL_KEY` on the API (prepare → 503). Unpause with
 `set_pause(0)`.
 
-**Keeper key rotation.** 1) `solana-keygen new` → fund it. 2) Admin `set_keepers([old, new])`. 3) Railway: set
-`KEEPER_SECRET_KEY` (stdin) on `keeper`, redeploy; the new process waits for the lock until the old one exits.
-4) Admin `set_keepers([new])`. 5) Drain the old key's SOL; its lookup table can be closed from the old key
-(`deactivate` → wait ~513 slots → `close`). The new keeper creates and persists its own table
-(`meta` key `keeper:<pubkey>:alt`). Suspected compromise: do step 4 first (the key can only bias sample timing).
+**Jobs (operator) key rotation.** 1) `solana-keygen new` → fund it. 2) Admin `set_operators([old, new])` (2 slots).
+3) Railway: set `KEEPER_SECRET_KEY` (stdin) on `keeper`, redeploy; the new process waits for the lock until the old
+one exits. 4) Admin `set_operators([new])`. 5) Drain the old key's SOL; its lookup table can be closed from the old
+key (`deactivate` → wait ~513 slots → `close`). The new keeper creates and persists its own table (`meta` key
+`keeper:<pubkey>:alt`). Suspected compromise: do step 4 first (an operator can only bias sample / buyback timing
+within the guards; it holds no attestation key). Attestor keys rotate with `set_keepers` (new keys frozen 6 h).
 
 **MINT_POOL_KEY rotation.** 1) `openssl rand -hex 32`. 2) Set it on **grinder and api together**
 (`--skip-deploys`), deploy both. New rows carry the new fingerprint; the API only reserves rows it can decrypt.

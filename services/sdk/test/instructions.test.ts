@@ -15,6 +15,8 @@ import {
   claimForIx,
   claimIx,
   claimLpFeesIx,
+  claimPositionRewardsIx,
+  claimUnregisteredFeesIx,
   closeConsumedIx,
   closePositionIx,
   closeTicketIx,
@@ -46,11 +48,19 @@ import {
   routerSellIx,
   setAutoClaimIx,
   setKeepersIx,
+  setOperatorsIx,
   setPauseIx,
   voidTicketIx,
   withdrawCreatorFeesIx,
   withdrawEscrowIx,
   withdrawPlatformFeesIx,
+  ata,
+  isAttestor,
+  isOperator,
+  keyRole,
+  rewardVault,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
 } from "../src/index.js";
 
 const k = () => Keypair.generate().publicKey;
@@ -70,6 +80,8 @@ const built: Record<string, { keys: unknown[] }> = {
   claim_fees: claimFeesIx(k(), coin),
   claim_for: claimForIx({ keeper: k(), mint, ticket: k(), owner: k() }),
   claim_lp_fees: claimLpFeesIx(k(), { ...coin, dammPosition: k(), positionNftMint: k() }),
+  claim_position_rewards: claimPositionRewardsIx(k(), { ...coin, positionNftMint: k(), rewardIndex: 0, rewardMint: mint, rewardVault: k(), tokenFlag: 1, platformTreasury: k() }),
+  claim_unregistered_fees: claimUnregisteredFeesIx(k(), { mint, dbcConfig: coin.dbcConfig, platformTreasury: k() }),
   close_consumed: closeConsumedIx(k(), k(), k(), k()),
   close_position: closePositionIx({ signer: k(), mint, wallet: k(), rentPayer: k(), nextTicketSeq: 0n }),
   close_ticket: closeTicketIx({ caller: k(), ticket: k(), rentPayer: k(), mint, owner: k() }),
@@ -79,7 +91,7 @@ const built: Record<string, { keys: unknown[] }> = {
   graduate: graduateIx({ caller: k(), coin, dammPosition: k(), positionNftMint: k() }),
   init_claim_queue: initClaimQueueIx(k(), mint),
   init_observations: initObservationsIx(k(), mint),
-  initialize_global: initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 2, params: DEFAULT_PARAMS, keepers: [k(), k(), k()], configs: [k()] }),
+  initialize_global: initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 2, params: DEFAULT_PARAMS, keepers: [k(), k(), k()], operators: [k()], configs: [k()] }),
   migrate_global: migrateGlobalIx(k()),
   migrate_pool: migratePoolIx({ caller: k(), coin, nftMint: k() }),
   process_queue: processQueueIx({ cranker: k(), mint, entries: [{ ticket: k(), owner: k() }] }),
@@ -91,6 +103,7 @@ const built: Record<string, { keys: unknown[] }> = {
   sell: routerSellIx({ trader: k(), coin, venue: "damm_v2", amountIn: 1n, minOut: 0n }),
   set_auto_claim: setAutoClaimIx(k(), mint, false),
   set_keepers: setKeepersIx(k(), [k(), k()]),
+  set_operators: setOperatorsIx(k(), [k()]),
   set_pause: setPauseIx(k(), 16),
   void_ticket: voidTicketIx({ authority: k(), ticket: k(), mint, owner: k(), consumed: k(), reason: 1, reopen: false }),
   withdraw_creator_fees: withdrawCreatorFeesIx(k(), mint),
@@ -119,6 +132,44 @@ describe("initialize_global bootstrap", () => {
     expect(i.keys.slice(-2).map((m) => [m.pubkey.toBase58(), m.isSigner, m.isWritable])).toEqual([[c1.toBase58(), false, false], [c2.toBase58(), false, false]]);
     expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [k(), k(), k(), k()] })).toThrow();
     expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, configs: Array.from({ length: 9 }, k) })).toThrow();
+  });
+});
+
+describe("operators (jobs keys)", () => {
+  it("initialize_global pads 2 operator slots and refuses an operator that is also a keeper", () => {
+    const [a, b, o] = [k(), k(), k()];
+    const i = initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [a, b], operators: [o] });
+    const d = fumpadCoder().instruction.decode(Buffer.from(i.data)) as unknown as { data: { operators: PublicKey[] } };
+    expect(d.data.operators.map((x) => x.toBase58())).toEqual([o, PublicKey.default].map((x) => x.toBase58()));
+    expect(() => initializeGlobalIx({ payer: k(), admin: k(), platformTreasury: k(), clusterTag: 1, params: DEFAULT_PARAMS, keepers: [a, b], operators: [b] })).toThrow(/attestor and an operator/);
+    expect(() => setOperatorsIx(k(), [k(), k(), k()])).toThrow();
+  });
+  it("set_operators encodes exactly 2 slots", () => {
+    const o = k();
+    const d = fumpadCoder().instruction.decode(Buffer.from(setOperatorsIx(k(), [o]).data)) as { name: string; data: { operators: PublicKey[] } };
+    expect(d.name).toBe("set_operators");
+    expect(d.data.operators.map((x) => x.toBase58())).toEqual([o.toBase58(), PublicKey.default.toBase58()]);
+  });
+  it("keyRole / isOperator / isAttestor", () => {
+    const [a, o] = [k(), k()];
+    const g = { keepers: [a, PublicKey.default, PublicKey.default], operators: [o, PublicKey.default] };
+    expect([keyRole(g, a), keyRole(g, o), keyRole(g, k()), keyRole(g, PublicKey.default)]).toEqual(["attestor", "operator", null, null]);
+    expect(keyRole({ keepers: [a], operators: [a] }, a)).toBe("both");
+    expect(isOperator(g, o) && isAttestor(g, a) && !isOperator(g, a)).toBe(true);
+  });
+});
+
+describe("stranded-value claims", () => {
+  it("claim_position_rewards routes the coin's own mint to its reward vault, others to the treasury ATA", () => {
+    const [nft, vault, treasury, foreign] = [k(), k(), k(), k()];
+    const own = claimPositionRewardsIx(k(), { ...coin, positionNftMint: nft, rewardIndex: 0, rewardMint: mint, rewardVault: vault, tokenFlag: 1, platformTreasury: treasury });
+    const other = claimPositionRewardsIx(k(), { ...coin, positionNftMint: nft, rewardIndex: 1, rewardMint: foreign, rewardVault: vault, tokenFlag: 0, platformTreasury: treasury });
+    const dest = (i: { keys: { pubkey: PublicKey }[] }) => i.keys[9].pubkey.toBase58();
+    const prog = (i: { keys: { pubkey: PublicKey }[] }) => i.keys[11].pubkey.toBase58();
+    expect(dest(own)).toBe(rewardVault(mint).toBase58());
+    expect(prog(own)).toBe(TOKEN_2022_PROGRAM_ID.toBase58());
+    expect(dest(other)).toBe(ata(treasury, foreign, TOKEN_PROGRAM_ID).toBase58());
+    expect(prog(other)).toBe(TOKEN_PROGRAM_ID.toBase58());
   });
 });
 

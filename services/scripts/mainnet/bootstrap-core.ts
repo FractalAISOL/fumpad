@@ -8,9 +8,9 @@
  *   config             DBC create_config, MAINNET values (85 SOL, D17 curve, 1% migration fee, 99% → 1.25% / 8 slots);
  *                      the instruction bytes must equal contracts/tests/vectors/dbc_config.json `mainnet`
  *   init               initialize_global: cluster_tag 0, Params = defaults + launch_signer, keepers attestor-1/2/3
- *                      (no 6 h freeze), configs [the DBC config] (no 48 h timelock), admin = guardian = deployer,
- *                      platform_treasury = config `treasury`
- *   fund               top up attestor-1/2/3 from the deployer
+ *                      (no 6 h freeze), operators [operator] (the jobs keeper's key, never an attestor), configs [the
+ *                      DBC config] (no 48 h timelock), admin = guardian = deployer, platform_treasury = config `treasury`
+ *   fund               top up operator + attestor-1/2/3 from the deployer
  *   propose-admin      propose_admin(new admin = admin vault, treasury, guardian vault) by the deployer (48 h)
  *   accept-admin       admin multisig vault tx `accept_admin`: create it (ops key), report approvals, execute once both
  *                      the 48 h FUMPAD eta and the Squads time lock have passed (voters approve in the Squads app)
@@ -70,7 +70,7 @@ import { GENESIS, redactText } from "../ops/common.js";
 import { executeVaultTx, proposalState, proposeVaultTx, readMultisig, setUpgradeAuthorityIx, SQUADS_PROGRAM_ID, vaultPdaOf } from "../ops/multisig.js";
 import { committedMainnetId } from "./build-program.js";
 import { type Manifest, SERVICES, TESTED_MANIFEST } from "./fork.js";
-import { DEFAULT_FUND_SOL, ensureHotKeys, type HotKey, keyPath, loadConfig, type MainnetConfig, type PartyConfig, readKeypairFile } from "./keys.js";
+import { DEFAULT_FUND_SOL, ensureHotKeys, type FundedKey, type HotKey, keyPath, loadConfig, type MainnetConfig, type PartyConfig, readKeypairFile } from "./keys.js";
 
 export type MainnetCluster = "mainnet" | "local-fork";
 export type Mode = "plan" | "simulate" | "send";
@@ -224,6 +224,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
   const upParty = cfg.upgradeAuthority ?? cfg.admin;
   const configKey = hot("dbc-config");
   const keepers = [hot("attestor-1").publicKey, hot("attestor-2").publicKey, hot("attestor-3").publicKey];
+  const operator = hot("operator").publicKey;
   const launchSigner = hot("launch-signer").publicKey;
   const params = mainnetParams(launchSigner);
   const expectConfig = fumpadConfigParams("mainnet");
@@ -231,7 +232,8 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
   const pubkeys: Record<string, string> = {
     program: FUMPAD_PROGRAM_ID.toBase58(),
     deployer: deployer.publicKey.toBase58(),
-    "attestor-1 (+ jobs keeper)": keepers[0].toBase58(),
+    "operator (jobs keeper)": operator.toBase58(),
+    "attestor-1": keepers[0].toBase58(),
     "attestor-2": keepers[1].toBase58(),
     "attestor-3": keepers[2].toBase58(),
     "launch-signer": launchSigner.toBase58(),
@@ -393,7 +395,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
 
   // ── init ─────────────────────────────────────────────────────────────────
   if (o.steps.includes("init")) {
-    say("\n▶ init (initialize_global: cluster_tag 0, default Params + launch_signer, keepers attestor-1/2/3, configs [DBC config])");
+    say("\n▶ init (initialize_global: cluster_tag 0, default Params + launch_signer, keepers attestor-1/2/3, operators [operator], configs [DBC config])");
     const bad = paramsProblems(params);
     if (bad.length) throw new Error(`mainnet params invalid: ${bad.join("; ")}`);
     say(`  params: min sell $${Number(params.minSellUsdCents) / 100}, hold ${params.minHoldSecs}s, challenge ${params.ticketChallengeSecs}s, oracle ${params.oracleWindowSecs}s / ${params.oracleMinSamples} samples (spacing ${params.oracleMinSpacingSecs}s), claim window ${Number(params.claimWindowSecs) / 86_400} d, rebuy ${Number(params.rebuyWindowSecs) / 86_400} d, fees ${params.feeBuybackShareBps}/${params.feePlatformShareBps}/${params.feeCreatorShareBps} bps, trigger ${params.triggerMultipleBps / 10_000}x, claim ${params.claimBps / 100}%, launch_signer ${launchSigner.toBase58()}`);
@@ -406,12 +408,12 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     } else if (!prog.authority?.equals(deployer.publicKey)) {
       failures.push(`init: upgrade authority ${prog.authority?.toBase58() ?? "none"} ≠ deployer (initialize_global would fail)`);
     } else {
-      const initIx = initializeGlobalIx({ payer: deployer.publicKey, admin: deployer.publicKey, platformTreasury: treasury, clusterTag: CLUSTER_TAG.mainnet, params, keepers, configs: [configKey.publicKey] });
+      const initIx = initializeGlobalIx({ payer: deployer.publicKey, admin: deployer.publicKey, platformTreasury: treasury, clusterTag: CLUSTER_TAG.mainnet, params, keepers, operators: [operator], configs: [configKey.publicKey] });
       const cfgAcc = await readConfig();
       if (!cfgAcc && o.mode === "send") failures.push("init: config missing (run --step config first)");
       else if (!cfgAcc) await exec("init", "create_config + initialize_global (bundled for simulation only)", [createConfigIx(), initIx], [configKey], [globalPda()], 0);
       else {
-        if (o.mode === "send") await gate("init", ["initialize_global (irreversible: cluster_tag, keepers, params, config)", `keepers ${keepers.map((k) => k.toBase58()).join(", ")}`, `launch_signer ${launchSigner.toBase58()} · treasury ${treasury.toBase58()}`]);
+        if (o.mode === "send") await gate("init", ["initialize_global (irreversible: cluster_tag, keepers, params, config)", `keepers ${keepers.map((k) => k.toBase58()).join(", ")} · operator ${operator.toBase58()}`, `launch_signer ${launchSigner.toBase58()} · treasury ${treasury.toBase58()}`]);
         await track("init", () => exec("init", "initialize_global", [initIx], [], [globalPda()]));
       }
     }
@@ -419,11 +421,11 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
 
   // ── fund ─────────────────────────────────────────────────────────────────
   if (o.steps.includes("fund")) {
-    say("\n▶ fund (top up the keepers from the deployer)");
+    say("\n▶ fund (top up the operator + attestors from the deployer)");
     const targets = { ...DEFAULT_FUND_SOL, ...(cfg.fund ?? {}) };
     const rows = await Promise.all(
-      (Object.entries(targets) as [string, number][]).map(async ([name, s], i) => {
-        const to = keepers[i];
+      (Object.entries(targets) as [FundedKey, number][]).map(async ([name, s]) => {
+        const to = hot(name).publicKey;
         const have = await balance(to);
         const target = BigInt(Math.round(s * LAMPORTS_PER_SOL));
         return { name, to, have, target, topUp: have >= target ? 0n : target - have };
@@ -585,6 +587,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
       const same = (a: PublicKey[], b: PublicKey[]) => a.length === b.length && a.every((x, i) => x.equals(b[i]));
       checks.push(["cluster_tag 0 (mainnet)", g.clusterTag === CLUSTER_TAG.mainnet, String(g.clusterTag)]);
       checks.push(["keepers = attestor-1/2/3, keeper_added_at = 0, all 3 active", same(g.keepers, keepers) && g.keeperAddedAt.every((t) => t === 0n) && activeKeepers(g, now).length === 3]);
+      checks.push(["operators = [operator] (jobs key), disjoint from the attestors", same(g.operators, [operator, PublicKey.default]) && !keepers.some((k) => k.equals(operator))]);
       checks.push(["configs = [the DBC config]", g.configs[0].equals(configKey.publicKey) && g.configs.slice(1).every((c) => c.equals(PublicKey.default)) && g.configs.length === MAX_CONFIGS]);
       const pd = paramsDiff(g.params, params);
       checks.push(["params = mainnet defaults + launch_signer (field by field)", pd.length === 0, pd.join("; ") || undefined]);
@@ -606,8 +609,8 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     warnings.push(...pc.warnings);
     const targets = { ...DEFAULT_FUND_SOL, ...(cfg.fund ?? {}) };
     // funded to the target by `fund`; operating keepers spend (rent float, fees): fail below a quarter of it, warn below it
-    for (const [i, [name, s]] of (Object.entries(targets) as [string, number][]).entries()) {
-      const have = await balance(keepers[i]);
+    for (const [name, s] of Object.entries(targets) as [FundedKey, number][]) {
+      const have = await balance(hot(name).publicKey);
       const target = BigInt(Math.round(s * LAMPORTS_PER_SOL));
       checks.push([`${name} balance ≥ ¼ of its ${s} SOL target`, have * 4n >= target, `${sol(have)} SOL`]);
       if (have < target) warnings.push(`${name} below its ${s} SOL target (${sol(have)} SOL): --step fund tops it up`);

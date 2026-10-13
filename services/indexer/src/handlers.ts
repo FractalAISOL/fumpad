@@ -593,12 +593,18 @@ export async function applyEvents(ctx: TxCtx, events: IndexedEvent[]): Promise<v
         ctx.touched.add(mint);
         break;
       }
+      // DAMM v2 farming rewards claimed for the coin's locked position: coin-mint rewards joined the reward vault.
+      case "PositionRewardClaimed": {
+        ctx.touched.add(b58(d.mint));
+        break;
+      }
       // ── governance ────────────────────────────────────────────────────
       case "ParamsQueued":
       case "ParamsUpdated":
       case "ParamsCancelled":
       case "PauseSet":
       case "KeepersSet":
+      case "OperatorsSet":
       case "ConfigQueued":
       case "ConfigUpdated":
       case "ConfigCancelled":

@@ -124,7 +124,10 @@ export const TOTAL_SUPPLY_BASE = 1_000_000_000n * BASE_PER_TOKEN;
 export const REWARD_POOL_BASE = 80_000_000n * BASE_PER_TOKEN;
 
 // ── protocol limits (constants.rs) ──────────────────────────────────────────
+/** Attestor keys (`Global.keepers`): sign + submit attestations only. */
 export const MAX_KEEPERS = 3;
+/** Jobs keys (`Global.operators`): samples, claim_for, pre-graduation buybacks. Never attestors. */
+export const MAX_OPERATORS = 2;
 export const MAX_CONFIGS = 8;
 export const MAX_OPEN_TICKETS = 5;
 export const MAX_QUEUED_PER_WALLET = 2;

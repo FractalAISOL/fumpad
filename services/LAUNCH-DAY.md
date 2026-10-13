@@ -45,8 +45,9 @@ Opening the app only after the handover means no hot key holds admin power while
    Any difference (Meteora upgrades DBC/DAMM v2 regularly) → re-run `npm run mainnet:rehearsal` (it re-dumps
    mainnet) and the contracts' mainnet-binary tests before going on. Run it again on T0 morning.
 3. **RPC providers** (MAINNET-COSTS.md §5): four different companies, env files mode 600 in `$K`:
-   `rpc.env` (A: indexer, api, keeper, attestor-1), `rpc-b.env` (attestor-2), `rpc-c.env` (attestor-3), `rpc-d.env`
-   (watcher) — `RPC_URL=…` (+ `RPC_MIN_GAP_MS` if rate-limited). The current shared Helius key 429s at 1 req/s on
+   `rpc.env` (A: indexer, api, keeper), `rpc-b.env` (attestor-1), `rpc-c.env` (attestor-2), `rpc-d.env` (attestor-3),
+   `rpc-e.env` (watcher) — five different companies if you can, never one shared by two attestors or by an attestor
+   and the watcher (DEPLOY-v07.md §1 topology) — `RPC_URL=…` (+ `RPC_MIN_GAP_MS` if rate-limited). The current shared Helius key 429s at 1 req/s on
    mainnet: **not usable** for any service. Check all four (archive history, v1 txs, pagination, rate limit,
    cross-provider identical records):
    ```sh
@@ -74,7 +75,7 @@ Opening the app only after the handover means no hot key holds admin power while
    `computeUnitPriceMicroLamports` (20,000 default; raise if `getRecentPrioritizationFees` p75 is higher), `fund`.
 10. **Hot keys + program id** (offline is fine):
     ```sh
-    $B --step keys          # attestor-1/2/3, launch-signer, dbc-config, fumpad-program-keypair (700/600, never overwritten)
+    $B --step keys          # attestor-1/2/3, operator (jobs key), launch-signer, dbc-config, fumpad-program-keypair (700/600, never overwritten)
     ```
     **Back up `fumpad-program-keypair.json` offline now** (USB + paper/password manager), and the attestor /
     launch-signer keys to the secret store. `$K/pubkeys.json` lists every public key.
@@ -102,8 +103,11 @@ Opening the app only after the handover means no hot key holds admin power while
     $B --step all              # plan: costs, keys, what's missing
     $B --step config,fund --simulate
     ```
-13. **Railway mainnet project** (new project, e.g. `fumpad-mainnet`; nothing shared with devnet except
-    `waitlist-db`). Services as DEPLOY-v07.md §4, differences:
+13. **Railway mainnet projects** (core project, e.g. `fumpad-mainnet`; nothing shared with devnet except
+    `waitlist-db`) **+ one project per attestor** (`fumpad-attestor-1/2/3`, attestor-2 and attestor-3 under other
+    Railway accounts — ideally other people's — and attestor-3 ideally on another cloud; DEPLOY-v07.md §1 topology:
+    one cloud-account compromise must never yield two attestation keys, and the operator key never sits next to an
+    attestor key). Services as DEPLOY-v07.md §4, differences:
     | service | mainnet env |
     |---|---|
     | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
@@ -111,9 +115,9 @@ Opening the app only after the handover means no hot key holds admin power while
     | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan) |
     | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
-    | `keeper` | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = attestor-1, `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
-    | `attestor-1/2/3` | `KEEPER_MODE=attestor`, own key, own DB role (`secrets-v07.ts db-sql` adapted to `$K`), `RPC_URL` = A / B / C, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
-    | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = D, `PYTH_*`, `TELEGRAM_*` (guardians' chat) |
+    | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
+    | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
+    | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = E, `PYTH_*`, `TELEGRAM_*` (guardians' chat) |
     Create them with env set but **don't deploy the keeper/attestors before day 0** (no Global yet). Grinder +
     Postgres can start early (the vanity pool fills).
 14. **App (Vercel)**: no code change, no SDK repack — build-time env only (Production; `NEXT_PUBLIC_*` are inlined at
@@ -140,7 +144,7 @@ $B --step program       $SPEND --so ~/fumpad/contracts/target/deploy/fumpad.so  
 solana-verify get-program-hash -u "$(sed -n 's/^RPC_URL=//p' $K/rpc.env)" $FUMPAD_PROGRAM_ID   # must = H (§1.11); then §10 (verify + OtterSec) today, while the deployer is upgrade authority
 $B --step config        $SPEND                       # DBC create_config (mainnet vector bytes checked first)
 $B --step init          $SPEND                       # initialize_global: IRREVERSIBLE params/cluster_tag/keepers — read the summary
-$B --step fund          $SPEND                       # attestor-1 2 SOL, attestor-2/3 0.3 SOL
+$B --step fund          $SPEND                       # operator 2 SOL, attestor-1/2/3 0.3 SOL
 $B --step propose-admin $SPEND                       # admin → admin vault, guardian → guardian vault (48 h)
 $B --step verify                                     # all ✓; "next: after <eta> … accept-admin"
 $B --step accept-admin  $SPEND                       # ops key creates the accept_admin vault tx (no approval)
@@ -174,7 +178,7 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
 ## 5. T0: open
 
 1. Morning re-checks: `npm run mainnet:compare` (✓), `$B --step verify` (✓), `rpc-check` on the four providers,
-   keeper/attestor balances (attestor-1 ≥ 1 SOL), Telegram heartbeat, watcher feed clean, Railway services healthy,
+   keeper/attestor balances (operator ≥ 1 SOL), Telegram heartbeat, watcher feed clean, Railway services healthy,
    vanity pool ≥ 20, `/v1/status` green.
 2. Prelaunch gate release (app/LAUNCH.md "Open the app"): Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` → redeploy →
    `curl -sI https://fumpad.app/launches` = `200`.
@@ -188,7 +192,7 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
 
 - Telegram: keeper heartbeat (every 8 min), low balance (`MIN_KEEPER_LAMPORTS`), daily budget, attestor
   disagreements, watcher mismatches. Watcher `/v1/verification`: any `mismatch` = page the guardians.
-- Balances: attestor-1 (jobs + attestations) ≥ 1 SOL, attestor-2/3 ≥ 0.1 SOL; top up from the treasury. Graduations
+- Balances: operator (jobs keeper) ≥ 1 SOL, attestor-1/2/3 ≥ 0.1 SOL each; top up from the treasury. Graduations
   are paid from the 0.85 SOL migration fee (rehearsed: the keeper's net cost per graduation is fees only).
 - `/v1/status`: indexer lag, vanity pool. Railway metrics: memory/CPU of indexer + api.
 - Weekly: `npm run mainnet:compare` (Meteora upgrades), waitlist export (DEPLOY-v07.md §7).
@@ -206,7 +210,10 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 - Bad attestation: `PAUSE_ATTEST` (16) + `void_ticket` by the guardian (Squads transaction builder).
 - App: `NEXT_PUBLIC_PRELAUNCH` back on + redeploy hides the app (the chain keeps running).
 - Keeper/attestor misbehaving: stop the Railway service (attestations need 2 of 3; one down is fine). A compromised
-  keeper key: guardian `PAUSE_ATTEST`, admin `set_keepers` (48 h Squads lock, then the 6 h freeze for the new key).
+  attestor key: guardian `PAUSE_ATTEST`, admin `set_keepers` (48 h Squads lock, then the 6 h freeze for the new key).
+  A compromised operator (jobs) key: stop the `keeper` service; it can't attest — at worst it times samples / pre-grad
+  buybacks within the guards; admin `set_operators` to a fresh key (48 h Squads lock, no freeze), then redeploy the
+  keeper with it. A pause isn't needed for an operator compromise (`PAUSE_TRADE` stops pre-grad buybacks if wanted).
 - Unpause: `--bits 0` the same way.
 
 ## 8. Rollback / recovery
@@ -217,7 +224,7 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 - **Interrupted deploy**: `solana program show --buffers` → resume with `solana program deploy --buffer <B> …` or
   `solana program close <B>` to recover the buffer rent.
 - **After `initialize_global`, before the handover**: params can only change via `queue_params` (48 h);
-  keepers via `set_keepers` (immediate, 6 h freeze per new key); a wrong `propose_admin` → `cancel_admin` by the
+  keepers via `set_keepers` (immediate, 6 h freeze per new key), operators via `set_operators` (immediate); a wrong `propose_admin` → `cancel_admin` by the
   guardian (= deployer). A wrong Global (cluster_tag/params) can't be re-initialized: redeploy under a new program id.
 - **After the handover**: every fix is a Squads proposal — program upgrade (MULTISIG.md "Program upgrades
   afterwards": buffer → hash check by every approver → 3 approvals → 48 h → execute), params (48 h FUMPAD + 48 h

@@ -1,7 +1,9 @@
 /**
  * Keeper process. Modes (KEEPER_MODE or `--mode`):
- *   jobs      (default) fee claims, graduation, buybacks, samples, auto-claim, queue, ticket closing
- *   attestor  D31 ticket attestations (run ×3: separate keys, RPC providers, machines)
+ *   jobs      (default) fee claims, graduation, buybacks, samples, auto-claim, queue, ticket closing — with an
+ *             OPERATOR key (Global.operators); refuses to start with an attestor key
+ *   attestor  D31 ticket attestations (run ×3: separate keys, RPC providers, machines / cloud accounts) — with a
+ *             keeper key (Global.keepers); refuses to start with an operator key
  *   watcher   independent re-derivation of every attestation + public verification feed
  */
 import { requireFumpadDeployment } from "@fumpad/sdk";

@@ -127,7 +127,7 @@ export class Ingestor {
       this.stats.lastAppliedAt = Date.now();
       if (events.length) this.d.log.debug({ signature, slot: tx.slot, source, events: events.map((e) => e.name) }, "ingested");
       if (touched.size) this.d.onTouched?.([...touched]);
-      if (events.some((e) => e.program === "fumpad" && /^(Params|PauseSet|KeepersSet|Config|AdminAccepted|GlobalInitialized)/.test(e.name))) paramsChanged = true;
+      if (events.some((e) => e.program === "fumpad" && /^(Params|PauseSet|KeepersSet|OperatorsSet|Config|AdminAccepted|GlobalInitialized)/.test(e.name))) paramsChanged = true;
       if (paramsChanged) this.d.onParamsChanged?.();
     } else this.stats.duplicates++;
     this.stats.lastSlot = Math.max(this.stats.lastSlot, tx.slot);

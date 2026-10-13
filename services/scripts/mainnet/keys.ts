@@ -3,7 +3,10 @@
  * the SDK is loaded, see bootstrap-mainnet.ts).
  *
  * Generated here (hot keys, dir 700 / files 600, never overwritten, secrets never printed):
- *   attestor-1/2/3.json        Global.keepers (attestor-1 = also the jobs keeper, DEPLOY-v07.md §1)
+ *   attestor-1/2/3.json        Global.keepers (attestors ONLY: they sign + submit attestations; DEPLOY-v07.md §1 —
+ *                              copy each one to its own host / provider account, never next to the operator key)
+ *   operator.json              Global.operators[0]: the jobs keeper's hot key (samples, claim_for, pre-grad buybacks,
+ *                              cranks); never an attestor
  *   launch-signer.json         Params.launch_signer (the API's launch co-signer)
  *   dbc-config.json            address of the FUMPAD DBC config account (signs its creation only)
  *   fumpad-program-keypair.json  the MAINNET program id: back it up OFFLINE (it only matters until the first deploy,
@@ -17,7 +20,10 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { Keypair, PublicKey } from "@solana/web3.js";
 
-export const HOT_KEYS = ["attestor-1", "attestor-2", "attestor-3", "launch-signer", "dbc-config", "fumpad-program-keypair"] as const;
+export const HOT_KEYS = ["attestor-1", "attestor-2", "attestor-3", "operator", "launch-signer", "dbc-config", "fumpad-program-keypair"] as const;
+/** The hot keys `--step fund` tops up (in this order). */
+export const FUNDED_KEYS = ["operator", "attestor-1", "attestor-2", "attestor-3"] as const;
+export type FundedKey = (typeof FUNDED_KEYS)[number];
 export type HotKey = (typeof HOT_KEYS)[number];
 
 export const expandHome = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
@@ -49,14 +55,15 @@ export interface MainnetConfig {
   /** µlamports per CU for every bootstrap tx and the program deploy (default 20,000) */
   computeUnitPriceMicroLamports?: number;
   /** SOL each hot key is topped up to by `--step fund` (defaults: MAINNET-COSTS.md) */
-  fund?: Partial<Record<"attestor-1" | "attestor-2" | "attestor-3", number>>;
+  fund?: Partial<Record<FundedKey, number>>;
   /** refuse `fund` / `program` when the committed total exceeds this (default 12 SOL) */
   budgetSol?: number;
   /** extra program-data bytes reserved at deploy (`--max-len` = .so + this; default 0; MULTISIG.md: extend later) */
   programHeadroomBytes?: number;
 }
 
-export const DEFAULT_FUND_SOL = { "attestor-1": 2, "attestor-2": 0.3, "attestor-3": 0.3 } as const;
+/** The operator (jobs keeper) carries the graduation-setup float; attestors only ticket / marker rent. */
+export const DEFAULT_FUND_SOL: Record<FundedKey, number> = { operator: 2, "attestor-1": 0.3, "attestor-2": 0.3, "attestor-3": 0.3 };
 
 export function loadConfig(path: string): { cfg: MainnetConfig; dir: string; rel: (p: string) => string } {
   const file = resolve(expandHome(path));

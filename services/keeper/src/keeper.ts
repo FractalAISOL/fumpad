@@ -1,5 +1,6 @@
 /**
- * FUMPAD keeper jobs, v0.7 (SPEC v0.7 §3–§6, INTERFACE-v0.7 §3). One loop, chain state only:
+ * FUMPAD keeper jobs, v0.7 (SPEC v0.7 §3–§6, INTERFACE-v0.7 §3). One loop, chain state only. Runs with an
+ * OPERATOR key (`Global.operators`) — never an attestor key; refuses to start otherwise (`role.ts`):
  *
  *  fees      claim_fees: the coin's FIRST claim right after the launch window (slot ≥ launch_slot +
  *            launch_window_slots, D33: 100% → buyback), then whenever the DBC pool's unclaimed partner
@@ -9,7 +10,8 @@
  *  graduate  a completed DBC pool that Meteora's keepers haven't migrated within MIGRATE_GRACE_SECS →
  *            migrate_pool (fresh position-NFT keypair, 600k CU); a migrated pool → graduate (finds the
  *            locked DAMM v2 position), then init_observations + 9× init_claim_queue.
- *  sample    record_samples: graduated coins heartbeat < 10 min (EVERY coin), full rate (15 s) when spot
+ *  sample    record_samples (operator samples): graduated coins heartbeat < 10 min (EVERY enabled pool; a DAMM v2
+ *            pool disabled by its operator is skipped, on chain too), full rate (15 s) when spot
  *            ≥ 50% of the lowest open trigger or buyback_lamports ≥ threshold; curve coins only right
  *            before a pre-grad buyback (its guard needs a keeper sample ≤ 60 s old). ≤ 8 coins / legacy tx.
  *  buyback   execute_buyback: pre-grad (keeper-only) within ±band of the fresh pre-grad sample, slice ≤
@@ -48,6 +50,7 @@ import {
   coinPda,
   dammPoolPda,
   createAtaIdempotentIx,
+  DAMM_POOL_STATUS_ENABLED,
   DAMM_V2_PROGRAM_ID,
   type DammPool,
   type DbcVirtualPool,
@@ -100,6 +103,7 @@ import {
 import { Alerter } from "./alerts.js";
 import type { KeeperConfig } from "./config.js";
 import { type SpendState, trackSpend } from "./policy.js";
+import { requireKeyRole, roleProblem } from "./role.js";
 import { Sender } from "./sender.js";
 import { KeeperStore } from "./store.js";
 
@@ -285,6 +289,8 @@ export class Keeper {
   readonly jobs: Record<string, JobHealth> = {};
   private coins = new Map<string, CoinState>();
   private global?: GlobalAccount;
+  /** Set while this key isn't (only) an operator on chain: every job is skipped (they would fail anyway). */
+  private roleError: string | null = null;
   private chainNow = 0n;
   private slot = 0n;
   private lastScan = 0;
@@ -320,6 +326,8 @@ export class Keeper {
 
   async start(): Promise<void> {
     this.log.info({ keeper: this.keeperKey.toBase58(), dryRun: this.cfg.dryRun, jobs: this.cfg.jobs, singleInstanceLock: !!this.store }, "keeper starting");
+    // Jobs run with an operator key only: never an attestor (Global.keepers) key on the jobs box.
+    await requireKeyRole("jobs", this.conn, this.keeperKey);
     if (this.cfg.healthPort) {
       this.server = createServer((req, res) => {
         if (req.url?.startsWith("/health")) {
@@ -375,6 +383,10 @@ export class Keeper {
   // ── loop ─────────────────────────────────────────────────────────────────
   async loopOnce(): Promise<void> {
     await this.refresh();
+    if (this.roleError) {
+      this.loopAt = Date.now();
+      return;
+    }
     const j = this.cfg.jobs;
     if (j.fees) await this.job("fees", () => this.runFees());
     if (j.graduate) await this.job("graduate", () => this.runGraduate());
@@ -438,6 +450,12 @@ export class Keeper {
       const g = await this.conn.getAccountInfo(globalPda());
       if (!g) throw new Error("Global not initialized");
       this.global = decodeGlobal(g.data);
+      const wrongRole = roleProblem("jobs", this.global, this.keeperKey);
+      if (wrongRole !== this.roleError) {
+        this.roleError = wrongRole;
+        if (wrongRole) await this.alerts.alert("role", `jobs keeper key ${this.keeperKey.toBase58()} ${wrongRole}; jobs paused`);
+        else this.alerts.resolve("role");
+      }
       const res = await this.conn.getProgramAccounts(FUMPAD_PROGRAM_ID, { filters: [{ memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator("Coin")) } }] });
       for (const r of res) {
         const coin = decodeCoin(r.account.data);
@@ -642,7 +660,8 @@ export class Keeper {
     for (const c of this.coins.values()) {
       const k = c.coin;
       if (k.status === "graduated") {
-        if (!c.obs || !c.damm) continue;
+        // D38: a pool disabled by its DAMM v2 operator is skipped on chain; don't pay for a no-op sample
+        if (!c.obs || !c.damm || c.damm.poolStatus !== DAMM_POOL_STATUS_ENABLED) continue;
         const last = c.obs.keeperSampled ? c.obs.lastKeeperSampleTs : 0n;
         const since = now - last;
         if (since >= g.params.oracleMinSpacingSecs && since >= BigInt(this.sampleInterval(c))) due.push({ c, pool: k.dammPool });
@@ -688,7 +707,7 @@ export class Keeper {
   async runBuybacks(): Promise<number> {
     if (this.paused(PAUSE.trade)) return 0;
     const p = this.global!.params;
-    const skip = SKIP(["PriceDeviation", "InsufficientSamples", "NothingToBuyBack", "StaleSample", "LaunchWindowActive"]);
+    const skip = SKIP(["PriceDeviation", "InsufficientSamples", "NothingToBuyBack", "StaleSample", "LaunchWindowActive", "PoolDisabled"]);
     let n = 0;
     for (const c of this.coins.values()) {
       const k = c.coin;
@@ -712,7 +731,7 @@ export class Keeper {
         maxIn = pregradBuybackSlice({ buybackLamports: k.buybackLamports, quoteReserve: c.dbc.quoteReserve, threshold: cfg, maxPoolBps: p.buybackMaxPoolBps });
         venue = "dbc";
       } else if (k.status === "graduated") {
-        if (!c.obs || !c.damm) continue;
+        if (!c.obs || !c.damm || c.damm.poolStatus !== DAMM_POOL_STATUS_ENABLED) continue; // D38: PoolDisabled
         const med = medianPriceQ64(c.obs, this.chainNow, p.oracleWindowSecs, p.oracleMinSamples);
         if (!med || !withinBand(spot, med, p.buybackMaxDeviationBps)) continue;
         const cap = (c.damm.tokenBAmount * BigInt(p.buybackMaxPoolBps)) / BPS_DENOM;

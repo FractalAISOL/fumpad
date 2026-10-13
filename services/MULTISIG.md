@@ -9,7 +9,7 @@ Global is unchanged. Every write simulates first and only sends with `--yes`; `-
 
 | power (INTERFACE-v0.7) | today | after the handover |
 |---|---|---|
-| **admin**: `queue_params`/`execute_params` (48 h), `queue_config`/`execute_config` (48 h), `set_keepers` (immediate), `propose_admin` (48 h), everything guardian can do | deployer key | **admin multisig vault** (3-of-5, 48 h Squads time lock) |
+| **admin**: `queue_params`/`execute_params` (48 h), `queue_config`/`execute_config` (48 h), `set_keepers` (immediate), `set_operators` (immediate), `propose_admin` (48 h), everything guardian can do | deployer key | **admin multisig vault** (3-of-5, 48 h Squads time lock) |
 | **guardian**: `set_pause` (immediate, lapses after 7 d), `cancel_params`, `cancel_config`, `cancel_admin`, `void_ticket` | deployer key | **guardian multisig vault** (2-of-3, no time lock) |
 | **program upgrade authority** (BPF loader) | deployer key | **admin multisig vault** |
 | `platform_treasury` | unchanged unless you pass `--treasury` | |
@@ -34,7 +34,7 @@ checked against it at load. The rehearsal runs the exact mainnet bytecode (dumpe
   This is what lets our CLI drive the flow while every approval happens on a Ledger in the Squads app.
 - **48 h time lock** covers program upgrades (otherwise instant) and every admin action: users get 48 h to see an
   approved upgrade/param change before it can land. Trade-off: admin's immediate tools (`set_keepers`,
-  `void_ticket`) also wait 48 h; the guardian (no lock) covers incidents meanwhile (`set_pause` incl.
+  `set_operators`, `void_ticket`) also wait 48 h; the guardian (no lock) covers incidents meanwhile (`set_pause` incl.
   `PAUSE_ATTEST`, `void_ticket`). If that trade-off is wrong for you, the alternative is a third multisig with the
   same members holding only the upgrade authority (48 h) and the admin multisig at 0 (FUMPAD already timelocks
   params/configs/admin 48 h on chain). Not built; say so if you want it.

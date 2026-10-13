@@ -6,7 +6,7 @@ Railway project `fumpad-devnet` (linked in `~/fumpad/services`). Run every comma
 branch is merged, unless stated otherwise. Nothing here prints a secret: keys are piped, never echoed.
 
 Tools in this repo:
-- `scripts/devnet/bootstrap-v07.ts` — keys, DBC config, `initialize_global`, funding, verification (plan by default,
+- `scripts/devnet/bootstrap-v07.ts` — keys, DBC config, `initialize_global`, operators, funding, verification (plan by default,
   `--simulate` = simulateTransaction only, `--yes` = send; idempotent). Rehearsed end to end on a local validator by
   `npm run bootstrap:rehearsal` (real `initialize_global`, simulate → send → verify → second run sends nothing).
 - `scripts/devnet/secrets-v07.ts` — `key <name>` (pipe-only), `pubkey <name>`, `db-sql` (board roles file, 600),
@@ -21,23 +21,40 @@ devnet curve simulates OK on devnet DBC **0.2.2** (35k CU) and the simulated con
 | key (`~/fumpad-keys/devnet/v07/`) | role | on chain | funded (SOL) |
 |---|---|---|---|
 | deployer `~/.config/solana/id.json` | upgrade authority, **admin**, **guardian** (devnet only: `initialize_global` sets guardian = admin; to split later: `propose_admin(admin, treasury, guardian)` → 48 h → `accept_admin`; `guardian.json` is generated for that. Mainnet: admin + guardian + upgrade authority go to Squads multisigs, `MULTISIG.md`) | — | pays everything below |
-| `attestor-1.json` | keeper slot 1 **and the jobs keeper** | `Global.keepers[0]` | 2.00 |
-| `attestor-2.json` | keeper slot 2 | `Global.keepers[1]` | 0.25 |
-| `attestor-3.json` | keeper slot 3 | `Global.keepers[2]` | 0.25 |
+| `operator.json` | **the jobs keeper** (samples, `claim_for`, pre-grad buybacks, cranks; pays graduation setup) | `Global.operators[0]` | 2.00 |
+| `attestor-1.json` | attestor 1 (attestations only) | `Global.keepers[0]` | 0.25 |
+| `attestor-2.json` | attestor 2 | `Global.keepers[1]` | 0.25 |
+| `attestor-3.json` | attestor 3 | `Global.keepers[2]` | 0.25 |
 | `launch-signer.json` | API launch co-signer (`LAUNCH_SIGNER_KEY`) | `Params.launch_signer` | 0 (never pays) |
 | `treasury.json` | `Global.platform_treasury` | | 0.01 |
 | `guardian.json` | spare (see deployer) | | 0 |
 | `creator`, `alice`, `bob`, `whale` | test wallets (whale alone can complete a 0.85 SOL curve) | | 0.5 / 0.4 / 0.4 / 1.2 |
 | `dbc-config.json` | the FUMPAD DBC config account | `Global.configs[0]` | rent 0.006 |
 
-**Why the jobs keeper = attestor-1.** The contract has exactly 3 keeper slots and threshold 2-of-3. Everything the
-jobs keeper does that is keeper-gated — keeper `record_samples` (fallback samples never count for claims), `claim_for`
-(auto-claim), pre-graduation `execute_buyback`, and being the fee payer of `attest_*` — checks `Global.keepers`, so
-the jobs key must be one of the three. A 4th slot would change the Global layout (not worth it for v1). Consequences:
-attestor-1's balance pays both (keep ≥ 1 SOL; `MIN_KEEPER_LAMPORTS` alert), the jobs keeper's daily budget
-(`KEEPER_DAILY_BUDGET_SOL`) also sees attestor-1's rent spend, and the two processes use different advisory locks
-(jobs `7271002`, attestor per key) so they run side by side. Same layout planned for mainnet (put attestor-1 on the
-most reliable infra); a separate jobs key would need a 4th keeper slot.
+**Jobs key ≠ attestor keys (2026-10-13 d).** The jobs keeper runs with its own key, `Global.operators[0]`
+(`operator.json`): keeper samples, `claim_for` and pre-graduation buybacks check `Global.operators`; the three
+`Global.keepers` are attestors ONLY (they sign + submit `attest_sell` / `attest_rebuy`). The program refuses a key in
+both sets (`KeeperOperatorOverlap`), the jobs keeper refuses to start with a key that isn't (only) an operator, and an
+attestor refuses to start with an operator key (`keeper/src/role.ts`). So one compromised box holds either the jobs
+key or ONE attestation key, never both. (Before this change the jobs keeper reused attestor-1's key; a devnet Global
+from then is migrated in place — §10.)
+
+**Recommended topology (devnet now, mainnet required — THREAT-MODEL G6).** 2-of-3 only means something if no single
+account, provider or person can reach two attestation keys:
+| unit | Railway project / account | owner | RPC provider | services |
+|---|---|---|---|---|
+| core | `fumpad-devnet` (your account) | you | A | indexer, api, grinder, keeper (jobs, `operator` key), Postgres (board + data) |
+| attestor-1 | `fumpad-attestor-1` (**separate project**; separate account if possible) | you | B | attestor-1 |
+| attestor-2 | `fumpad-attestor-2`, **another Railway account** | ideally a second person | C | attestor-2 |
+| attestor-3 | `fumpad-attestor-3`, **another account, ideally another cloud** (Fly / Render / a VPS) | ideally a third person | D | attestor-3 |
+| watcher | anywhere except an attestor's project | guardian side | E (≠ every attestor's) | watcher → guardian Telegram chat |
+Rules: each attestor key exists only in its own project's variables (and the offline backup); no project member can
+read another attestor's variables; the jobs `operator` key never lives in an attestor project. Attestors in other
+projects reach the shared signature board over the board Postgres's TCP proxy with their own role + RLS + TLS:
+`secrets-v07.ts db-url attestor-N --public <proxy-host:port>` (an attestor's DB role can only write its own signature
+rows, V7-M1; the board is signatures + hints only, every attestor re-verifies from its own RPC). The watcher uses a
+5th provider so a provider shared with an attestor can't hide the attestation it serves wrongly. Until the second /
+third people exist, at minimum: 3 separate Railway projects, 3 different RPC companies, attestor-3 on a different cloud.
 
 **Params (`bootstrapParams`)**: defaults except min sell **$5** (500 c), min hold **60 s**, ticket challenge
 **3,600 s**, oracle window **600 s** with **28** samples (≥ 600/60, ≤ 600/10), `launch_signer` = launch-signer. All
@@ -76,14 +93,16 @@ Bootstrap:
 cd ~/fumpad/services
 npx tsx scripts/devnet/bootstrap-v07.ts --step all --simulate   # config sim + init sim (bundled) + fund sim; verify shows what's missing
 npx tsx scripts/devnet/bootstrap-v07.ts --step config --yes     # DBC create_config (skips if it exists and matches)
-npx tsx scripts/devnet/bootstrap-v07.ts --step init --yes       # initialize_global (keepers attestor-1/2/3, config, params)
+npx tsx scripts/devnet/bootstrap-v07.ts --step init --yes       # initialize_global (keepers attestor-1/2/3, operators [operator], config, params)
+npx tsx scripts/devnet/bootstrap-v07.ts --step operators --yes  # existing pre-operators Global only: migrate_global + set_operators (§10)
 npx tsx scripts/devnet/bootstrap-v07.ts --step fund             # prints the funding plan only
 npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes       # sends it (one tx)
 npx tsx scripts/devnet/bootstrap-v07.ts --step verify           # checklist; exit 1 on any ✗
 ```
 `verify` checks: program deployed + upgrade authority + **deployed bytecode == local .so**, DBC/DAMM programs, DAMM
 migration config, DBC pool authority flash rent, config §5.4 + devnet numbers, Global (cluster_tag 1, admin =
-guardian = deployer, treasury, keepers = attestor-1/2/3 with `keeper_added_at = 0` and all 3 active NOW, configs =
+guardian = deployer, treasury, keepers = attestor-1/2/3 with `keeper_added_at = 0` and all 3 active NOW, operators =
+[operator] disjoint from the keepers, configs =
 [config], nothing pending, not paused, params field by field incl. `launch_signer`), wallet balances.
 
 ## 3. Postgres reset (fresh schema; keep the vanity pool)
@@ -133,11 +152,11 @@ One image (`services/Dockerfile`, `SERVICE_ENTRY` picks the entry; `keeper/dist/
 | `indexer` | existing | `indexer/dist/main.js` | `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `RPC_URL`★, (`WS_URL`★), Meteora indexing is on by default (`METEORA_INDEXER_ENABLED` must not be `false`); **unset** `BACKFILL_FROM_SLOT` (or set it to the deploy slot) and the Helius webhook vars unless you re-point the webhook at `5YMF…` | provider A (Helius, `rpc.env`) | no |
 | `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional) | A | yes (`api-production-66441.up.railway.app`) |
 | `grinder` | existing | `grinder/Dockerfile` | unchanged (`DATABASE_URL`, `MINT_POOL_KEY`★, `POOL_TARGET`) | — | no |
-| `keeper` | existing | `keeper/dist/main.js`, `KEEPER_MODE=jobs` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (owner: `meta` table + advisory lock), `RPC_URL`★, **`KEEPER_SECRET_KEY`★ = attestor-1** (replaces the v0.6 keeper key), `KEEPER_DAILY_BUDGET_SOL=3` (graduation setup ≈ 0.5 SOL/coin on devnet + attestor-1 rent), `TELEGRAM_BOT_TOKEN`★/`TELEGRAM_CHAT_ID`, `PORT=8082` | A | no |
-| `attestor-1` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1`, `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | A | no |
-| `attestor-2` | **new** | same | attestor-2 key, role `fumpad_attestor_2`, … | **B** (second provider) | no |
-| `attestor-3` | **new** | same | attestor-3 key, role `fumpad_attestor_3`, … | **C** (third provider) | no |
-| `watcher` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=watcher` | `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `TELEGRAM_*` (guardian's chat), `PORT=8790`; no key, no DB | **D** (ideally 4th) | optional (`/v1/verification` public feed) |
+| `keeper` | existing | `keeper/dist/main.js`, `KEEPER_MODE=jobs` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (owner: `meta` table + advisory lock), `RPC_URL`★, **`KEEPER_SECRET_KEY`★ = operator** (never an attestor key: it refuses to start), `KEEPER_DAILY_BUDGET_SOL=3` (graduation setup ≈ 0.5 SOL/coin on devnet), `TELEGRAM_BOT_TOKEN`★/`TELEGRAM_CHAT_ID`, `PORT=8082` | A | no |
+| `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | **B** | no |
+| `attestor-2` | **new**, own project + account | same | attestor-2 key, role `fumpad_attestor_2`, … | **C** | no |
+| `attestor-3` | **new**, own project + account (+ cloud) | same | attestor-3 key, role `fumpad_attestor_3`, … | **D** | no |
+| `watcher` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=watcher` | `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `TELEGRAM_*` (guardian's chat), `PORT=8790`; no key, no DB | **E** (5th, ≠ every attestor's) | optional (`/v1/verification` public feed) |
 
 **Program id + cluster (every service except the grinder).** `FUMPAD_PROGRAM_ID` (base58) and `FUMPAD_CLUSTER`
 (`mainnet` | `devnet` | `localnet`) select the deployment; both **unset = the devnet deployment** (`5YMF…S9Fb`,
@@ -194,14 +213,16 @@ setsecret() { railway variables --service "$1" --skip-deploys --set-from-stdin "
    railway up --service api --detach
    railway up grinder --path-as-root --service grinder --detach      # unchanged; only if it was stopped
    ```
-4. **keeper (jobs) = attestor-1's key**:
+4. **keeper (jobs) = the operator key** (never an attestor's):
    ```sh
-   npx tsx $S key attestor-1 | setsecret keeper KEEPER_SECRET_KEY
+   npx tsx $S key operator | setsecret keeper KEEPER_SECRET_KEY
    railway variables --service keeper --skip-deploys --set "KEEPER_MODE=jobs" --set "KEEPER_DAILY_BUDGET_SOL=3" --set "SERVICE_ENTRY=keeper/dist/main.js"
    railway up --service keeper --detach          # optional first: --set "DRY_RUN=true" to review its plan, then unset
    ```
 5. **Board roles** (§3 `db-sql` + `\i roles.sql`) — before the attestors start with `ATTEST_BOARD_REQUIRE_RLS=1`.
-6. **attestor-1/2/3** (create, configure, deploy; RPC file per attestor):
+6. **attestor-1/2/3** (create, configure, deploy; RPC file per attestor). Shown in the core project for brevity;
+   for the §1 topology run each block with that attestor's own project linked (`railway link`), and set its
+   `DATABASE_URL` with `npx tsx $S db-url attestor-N --public <board-proxy-host:port> | setsecret attestor-N DATABASE_URL`:
    ```sh
    for i in 1 2 3; do
      railway add --service attestor-$i
@@ -257,7 +278,7 @@ Action: redeploy the v0.7 app from main (`cd ~/fumpad/app && vercel deploy --pro
 1. App: launch with `creator` (signed prepare → `…fmbL` mint → `CoinRegistered`), buy with alice/bob, wait ≥ 60 s,
    sell ≥ $5 → ticket "verifying" → attested by 2 of 3 attestors (`TicketAttested`) → claimable after 1 h.
 2. `whale` completes the curve (router buy with PartialFill) → keeper `migrate_pool` + `graduate` + observations +
-   claim queue (attestor-1 pays ≈ 0.5 SOL) → samples → claims.
+   claim queue (the operator pays ≈ 0.5 SOL) → samples → claims.
 3. Watcher `/v1/verification` shows no mismatch.
 
 ## 7. Waitlist in its own database (`waitlist-db`)
@@ -421,3 +442,37 @@ old key revoked last.
 
 Mainnet: same commands with `~/fumpad-keys/mainnet/…` and the mainnet Railway project linked. `curl -K <(…)` keeps the
 secret out of the process list and the terminal.
+
+## 10. Operators split — upgrading the existing devnet deployment (2026-10-13 d)
+
+The devnet Global was initialized before `Global.operators` existed (those 64 bytes were `reserved`, all zero) and its
+jobs keeper runs with attestor-1's key. The new program reads that Global as "no operators" (so samples, `claim_for`
+and pre-grad buybacks refuse everyone) until the operators step runs — do the steps back to back.
+
+```sh
+# 0. build (same .so the tests ran on) — contracts/
+cd ~/fumpad/contracts && anchor build -p fumpad          # target/deploy/fumpad.so = 804,472 bytes
+# 1. the program data account is 770,280 bytes: extend first (≈ +0.28 SOL rent), then upgrade
+set -a; . ~/fumpad-keys/devnet/rpc.env; set +a
+solana program extend 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb 40000 --url "$RPC_URL" --keypair ~/.config/solana/id.json
+solana program deploy target/deploy/fumpad.so --program-id target/deploy/fumpad-keypair.json \
+  --upgrade-authority ~/.config/solana/id.json --keypair ~/.config/solana/id.json --url "$RPC_URL" --with-compute-unit-price 10000
+# 2. operator key + Global: ONE tx = migrate_global (operators[0] := keepers[0]) + set_operators([operator])
+cd ~/fumpad/services
+npx tsx scripts/devnet/bootstrap-v07.ts --step keys                 # creates operator.json (others kept)
+npx tsx scripts/devnet/bootstrap-v07.ts --step operators --simulate
+npx tsx scripts/devnet/bootstrap-v07.ts --step operators --yes
+npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes           # operator → 2 SOL (attestor-1 target is now 0.25)
+npx tsx scripts/devnet/bootstrap-v07.ts --step verify               # operators = [operator], disjoint; bytecode = local .so
+# 3. services (this branch merged): the jobs keeper switches to the operator key
+npx tsx scripts/devnet/secrets-v07.ts key operator | railway variables --service keeper --skip-deploys --set-from-stdin KEEPER_SECRET_KEY
+for s in keeper attestor-1 attestor-2 attestor-3 watcher indexer api; do railway up --service $s --detach; done
+```
+Between step 1 and step 2 (seconds) the old jobs keeper's samples are refused (`Unauthorized` pre-graduation; fallback
+post-graduation) — harmless. After step 2 attestor-1's key is no longer an operator, so the old jobs keeper's
+samples / auto-claims / pre-grad buybacks fail until step 3 redeploys it with the operator key (do it right away; the
+new binary refuses attestor-1's key, and permissionless jobs — fees, graduation, queue — never stopped). Attestors need no key change (their keys stay in `Global.keepers`, no freeze). Old
+attestor-1 SOL beyond its 0.25 target can be drained to the deployer. Then move the attestors to the §1 topology
+(separate projects / accounts / providers) one at a time: an attestor that is down only costs liveness while the other
+two sign.
+

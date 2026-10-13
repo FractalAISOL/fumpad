@@ -44,6 +44,7 @@ import {
 } from "@fumpad/sdk";
 
 import type { Alerter } from "../alerts.js";
+import { roleProblem } from "../role.js";
 import { type SignatureBoard, validSignatures } from "./board.js";
 import type { Derivation } from "./derive.js";
 import { type Candidate, candidates } from "./records.js";
@@ -129,7 +130,7 @@ export interface AttestorStats {
   dropped: number;
   deferred: number;
   errors: number;
-  state: "idle" | "not_active_keeper" | "paused" | "running";
+  state: "idle" | "not_active_keeper" | "wrong_role" | "paused" | "running";
   lastTickAt: number;
 }
 
@@ -166,6 +167,14 @@ export class Attestor {
     const started = clock();
     const g = await this.o.chain.global();
     const now = this.now();
+    // An operator (jobs) key never attests, even if it is also in Global.keepers (transient after migrate_global).
+    const wrongRole = roleProblem("attestor", g, this.o.keeper.publicKey);
+    if (wrongRole) {
+      this.stats.state = "wrong_role";
+      log.error({ keeper: this.me }, `attestor: this key ${wrongRole}`);
+      await this.o.alerts?.alert("role", `attestor key ${this.me} ${wrongRole}`);
+      return;
+    }
     const active = activeKeepers(g, now);
     if (!active.some((k) => k.toBase58() === this.me)) {
       this.stats.state = "not_active_keeper";

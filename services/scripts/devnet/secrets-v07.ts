@@ -10,6 +10,11 @@
  *        # role passwords generated once into <keys-dir>/db/passwords.json (600). Prints only the paths.
  *   npx tsx scripts/devnet/secrets-v07.ts db-url <attestor-1|attestor-2|attestor-3> [--pg-service Postgres]
  *        # postgresql://fumpad_attestor_N:<pw>@${{<pg>.RAILWAY_PRIVATE_DOMAIN}}:5432/${{<pg>.PGDATABASE}}
+ *        # (same Railway project as the board Postgres)
+ *   npx tsx scripts/devnet/secrets-v07.ts db-url <attestor-N> --public <host:port> [--db railway]
+ *        # postgresql://fumpad_attestor_N:<pw>@<host:port>/<db>?sslmode=require — for an attestor in ANOTHER Railway
+ *        # project / account (DEPLOY-v07.md §1 topology): <host:port> = the board Postgres's TCP proxy
+ *   `key operator` = the jobs keeper's key (Global.operators[0]; never an attestor key).
  *
  * --keys-dir <dir> (default ~/fumpad-keys/devnet/v07).
  */
@@ -102,9 +107,17 @@ try {
   } else if (cmd === "db-url") {
     if (!ATTESTORS.includes(arg as (typeof ATTESTORS)[number])) throw new Error("db-url attestor-1|attestor-2|attestor-3");
     const pw = passwords()[arg];
-    pipeOnly(`postgresql://${dbRole(arg)}:${pw}@\${{${pgService}.RAILWAY_PRIVATE_DOMAIN}}:5432/\${{${pgService}.PGDATABASE}}`);
+    const pub = argv.indexOf("--public");
+    if (pub >= 0) {
+      // an attestor in another project can't use the private network or ${{…}} references: literal TCP proxy, TLS
+      const host = argv[pub + 1];
+      if (!host || !/^[a-z0-9.-]+:\d+$/i.test(host)) throw new Error("--public <host:port> (the board Postgres's TCP proxy)");
+      pipeOnly(`postgresql://${dbRole(arg)}:${pw}@${host}/${opt("--db", "railway")}?sslmode=require`);
+    } else {
+      pipeOnly(`postgresql://${dbRole(arg)}:${pw}@\${{${pgService}.RAILWAY_PRIVATE_DOMAIN}}:5432/\${{${pgService}.PGDATABASE}}`);
+    }
   } else {
-    console.error("usage: secrets-v07.ts key <name> [--json] | pubkey <name> | db-sql | db-url <attestor-N>  [--keys-dir d] [--pg-service Postgres]");
+    console.error("usage: secrets-v07.ts key <name> [--json] | pubkey <name> | db-sql | db-url <attestor-N> [--public host:port [--db railway]]  [--keys-dir d] [--pg-service Postgres]");
     process.exit(2);
   }
 } catch (e) {

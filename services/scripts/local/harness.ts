@@ -28,6 +28,7 @@ import {
   fumpadCoder,
   globalPda,
   MAX_CONFIGS,
+  MAX_OPERATORS,
   MAX_KEEPERS,
   type Params,
   paramsToIdl,
@@ -82,6 +83,8 @@ export interface GlobalPreload {
   admin: PublicKey;
   platformTreasury: PublicKey;
   keepers: PublicKey[];
+  /** jobs keys (Global.operators); never a keeper */
+  operators: PublicKey[];
   params: Params;
   configs: PublicKey[];
 }
@@ -91,6 +94,8 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
   while (keepers.length < MAX_KEEPERS) keepers.push(PublicKey.default);
   const configs = [...g.configs];
   while (configs.length < MAX_CONFIGS) configs.push(PublicKey.default);
+  const operators = [...g.operators];
+  while (operators.length < MAX_OPERATORS) operators.push(PublicKey.default);
   // Encode with the borsh layout directly: Anchor coders cap their buffer at 1000 bytes (Global is 1044).
   const layout = (fumpadCoder().types as unknown as { typeLayouts: Map<string, { encode(v: unknown, b: Buffer): number }> }).typeLayouts.get("Global")!;
   const buf = Buffer.alloc(4096);
@@ -115,7 +120,7 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
     pending_config: PublicKey.default,
     pending_config_add: 0,
     pending_config_eta: bn(0n),
-    reserved: new Array(64).fill(0),
+    operators,
   }, buf);
   const data = Buffer.concat([Buffer.from(accountDiscriminator("Global")), buf.subarray(0, len)]);
   mkdirSync(LOCAL, { recursive: true });

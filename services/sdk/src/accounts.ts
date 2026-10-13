@@ -48,6 +48,8 @@ export interface GlobalAccount {
   pendingConfig: PublicKey;
   pendingConfigAdd: number;
   pendingConfigEta: bigint;
+  /** Jobs keys (samples, claim_for, pre-grad buybacks); disjoint from `keepers`. Default key = empty slot. */
+  operators: PublicKey[];
 }
 
 export interface CoinAccount {
@@ -184,6 +186,21 @@ export function isPaused(g: Pick<GlobalAccount, "paused" | "pauseExpiresAt">, fl
  */
 export function activeKeepers(g: Pick<GlobalAccount, "keepers" | "keeperAddedAt">, now: bigint | number, freezeSecs = 6n * 3_600n): PublicKey[] {
   return g.keepers.filter((k, i) => !k.equals(PublicKey.default) && (g.keeperAddedAt[i] === 0n || BigInt(now) >= g.keeperAddedAt[i] + freezeSecs));
+}
+
+/** Is `key` one of Global's operators (jobs keys: samples, claim_for, pre-graduation buybacks)? */
+export function isOperator(g: Pick<GlobalAccount, "operators">, key: PublicKey): boolean {
+  return !key.equals(PublicKey.default) && (g.operators ?? []).some((o) => o.equals(key));
+}
+/** Is `key` one of Global's attestor keys (`keepers`)? */
+export function isAttestor(g: Pick<GlobalAccount, "keepers">, key: PublicKey): boolean {
+  return !key.equals(PublicKey.default) && (g.keepers ?? []).some((k) => k.equals(key));
+}
+/** The on-chain role of `key`: "operator" (jobs), "attestor", "both" (only transiently after `migrate_global`), or null. */
+export function keyRole(g: Pick<GlobalAccount, "keepers" | "operators">, key: PublicKey): "operator" | "attestor" | "both" | null {
+  const op = isOperator(g, key);
+  const at = isAttestor(g, key);
+  return op && at ? "both" : op ? "operator" : at ? "attestor" : null;
 }
 
 // ── zero-copy ───────────────────────────────────────────────────────────────

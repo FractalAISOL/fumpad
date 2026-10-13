@@ -46,7 +46,8 @@ labelled **estimate** with a source where a vendor decides (RPC, Railway). No re
 
 | key | role | funded to (bootstrap `fund`) | why |
 |---|---|---|---|
-| attestor-1 | keeper slot 1 **and the jobs keeper** (migrate, graduate, init observations/claim queue, samples, buybacks, fee claims, auto-claims) | **2.0 SOL** | graduation setup is fronted then refunded (§4); samples + attestation rent; `MIN_KEEPER_LAMPORTS` alert at 0.5 SOL |
+| operator | **the jobs keeper** (`Global.operators[0]`: migrate, graduate, init observations/claim queue, samples, buybacks, fee claims, auto-claims) | **2.0 SOL** | graduation setup is fronted then refunded (§4); sample fees; `MIN_KEEPER_LAMPORTS` alert at 0.5 SOL |
+| attestor-1 | attestor 1 (attestations only, `Global.keepers[0]`) | 0.3 SOL | position / ticket / marker rent (refunded on close) |
 | attestor-2 | keeper slot 2 | **0.3 SOL** | attestation rent (Position / Ticket / Consumed) when it is the submitter, tx fees |
 | attestor-3 | keeper slot 3 | **0.3 SOL** | same |
 | launch-signer | API co-signer | 0 | never pays (only signs) |
@@ -108,7 +109,8 @@ Four different companies (one per attestor + the watcher; DEPLOY-v07.md §8). Th
 | Chainstack / Alchemy / a 2nd Helius account | similar tiers ($49–$499) | — | vendor pages |
 | **App frontend key** (`NEXT_PUBLIC_SOLANA_RPC`, domain-restricted) | usually the A provider's plan, separate key | — | — |
 
-**Estimate**: A = Helius Business ($499; indexer + api + jobs keeper + attestor-1 are the heavy users), B, C, D on
+**Estimate**: A = Helius Business ($499; indexer + api + jobs keeper are the heavy users; the attestors and the
+watcher each use their own provider, DEPLOY-v07.md §1), B, C, D on
 $49–$249 plans → **≈ $650–$1,250 / month**; a lean start (all four on ~$49 plans + Triton PAYG) ≈ $200–$300 / month
 if the request rates fit (check with `rpc-check`, which measures the 429 threshold).
 
@@ -117,7 +119,7 @@ if the request rates fit (check with `rpc-check`, which measures the 429 thresho
 Pro plan **$20/month per workspace** incl. $20 of usage; usage $20 per vCPU-month, $10 per GB-RAM-month, $0.05/GB
 egress, $0.15/GB-month volumes ([railway.com/pricing](https://railway.com/pricing), summarized at
 [budgetforge.dev](https://www.budgetforge.dev/tools/railway-pricing-2026)). The mainnet project: indexer, api,
-grinder, keeper, attestor-1/2/3, watcher, Postgres (+ the shared `waitlist-db`). At ~0.1–0.25 vCPU and 0.3–0.5 GB
+grinder, keeper, attestor-1/2/3 (each in its own project), watcher, Postgres (+ the shared `waitlist-db`). At ~0.1–0.25 vCPU and 0.3–0.5 GB
 average per service (devnet-like load; the grinder is CPU-bound while refilling its pool) → **≈ $80–$200 / month**
 (estimate; check the devnet project's usage page for real numbers before sizing).
 
@@ -130,11 +132,11 @@ average per service (devnet-like load; the grinder is CPU-bound while refilling 
 | deploy fees (write txs + priority, measured §8) | 0.0040 |
 | DBC config + Global | 0.0119 |
 | Squads multisigs ×2 (creation fee 0) | 0.0043 |
-| keepers: attestor-1 2.0 + attestor-2 0.3 + attestor-3 0.3 (working balances) | 2.6000 |
+| keepers: operator 2.0 + attestor-1/2/3 0.3 each (working balances) | 2.9000 |
 | ops key | 0.05 |
 | bootstrap/governance tx fees + priority margin | 0.05 |
-| **deployer must hold at the start (peak)** | **≈ 10.4 SOL** (incl. the 3.81 SOL refunded by the deploy) |
-| **ends up committed** (rent locked + keeper balances) | **≈ 6.5 SOL** (3.83 rent, 2.6 working balances, ~0.1 fees) |
+| **deployer must hold at the start (peak)** | **≈ 11.0 SOL** (incl. ≈ 4.09 SOL refunded by the deploy; program data 804,472 bytes since 2026-10-13 d) |
+| **ends up committed** (rent locked + keeper balances) | **≈ 7.1 SOL** (≈ 4.1 rent, 2.9 working balances, ~0.1 fees) |
 
 Not included: the team's own first coin and test trades, priority-fee spikes on deploy day (raise
 `computeUnitPriceMicroLamports` if the p75 is non-zero; each 10,000 µlamports adds ≈ 0.004 SOL per 400k-CU tx and

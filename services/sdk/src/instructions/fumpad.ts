@@ -7,10 +7,22 @@ import { type AccountMeta, PublicKey, type TransactionInstruction } from "@solan
 
 import { toIdl } from "../borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "../coder.js";
-import { DAMM_V2_MIGRATION_CONFIG, DAMM_V2_PROGRAM_ID, DBC_PROGRAM_ID, FUMPAD_PROGRAM_ID, MAX_CONFIGS, MAX_KEEPERS, WSOL_MINT } from "../constants.js";
+import {
+  DAMM_V2_MIGRATION_CONFIG,
+  DAMM_V2_PROGRAM_ID,
+  DBC_PROGRAM_ID,
+  FUMPAD_PROGRAM_ID,
+  MAX_CONFIGS,
+  MAX_KEEPERS,
+  MAX_OPERATORS,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  WSOL_MINT,
+} from "../constants.js";
 import { dammSwapAccounts, dbcMigrationAccounts, dbcSwapAccounts } from "../meteora/instructions.js";
 import { type Params, paramsToIdl } from "../params.js";
 import {
+  ata,
   buybackPda,
   buybackWsol,
   claimQueuePda,
@@ -20,6 +32,7 @@ import {
   consumedSellPda,
   dammPoolPda,
   dammPositionNftAccountPda,
+  dammPositionPda,
   dammVaultPda,
   dbcPoolPda,
   dbcVaultPda,
@@ -58,10 +71,22 @@ const dbcPoolOf = (c: CoinRefs) => c.dbcPool ?? dbcPoolPda(c.dbcConfig, c.mint);
 const dammPoolOf = (c: CoinRefs) => c.dammPool ?? dammPoolPda(c.mint);
 
 // ── admin / governance ──────────────────────────────────────────────────────
+const pad = (keys: PublicKey[], n: number, what: string): PublicKey[] => {
+  if (keys.length > n) throw new Error(`at most ${n} ${what}`);
+  return [...keys, ...Array(n - keys.length).fill(PublicKey.default)];
+};
+/** Throws if a key is both an attestor (keeper) and an operator — the program refuses it (KeeperOperatorOverlap). */
+function assertDisjoint(keepers: PublicKey[], operators: PublicKey[]): void {
+  for (const o of operators) {
+    if (!o.equals(PublicKey.default) && keepers.some((k) => k.equals(o))) throw new Error(`${o.toBase58()} can't be both an attestor and an operator`);
+  }
+}
+
 /**
- * `initialize_global` — payer must be the fumpad program's upgrade authority. Bootstrap: `keepers` (≤ 3) start
- * with NO 6h attest freeze and `configs` (≤ 8 FUMPAD DBC configs, validated like `execute_config` add, passed as
- * remaining accounts) are allow-listed with NO 48h timelock. Later changes keep their freeze / timelock.
+ * `initialize_global` — payer must be the fumpad program's upgrade authority. Bootstrap: `keepers` (≤ 3 attestors)
+ * start with NO 6h attest freeze, `operators` (≤ 2 jobs keys, never attestors) are set at once, and `configs` (≤ 8
+ * FUMPAD DBC configs, validated like `execute_config` add, passed as remaining accounts) are allow-listed with NO
+ * 48h timelock. Later changes keep their freeze / timelock.
  */
 export function initializeGlobalIx(a: {
   payer: PublicKey;
@@ -70,10 +95,13 @@ export function initializeGlobalIx(a: {
   clusterTag: number;
   params: Params;
   keepers?: PublicKey[];
+  operators?: PublicKey[];
   configs?: PublicKey[];
 }): TransactionInstruction {
   const keepers = a.keepers ?? [];
   if (keepers.length > MAX_KEEPERS) throw new Error(`at most ${MAX_KEEPERS} keepers`);
+  const operators = pad(a.operators ?? [], MAX_OPERATORS, "operators");
+  assertDisjoint(keepers, operators);
   const configs = a.configs ?? [];
   if (configs.length > MAX_CONFIGS) throw new Error(`at most ${MAX_CONFIGS} configs`);
   return ix(
@@ -85,6 +113,7 @@ export function initializeGlobalIx(a: {
       clusterTag: a.clusterTag,
       params: paramsToIdl(a.params),
       keepers: [...keepers, ...Array(MAX_KEEPERS - keepers.length).fill(PublicKey.default)],
+      operators,
     },
     configs.map((pubkey) => r(pubkey)),
   );
@@ -97,6 +126,10 @@ export function setKeepersIx(admin: PublicKey, keepers: PublicKey[]): Transactio
   if (keepers.length > MAX_KEEPERS) throw new Error(`at most ${MAX_KEEPERS} keepers`);
   const list = [...keepers, ...Array(MAX_KEEPERS - keepers.length).fill(PublicKey.default)];
   return ix("set_keepers", { admin, global: globalPda() }, { keepers: list });
+}
+/** `set_operators` — admin, immediate: the jobs keys (samples, claim_for, pre-grad buybacks). Never an attestor key. */
+export function setOperatorsIx(admin: PublicKey, operators: PublicKey[]): TransactionInstruction {
+  return ix("set_operators", { admin, global: globalPda() }, { operators: pad(operators, MAX_OPERATORS, "operators") });
 }
 export const proposeAdminIx = (admin: PublicKey, newAdmin: PublicKey, platformTreasury: PublicKey, guardian: PublicKey) =>
   ix("propose_admin", { admin, global: globalPda() }, { newAdmin, platformTreasury, guardian });
@@ -191,6 +224,58 @@ export function claimLpFeesIx(caller: PublicKey, c: CoinRefs & { dammPosition: P
     feeWsol: feeWsolPda(),
     rewardVault: rewardVault(c.mint),
   });
+}
+/**
+ * `claim_unregistered_fees` — DBC partner fees of a pool on a FUMPAD-shaped config whose mint never registered
+ * (no Coin) → `platformTreasury` (= Global.platform_treasury). The base-side destination ATA(reward_pool, mint) must
+ * exist: prepend `createAtaIdempotentIx(caller, rewardPoolPda(), mint, TOKEN_2022)`.
+ */
+export function claimUnregisteredFeesIx(caller: PublicKey, a: { mint: PublicKey; dbcConfig: PublicKey; platformTreasury: PublicKey; dbcPool?: PublicKey }): TransactionInstruction {
+  const pool = a.dbcPool ?? dbcPoolPda(a.dbcConfig, a.mint);
+  return ix("claim_unregistered_fees", {
+    caller,
+    global: globalPda(),
+    mint: a.mint,
+    coin: coinPda(a.mint),
+    dbcConfig: a.dbcConfig,
+    dbcPool: pool,
+    dbcBaseVault: dbcVaultPda(a.mint, pool),
+    dbcQuoteVault: dbcVaultPda(WSOL_MINT, pool),
+    feeClaimer: feeClaimerPda(),
+    feeWsol: feeWsolPda(),
+    rewardVault: rewardVault(a.mint),
+    platformTreasury: a.platformTreasury,
+  });
+}
+/**
+ * `claim_position_rewards(reward_index)` — DAMM v2 farming rewards of a fee_claimer-held position of a graduated
+ * coin's pool. Destination: the coin's reward vault when `rewardMint == mint`, else ATA(platformTreasury,
+ * rewardMint, token program) (must exist). `rewardVault` / `rewardMint` / `tokenFlag` from the pool's reward slot.
+ */
+export function claimPositionRewardsIx(
+  caller: PublicKey,
+  a: CoinRefs & { positionNftMint: PublicKey; rewardIndex: number; rewardMint: PublicKey; rewardVault: PublicKey; tokenFlag: number; platformTreasury: PublicKey },
+): TransactionInstruction {
+  const tokenProgram = a.tokenFlag === 1 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+  const destination = a.rewardMint.equals(a.mint) ? rewardVault(a.mint) : ata(a.platformTreasury, a.rewardMint, tokenProgram);
+  return ix(
+    "claim_position_rewards",
+    {
+      caller,
+      global: globalPda(),
+      coin: coinPda(a.mint),
+      mint: a.mint,
+      dammPool: dammPoolOf(a),
+      dammPosition: a.dammPosition ?? dammPositionPda(a.positionNftMint),
+      positionNftAccount: dammPositionNftAccountPda(a.positionNftMint),
+      dammRewardVault: a.rewardVault,
+      rewardMint: a.rewardMint,
+      destination,
+      feeClaimer: feeClaimerPda(),
+      rewardTokenProgram: tokenProgram,
+    },
+    { rewardIndex: a.rewardIndex },
+  );
 }
 export const withdrawCreatorFeesIx = (creator: PublicKey, mint: PublicKey) => ix("withdraw_creator_fees", { creator, coin: coinPda(mint) });
 export const withdrawPlatformFeesIx = (caller: PublicKey, mint: PublicKey, platformTreasury: PublicKey) =>
@@ -335,6 +420,7 @@ export function claimIx(a: { owner: PublicKey; mint: PublicKey; ticket: PublicKe
     ownerTokenAccount: a.ownerTokenAccount ?? coinAta(a.owner, a.mint),
   });
 }
+/** `claim_for` (D17 auto-claim) — `keeper` must be an OPERATOR key (`Global.operators`), never an attestor. */
 export function claimForIx(a: { keeper: PublicKey; mint: PublicKey; ticket: PublicKey; owner: PublicKey }): TransactionInstruction {
   return ix("claim_for", {
     keeper: a.keeper,
