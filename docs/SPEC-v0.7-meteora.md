@@ -1,6 +1,6 @@
 # FUMPAD — Technical Spec v0.7 (Meteora)
 
-Status: **DRAFT for user review** · 2026-10-13 · Supersedes the venue/curve parts of `SPEC.md` v0.6 (§3, §3.1, §3.2, §4, §4.1, §5.1, §5.2, parts of §5.3/§5.4/§6). Everything not mentioned here keeps its v0.6 meaning (D1–D6, D9, D15–D18, D23–D26, D29).
+Status: **APPROVED by user 2026-10-13 (incl. D31 one attested-ticket model)** · 2026-10-13 · Supersedes the venue/curve parts of `SPEC.md` v0.6 (§3, §3.1, §3.2, §4, §4.1, §5.1, §5.2, parts of §5.3/§5.4/§6). Everything not mentioned here keeps its v0.6 meaning (D1–D6, D9, D15–D18, D23–D26, D29).
 Evidence: `spike/meteora/REPORT.md` (devnet spike, 11/12 PASS), `services/meteora/ATTESTATION.md` (trade parser + keeper rules), on-chain census of hook vs plain DBC coins (Axiom shows no warning for plain DBC coins — user-verified 2026-10-13).
 
 ## 0. New decisions
