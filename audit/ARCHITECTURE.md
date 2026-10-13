@@ -1,6 +1,6 @@
 # FUMPAD v0.7 — architecture for auditors
 
-Commit `aa137a9`. Byte-level details (account layouts, offsets, instruction account lists, events, error codes) are
+Commit: this branch (`aa137a9` + the pre-audit fixes, PRIOR-REVIEWS §0). Byte-level details (account layouts, offsets, instruction account lists, events, error codes) are
 in `contracts/INTERFACE-v0.7.md`; this file explains how the pieces fit and who can do what. "Coin" below means the
 per-mint `Coin` account and everything FUMPAD holds for that mint.
 
@@ -11,8 +11,8 @@ per-mint `Coin` account and everything FUMPAD holds for that mint.
 | 1 | **fumpad program** (Anchor 1.2.1, upgradeable) | `contracts/programs/fumpad` | the system; upgrade authority = admin multisig (mainnet plan) |
 | 2 | **Meteora DBC** (bonding curve) + **DAMM v2** (AMM) | external, mainnet ids in README §3 | trusted (D38); upgradeable by Meteora |
 | 3 | **Token-2022 coin mint** | created by DBC `initialize_virtual_pool_with_token2022`; vanity `…fmbL` key from the API | no mint / freeze / metadata authority (config enforces `Immutable`) |
-| 4 | **Attestors ×3** (`KEEPER_MODE=attestor`) | `services/keeper/src/attest` | each holds one keeper key in `Global.keepers`; any 2 together can create tickets |
-| 5 | **Jobs keeper** (`KEEPER_MODE=jobs`) | `services/keeper/src/keeper.ts` | uses the attestor-1 key (3 keeper slots only; DEPLOY-v07 §1) |
+| 4 | **Attestors ×3** (`KEEPER_MODE=attestor`) | `services/keeper/src/attest` | each holds one key in `Global.keepers` (attestation only); any 2 together can create tickets; each on its own cloud project / account / RPC provider (DEPLOY-v07 §1) |
+| 5 | **Jobs keeper** (`KEEPER_MODE=jobs`) | `services/keeper/src/keeper.ts` | holds an **operator** key (`Global.operators`), never an attestor key — disjoint on chain (`KeeperOperatorOverlap`) and refused by the service (`keeper/src/role.ts`) |
 | 6 | **Watcher** (`KEEPER_MODE=watcher`) | `services/keeper/src/watch` | no key; own RPC; alerts the guardian chat on any mismatch |
 | 7 | **Signature board** | Postgres tables `attest_signatures`, `attest_hints`, per-attestor DB roles + RLS | untrusted transport: signatures are verified, hints only delay (≤ 90 s) |
 | 8 | **Indexer + API** | `services/indexer`, `services/api` | untrusted for chain truth; the API holds the **launch co-signer key** and decrypts vanity-mint secrets |
@@ -37,12 +37,13 @@ per-mint `Coin` account and everything FUMPAD holds for that mint.
                       │   │  Global · Coin[mint] · Position · Ticket · Consumed · ClaimQueue · Obs.  │                │
                       │   │  PDA signers: fee_claimer, fee_wsol, reward_pool, buyback, event auth.   │                │
                       │   └──▲───────────────▲───────────────────▲───────────────────▲───────────────┘                │
-                      │      │ admin ix      │ guardian ix       │ [Ed25519 ×2 + attest_*]    │ keeper-only ix     │
+                      │      │ admin ix      │ guardian ix       │ [Ed25519 ×2 + attest_*]    │ operator-only ix   │
                       └──────┼───────────────┼───────────────────┼───────────────────┼──────────────────────────────┘
        ══ B1 ═══════════════ │ ═════════════ │ ════════ B2 ══════ │ ═══════════════════│═══════════════════════════════
              Squads admin    │   Squads      │                    │                    │
              3-of-5 + 48 h ──┘   guardian ───┘          attestor-1 ── attestor-2 ── attestor-3      jobs keeper
-                                 2-of-3                   │ own RPC A   │ own RPC B   │ own RPC C   (= attestor-1 key)
+                                 2-of-3                   │ own RPC B   │ own RPC C   │ own RPC D   (operator key, RPC A)
+                                                          (own project / account each)            (never an attestor key)
                                    ▲                      │             │             │
                                    │ alerts               └──── signature board (Postgres, RLS) ───┘
                                  watcher (own RPC D) ── re-derives every TicketAttested / TicketDebited
@@ -71,10 +72,10 @@ Seeds are byte strings; `mint` = the coin's mint; derived addresses for the devn
 |---|---|---|---|---|
 | `global` | `["global"]` | `Global`, fumpad | `initialize_global` (upgrade authority) | written by admin / guardian / permissionless execute ixs (§6) |
 | `coin` | `["coin", mint]` | `Coin`, fumpad; holds creator / platform / buyback lamports | `register_coin` (creator) | lamports leave only via `withdraw_creator_fees` (creator), `withdraw_platform_fees` (→ `Global.platform_treasury`), `execute_buyback` (→ `buyback` PDA → its WSOL ATA → swap) |
-| `fee_claimer` | `["fee_claimer"]` | system account, no data | never created; holds lamports only transiently inside one ix | signs DBC `claim_trading_fee`, `withdraw_migration_fee` (partner), `partner_withdraw_surplus` (in `claim_fees` / `graduate`) and DAMM `claim_position_fee` (in `claim_lp_fees`), each with an exact pinned account list; signs `fee_wsol` close and system transfers out of itself. It is the DBC config's `fee_claimer` and the owner of every coin's DAMM v2 position NFT (NFT account `PDA_DAMM["position_nft_account", nft_mint]`). It never signs a DAMM liquidity / lock / transfer instruction. |
-| `fee_wsol` | `["fee_wsol"]` | SPL-Token WSOL account, authority `fee_claimer` | created and closed inside `claim_fees`, `claim_lp_fees`, `graduate` (caller advances rent, refunded in the same ix) | never exists between instructions; a lamport pre-fund is tolerated (counted as claimed in `claim_fees`; excluded from the budget and returned in `graduate`) |
+| `fee_claimer` | `["fee_claimer"]` | system account, no data | never created; holds lamports only transiently inside one ix | signs DBC `claim_trading_fee` (in `claim_fees` / `claim_unregistered_fees`), `withdraw_migration_fee` (partner), `partner_withdraw_surplus` (in `graduate`) and DAMM `claim_position_fee` (in `claim_lp_fees`) / `claim_reward` (in `claim_position_rewards`), each with an exact pinned account list; signs `fee_wsol` close and system transfers out of itself. It is the DBC config's `fee_claimer` and the owner of every coin's DAMM v2 position NFT (NFT account `PDA_DAMM["position_nft_account", nft_mint]`). It never signs a DAMM liquidity / lock / transfer instruction. |
+| `fee_wsol` | `["fee_wsol"]` | SPL-Token WSOL account, authority `fee_claimer` | created and closed inside `claim_fees`, `claim_lp_fees`, `claim_unregistered_fees`, `graduate` (caller advances rent, refunded in the same ix) | never exists between instructions; a lamport pre-fund is tolerated (counted as claimed in `claim_fees`; excluded from the budget and returned in `graduate`) |
 | `reward_pool` | `["reward_pool"]` | system account, no data | never created | authority of every reward vault and every escrow. Signs Token-2022 `transfer_checked` out of `ATA(reward_pool, coin.mint)` in `claim` / `claim_for` / `process_queue` (to the ticket owner's account or the ticket's escrow) and out of an escrow in `withdraw_escrow` (to an owner account) + escrow close. DBC config `leftover_receiver`. |
-| reward vault | `ATA(reward_pool, mint, Token-2022)` | Token-2022 account | `register_coin` (creator, idempotent) | inflows: DBC `withdraw_leftover` (8%), buybacks, donations, DBC/DAMM base-side fee claims (0 in quote / `OnlyB` mode); outflows: claims only |
+| reward vault | `ATA(reward_pool, mint, Token-2022)` | Token-2022 account | `register_coin` (creator, idempotent) | inflows: DBC `withdraw_leftover` (8%), buybacks, donations, DBC/DAMM base-side fee claims (0 in quote / `OnlyB` mode), DAMM farming rewards paid in the coin's own mint (`claim_position_rewards`); outflows: claims only |
 | `buyback` | `["buyback"]` | system account, no data | never created | signs DBC / DAMM `swap2` as payer in `execute_buyback` with an exact pinned 15 / 14-account list (input = its WSOL ATA, output = the coin's reward vault, referral None); receives Coin lamports and wraps them |
 | buyback WSOL | `ATA(buyback, WSOL)` | SPL-Token account, shared by all coins | `execute_buyback` (`init_if_needed`, cranker) | holds only swap rounding dust between buybacks (never credited to any coin) |
 | `position` | `["position", mint, wallet]` | `Position` (open-ticket list ≤ 5, seq counter, auto-claim opt-out, `rent_payer`) | `attest_sell` (attesting keeper) | closed by the wallet, or by `rent_payer` only while `auto_claim_opt_out == 0` (REVIEW-v0.7 L-1); rent → `rent_payer` |
@@ -83,7 +84,7 @@ Seeds are byte strings; `mint` = the coin's mint; derived addresses for the devn
 | `consumed` (rebuy) | `["consumed", sha256(tx_sig), ix_key, ticket]` | `Consumed` kind 1 | `attest_rebuy` (keeper) | same close rule |
 | `claim_queue` | `["claim_queue", mint]` | zero-copy, 81,976 B, 1024 entries | rent pre-funded by `graduate`; `init_claim_queue` ×9 (anyone, Graduated only) | modified by claim, claim_for, process_queue, attest_rebuy (queued tickets), close_ticket |
 | `observations` | `["observations", mint]` | zero-copy ring, 256 samples | pre-funded by `graduate`; `init_observations` (anyone, Graduated only) | written by `record_samples` |
-| `escrow` | `["escrow", ticket]` | Token-2022 account, authority `reward_pool` | `process_queue` cranker or `claim_for` keeper (`Ticket.escrow_payer`) | emptied only by `withdraw_escrow` (owner-signed) |
+| `escrow` | `["escrow", ticket]` | Token-2022 account, authority `reward_pool` | `process_queue` cranker or `claim_for` operator (`Ticket.escrow_payer`) | emptied only by `withdraw_escrow` (owner-signed) |
 | event authority | `["__event_authority"]` | Anchor `emit_cpi` | — | signs the event self-CPI only |
 
 External accounts the program trusts by address or derivation (never by caller choice): DBC pool / config pinned in
@@ -116,6 +117,12 @@ swap on a FUMPAD DBC / DAMM v2 pool  ── 1.25% fee (DBC: 99% → 1.25% over 8
 launch flag early; a late first claim only moves more fees to the buyback (D33). DBC creator fee share is 0 by
 config (checked); FUMPAD pays the creator from its own share.
 
+Otherwise-stranded value (pre-audit, SPEC Clarification 28): `claim_unregistered_fees` (anyone) sends the partner
+fees of a pool on a FUMPAD-shaped config whose mint has no `Coin` straight to `Global.platform_treasury` (no split,
+no coin state; refused with `PoolIsRegistered` when the Coin exists). `claim_position_rewards` (anyone, Graduated)
+sends DAMM v2 farming rewards of a `fee_claimer`-held position of the coin's pool to the coin's reward vault (coin
+mint) or to `ATA(platform_treasury, reward_mint)` (any other mint); the destination is computed on chain.
+
 ### 4.2 Graduation (D34 / D35)
 
 ```
@@ -143,10 +150,11 @@ fumpad.graduate (anyone, idempotent per step):
 
 | | Pre-graduation (`Curve`) | Post-graduation (`Graduated`) |
 |---|---|---|
-| Caller | keeper only | anyone |
+| Caller | operator only (`Global.operators`) | anyone |
 | Timing | after the launch window | — |
 | Guard price | median of `Coin.pregrad_ring` (≥ 4 keeper samples within 300 s spanning ≥ 60 s); spot within ±band of the median AND of the latest sample (≤ 60 s old) | 30-min median of keeper samples (≥ `oracle_min_samples`, 5 of 6 buckets); spot within ±band |
 | Slice | ≤ `buyback_max_pool_bps` (0.5%) of the curve's quote reserve, and never reaching the migration threshold | ≤ 0.5% of the pool's `token_b_amount` |
+| Pool status | — (DBC has none) | DAMM v2 `pool_status` must be 0 (`PoolDisabled`) |
 
 ### 4.4 Claims, queue, escrow
 
@@ -164,9 +172,9 @@ fitting queue entry; else queued (≤ 2 entries per wallet per coin, 1024 per co
 |---|---|---|---|
 | Coin, reward vault | creator | — (permanent) | |
 | Position, Ticket, Consumed | attesting keeper (`rent_payer`) | `rent_payer` | `close_position`, `close_ticket`, `close_consumed` |
-| Escrow | cranker / `claim_for` keeper (`escrow_payer`) | `escrow_payer` | `withdraw_escrow` |
+| Escrow | cranker / `claim_for` operator (`escrow_payer`) | `escrow_payer` | `withdraw_escrow` |
 | Observations, ClaimQueue | pre-funded from the migration fee by `graduate` | — (permanent) | |
-| `fee_wsol` | caller of `claim_fees` / `claim_lp_fees` / `graduate` | caller, same ix | |
+| `fee_wsol` | caller of `claim_fees` / `claim_lp_fees` / `claim_unregistered_fees` / `graduate` | caller, same ix | |
 | buyback WSOL ATA | first cranker | — | |
 
 ## 5. State machines
@@ -182,7 +190,8 @@ fitting queue entry; else queued (≤ 2 entries per wallet per coin, 1024 per co
 ```
 A third-party completion leaves the coin in `Curve` until `graduate`. Router: DBC while `Curve`, DAMM v2 while
 `Graduated`, refused in `Complete`. Tickets are attested in every status (DBC sells before completion keep being
-attested after it). Claims, observations, post-grad buybacks and `claim_lp_fees` require `Graduated`.
+attested after it). Claims, observations, post-grad buybacks, `claim_lp_fees` and `claim_position_rewards` require `Graduated`. A DAMM
+v2 pool disabled by its operator is not sampled (claims wait for coverage), not bought on and not routed.
 
 ### 5.2 Ticket
 
@@ -209,23 +218,24 @@ attest_sell ─► Open ──claim / claim_for (paid now)───────�
 
 | Action | Who | Delay | Notes |
 |---|---|---|---|
-| `initialize_global` | program upgrade authority (checked via ProgramData) | — | sets admin = guardian, treasury, `cluster_tag` (any u8, immutable), params (validated), bootstrap keepers (no 6 h freeze), bootstrap DBC configs (validated, no 48 h) |
+| `initialize_global` | program upgrade authority (checked via ProgramData) | — | sets admin = guardian, treasury, `cluster_tag` (any u8, immutable), params (validated), bootstrap keepers (no 6 h freeze), operators (disjoint from the keepers), bootstrap DBC configs (validated, no 48 h) |
 | `queue_params` → `execute_params` | admin → anyone | 48 h | `Params::is_valid` bounds every field (SPEC §6.2 + v0.7 attestation params); reward terms and fee split are snapshotted per coin at `register_coin`; oracle / buyback / attestation params (`ticket_challenge_secs`, `max_attest_age_secs`, rate cap, `launch_signer`) are global |
 | `cancel_params` | admin or guardian | immediate | |
 | `queue_config` → `execute_config` (add / remove a DBC config) | admin → anyone | 48 h | add re-validated at queue and execute; removal doesn't affect registered coins |
 | `cancel_config` | admin or guardian | immediate | |
 | `propose_admin(admin, treasury, guardian)` → `accept_admin` | admin → the new admin key signs | 48 h | `cancel_admin` by admin or guardian |
-| `set_keepers` | admin | immediate | new keys can't count toward attestations for 6 h; remaining keys keep their timestamp |
+| `set_keepers` | admin | immediate | new keys can't count toward attestations for 6 h; remaining keys keep their timestamp; a current operator key is refused |
+| `set_operators` | admin | immediate | ≤ 2 jobs keys; an attestor key is refused (`KeeperOperatorOverlap`); no freeze (operators can't create tickets) |
 | `set_pause(bits)` | admin or guardian | immediate | non-zero lapses after 7 d unless renewed; 0 unpauses |
 | `void_ticket(reason, reopen)` | guardian or admin | only inside the ticket's challenge window, `Open` tickets | `reopen = true` lets one corrected attestation of the same trade follow |
-| `migrate_global` | admin | — | no-op on the current layout (D39: fresh layouts; mechanism kept) |
+| `migrate_global` | admin | — | on a Global from before `operators` existed (all-zero slots): `operators[0] = keepers[0]` (keeps the old jobs key working across the upgrade; `set_operators` then moves it — the devnet bootstrap does both in one tx); otherwise a no-op |
 | program upgrade | upgrade authority (admin Squads vault, 48 h Squads time lock) | 48 h (Squads) | can replace everything; the on-chain timelocks are meaningful only with the Squads time lock |
 
 Pause flags (`Global.paused`, in force only while `now < pause_expires_at`):
 
 | Bit | Flag | Stops | Never stopped by any flag |
 |---|---|---|---|
-| 1 | `PAUSE_LAUNCH` | `register_coin` | router `sell`; `claim_fees`, `claim_lp_fees`; `withdraw_creator_fees`, `withdraw_platform_fees`; `record_samples`; `void_ticket`; `close_*`; `set_auto_claim`; `init_*`; trading on Meteora itself |
+| 1 | `PAUSE_LAUNCH` | `register_coin` | router `sell`; `claim_fees`, `claim_lp_fees`, `claim_unregistered_fees`, `claim_position_rewards`; `withdraw_creator_fees`, `withdraw_platform_fees`; `record_samples`; `void_ticket`; `close_*`; `set_auto_claim`; `init_*`; trading on Meteora itself |
 | 2 | `PAUSE_TRADE` | router `buy`, `execute_buyback` | |
 | 4 | `PAUSE_CLAIMS` | `claim`, `claim_for`, `process_queue`, `withdraw_escrow` | |
 | 8 | `PAUSE_GRADUATE` | `migrate_pool`, `graduate` (never Meteora's own migration) | |
@@ -238,21 +248,26 @@ lock; upgrade authority = admin vault (transferred only after `accept_admin` exe
 
 ## 7. Keeper powers and limits
 
-On-chain, a "keeper" is any key in `Global.keepers` (3 slots). The jobs keeper shares the attestor-1 key.
+Two disjoint on-chain roles (pre-audit fix, SPEC Clarification 25): **attestors** = `Global.keepers` (3 slots: rows 1–3
+below) and **operators** = `Global.operators` (2 slots, the jobs keeper's key: rows 4–7). `initialize_global`,
+`set_operators` and `set_keepers` refuse a key in both (`KeeperOperatorOverlap`); the only way a key is both is the
+transitional `migrate_global` fill (§6). An attestor key has no jobs power; an operator key can neither submit nor
+co-sign an attestation.
 
 | Power | Instruction | Limit enforced on chain |
 |---|---|---|
-| Co-sign tickets (2 distinct active keys needed) | Ed25519 + `attest_sell` | record binding (program id, cluster tag, coin, its DBC / recorded DAMM pool, trader ≠ creator / default, `usd_cents ≥ min`, `0 < ticket_tokens ≤ base_amount`, `quote_gross > 0`, `price > 0`, `slot ≥ launch_slot`, `block_time ∈ [created_at − 60 s, now + 60 s]`, age ≤ `max_attest_age_secs`, Pyth age ≤ `max_price_age_secs`), replay marker, ≤ 5 open per wallet, rate cap (defers), challenge window, guardian void, `PAUSE_ATTEST`. **Not** checked on chain: that the trade exists, hold time, rebuys, the D10/D12 price, the USD value. |
-| Co-sign rebuy debits | Ed25519 + `attest_rebuy` | ticket / mint / owner binding, `Open|Queued`, `sell_ts ≤ block_time ≤ sell_ts + rebuy_window`, age, one debit per (trade, ticket), debit ≤ ticket tokens. Can only lower or void tickets. |
-| Submit attestations (fee payer, pays rent) | `attest_*` | submitter must be a keeper; signatures decide |
-| Price samples | `record_samples` | price is read from the pool account, never supplied; spacing ≥ `oracle_min_spacing_secs`; the transaction may contain only compute-budget instructions besides it; pre-grad samples keeper-only; post-grad samples permissionless only after `keeper_stale_secs` without a keeper sample, and those (fallback) never count for medians. A keeper controls **timing** only. |
-| Pre-graduation buybacks | `execute_buyback` (Curve) | guards in §4.3; spends only the coin's own buyback balance into its own reward vault |
-| Auto-claim | `claim_for` | same rules as `claim`; payout only to the owner's canonical ATA or the ticket's escrow; respects opt-out |
-| Close a Position it paid for | `close_position` | only while the wallet hasn't opted out of auto-claim |
+| Co-sign tickets (2 distinct active keys needed) — attestor | Ed25519 + `attest_sell` | record binding (program id, cluster tag, coin, its DBC / recorded DAMM pool, trader ≠ creator / default, `usd_cents ≥ min`, `0 < ticket_tokens ≤ base_amount`, `quote_gross > 0`, `price > 0`, **`price ≥ ⌊quote_gross·2⁶⁴/base_amount⌋`** (D12: never below its own execution price), `slot ≥ launch_slot`, `block_time ∈ [created_at − 60 s, now + 60 s]`, age ≤ `max_attest_age_secs`, Pyth age ≤ `max_price_age_secs`), replay marker, ≤ 5 open per wallet, rate cap (defers), challenge window, guardian void, `PAUSE_ATTEST`. **Not** checked on chain: that the trade exists, hold time, rebuys, the D10 reference / D12 floor beyond the execution price, the USD value. |
+| Co-sign rebuy debits — attestor | Ed25519 + `attest_rebuy` | ticket / mint / owner binding, `Open|Queued`, `sell_ts ≤ block_time ≤ sell_ts + rebuy_window`, age, one debit per (trade, ticket), debit ≤ ticket tokens. Can only lower or void tickets. |
+| Submit attestations (fee payer, pays rent) — attestor | `attest_*` | submitter must be a keeper; signatures decide |
+| Price samples — operator | `record_samples` | price is read from the pool account, never supplied; spacing ≥ `oracle_min_spacing_secs`; the transaction may contain only compute-budget instructions besides it; pre-grad samples operator-only; post-grad samples permissionless only after `keeper_stale_secs` without an operator sample, and those (fallback) never count for medians; a disabled DAMM v2 pool is skipped. An operator controls **timing** only. |
+| Pre-graduation buybacks — operator | `execute_buyback` (Curve) | guards in §4.3; spends only the coin's own buyback balance into its own reward vault |
+| Auto-claim — operator | `claim_for` | same rules as `claim`; payout only to the owner's canonical ATA or the ticket's escrow; respects opt-out |
+| Close a Position it paid for — the attestor that paid | `close_position` | only while the wallet hasn't opted out of auto-claim |
 
-Permissionless cranks anyone may run (keepers do): `claim_fees`, `claim_lp_fees`, `migrate_pool`, `graduate`,
+Permissionless cranks anyone may run (the jobs keeper does): `claim_fees`, `claim_lp_fees`, `migrate_pool`, `graduate`,
 `init_observations`, `init_claim_queue`, post-grad `execute_buyback`, `process_queue`, `close_ticket`,
-`close_consumed`, `execute_params`, `execute_config`, `withdraw_platform_fees`.
+`close_consumed`, `execute_params`, `execute_config`, `withdraw_platform_fees`, `claim_unregistered_fees`,
+`claim_position_rewards`.
 
 ## 8. Off-chain attestation pipeline (scope B)
 

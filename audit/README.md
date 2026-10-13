@@ -13,7 +13,7 @@ were not verified are marked **UNVERIFIED**.
 | `audit/build-and-test.sh` | one script that builds and runs every suite listed below |
 
 Normative sources in the repo (read in this order): `docs/SPEC-v0.7-meteora.md` (v0.7 decisions D30–D39 +
-Clarifications 1–24) → `docs/SPEC.md` (v0.6; every rule v0.7 does not change is still in force, notably D1–D6, D9,
+Clarifications 1–28) → `docs/SPEC.md` (v0.6; every rule v0.7 does not change is still in force, notably D1–D6, D9,
 D10/D12, D15–D17, D23–D26, D29) → `contracts/INTERFACE-v0.7.md` (instructions, accounts, PDAs, byte layouts,
 attestation messages, events, errors) → `contracts/CONTRACTS.md` (build, sizes, CU, deploy order, open risks) →
 `services/meteora/ATTESTATION.md` (trade parser and keeper signing rules).
@@ -41,7 +41,8 @@ tokens from a per-coin reward pool.
   ≥ 10 min, not the creator, ≤ 5 open tickets per wallet and coin, rebuy rule, D10/D12 price floor) is turned into
   an on-chain `Ticket` by **2-of-3 keeper attestations**: three keepers independently re-derive the coin's full
   history from finalized chain data with a deterministic engine and sign a fixed-width Ed25519 message; the program
-  verifies the signatures by Ed25519-precompile introspection, prevents replays with per-trade PDAs, applies a
+  verifies the signatures by Ed25519-precompile introspection, requires the attested ticket price to be at least the
+  trade's own execution price, prevents replays with per-trade PDAs, applies a
   per-coin rate cap, and makes every ticket wait out a **challenge window** (default 6 h) during which a guardian
   multisig can void it. An independent watcher re-derives every attestation and alerts on mismatch.
 - **Claims.** After graduation, a ticket is claimable when the 30-minute median of keeper-recorded DAMM v2 spot
@@ -49,6 +50,9 @@ tokens from a per-coin reward pool.
   no older fitting claim waiting), otherwise they enter a per-coin skip-ahead queue (1024 entries); payouts to
   accounts that refuse transfers go to a per-ticket escrow. Keepers may auto-claim on the owner's behalf (payout
   always to the owner); owners can opt out.
+- **Keys.** The three attestor keys (`Global.keepers`) only attest. A separate **operator** key (`Global.operators`,
+  the jobs keeper) takes keeper price samples, auto-claims and runs pre-graduation buybacks; the program refuses a
+  key in both sets, and each attestor runs in its own cloud project / account with its own RPC provider.
 - **Governance.** Admin = Squads v4 multisig (3-of-5, 48 h Squads time lock; also program upgrade authority);
   guardian = separate Squads multisig (2-of-3, no time lock) that can only pause, cancel pending changes and void
   tickets in their challenge window. Params, the DBC-config allow-list and admin/treasury/guardian changes are 48 h
@@ -61,9 +65,10 @@ can disable a pool or change its fee; Meteora takes 20% of trading fees.
 
 ## 2. Scope
 
-**Commit:** `aa137a936518d89c9a2aba83cbf1e8f27208aa47` (`main`, 2026-10-13). This package lives on a branch on
-top of that commit and adds only the `audit/` directory; no code differs. Program source last changed in `5cac136`
-/ `418b24c` (both ancestors of `aa137a9`).
+**Commit:** the head of this branch: `aa137a936518d89c9a2aba83cbf1e8f27208aa47` (`main`, 2026-10-13) + the
+deploy-config commit `13bfa7b` + the **pre-audit fixes** (PRIOR-REVIEWS §0: operators separate from attestors, DAMM
+v2 pool status, the D12 execution-price floor in `attest_sell`, `claim_unregistered_fees`, `claim_position_rewards`,
+error-code and two-coin tests). The numbers below are for that head.
 
 Line counts: `wc -l` (all lines) and "code" = lines that are neither blank nor comment-only (`//`, `///`, `//!`,
 `*`). Produced by the counting snippet in §2.4.
@@ -73,36 +78,37 @@ Line counts: `wc -l` (all lines) and "code" = lines that are neither blank nor c
 `contracts/programs/fumpad/` — Anchor 1.2.1, one program `fumpad`, devnet / test id
 `5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb` (mainnet will get its own keypair and `declare_id!`; §6).
 
-**47 Rust files, 6,526 lines (5,362 code), of which 523 lines are in-file `#[cfg(test)]` modules**; plus
+**48 Rust files, 6,986 lines (5,700 code), of which 523 lines are in-file `#[cfg(test)]` modules**; plus
 `programs/fumpad/Cargo.toml` (31), `contracts/Cargo.toml` (release profile, `overflow-checks = true`),
 `contracts/.cargo/config.toml` (SBF inliner flags), `contracts/rust-toolchain.toml`, `contracts/Cargo.lock`.
 
 | File | Lines | Contents |
 |---|---:|---|
-| `src/lib.rs` | 199 | `declare_id!`, 37 instruction entry points, `emit_event!` macro |
+| `src/lib.rs` | 228 | `declare_id!` (devnet id; `--features mainnet` = `program-ids/mainnet.txt`), 40 instruction entry points, `emit_event!` macro |
 | `src/attestation.rs` | 389 | sell (284 B) / rebuy (236 B) message codecs, Ed25519-precompile introspection |
-| `src/constants.rs` | 153 | seeds, defaults, param bounds, external ids |
-| `src/error.rs` | 125 | 59 custom errors (6000–6058) |
-| `src/events.rs` | 353 | events + shared event self-CPI (`emit_cpi_data`) |
-| `src/external/meteora.rs` | 361 | DBC 0.2.1 / DAMM v2 0.2.4 raw layouts (byte offsets), discriminators, pass-through CPI, `require_exact_accounts` |
+| `src/constants.rs` | 156 | seeds, defaults, param bounds, external ids, `MAX_KEEPERS` 3 / `MAX_OPERATORS` 2 |
+| `src/error.rs` | 131 | 62 custom errors (6000–6061) |
+| `src/events.rs` | 387 | events + shared event self-CPI (`emit_cpi_data`) |
+| `src/external/meteora.rs` | 396 | DBC 0.2.1 / DAMM v2 0.2.4 raw layouts (byte offsets), discriminators, pass-through CPI, `require_exact_accounts` |
 | `src/external/mod.rs` | 1 | |
 | `src/math/{fees,price,mod}.rs` | 44 + 132 + 5 | 50/30/20 split, Q64 price from `sqrt_price`, 10× check |
-| `src/state/global.rs` | 264 | `Global`, `Params` + `is_valid` bounds, pause flags, keeper/guardian predicates |
+| `src/state/global.rs` | 276 | `Global` (incl. `operators`), `Params` + `is_valid` bounds, pause flags, keeper / operator / guardian predicates |
 | `src/state/coin.rs` | 269 | `Coin`, rate-cap leaky bucket, pre-graduation sample ring (median) |
 | `src/state/{position,ticket,consumed,claim_queue,observations,mod}.rs` | 31 + 56 + 27 + 28 + 185 + 34 | per-wallet / per-ticket / replay-marker / queue / oracle ring |
-| `src/instructions/admin/{mod,config,migrate_global}.rs` | 264 + 104 + 41 | init, params / config / admin timelocks, pause, keepers, layout hook |
+| `src/instructions/admin/{mod,config,migrate_global}.rs` | 299 + 104 + 61 | init, params / config / admin timelocks, pause, keepers, operators, layout hook (operators fill) |
 | `src/instructions/launch.rs` | 121 | `register_coin` |
-| `src/instructions/venue/router.rs` | 173 | `buy` / `sell` (user-signed DBC / DAMM v2 `swap2` pass-through) |
+| `src/instructions/venue/router.rs` | 176 | `buy` / `sell` (user-signed DBC / DAMM v2 `swap2` pass-through) |
 | `src/instructions/venue/fees.rs` | 309 | `claim_fees` (DBC partner fees), `claim_lp_fees` (DAMM v2 position fees) |
-| `src/instructions/venue/buyback.rs` | 234 | `execute_buyback` (pre- and post-graduation guards) |
+| `src/instructions/venue/buyback.rs` | 237 | `execute_buyback` (pre- and post-graduation guards, pool status) |
+| `src/instructions/venue/unclaimed.rs` | 260 | `claim_unregistered_fees`, `claim_position_rewards` (otherwise-stranded value) |
 | `src/instructions/venue/graduation.rs` | 332 | `migrate_pool`, `graduate` (leftover, migration fee, surplus, setup budget) |
-| `src/instructions/venue/{record_samples,init_observations,common,mod}.rs` | 151 + 47 + 112 + 16 | oracle samples, WSOL helpers |
-| `src/instructions/tickets/{attest_sell,attest_rebuy,mod}.rs` | 259 + 152 + 98 | attestations, `void_ticket`, `close_consumed` |
+| `src/instructions/venue/{record_samples,init_observations,common,mod}.rs` | 161 + 47 + 112 + 18 | oracle samples (operator, pool status), WSOL helpers |
+| `src/instructions/tickets/{attest_sell,attest_rebuy,mod}.rs` | 265 + 152 + 98 | attestations, `void_ticket`, `close_consumed` |
 | `src/instructions/rewards/*.rs` (12 files) | 1,247 | `claim`, `claim_for`, `process_queue`, queue ops, escrow, close paths, fee withdrawals, `set_auto_claim`, `init_claim_queue` |
 | `src/instructions/mod.rs` | 11 | |
 
-Test code (not in scope for findings, but it is the regression evidence): `contracts/tests/src/*.rs`, 15 files,
-5,557 lines (LiteSVM harness + 79 integration tests on the mainnet Meteora binaries).
+Test code (not in scope for findings, but it is the regression evidence): `contracts/tests/src/*.rs`, 18 files,
+6,620 lines (LiteSVM harness + 95 integration tests on the mainnet Meteora binaries).
 
 ### 2.2 Scope B — off-chain attestation trust chain
 
@@ -115,13 +121,13 @@ Everything that decides what a keeper signs, or that checks what was signed. Typ
 | `services/engine/src/**/*.ts` | 12 | 1,608 (1,195) | deterministic eligibility engine: hold buckets, rebuy rule, D10 reference / D12 floor, USD via Pyth (Hermes historical), canonical output, incremental mint crawl |
 | `services/keeper/src/attest/*.ts` | 7 | 1,232 | attestor: re-derivation per coin (`derive.ts`), messages (`records.ts`), signature board (Postgres + RLS, `board.ts`), submission (`attestor.ts`, `chain.ts`), history guard |
 | `services/keeper/src/watch/*.ts` | 2 | 339 | watcher: field-by-field verification of every `TicketAttested` / `TicketDebited`, alerts |
-| `services/keeper/src/{main,config,alerts}.ts` | 3 | 225 | mode switch, key loading, Telegram alerts |
+| `services/keeper/src/{main,config,alerts,role}.ts` | 4 | 271 | mode switch, key loading, Telegram alerts, key-role check (jobs = operator key only; attestor never an operator key) |
 | `services/sdk/src/{attestation,hash,pda}.ts` | 3 | 464 (396) | message encoding (byte-identical to the program, vector-tested), Ed25519 sign/verify, PDA derivation incl. consumed markers |
 
-Total scope B: **36 files, 5,227 lines (4,085 code) + 1,470 lines of IDL data.**
+Total scope B: **37 files, 5,285 lines (4,121 code) + 1,470 lines of IDL data.**
 
-Out of scope B but relevant context: `services/keeper/src/keeper.ts` (the "jobs" keeper: samples, cranks,
-auto-claim, pre-graduation buybacks; its on-chain powers are bounded by the program and listed in ARCHITECTURE
+Out of scope B but relevant context: `services/keeper/src/keeper.ts` (the "jobs" keeper, operator key: samples,
+cranks, auto-claim, pre-graduation buybacks; its on-chain powers are bounded by the program and listed in ARCHITECTURE
 §7), `services/indexer`, `services/api` (incl. the launch co-signer `LAUNCH_SIGNER_KEY`), `services/grinder`.
 
 ### 2.3 Scope C — optional / light: embedded-wallet silent signing
@@ -143,7 +149,7 @@ Total scope C: **3 files, 731 lines (498 code).** Callers for context: `app/src/
 ```sh
 cnt() { t=0; c=0; for f in "$@"; do t=$((t+$(wc -l <"$f"))); c=$((c+$(grep -cvE '^\s*$|^\s*//|^\s*\*|^\s*/\*' "$f"))); done; echo "$# files, $t lines, $c code"; }
 cnt $(git ls-files 'contracts/programs/fumpad/src/*.rs')
-cnt $(git ls-files 'services/meteora/src/*.ts' | grep -v /idl/) $(git ls-files 'services/engine/src/*.ts' 'services/keeper/src/attest/*.ts' 'services/keeper/src/watch/*.ts') services/keeper/src/{main,config,alerts}.ts services/sdk/src/{attestation,hash,pda}.ts
+cnt $(git ls-files 'services/meteora/src/*.ts' | grep -v /idl/) $(git ls-files 'services/engine/src/*.ts' 'services/keeper/src/attest/*.ts' 'services/keeper/src/watch/*.ts') services/keeper/src/{main,config,alerts,role}.ts services/sdk/src/{attestation,hash,pda}.ts
 cnt app/src/chain/{allowlist,signer,launchAuth}.ts
 ```
 
@@ -157,7 +163,7 @@ check that our code does not assume more than stated.
 | Component | Version / id | Our assumptions |
 |---|---|---|
 | **Meteora DBC** | `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`, mainnet 0.2.1, programdata sha256 `4c26a8a5…f23b`, upgrade authority `JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd`, last deployed slot 445,503,633 | Account layouts at the byte offsets in `external/meteora.rs` (`VirtualPool` 424 B, `PoolConfig` 1,048 B) stay valid (readers fail closed on owner / discriminator / length). `claim_trading_fee` pays partner fees only to the config's `fee_claimer` signer. `withdraw_leftover` pays the leftover only to `ATA(leftover_receiver, mint)` and sets `is_withdraw_leftover`. `withdraw_migration_fee` (partner) / `partner_withdraw_surplus` pay only to the `fee_claimer` signer and set their flags. `migration_damm_v2` creates the DAMM v2 pool under a config whose `pool_creator_authority` is DBC's pool authority and mints the 100% partner-locked position NFT to `fee_claimer`. `enable_first_swap_with_min_fee` gives the min fee to exactly one swap of the pool-creation transaction (verified on the binary: `verify_dbc_min_fee_goes_to_one_swap_per_launch_tx`). `TokenAuthorityOption::Immutable` leaves no mint / freeze / metadata authority. Swaps emit `EvtSwap` + `EvtSwap2` via self-CPI with the `__event_authority` PDA. |
-| **Meteora DAMM v2** | `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`, mainnet 0.2.4, sha256 `4d5b920b…848b`, same upgrade authority, last deployed slot 445,230,614; migration config `A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck` | Pool PDA `["pool", config, max(mint, WSOL), min(mint, WSOL)]`; `sqrt_price` at offset 456, `pool_status` at 481, `token_b_amount` for depth. `claim_position_fee` requires the position-NFT holder to sign and pays to the given token accounts. Permanently locked liquidity can never be withdrawn by anyone. Anyone can create positions / add / lock liquidity in the pool (handled, REVIEW-v0.7 H-1). The pool can be disabled by its operator (router refuses; samples do **not** check it — THREAT-MODEL §4). |
+| **Meteora DAMM v2** | `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`, mainnet 0.2.4, sha256 `4d5b920b…848b`, same upgrade authority, last deployed slot 445,230,614; migration config `A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck` | Pool PDA `["pool", config, max(mint, WSOL), min(mint, WSOL)]`; `sqrt_price` at offset 456, `pool_status` at 481, `token_b_amount` for depth. `claim_position_fee` requires the position-NFT holder to sign and pays to the given token accounts. Permanently locked liquidity can never be withdrawn by anyone. Anyone can create positions / add / lock liquidity in the pool (handled, REVIEW-v0.7 H-1). The pool can be disabled by its operator (`pool_status` @481 ≠ 0: router and buybacks refuse it, samples skip it). Farming rewards (`reward_infos` @728) are paid by `claim_reward` to the position-NFT holder's signature (`claim_position_rewards`); on our pools only a DAMM admin can open one (UNVERIFIED). |
 | **Squads v4** | `SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf`, sha256 `dec8d3e0…d34c`, upgrade authority **none** (immutable), last deployed slot 302,582,236 | Vault PDA signs only executed proposals; time lock enforced by the program; `configAuthority = null` makes membership / threshold / time-lock changes themselves subject to vote + time lock. |
 | **Pyth** (Hermes historical API, SOL/USD feed `0xef0d8b6f…b56d`) | off-chain only in v0.7 (the program no longer reads Pyth) | All attestors and the watcher use the same Hermes source and pick the update with the greatest `publish_time ≤ block_time` (deterministic tie-break); the program only checks `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs` on the attested numbers. Hermes availability / integrity is trusted for the $50 threshold only. |
 | SPL Token, Token-2022, ATA, System, Ed25519 precompile, instructions sysvar | Solana mainnet builtins / programs | Standard semantics. Ed25519 precompile verifies every listed signature or fails the whole transaction. |
@@ -201,31 +207,31 @@ directory it prints; each step prints its pass/fail line. What it runs, in order
 
 1. **Fixture check.** `contracts/tests/fixtures/*` are committed (dumped read-only from mainnet; no download
    needed). The script verifies their sha256 against the values in §5.1.
-2. **Program build.** `anchor build -p fumpad` in `contracts/` → `contracts/target/deploy/fumpad.so` (754,288
-   bytes at `aa137a9`), IDL `target/idl/fumpad.json`. The program keypair `contracts/target/deploy/fumpad-keypair.json`
+2. **Program build.** `anchor build -p fumpad` in `contracts/` → `contracts/target/deploy/fumpad.so` (804,472
+   bytes at this head; 754,288 at `aa137a9`), IDL `target/idl/fumpad.json`. The program keypair `contracts/target/deploy/fumpad-keypair.json`
    is git-ignored and **is not part of the package**; it does not affect the compiled bytes (`declare_id!` does). If
    it is absent, `anchor build` creates a throwaway keypair and prints "Program ID mismatch detected" (harmless;
    verified: a build from a `git archive` copy in another directory with a fresh keypair gave the same `fumpad.so`
    sha256 as the build with the devnet keypair). It is only needed to *deploy* (the local e2e stack loads the `.so` at the program id with `--upgradeable-program` and needs no
    keypair).
-3. **Program unit tests.** `cargo test -p fumpad --lib` — 20 tests (attestation codec + Ed25519 parsing, queue,
+3. **Program unit tests.** `cargo test -p fumpad --lib` — 21 tests (attestation codec + Ed25519 parsing, queue,
    oracle median / coverage, pre-graduation ring, rate cap, fee split, price math, account sizes).
-4. **LiteSVM integration suite.** `cargo test -p tests` — 78 pass + 1 ignored (`derive_exact_curves`, a re-derivation
+4. **LiteSVM integration suite.** `cargo test -p tests` — 94 pass + 1 ignored (`derive_exact_curves`, a re-derivation
    tool), ≈ 15 s. Runs the built `fumpad.so` together with the **mainnet** DBC 0.2.1 and DAMM v2 0.2.4 binaries and
    the mainnet DAMM v2 migration config. Includes the CU / tx-size / rent report (`cu_report`; print it with
    `cargo test -p tests cu_report -- --nocapture`) and the attestation / DBC-config test-vector checks
    (`UPDATE_VECTORS=1` regenerates them).
-5. **Services.** `npm ci`, `npm run typecheck`, `npm test` (vitest, project `unit`: 40 files, 411 tests incl.
+5. **Services.** `npm ci`, `npm run typecheck`, `npm test` (vitest, project `unit`: 42 files, 436 tests incl.
    parser fixtures from mainnet transactions, engine golden replays of recorded mainnet histories, attestor 2-of-3
    logic, watcher, SDK ↔ contract vectors).
 6. **Services integration + local e2e.** `npm run test:integration` (6 files, 31 tests, ≈ 4 min): indexer ↔
    Postgres ↔ API, keeper single-instance lock, and `e2e.test.ts` = `npm run local`: a `solana-test-validator` with
    the built `fumpad.so`, the mainnet DBC / DAMM v2 binaries and migration config, a throwaway Postgres
-   (`initdb`), the real indexer, API, jobs keeper, **three attestors and the watcher**, running launch → direct and
+   (`initdb`), the real indexer, API, jobs keeper (operator key), **three attestors and the watcher**, running launch → direct and
    routed trades on DBC → attested tickets (outside + router) → rebuy debit → curve completion → migration →
    `graduate` → DAMM v2 trades → samples → auto-claim payout, and asserting the watcher found every attestation
    matching. Ports: the script pins the validator's gossip / dynamic ports to 8001 / 8002–8041 (a first run without that collided with another validator on the same machine); override with `FUMPAD_RPC_PORT`, `FUMPAD_API_PORT`, `FUMPAD_GOSSIP_PORT`, `FUMPAD_PG_PORT`.
-7. **App.** `npm ci` and `npm test` in `app/` (node test runner: 104 tests incl. the allow-list against
+7. **App.** `npm ci` and `npm test` in `app/` (node test runner: 113 tests incl. the allow-list against
    transactions captured from the local stack and tamper variants).
 8. **Security-review PoCs.** The v0.7 off-chain PoCs (`security-review/v07-poc/*.test.ts`) were written to pass while
    each bug existed and were flipped to assert the fix; the script runs them (it creates the git-ignored symlink
@@ -243,7 +249,8 @@ Not run by the script (need keys / funded accounts / mainnet RPC): `npm run boot
 `npm run multisig:rehearsal` (≈ 3 min; local validator + mainnet Squads v4 binary; needs the program keypair because
 it runs a real `solana program deploy`), `npm run mainnet:rehearsal` (≈ 16 min; read-only mainnet fork), the devnet
 scenario `services/scripts/devnet/*`. Their results are recorded in `services/MULTISIG.md` §6 (33/33) and
-`services/LAUNCH-DAY.md` §9 (37/37).
+`services/LAUNCH-DAY.md` §9 (37/37); at this head the mainnet rehearsal (37/37) and the bootstrap rehearsal (7/7)
+were re-run (TEST-COVERAGE §3).
 
 ### 5.1 Mainnet fixtures
 
@@ -274,7 +281,9 @@ exact-8% curve configs for a new DBC binary.
 
 ## 6. Deployed program and reproducing its bytes
 
-**Devnet** (only deployment; nothing is on mainnet):
+**Devnet** (only deployment; nothing is on mainnet). **It runs the `aa137a9` code**, i.e. without the pre-audit
+fixes, until the upgrade of `services/DEPLOY-v07.md` §10 (extend + deploy + `migrate_global` / `set_operators`); the
+table and the reproduction below describe the `aa137a9` deployment:
 
 | | |
 |---|---|
@@ -302,6 +311,6 @@ done yet.
 **Mainnet** (planned, `services/LAUNCH-DAY.md`): a fresh program keypair, `declare_id!` changed to it on a release
 branch (`services/scripts/mainnet/build-program.ts` performs exactly that substitution in a temp copy and checks
 the id is embedded), so the mainnet `.so` differs from the devnet one in the embedded id only. `initialize_global`
-from the upgrade-authority key with `cluster_tag = 0`, the bootstrap keepers and the DBC config, `launch_signer` set;
+from the upgrade-authority key with `cluster_tag = 0`, the bootstrap keepers (attestors), the operator (jobs key) and the DBC config, `launch_signer` set;
 then `propose_admin` → 48 h → `accept_admin` to the Squads vaults, then upgrade authority → admin vault
 (`services/MULTISIG.md` §4).
