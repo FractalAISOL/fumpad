@@ -7,10 +7,10 @@
 import { Keypair } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import type { ClaimQueueAccount, QueueEntry } from "../src/accounts.js";
-import { FumpadClient } from "../src/client.js";
-import { MAX_QUEUE_ENTRIES_PER_TX } from "../src/constants.js";
-import { planQueuePayments } from "../src/math/rewards.js";
+import type { ClaimQueueAccount, QueueEntry } from "../../src/v06/accounts.js";
+import { FumpadClient } from "../../src/v06/client.js";
+import { MAX_QUEUE_ENTRIES_PER_TX } from "../../src/v06/constants.js";
+import { planQueuePayments } from "../../src/v06/math/rewards.js";
 
 const BPS = 10_000n;
 const k = () => Keypair.generate().publicKey;

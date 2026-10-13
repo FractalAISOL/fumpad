@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const target = join(here, "../../contracts/target");
-const out = join(here, "../sdk/src/idl");
+const out = join(here, "../sdk/src/v06/idl");
 mkdirSync(out, { recursive: true });
 
 const files = [

@@ -2,7 +2,7 @@ import { ComputeBudgetProgram, Keypair, PublicKey } from "@solana/web3.js";
 import { pino } from "pino";
 import { describe, expect, it } from "vitest";
 
-import { recordSamplesIx } from "@fumpad/sdk";
+import { recordSamplesIx } from "@fumpad/sdk/v06";
 
 import { Alerter } from "../src/alerts.js";
 import { loadKeeperConfig } from "../src/config.js";

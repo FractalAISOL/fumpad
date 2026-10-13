@@ -20,7 +20,7 @@
 import type { ConfirmedSignatureInfo, Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
 
-import { accountKeys, FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID, type TxLike } from "@fumpad/sdk";
+import { accountKeys, FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID, type TxLike } from "@fumpad/sdk/v06";
 
 import type { Db } from "../db.js";
 import type { Commit, Ingestor, Source } from "../ingest.js";

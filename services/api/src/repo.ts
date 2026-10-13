@@ -3,7 +3,7 @@
  * app/src/data/types.ts). Units follow app/src/data/chain.ts: SOL, whole tokens,
  * SOL-per-token prices, unix MILLISECONDS.
  */
-import { DEFAULT_PARAMS, type Params, poolNeededFor, q64ToSolPerToken } from "@fumpad/sdk";
+import { DEFAULT_PARAMS, type Params, poolNeededFor, q64ToSolPerToken } from "@fumpad/sdk/v06";
 import { fromStored, getMeta, type Queryable } from "@fumpad/indexer";
 
 import type {

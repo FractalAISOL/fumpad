@@ -14,7 +14,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { bn, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type TxLike } from "@fumpad/sdk";
+import { bn, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type TxLike } from "@fumpad/sdk/v06";
 
 import { loadIndexerConfig } from "../src/config.js";
 import { RpcSource } from "../src/sources/rpc.js";

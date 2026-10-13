@@ -2,11 +2,11 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
-import { bn } from "../src/borsh.js";
-import { fumpadCoder, lockerCoder, FUMPAD_IDL, LP_LOCKER_IDL } from "../src/coder.js";
-import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID } from "../src/constants.js";
-import { decodeTransactionEvents, type TxLike } from "../src/events.js";
-import { eventAuthorityPda } from "../src/pda.js";
+import { bn } from "../../src/v06/borsh.js";
+import { fumpadCoder, lockerCoder, FUMPAD_IDL, LP_LOCKER_IDL } from "../../src/v06/coder.js";
+import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID } from "../../src/v06/constants.js";
+import { decodeTransactionEvents, type TxLike } from "../../src/v06/events.js";
+import { eventAuthorityPda } from "../../src/v06/pda.js";
 
 function discriminator(idl: typeof FUMPAD_IDL, name: string): Uint8Array {
   const ev = (idl.events as { name: string; discriminator: number[] }[]).find((e) => e.name === name)!;

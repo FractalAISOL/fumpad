@@ -1,5 +1,5 @@
 /** Pure keeper policies (unit tested): queue walk planning, spend accounting. */
-import { BPS_DENOM } from "@fumpad/sdk";
+import { BPS_DENOM } from "@fumpad/sdk/v06";
 
 /** The program's per-claim check (logic::fits): non-zero, ≤ cap of the CURRENT pool, ≤ pool. */
 export const fitsPool = (amount: bigint, pool: bigint, maxClaimPoolBps: number) =>
@@ -9,7 +9,7 @@ export const fitsPool = (amount: bigint, pool: bigint, maxClaimPoolBps: number) 
  * H-4: simulate `process_queue`'s skip-ahead walk and return exactly the entries it will pay.
  * Lives in the SDK since v0.6 (`FumpadClient.buildProcessQueue` uses it too); re-exported here.
  */
-export { planQueuePayments } from "@fumpad/sdk";
+export { planQueuePayments } from "@fumpad/sdk/v06";
 
 /** M-7: keeper spend for the current UTC day, measured from balance decreases (deposits don't count). */
 export interface SpendState {

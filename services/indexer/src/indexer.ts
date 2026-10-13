@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 
 import { Connection } from "@solana/web3.js";
 
-import { DEFAULT_PARAMS, type Params } from "@fumpad/sdk";
+import { DEFAULT_PARAMS, type Params } from "@fumpad/sdk/v06";
 
 import { ChainSync } from "./chainSync.js";
 import type { IndexerConfig } from "./config.js";

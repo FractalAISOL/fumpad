@@ -1,6 +1,6 @@
 import type { Connection } from "@solana/web3.js";
 
-import { DEFAULT_PARAMS, decodeGlobal, globalPda, type Params } from "@fumpad/sdk";
+import { DEFAULT_PARAMS, decodeGlobal, globalPda, type Params } from "@fumpad/sdk/v06";
 
 import { getMeta, type Queryable, setMeta } from "./db.js";
 

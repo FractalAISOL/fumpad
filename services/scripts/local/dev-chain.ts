@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { Connection, Keypair } from "@solana/web3.js";
 
-import { FumpadClient } from "@fumpad/sdk";
+import { FumpadClient } from "@fumpad/sdk/v06";
 
 import { airdrop, initGlobal, LOCAL_PARAMS } from "./actors.js";
 import { keypair, keypairPath, LOCAL, startPostgres, startValidator } from "./harness.js";

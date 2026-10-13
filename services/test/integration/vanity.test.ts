@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createPool, type Db, migrate } from "@fumpad/indexer";
 import { buildServer, keyFingerprint, loadApiConfig, type MintPool, parsePoolKey, signLaunchAuth } from "@fumpad/api";
-import { FUMPAD_PROGRAM_ID, inspectLaunchTx } from "@fumpad/sdk";
+import { FUMPAD_PROGRAM_ID, inspectLaunchTx } from "@fumpad/sdk/v06";
 
 import { buildGrinder, type Postgres, runBinary, startPostgres } from "../../scripts/local/harness.js";
 

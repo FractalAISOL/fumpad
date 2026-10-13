@@ -19,7 +19,7 @@ import {
   type TxLike,
   WSOL_MINT,
   eventAuthorityPda,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 import { createLogger, createPool, type Db, Finalizer, Ingestor, migrate, replayMint, setMeta, storeable } from "@fumpad/indexer";
 import { Repo } from "@fumpad/api";
 

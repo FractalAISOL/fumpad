@@ -14,7 +14,7 @@
 import { ComputeBudgetProgram, type Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { FastifyInstance } from "fastify";
 
-import { type FumpadClient, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
+import { type FumpadClient, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk/v06";
 
 import type { Db } from "@fumpad/indexer";
 

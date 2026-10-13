@@ -17,7 +17,7 @@ import {
   txInvokes,
   type TxLike,
   WSOL_MINT,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import { type Db, NOTIFY_CHANNEL, withTx } from "./db.js";
 import { applyEvents, eventMint, jsonify, type TxCtx } from "./handlers.js";

@@ -6,14 +6,14 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
-import { decodeGlobal, GLOBAL_ACCOUNT_LEN, globalNeedsMigration, isPaused, upgradeLegacyGlobal } from "../src/accounts.js";
-import { bn } from "../src/borsh.js";
-import { FUMPAD_IDL, fumpadCoder } from "../src/coder.js";
-import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID, PAUSE_CLAIMS, PAUSE_TRADE } from "../src/constants.js";
-import { decodeEventRaw, decodeTransactionEvents, type TxLike } from "../src/events.js";
-import { paramsToIdl } from "../src/instructions/fumpad.js";
-import { DEFAULT_PARAMS } from "../src/params.js";
-import { eventAuthorityPda } from "../src/pda.js";
+import { decodeGlobal, GLOBAL_ACCOUNT_LEN, globalNeedsMigration, isPaused, upgradeLegacyGlobal } from "../../src/v06/accounts.js";
+import { bn } from "../../src/v06/borsh.js";
+import { FUMPAD_IDL, fumpadCoder } from "../../src/v06/coder.js";
+import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID, PAUSE_CLAIMS, PAUSE_TRADE } from "../../src/v06/constants.js";
+import { decodeEventRaw, decodeTransactionEvents, type TxLike } from "../../src/v06/events.js";
+import { paramsToIdl } from "../../src/v06/instructions/fumpad.js";
+import { DEFAULT_PARAMS } from "../../src/v06/params.js";
+import { eventAuthorityPda } from "../../src/v06/pda.js";
 
 const mint = Keypair.generate().publicKey;
 const user = Keypair.generate().publicKey;

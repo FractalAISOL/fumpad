@@ -6,11 +6,11 @@
 import { Keypair, PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { FUMPAD_IDL, LP_LOCKER_IDL, fumpadCoder, idlInstruction } from "../src/coder.js";
-import { FUMPAD_PROGRAM_ID, PUMPSWAP_PROGRAM_ID } from "../src/constants.js";
-import * as I from "../src/instructions/index.js";
-import { DEFAULT_PARAMS } from "../src/params.js";
-import { coinAddresses, coinAta, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, pumpswapSignerPda, ticketPda, wsolAta } from "../src/pda.js";
+import { FUMPAD_IDL, LP_LOCKER_IDL, fumpadCoder, idlInstruction } from "../../src/v06/coder.js";
+import { FUMPAD_PROGRAM_ID, PUMPSWAP_PROGRAM_ID } from "../../src/v06/constants.js";
+import * as I from "../../src/v06/instructions/index.js";
+import { DEFAULT_PARAMS } from "../../src/v06/params.js";
+import { coinAddresses, coinAta, escrowPda, eventAuthorityPda, graduationWsolPda, positionPda, pumpswapSignerPda, ticketPda, wsolAta } from "../../src/v06/pda.js";
 
 const k = () => Keypair.generate().publicKey;
 const user = k();

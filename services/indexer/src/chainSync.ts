@@ -8,7 +8,7 @@
 import type { Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
 
-import { coinAddresses, decodeCoin, decodePumpPool, decodeTokenAccount, priceQ64 } from "@fumpad/sdk";
+import { coinAddresses, decodeCoin, decodePumpPool, decodeTokenAccount, priceQ64 } from "@fumpad/sdk/v06";
 
 import type { Db } from "./db.js";
 import type { Logger } from "./log.js";

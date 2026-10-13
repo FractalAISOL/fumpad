@@ -19,7 +19,7 @@ import {
   priceQ64,
   q64ToSolPerToken,
   TICKET_STATUS_NAMES,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import { NOTIFY_CHANNEL, type Tx } from "./db.js";
 

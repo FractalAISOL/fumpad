@@ -19,7 +19,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { type Connection, PublicKey } from "@solana/web3.js";
 
-import { FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID } from "@fumpad/sdk";
+import { FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID } from "@fumpad/sdk/v06";
 
 import type { Logger } from "../log.js";
 

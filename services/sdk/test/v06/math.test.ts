@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_PARAMS } from "../src/params.js";
-import { quoteCurveBuy } from "../src/quote.js";
+import { DEFAULT_PARAMS } from "../../src/v06/params.js";
+import { quoteCurveBuy } from "../../src/v06/quote.js";
 import {
   claimAmount,
   claimCap,
@@ -36,7 +36,7 @@ import {
   curveSpotQ64,
   type CurveReserves,
   type ReferencePrice,
-} from "../src/math/index.js";
+} from "../../src/v06/math/index.js";
 
 const V = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "vectors.json"), "utf8"));
 const B = (x: string | null) => (x === null ? null : BigInt(x));

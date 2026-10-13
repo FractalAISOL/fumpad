@@ -12,7 +12,7 @@ import os from "node:os";
 
 import { Connection, Keypair, Transaction } from "@solana/web3.js";
 
-import { decodeGlobal, GLOBAL_ACCOUNT_LEN, globalNeedsMigration, globalPda, migrateGlobalIx } from "@fumpad/sdk";
+import { decodeGlobal, GLOBAL_ACCOUNT_LEN, globalNeedsMigration, globalPda, migrateGlobalIx } from "@fumpad/sdk/v06";
 
 const RPC = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const arg = (name: string, def: string) => {

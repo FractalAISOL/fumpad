@@ -76,7 +76,7 @@ import {
   positionPda,
   priceQ64,
   type TicketAccount,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import { Alerter } from "./alerts.js";
 import type { KeeperConfig } from "./config.js";

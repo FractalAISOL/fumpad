@@ -10,7 +10,7 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { MAX_QUEUE_ENTRIES_PER_TX, type QueueEntry } from "@fumpad/sdk";
+import { MAX_QUEUE_ENTRIES_PER_TX, type QueueEntry } from "@fumpad/sdk/v06";
 
 import { fitsPool, planQueuePayments, trackSpend, utcDay } from "../src/policy.js";
 import { capPriority, computeUnitLimit } from "../src/sender.js";

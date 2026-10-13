@@ -27,7 +27,7 @@ import {
   type CoinAccount,
   decodeTokenAccount,
   TOKEN_2022_PROGRAM_ID,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import type { TtlCache } from "./cache.js";
 import type { Side, TradeQuote } from "./generated/app-types.js";

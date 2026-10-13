@@ -14,7 +14,7 @@
 import type { Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
 
-import { accountKeys, type TxLike } from "@fumpad/sdk";
+import { accountKeys, type TxLike } from "@fumpad/sdk/v06";
 
 import type { Db } from "./db.js";
 import type { Logger } from "./log.js";

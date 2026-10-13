@@ -3,7 +3,7 @@
  * Used after a rollback (a confirmed transaction that never finalized) and by the
  * `replay` CLI. Global tables (users, user_stats, wallet_*) are recomputed by derive.ts.
  */
-import { decodeEventRaw, type FumpadEvent, type Params } from "@fumpad/sdk";
+import { decodeEventRaw, type FumpadEvent, type Params } from "@fumpad/sdk/v06";
 
 import { type Db, withTx } from "./db.js";
 import { applyEvents } from "./handlers.js";

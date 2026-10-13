@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
+import { FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk/v06";
 
 import { parsePrepareBody, WindowLimiter } from "../src/launch/routes.js";
 import { keyFingerprint, MintVault, parsePoolKey } from "../src/launch/vault.js";

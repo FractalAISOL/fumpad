@@ -15,5 +15,5 @@ const out = execFileSync("cargo", ["run", "--quiet", "--release", "--manifest-pa
   maxBuffer: 256 * 1024 * 1024,
   stdio: ["ignore", "pipe", "inherit"],
 });
-writeFileSync(join(here, "../sdk/test/vectors.json"), out);
+writeFileSync(join(here, "../sdk/test/v06/vectors.json"), out);
 console.log(`wrote sdk/test/vectors.json (${out.length} bytes)`);

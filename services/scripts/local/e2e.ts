@@ -29,7 +29,7 @@ import {
   tokenDeltas,
   TOKEN_2022_PROGRAM_ID,
   type TxLike,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import { airdrop, directPumpBuy, initGlobal, LOCAL_PARAMS, tokenBalance } from "./actors.js";
 import bs58 from "bs58";

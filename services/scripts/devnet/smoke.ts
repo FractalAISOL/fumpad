@@ -23,7 +23,7 @@ import {
   type Params,
   q64ToSolPerToken,
   type TxLike,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import { initGlobal, tokenBalance } from "../local/actors.js";
 

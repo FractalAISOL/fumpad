@@ -7,7 +7,7 @@ import { Connection, Keypair, type PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { bn, DEFAULT_PARAMS, EVENT_IX_TAG, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type Params, type TxLike, eventAuthorityPda } from "@fumpad/sdk";
+import { bn, DEFAULT_PARAMS, EVENT_IX_TAG, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type Params, type TxLike, eventAuthorityPda } from "@fumpad/sdk/v06";
 import { createLogger, createPool, type Db, Ingestor, migrate, replayMint, setMeta, storeable } from "@fumpad/indexer";
 import { Repo } from "@fumpad/api";
 

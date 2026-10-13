@@ -16,7 +16,7 @@ import {
 } from "@solana/web3.js";
 import type { Logger } from "pino";
 
-import { type BuiltTx, COMPUTE_BUDGET_PROGRAM_ID, confirmSignature, customErrorCode, TxFailedError } from "@fumpad/sdk";
+import { type BuiltTx, COMPUTE_BUDGET_PROGRAM_ID, confirmSignature, customErrorCode, TxFailedError } from "@fumpad/sdk/v06";
 
 export interface SendResult {
   ok: boolean;

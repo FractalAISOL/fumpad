@@ -26,7 +26,7 @@ import {
   PUMPSWAP_PROGRAM_ID,
   PYTH_RECEIVER_PROGRAM_ID,
   PYTH_SOL_USD_ACCOUNT,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const SERVICES = resolve(here, "../..");

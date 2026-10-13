@@ -15,7 +15,7 @@ import {
   q64ToSolPerToken,
   ticketPda,
   type TxLike,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 import { airdrop, initGlobal, directPumpBuy, LOCAL_PARAMS, tokenBalance } from "./actors.js";
 import { Indexer, loadIndexerConfig } from "@fumpad/indexer";

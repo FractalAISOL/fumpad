@@ -20,7 +20,7 @@ import {
   confirmSignature,
   createAtaIdempotentIx,
   TOKEN_2022_PROGRAM_ID,
-} from "@fumpad/sdk";
+} from "@fumpad/sdk/v06";
 
 /** Fast local params: 2s maturity; 60 s oracle window (6 × 10 s coverage buckets), ≥3 keeper samples, 2 s spacing. */
 /**

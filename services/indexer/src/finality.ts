@@ -7,7 +7,7 @@
  */
 import type { Connection } from "@solana/web3.js";
 
-import type { Params } from "@fumpad/sdk";
+import type { Params } from "@fumpad/sdk/v06";
 
 import type { Db } from "./db.js";
 import type { Logger } from "./log.js";
