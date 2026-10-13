@@ -253,6 +253,27 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
     return { status: "paid", signature: res.signature, at };
   }, [moment, data, tx, address, setClaimable, tickets, toast, override]);
 
+  /** D16: move an escrowed payout into the wallet's own token account. */
+  const [escrowBusy, setEscrowBusy] = useState<string | null>(null);
+  const onWithdrawEscrow = useCallback(
+    async (t: Ticket) => {
+      setEscrowBusy(t.id);
+      const res = await tx.withdrawEscrow({ mint: t.mint, ticket: t.id });
+      setEscrowBusy(null);
+      tx.reset();
+      if (!res) {
+        toast(tx.lastError() ?? "The withdrawal didn't go through. Nothing was sent; try again.");
+        return;
+      }
+      const patch: Partial<Ticket> = { escrowed: false, chainStatus: "claimed" };
+      override(t, patch);
+      if (res.simulated && "markEscrowWithdrawn" in data) (data as { markEscrowWithdrawn: (id: string) => void }).markEscrowWithdrawn(t.id);
+      setTickets((ts) => ts?.map((x) => (x.id === t.id ? { ...x, ...patch } : x)) ?? ts);
+      toast(`Withdrew ${f.int(t.claimAmount)} ${t.symbol} to your wallet.`, "money");
+    },
+    [tx, toast, override, data],
+  );
+
   const FILTERS: { value: Filter; label: string; count: number }[] = [
     { value: "all", label: "All", count: counts.all },
     { value: "new", label: "Verifying", count: counts.new },
@@ -371,6 +392,13 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
                     <>
                       <Button variant="flare" onClick={() => setMoment(t)}>
                         Claim {f.int(t.claimAmount)}
+                      </Button>
+                      <ShareButton ticket={t} />
+                    </>
+                  ) : t.state === "claimed" && t.escrowed ? (
+                    <>
+                      <Button variant="flare" onClick={() => onWithdrawEscrow(t)} loading={escrowBusy === t.id} disabled={escrowBusy !== null}>
+                        Withdraw {f.int(t.claimAmount)}
                       </Button>
                       <ShareButton ticket={t} />
                     </>

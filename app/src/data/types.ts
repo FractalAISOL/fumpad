@@ -123,7 +123,7 @@ export interface Holder {
  * Mirrors `TicketStatus`, plus `pending` for a qualifying sell the keepers haven't attested yet
  * (no ticket account exists; SPEC v0.7 §5).
  */
-export type TicketChainStatus = "pending" | "open" | "queued" | "claimed" | "expired" | "voided";
+export type TicketChainStatus = "pending" | "open" | "queued" | "claimed" | "expired" | "voided" | "escrowed";
 
 /**
  * What the UI shows. Derived from chain status + attestation + coin status + oracle median:
@@ -200,7 +200,10 @@ export interface Ticket {
   crossedMultiple?: number;
   /** Median ÷ ticket price at payout (claimed tickets). */
   claimMultiple?: number;
-  /** D16: the payout went to the ticket's escrow (owner's token account refused it) and waits to be withdrawn. */
+  /**
+   * D16: the payout went to the ticket's escrow (the owner's token account refused it) and waits
+   * to be withdrawn (`chainStatus` "escrowed", shown as state "claimed"). False once withdrawn.
+   */
   escrowed?: boolean;
   /** Debits applied by rebuys within 7 days. */
   rebuyDebited: number;

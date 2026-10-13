@@ -14,7 +14,7 @@ export function ProfileTickets({ tickets }: { tickets: Ticket[] }) {
   if (!tickets.length)
     return (
       <EmptyState title="No tickets yet" compact>
-        This wallet hasn&apos;t sold {f.usdRule(params.minSellUsd)} or more of anything through FUMPAD.
+        This wallet hasn&apos;t sold {f.usdRule(params.minSellUsd)} or more of a FUMPAD coin yet, on any app.
       </EmptyState>
     );
   const sorted = [...tickets].sort((a, b) => b.multiple - a.multiple);

@@ -115,7 +115,7 @@ function ViewerProvider({ children }: { children: ReactNode }) {
       .then((ts) => {
         if (want !== current.current) return;
         setClaimable(ts.filter((t) => t.state === "claimable").length);
-        const open = [...new Set(ts.filter((t) => ["claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)).map((t) => t.mint))].sort();
+        const open = [...new Set(ts.filter((t) => ["verifying", "challenge", "claimable", "tracking", "queued", "awaiting-graduation"].includes(t.state)).map((t) => t.mint))].sort();
         setTicketMints((prev) => (prev.join() === open.join() ? prev : open));
       })
       .catch(keepSnapshot);

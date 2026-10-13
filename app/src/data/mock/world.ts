@@ -521,6 +521,22 @@ export const DEMO_TICKETS: TicketSpec[] = [
     source: "router",
   },
   { symbol: "LGRN", seq: 0, sellTs: d(7, 12, 9, 30), originalTokens: 7_400_000, tokens: 7_400_000, multiple: 0.4, peak: 2.3, state: "expired" },
+  // D16: a payout the wallet's token account refused (e.g. closed), waiting in the ticket's escrow.
+  {
+    symbol: "WBSC",
+    seq: 1,
+    sellTs: d(8, 30, 16, 5),
+    originalTokens: 900_000,
+    tokens: 900_000,
+    multiple: 41,
+    peak: 44,
+    state: "claimed",
+    claimedAt: d(10, 8, 9, 40),
+    claimedMultiple: 12.2,
+    source: "outside",
+    app: "jupiter",
+    escrowed: true,
+  },
 ];
 
 /** Deterministic tickets for any other wallet (connected wallets in the mock). */

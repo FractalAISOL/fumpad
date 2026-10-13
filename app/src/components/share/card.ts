@@ -8,8 +8,8 @@ export const CARD_STYLES: CardStyle[] = ["flare", "paper", "night"];
 /**
  * What the card says, by ticket state. Three of them are money (orange allowed); the rest
  * are ink, because orange only ever means money.
- *  - fumbled:   tracking, below 10×
- *  - curve:     waiting for graduation
+ *  - fumbled:   tracking, below 10× (also while verifying / in the challenge window, graduated coins)
+ *  - curve:     waiting for graduation (also while verifying / in the challenge window)
  *  - claimable: 10× held, claim open
  *  - queued:    10× held, waiting in the payout queue
  *  - paid:      claimed (or paid into escrow)
@@ -19,6 +19,9 @@ export type CardKind = "fumbled" | "curve" | "claimable" | "queued" | "paid" | "
 
 export function cardKind(t: Ticket): CardKind {
   switch (t.state) {
+    case "verifying":
+    case "challenge":
+      return t.coinStatus === "graduated" ? "fumbled" : "curve";
     case "tracking":
       return "fumbled";
     case "awaiting-graduation":
@@ -107,7 +110,10 @@ export function cardCopy(t: Ticket, params?: Pick<ProtocolParams, "oracleWindowS
   const kind = cardKind(t);
   const money = isMoney(kind);
   const median = params ? `${f.durationShort(params.oracleWindowSecs)} median` : "median";
-  const sold = `Sold ${f.int(t.originalTokens)} $${t.symbol} at ${f.priceText(t.sellPrice)} SOL.`;
+  const venue = t.source === "router" ? "FUMPAD" : f.appName(t.app);
+  const sold = `Sold ${f.int(t.originalTokens)} $${t.symbol}${venue ? ` on ${venue}` : ""} at ${f.priceText(t.sellPrice)} SOL.`;
+  // v0.7: a fresh ticket is first verified (keeper attestation), then sits in the challenge window.
+  const fresh = t.state === "verifying" ? "Sell landed. Being verified." : t.state === "challenge" ? (t.multiple >= 10 ? "Past 10×. Claims open after the challenge window." : "Verified. In the challenge window.") : null;
   const claim = `${f.int(t.claimAmount)} $${t.symbol}`;
   const x = multipleText(t.multiple);
   const pool = `from the $${t.symbol} pool`;
@@ -118,7 +124,8 @@ export function cardCopy(t: Ticket, params?: Pick<ProtocolParams, "oracleWindowS
       return {
         ...base,
         head: "FUMBLED.",
-        kicker: climbing ? `Now ${x} of the sell price. And climbing.` : t.multiple < 1 ? `Now ${x} of the sell price. Waiting, with dignity.` : `Now ${x} of the sell price. Waiting.`,
+        kicker:
+          fresh ?? (climbing ? `Now ${x} of the sell price. And climbing.` : t.multiple < 1 ? `Now ${x} of the sell price. Waiting, with dignity.` : `Now ${x} of the sell price. Waiting.`),
         body: `${sold} If it holds 10×, FUMPAD pays back ${claim}.`,
         figure: t.multiple,
         figureNote: `of 10×, ${median} now`,
@@ -129,7 +136,7 @@ export function cardCopy(t: Ticket, params?: Pick<ProtocolParams, "oracleWindowS
       return {
         ...base,
         head: "FUMBLED on the curve.",
-        kicker: t.multiple >= 10 ? `Already past 10×. Claiming opens at graduation.` : `Now ${x} of the sell price. Still on the curve.`,
+        kicker: fresh ?? (t.multiple >= 10 ? `Already past 10×. Claiming opens at graduation.` : `Now ${x} of the sell price. Still on the curve.`),
         body: `${sold} At 10× after graduation, FUMPAD pays back ${claim}.`,
         figure: t.multiple,
         figureNote: "of 10×, on the curve now",
@@ -170,6 +177,17 @@ export function cardCopy(t: Ticket, params?: Pick<ProtocolParams, "oracleWindowS
       };
     }
     case "gone":
+      if (t.state === "voided" && t.voidReason === "guardian")
+        return {
+          ...base,
+          muted: true,
+          head: "Voided.",
+          kicker: "Caught in the challenge window.",
+          body: `${sold} The attestation didn't match the chain, so the ticket never counted.`,
+          figure: t.peakMultiple,
+          figureNote: "peak, ticket voided",
+          foot: "No claim",
+        };
       return t.state === "voided"
         ? {
             ...base,
@@ -213,7 +231,9 @@ export function postText(t: Ticket, own: boolean) {
       return `${who} sold $${t.symbol} too early. It ran ${multipleText(t.claimMultiple ?? t.multiple)} and @fumpad paid ${me} back ${f.int(t.claimAmount)} ${t.symbol} from the coin's own pool.`;
     case "gone":
       return t.state === "voided"
-        ? `${who} sold $${t.symbol}, bought back in, and the ticket went to zero. Fumbled. Fully.`
+        ? t.voidReason === "guardian"
+          ? `${who} sold $${t.symbol}; the ticket was voided in its challenge window.`
+          : `${who} sold $${t.symbol}, bought back in, and the ticket went to zero. Fumbled. Fully.`
         : `${who} sold $${t.symbol}. It peaked at ${multipleText(t.peakMultiple)} and never held 10×. Fumbled. Fully. Sometimes selling was right.`;
   }
 }

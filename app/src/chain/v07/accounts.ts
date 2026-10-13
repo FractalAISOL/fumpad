@@ -2,13 +2,14 @@
  * ADAPTER (until @fumpad/sdk v0.7): the few account fields the app reads from chain, by byte
  * offset (8-byte Anchor discriminator included).
  *
- *   - FUMPAD `Coin` (INTERFACE-v0.7 §5.3): status, pools, config. UNVERIFIED against a built
- *     program (the layout is from the interface doc); every decode self-checks (discriminator,
- *     mint, and the DBC pool PDA re-derived from the decoded config) and refuses on mismatch.
+ *   - FUMPAD `Coin` (INTERFACE-v0.7 §5.3): status, pools, config. Offsets match the Rust struct
+ *     (contracts branch, 037027a `state/coin.rs`); not yet checked against a deployed account
+ *     (UNVERIFIED). Every decode self-checks (discriminator, mint, and the DBC pool PDA
+ *     re-derived from the decoded config) and refuses on mismatch.
  *   - DBC `PoolConfig` (1,048 bytes; offsets from the DBC 0.2.1 IDL, matching INTERFACE §5.4 and
  *     checked against the spike's devnet config with the official SDK decoder): the curve's
  *     start, segment 0 and the base fee, for the launch's first-buy check.
- *   - FUMPAD `Ticket` (§5.6): owner + escrow payer, for `withdraw_escrow`. UNVERIFIED as above.
+ *   - FUMPAD `Ticket` (§5.6, `state/ticket.rs`): owner + escrow payer, for `withdraw_escrow`. Same caveat.
  *
  * No React, no `@/` imports.
  */

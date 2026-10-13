@@ -350,7 +350,9 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
       : t.state === "queued"
         ? "queued"
         : t.state === "claimed"
-          ? "claimed"
+          ? t.escrowed
+            ? "escrowed"
+            : "claimed"
           : t.state === "expired"
             ? "expired"
             : t.state === "voided"
@@ -1232,6 +1234,11 @@ export class MockFumpadData implements FumpadData {
       if (t) return t;
     }
     return null;
+  }
+
+  /** Mock-only: reflect an escrow withdrawal made in this session. */
+  markEscrowWithdrawn(id: Address) {
+    ticketOverrides.set(id, { ...ticketOverrides.get(id), escrowed: false, chainStatus: "claimed" });
   }
 
   /** Mock-only: reflect a claim made in this session. */
