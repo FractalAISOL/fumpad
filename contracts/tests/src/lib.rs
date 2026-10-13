@@ -514,12 +514,14 @@ mod attest_tests;
 #[cfg(test)]
 mod config_tests;
 #[cfg(test)]
+mod cu_report;
+#[cfg(test)]
 mod fees_tests;
 #[cfg(test)]
 pub(crate) mod lifecycle_tests;
 #[cfg(test)]
 mod oracle_buyback_tests;
 #[cfg(test)]
-mod rewards_tests;
+pub(crate) mod rewards_tests;
 #[cfg(test)]
 mod router_tests;
