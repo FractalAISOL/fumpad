@@ -1,98 +1,149 @@
 /**
- * M-1 regression (was security-review/app-poc/launch-buy-redirect.test.ts): the app must bind the
- * API's prepared launch to the reserved mint, the form's metadata and the first buy the user
- * typed. Transactions are assembled from the SDK's encoders (no RPC). `npm test`
+ * M-1 launch binding, v0.7: the API's prepared launch (DBC init → creator's first buy →
+ * register_coin, co-signed by the mint) must be exactly the coin and first buy the user asked
+ * for. The first-buy quote is pinned to Meteora's official SDK on the devnet config.
+ *
+ *   npm test
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buyIx, computeBudgetIxs, createCoinIx, DEFAULT_PARAMS } from "@fumpad/sdk";
-import { Keypair, type PublicKey, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { checkLaunchBinding, expectedFirstBuy, type LaunchIntent } from "./launch";
+import { Keypair, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { checkLaunchBinding, expectedFirstBuy, LAUNCH_SLIPPAGE_BPS, type LaunchIntent } from "./launch";
+import { decodeDbcCurveStart, type DbcCurveStart } from "./v07/accounts";
+import { quoteFreshBuy, withSlippage } from "./v07/dbc";
+import { coinAta, TOKEN_2022_PROGRAM_ID } from "./v07/ids";
+import { computeBudgetIxs, createAtaIdempotentIx, dbcFirstBuyIx, dbcInitPoolIx, registerCoinIx, unwrapSolIx, wrapSolIxs } from "./v07/ix";
+import { DEVNET_DBC_CONFIG, SDK_FRESH_BUYS } from "./v07/testdata";
 
-const SOL = BigInt(1_000_000_000);
-const BLOCKHASH = "11111111111111111111111111111111";
+const curve = decodeDbcCurveStart(new Uint8Array(DEVNET_DBC_CONFIG));
+const readCurve = async () => curve;
 const wallet = Keypair.generate().publicKey;
-const mintKp = Keypair.generate();
-const MINT = mintKp.publicKey.toBase58();
-// Grinding a real `…fmbL` key takes minutes; the checks take the suffix as a parameter.
-const SUFFIX = MINT.slice(-1);
-const FORM = { name: "Pigeon Nation", symbol: "PIGN", uri: "ipfs://bafy-pign" };
-const BUDGET = SOL / BigInt(2);
-const first = expectedFirstBuy(DEFAULT_PARAMS, BUDGET)!;
+const config = Keypair.generate().publicKey;
+const BUDGET = BigInt(100_000_000);
 
-const intent = (over: Partial<LaunchIntent> = {}): LaunchIntent => ({
-  wallet,
-  mint: MINT,
-  suffix: SUFFIX,
-  ...FORM,
-  initialBuyLamports: BUDGET,
-  params: DEFAULT_PARAMS,
-  ...over,
-});
+/**
+ * A reserved mint. Grinding a real `…fmbL` key takes minutes, so the tests pass each key's own
+ * last 4 characters as the vanity suffix (the check is the same).
+ */
+const vanityKeypair = () => Keypair.generate();
 
-function prepared(ixs: TransactionInstruction[], signer = mintKp, payer: PublicKey = wallet): VersionedTransaction {
-  const t = new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: BLOCKHASH, instructions: [...computeBudgetIxs(400_000), ...ixs] }).compileToV0Message());
-  t.sign([signer]);
+function launch(mintKp: Keypair, o: { buyIn?: bigint; minOut?: bigint; name?: string; symbol?: string; uri?: string; wrap?: bigint } = {}) {
+  const m = mintKp.publicKey;
+  const ixs: TransactionInstruction[] = [
+    ...computeBudgetIxs(400_000),
+    dbcInitPoolIx({ config, creator: wallet, mint: m, name: o.name ?? "Pigeon", symbol: o.symbol ?? "PIGN", uri: o.uri ?? "ipfs://pign" }),
+  ];
+  if (o.buyIn) {
+    ixs.push(
+      createAtaIdempotentIx(wallet, wallet, m, TOKEN_2022_PROGRAM_ID, coinAta(wallet, m)),
+      ...wrapSolIxs(wallet, o.wrap ?? o.buyIn),
+      dbcFirstBuyIx({ creator: wallet, mint: m, config, amountIn: o.buyIn, minOut: o.minOut ?? expectedFirstBuy(curve, o.buyIn)!.minTokensOut }),
+      unwrapSolIx(wallet),
+    );
+  }
+  ixs.push(registerCoinIx({ creator: wallet, mint: m, config }));
+  const t = new VersionedTransaction(
+    new TransactionMessage({ payerKey: wallet, recentBlockhash: "11111111111111111111111111111111", instructions: ixs }).compileToV0Message(),
+  );
+  t.sign([mintKp]);
   return t;
 }
-const create = (m: Partial<typeof FORM> = {}, mint: PublicKey = mintKp.publicKey) => createCoinIx({ creator: wallet, mint, ...FORM, ...m });
-const firstBuy = (o: { mint?: PublicKey; solIn?: bigint; minTokensOut?: bigint } = {}) =>
-  buyIx({ user: wallet, mint: o.mint ?? mintKp.publicKey, solIn: o.solIn ?? first.solIn, minTokensOut: o.minTokensOut ?? first.minTokensOut, openTickets: [] });
-const refused = (t: VersionedTransaction, i: LaunchIntent, re: RegExp) => assert.throws(() => checkLaunchBinding(t, i), (e: unknown) => e instanceof Error && /^Refusing to sign/.test(e.message) && re.test(e.message));
 
-describe("checkLaunchBinding (M-1)", () => {
-  it("accepts the launch the API should build", () => {
-    const info = checkLaunchBinding(prepared([create(), firstBuy()]), intent());
-    assert.equal(info.mint, MINT);
-    assert.equal(info.buySolIn, first.solIn);
-    // …and a launch without a first buy.
-    checkLaunchBinding(prepared([create()]), intent({ initialBuyLamports: BigInt(0) }));
+const intentFor = (mintKp: Keypair, initialBuyLamports = BigInt(0)): LaunchIntent => {
+  const mint = mintKp.publicKey.toBase58();
+  return { wallet, mint, suffix: mint.slice(-4), name: "Pigeon", symbol: "PIGN", uri: "ipfs://pign", initialBuyLamports };
+};
+const refused = (p: Promise<unknown>, re: RegExp) => assert.rejects(p, (e: unknown) => e instanceof Error && re.test(e.message));
+
+describe("DBC config + first-buy math (pinned to the official SDK)", () => {
+  it("decodes the devnet config: 99% → 1.25% scheduler, first swap at the min fee, 0.85 SOL threshold", () => {
+    assert.equal(curve.minFeeNumerator, BigInt(12_500_000));
+    assert.equal(curve.firstSwapMinFee, true);
+    assert.equal(curve.migrationQuoteThreshold, BigInt(850_000_000));
+    assert.equal(curve.swapBaseAmount, BigInt("729655071047103"));
+    assert.equal(curve.sqrtStartPrice, BigInt("10169090682030081"));
   });
 
-  it("the first buy is the budget minus the 1% fee, with 1% slippage", () => {
-    assert.ok(first.solIn < BUDGET && first.solIn > (BUDGET * BigInt(98)) / BigInt(100));
-    assert.ok(first.minTokensOut > BigInt(0) && first.minTokensOut < first.tokensOut);
+  it("quotes a fresh pool's first buy exactly as Meteora's SDK does", () => {
+    for (const [lamports, out] of SDK_FRESH_BUYS) assert.equal(quoteFreshBuy(curve, lamports, curve.minFeeNumerator)?.tokensOut, out);
   });
 
-  it("refuses the PoC: first buy redirected to another coin with min_tokens_out = 0", () => {
-    const attackerCoin = Keypair.generate().publicKey;
-    const poc = prepared([
-      createCoinIx({ creator: wallet, mint: mintKp.publicKey, name: "NOT WHAT YOU TYPED", symbol: "SCAM", uri: "https://attacker.example/m.json" }),
-      buyIx({ user: wallet, mint: attackerCoin, solIn: BigInt(5) * SOL, minTokensOut: BigInt(0), openTickets: [] }),
-    ]);
-    assert.throws(() => checkLaunchBinding(poc, intent({ initialBuyLamports: BigInt(5) * SOL })), /Refusing to sign/);
-    // Each half of the attack on its own:
-    refused(prepared([create(), firstBuy({ mint: attackerCoin })]), intent(), /first buy/);
-    refused(prepared([create({ name: "NOT WHAT YOU TYPED" }), firstBuy()]), intent(), /name, symbol or metadata/);
+  it("refuses config bytes that aren't a DBC PoolConfig", () => {
+    const bad = new Uint8Array(DEVNET_DBC_CONFIG);
+    bad[0] ^= 1;
+    assert.throws(() => decodeDbcCurveStart(bad), /Unexpected DBC config/);
+    assert.throws(() => decodeDbcCurveStart(new Uint8Array(DEVNET_DBC_CONFIG).subarray(0, 1000)), /Unexpected DBC config/);
   });
 
-  it("refuses different metadata", () => {
-    refused(prepared([create({ symbol: "PІGN" }), firstBuy()]), intent(), /name, symbol or metadata/); // Cyrillic І
-    refused(prepared([create({ uri: "https://attacker.example/m.json" }), firstBuy()]), intent(), /name, symbol or metadata/);
+  it("the first buy is the budget (fee included) with 1% slippage on the SDK quote", () => {
+    const want = expectedFirstBuy(curve, BUDGET)!;
+    assert.equal(LAUNCH_SLIPPAGE_BPS, 100);
+    assert.equal(want.amountIn, BUDGET);
+    assert.equal(want.tokensOut, SDK_FRESH_BUYS[1][1]);
+    assert.equal(want.minTokensOut, withSlippage(SDK_FRESH_BUYS[1][1], 100));
+    assert.equal(expectedFirstBuy(curve, BigInt(0)), null);
+  });
+});
+
+describe("checkLaunchBinding", () => {
+  it("accepts the launch the user reviewed, with and without a first buy", async () => {
+    const k = vanityKeypair();
+    const plain = await checkLaunchBinding(launch(k), intentFor(k), readCurve);
+    assert.equal(plain.symbol, "PIGN");
+    const withBuy = await checkLaunchBinding(launch(k, { buyIn: BUDGET }), intentFor(k, BUDGET), readCurve);
+    assert.equal(withBuy.firstBuy?.amountIn, BUDGET);
   });
 
-  it("refuses a different mint than the reserved one", () => {
-    const other = Keypair.generate();
-    refused(prepared([create({}, other.publicKey), firstBuy({ mint: other.publicKey })], other), intent(), /signers|different mint/);
+  it("refuses other metadata than what the user entered", async () => {
+    const k = vanityKeypair();
+    await refused(checkLaunchBinding(launch(k, { name: "Pigeon2" }), intentFor(k), readCurve), /metadata/);
+    await refused(checkLaunchBinding(launch(k, { symbol: "PIGM" }), intentFor(k), readCurve), /metadata/);
+    await refused(checkLaunchBinding(launch(k, { uri: "ipfs://other" }), intentFor(k), readCurve), /metadata/);
   });
 
-  it("refuses a first buy that spends a different amount or has no slippage bound", () => {
-    refused(prepared([create(), firstBuy({ solIn: first.solIn + BigInt(1) })]), intent(), /different amount/);
-    refused(prepared([create(), firstBuy({ solIn: first.solIn - BigInt(1_000) })]), intent(), /different amount/);
-    refused(prepared([create(), firstBuy({ minTokensOut: BigInt(0) })]), intent(), /minimum tokens/);
-    refused(prepared([create(), firstBuy({ minTokensOut: first.minTokensOut - BigInt(1) })]), intent(), /minimum tokens/);
-    refused(prepared([create(), firstBuy({ minTokensOut: first.tokensOut + BigInt(1) })]), intent(), /minimum tokens/);
+  it("refuses a mint that isn't the reserved vanity mint", async () => {
+    const k = vanityKeypair();
+    await refused(checkLaunchBinding(launch(k), { ...intentFor(k), suffix: "fmbL" }, readCurve), /isn't a FUMPAD address/);
+    const other = vanityKeypair();
+    await refused(checkLaunchBinding(launch(k), { ...intentFor(other) }, readCurve), /reserved mint|signers/);
   });
 
-  it("refuses an added or missing first buy", () => {
-    refused(prepared([create(), firstBuy()]), intent({ initialBuyLamports: BigInt(0) }), /didn't ask for/);
-    refused(prepared([create()]), intent(), /missing/);
-    refused(prepared([create(), firstBuy()]), intent({ params: undefined }), /launch parameters/);
+  it("refuses a first buy the user didn't ask for, a missing one, or a different amount", async () => {
+    const k = vanityKeypair();
+    await refused(checkLaunchBinding(launch(k, { buyIn: BUDGET }), intentFor(k), readCurve), /more SOL|didn't ask/);
+    await refused(checkLaunchBinding(launch(k), intentFor(k, BUDGET), readCurve), /missing/);
+    await refused(checkLaunchBinding(launch(k, { buyIn: BUDGET / BigInt(2) }), intentFor(k, BUDGET), readCurve), /different amount/);
+    await refused(checkLaunchBinding(launch(k, { buyIn: BUDGET * BigInt(2) }), intentFor(k, BUDGET), readCurve), /more SOL/);
+    // The buy amount matches but more SOL is wrapped than typed.
+    await refused(checkLaunchBinding(launch(k, { buyIn: BUDGET, wrap: BUDGET * BigInt(3) }), intentFor(k, BUDGET), readCurve), /more SOL/);
   });
 
-  it("refuses a mint signature that doesn't verify", () => {
-    const t = prepared([create(), firstBuy()]);
-    t.signatures[1] = Uint8Array.from({ length: 64 }, (_, i) => i + 1);
-    refused(t, intent(), /signature|signed/);
+  it("refuses a first buy without a real slippage bound, or one above the quote", async () => {
+    const k = vanityKeypair();
+    const want = expectedFirstBuy(curve, BUDGET)!;
+    await refused(checkLaunchBinding(launch(k, { buyIn: BUDGET, minOut: BigInt(1) }), intentFor(k, BUDGET), readCurve), /minimum tokens/);
+    await refused(
+      checkLaunchBinding(launch(k, { buyIn: BUDGET, minOut: want.minTokensOut - BigInt(1_000) }), intentFor(k, BUDGET), readCurve),
+      /minimum tokens/,
+    );
+    await refused(checkLaunchBinding(launch(k, { buyIn: BUDGET, minOut: want.tokensOut + BigInt(1_000) }), intentFor(k, BUDGET), readCurve), /minimum tokens/);
+    // Within rounding slack of the API's own math: fine.
+    await checkLaunchBinding(launch(k, { buyIn: BUDGET, minOut: want.minTokensOut - BigInt(5) }), intentFor(k, BUDGET), readCurve);
+  });
+
+  it("refuses when the curve can't be read, or its first swap would pay the launch-window fee", async () => {
+    const k = vanityKeypair();
+    const tx = launch(k, { buyIn: BUDGET });
+    await refused(
+      checkLaunchBinding(tx, intentFor(k, BUDGET), async () => {
+        throw new Error("rpc down");
+      }),
+      /couldn't read/,
+    );
+    const noMin: DbcCurveStart = { ...curve, firstSwapMinFee: false };
+    await refused(
+      checkLaunchBinding(tx, intentFor(k, BUDGET), async () => noMin),
+      /snipe fee/,
+    );
   });
 });

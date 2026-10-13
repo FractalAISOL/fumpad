@@ -97,3 +97,52 @@ Keep: params timelock (D15), bounds (D23, minus curve params — the curve now l
 
 ## 9. Testing gates
 LiteSVM with **mainnet** DBC 0.2.1 + DAMM v2 binaries and mainnet migration config; full launch → curve (router + direct third-party swaps) → completion (PartialFill) → migration → leftover 8% exact → fees split → buybacks → samples → attested tickets → claims/queue/escrow → expiry. Adversarial: forged/duplicate/replayed attestation, single-keeper signature, keeper not in set, wrong pool/third-party pool, creator as trader, rate cap, challenge-window claim, guardian void, rebuy debit, launch-window fee routing, buyback sandwich guards, migration-fee accounting, pause semantics. Off-chain: engine golden tests on recorded mainnet histories (bit-exact across two independent runs), keeper disagreement tests. Local e2e and devnet e2e as before. Internal security review before external audits.
+
+## Clarifications (contracts v0.7 implementation, 2026-10-13)
+
+Made while implementing `contracts/` (details: `contracts/INTERFACE-v0.7.md`, `contracts/CONTRACTS.md`). None changes a
+decision; each pins down something the spec left open or that the mainnet binaries forced.
+
+1. **Migration fee = 1% (D34).** DBC 0.2.1 takes `migration_fee_percentage` as a whole percent, so ≈0.75% isn't
+   expressible: FUMPAD configs use 1% (0.85 SOL at 85 SOL; 0.0085 SOL on devnet). `graduate` spends migration fee +
+   partner surplus together as the setup budget (migrator refund → caller refund → observations → claim queue →
+   platform).
+2. **8% exact (D35).** The DBC curve is re-derived on the mainnet binary (incl. the DAMM v2 deposit's rounding dust)
+   so the leftover is exactly 80,000,000.000000 tokens when the curve completes in one swap. Each extra swap rounds its
+   output down in the pool's favour, so a real path adds a few base units (10⁻⁶ token) on top — never less.
+   Start MC 30.33 SOL (spec ≈30.39), ×14.69 to graduation.
+3. **Graduation is two instructions** (§4): `migrate_pool` (wrapper of DBC `migration_damm_v2`, records the caller's
+   flash-rent cost) + `graduate` (steps 2–4). One instruction needs ≈ 37 accounts and doesn't fit a legacy tx. Anyone
+   may migrate directly on DBC; `graduate` skips done steps (leftover, migration fee, surplus each checked by DBC
+   flags). `graduate` accepts any DAMM v2 config whose `pool_creator_authority` is DBC's pool authority (not only
+   `A8gM…`) and a position holding ≥ 99.99% of the liquidity permanently locked (100% measured).
+4. **Fee claims are two instructions** (§3.2): `claim_fees` (DBC partner fees; the first one after `launch_slot +
+   launch_window_slots` sends 100% to buyback, D33) and `claim_lp_fees` (DAMM v2 position; requires the launch flag
+   settled). Claimed WSOL is unwrapped into the Coin account (lamport invariant). Split: platform and creator get
+   exact floors of 30%/20%, the rounding remainder goes to buyback; the split is snapshotted per coin like D14.
+5. **Attestation message (§5.2).** `cluster_tag` is a `u8` stored in `Global` at init (0 mainnet, 1 devnet,
+   2 local). The `venue` byte carries the source: bit0 = venue (0 DBC, 1 DAMM v2), bit7 = routed by the FUMPAD router
+   (→ `Ticket.source`). `attest_sell`/`attest_rebuy` take no arguments: the record is read from the Ed25519
+   instruction immediately before them (every entry self-referencing, one shared message). Consumed seeds hash the
+   64-byte signature with SHA-256. The rebuy message (236 bytes) adds ticket/mint/owner/slot/block_time to the spec's
+   args, and its consumed marker is per (trade, ticket) because one buy can debit several tickets.
+6. **Attestation checks.** Submitter must be a keeper (it pays and gets back the rent). `block_time ∈ [created_at −
+   60 s, now + 60 s]`, `slot ≥ launch_slot`, `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs` (default
+   60 s per §5.4; Pyth is no longer read on-chain). The hourly cap is a sliding hour (current bucket + time-weighted
+   previous bucket). `attest_rebuy` re-checks `sell_ts ≤ block_time ≤ sell_ts + rebuy_window`.
+7. **Replay markers** are closable only after their ticket is closed AND the trade is older than the max attestation
+   age bound (7 days), so a closed marker can never let the same trade be attested again.
+8. **Rent payers.** Position, ticket and consumed rent are the attesting keeper's; `close_ticket` is permissionless
+   for every terminal state; `close_position` may be signed by the wallet or the rent payer; rent always returns to
+   the payer.
+9. **Statuses.** `Complete` is set only when the router itself completes the curve; `graduate` accepts `Curve` or
+   `Complete` once DBC reports the pool migrated. `PAUSE_GRADUATE` covers `migrate_pool` and `graduate`.
+10. **Pre-graduation samples** are keeper-only, spaced like keeper samples, and stored in the Coin (no ring before
+   graduation). Pre-graduation buybacks additionally require the launch window to be over.
+11. **Router.** Buys: ExactIn or PartialFill; sells: ExactIn. Referral must be None (exact fee measurement).
+   `RoutedTrade.quote_gross` = WSOL spent incl. fee (buy) / WSOL received + fee (sell).
+12. **Config allow-list**: 8 slots; add and remove are both 48h-timelocked; every add (and every `register_coin`)
+   re-checks the config's structural FUMPAD fields.
+13. **Keeper freeze**: per key; keys that stay in the set keep their original timestamp.
+14. **Rent figures** in `contracts/CONTRACTS.md` are measured with LiteSVM 0.18's mainnet feature set (claim queue
+   0.417 SOL vs 0.571 SOL in v0.6); the rate in force at deploy time is UNVERIFIED.

@@ -1,17 +1,12 @@
-//! Admin instructions. OWNER: foundation (lead).
-//!
-//! Roles (v0.6, M-2):
-//! * `admin` (Squads multisig) — queues params (48h, D15), proposes authority changes (48h),
-//!   sets keepers, pauses, migrates the Global layout.
-//! * `guardian` (separate multisig) — can only *stop* things: `set_pause`, `cancel_params`,
-//!   `cancel_admin`. It can't queue, propose or execute. So a stolen admin key can't change
-//!   params or rotate itself / the treasury / the guardian before the guardian cancels.
-//! * anyone — `execute_params` after the 48h.
-//! Every instruction here emits an event (L-3).
+//! Admin / governance. Roles (M-2): `admin` queues params/configs (48h), proposes authority changes (48h), sets
+//! keepers, pauses, migrates the layout; `guardian` can only stop things (pause, cancel_*, void_ticket); anyone
+//! executes a queued change after its timelock. Every instruction emits an event (L-3).
 
 use anchor_lang::prelude::*;
 
+pub mod config;
 pub mod migrate_global;
+pub use config::*;
 pub use migrate_global::*;
 
 use crate::{
@@ -31,45 +26,50 @@ pub struct InitializeGlobal<'info> {
     #[account(init, payer = payer, space = 8 + Global::INIT_SPACE, seeds = [GLOBAL_SEED], bump)]
     pub global: Box<Account<'info, Global>>,
     /// Only the program's upgrade authority may initialize (prevents front-running init).
-    /// Also the program account the L-3 event self-CPI needs.
     #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ FumpadError::Unauthorized)]
     pub program: Program<'info, crate::program::Fumpad>,
     #[account(constraint = program_data.upgrade_authority_address == Some(payer.key()) @ FumpadError::Unauthorized)]
     pub program_data: Account<'info, ProgramData>,
     pub system_program: Program<'info, System>,
-    /// CHECK: L-3 (v0.6) — Anchor's event authority PDA (`#[event_cpi]` can't be used: this
-    /// struct already has a `program` account).
+    /// CHECK: Anchor's event authority PDA (`#[event_cpi]` can't be used: this struct already has `program`).
     #[account(seeds = [b"__event_authority"], bump)]
     pub event_authority: UncheckedAccount<'info>,
 }
 
-/// The guardian starts as the admin (M-2); hand it to its own multisig with `propose_admin`.
 pub fn handle_initialize_global(
     ctx: Context<InitializeGlobal>,
     admin: Pubkey,
     platform_treasury: Pubkey,
+    cluster_tag: u8,
     params: Params,
 ) -> Result<()> {
     require!(params.is_valid(), FumpadError::InvalidParams);
     require_keys_neq!(admin, Pubkey::default(), FumpadError::InvalidParams);
+    require_keys_neq!(platform_treasury, Pubkey::default(), FumpadError::InvalidParams);
     let g = &mut ctx.accounts.global;
     g.bump = ctx.bumps.global;
     g.admin = admin;
     g.platform_treasury = platform_treasury;
-    g.keepers = [Pubkey::default(); MAX_KEEPERS];
-    g.paused = 0;
-    g.params = params;
     g.guardian = admin;
+    g.keepers = [Pubkey::default(); MAX_KEEPERS];
+    g.keeper_added_at = [0; MAX_KEEPERS];
+    g.cluster_tag = cluster_tag;
+    g.paused = 0;
     g.pause_expires_at = 0;
-    g.pending_admin_eta = 0;
-    g.reserved = [0; 80];
+    g.params = params;
     g.pending_params = Params::default();
     g.pending_eta = 0;
     g.pending_admin = Pubkey::default();
     g.pending_treasury = Pubkey::default();
     g.pending_guardian = Pubkey::default();
+    g.pending_admin_eta = 0;
+    g.configs = [Pubkey::default(); MAX_CONFIGS];
+    g.pending_config = Pubkey::default();
+    g.pending_config_add = 0;
+    g.pending_config_eta = 0;
+    g.reserved = [0; 128];
     let ts = Clock::get()?.unix_timestamp;
-    emit_event!(ctx, GlobalInitialized { admin, platform_treasury, guardian: admin, params, ts });
+    emit_event!(ctx, GlobalInitialized { admin, platform_treasury, guardian: admin, cluster_tag, params, ts });
     Ok(())
 }
 
@@ -95,21 +95,16 @@ pub struct GuardianOrAdmin<'info> {
     pub global: Box<Account<'info, Global>>,
 }
 
-// ── D15: 48h timelock on parameter changes (queue → execute; cancel any time) ──
-// There is no direct `update_params`. Pauses are immediate (and lapse after 7 days, M-3).
-// Keepers (`set_keepers`) are immediate (key rotation is incident response; keepers can't
-// move funds). Admin / treasury / guardian changes are timelocked two-step (M-2).
-
 #[event_cpi]
 #[derive(Accounts)]
-pub struct QueueParams<'info> {
-    pub admin: Signer<'info>,
-    #[account(mut, seeds = [GLOBAL_SEED], bump = global.bump, has_one = admin @ FumpadError::Unauthorized)]
+pub struct PermissionlessGlobal<'info> {
+    /// Anyone (the change was approved when it was queued).
+    pub caller: Signer<'info>,
+    #[account(mut, seeds = [GLOBAL_SEED], bump = global.bump)]
     pub global: Box<Account<'info, Global>>,
 }
 
-/// Queue `params` (replaces anything already queued and restarts the 48h clock).
-pub fn handle_queue_params(ctx: Context<QueueParams>, params: Params) -> Result<()> {
+pub fn handle_queue_params(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
     require!(params.is_valid(), FumpadError::InvalidParams);
     let now = Clock::get()?.unix_timestamp;
     let eta = now.checked_add(PARAMS_TIMELOCK_SECS).ok_or(FumpadError::MathOverflow)?;
@@ -120,17 +115,7 @@ pub fn handle_queue_params(ctx: Context<QueueParams>, params: Params) -> Result<
     Ok(())
 }
 
-#[event_cpi]
-#[derive(Accounts)]
-pub struct ExecuteParams<'info> {
-    /// Anyone (the change was approved when it was queued).
-    pub caller: Signer<'info>,
-    #[account(mut, seeds = [GLOBAL_SEED], bump = global.bump)]
-    pub global: Box<Account<'info, Global>>,
-}
-
-/// Apply the queued params once `pending_eta` has passed. Permissionless.
-pub fn handle_execute_params(ctx: Context<ExecuteParams>) -> Result<()> {
+pub fn handle_execute_params(ctx: Context<PermissionlessGlobal>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let g = &mut ctx.accounts.global;
     require!(g.pending_eta != 0, FumpadError::NoPendingParams);
@@ -144,20 +129,17 @@ pub fn handle_execute_params(ctx: Context<ExecuteParams>) -> Result<()> {
     Ok(())
 }
 
-/// M-2: the admin or the guardian drops the queued params change.
 pub fn handle_cancel_params(ctx: Context<GuardianOrAdmin>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let g = &mut ctx.accounts.global;
     require!(g.pending_eta != 0, FumpadError::NoPendingParams);
     g.pending_params = Params::default();
     g.pending_eta = 0;
-    emit_event!(ctx, ParamsCancelled { ts: now, authority: ctx.accounts.authority.key() });
+    emit_event!(ctx, ParamsCancelled { authority: ctx.accounts.authority.key(), ts: now });
     Ok(())
 }
 
-/// M-2 / M-3: admin or guardian, immediate. Non-zero flags are in force for
-/// `MAX_PAUSE_SECS` (7 days) and then lapse unless renewed by another `set_pause`; 0 unpauses.
-/// Curve sells are never paused (M-3).
+/// M-2 / M-3: admin or guardian, immediate; non-zero flags lapse after 7 days unless renewed; 0 unpauses.
 pub fn handle_set_pause(ctx: Context<GuardianOrAdmin>, paused: u8) -> Result<()> {
     require!(paused & !PAUSE_ALL == 0, FumpadError::InvalidParams);
     let now = Clock::get()?.unix_timestamp;
@@ -169,15 +151,30 @@ pub fn handle_set_pause(ctx: Context<GuardianOrAdmin>, paused: u8) -> Result<()>
     Ok(())
 }
 
+/// Immediate (incident response). A key not in the previous set starts a 6h attestation freeze (SPEC v0.7 §7);
+/// keys that stay keep their timestamp. Duplicates are rejected.
 pub fn handle_set_keepers(ctx: Context<AdminOnly>, keepers: [Pubkey; MAX_KEEPERS]) -> Result<()> {
-    ctx.accounts.global.keepers = keepers;
-    let ts = Clock::get()?.unix_timestamp;
-    emit_event!(ctx, KeepersSet { keepers, ts });
+    for (i, k) in keepers.iter().enumerate() {
+        require!(*k == Pubkey::default() || !keepers[..i].contains(k), FumpadError::InvalidParams);
+    }
+    let now = Clock::get()?.unix_timestamp;
+    let g = &mut ctx.accounts.global;
+    let mut added_at = [0i64; MAX_KEEPERS];
+    for (i, k) in keepers.iter().enumerate() {
+        if *k == Pubkey::default() {
+            continue;
+        }
+        added_at[i] = match g.keepers.iter().position(|old| old == k) {
+            Some(j) => g.keeper_added_at[j],
+            None => now,
+        };
+    }
+    g.keepers = keepers;
+    g.keeper_added_at = added_at;
+    emit_event!(ctx, KeepersSet { keepers, added_at, ts: now });
     Ok(())
 }
 
-/// M-2: propose a new authority set (replaces any open proposal, restarts the 48h). To change
-/// only the treasury or the guardian, propose the current admin and accept with it.
 pub fn handle_propose_admin(
     ctx: Context<AdminOnly>,
     new_admin: Pubkey,
@@ -201,13 +198,12 @@ pub fn handle_propose_admin(
 #[event_cpi]
 #[derive(Accounts)]
 pub struct AcceptAdmin<'info> {
-    /// Must be `Global.pending_admin` (proves the new key works before it takes over).
+    /// Must be `Global.pending_admin`.
     pub new_admin: Signer<'info>,
     #[account(mut, seeds = [GLOBAL_SEED], bump = global.bump)]
     pub global: Box<Account<'info, Global>>,
 }
 
-/// M-2: the proposed admin applies the proposal once its 48h have passed.
 pub fn handle_accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let g = &mut ctx.accounts.global;
@@ -227,7 +223,6 @@ pub fn handle_accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
     Ok(())
 }
 
-/// M-2: the admin or the guardian drops the open authority proposal.
 pub fn handle_cancel_admin(ctx: Context<GuardianOrAdmin>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let g = &mut ctx.accounts.global;

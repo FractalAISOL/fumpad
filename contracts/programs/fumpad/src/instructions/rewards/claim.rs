@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked};
+use anchor_spl::{
+    associated_token::get_associated_token_address_with_program_id,
+    token_interface::{transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked},
+};
 
 use crate::{
     constants::*,
@@ -11,14 +14,9 @@ use crate::{
 
 use super::{logic, queue};
 
-/// Claim a ticket once the coin has held `trigger_multiple` × the sell price (30-min
-/// median of keeper samples). Pays immediately when the amount fits the per-claim cap
-/// and no older fitting claim is waiting; otherwise enters the claim queue — unless the
-/// wallet already has `MAX_QUEUED_PER_WALLET` (2) entries there (D16: reverts with
-/// `WalletQueueLimit`, the ticket stays Open).
-///
-/// Queued tickets stay in `position.open_tickets` (the rebuy rule still applies to them,
-/// SPEC §5.3) until paid or voided. Paid tickets leave the open list.
+/// Claim a ticket once the coin has held `trigger_multiple` × the ticket price (30-min median of keeper samples
+/// of the DAMM v2 pool) and the ticket's challenge window is over. Pays immediately when the amount fits the
+/// per-claim cap and no older fitting claim is waiting; otherwise enters the claim queue (D16 per-wallet limit).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct Claim<'info> {
@@ -43,24 +41,19 @@ pub struct Claim<'info> {
     pub claim_queue: AccountLoader<'info, ClaimQueue>,
     #[account(seeds = [OBSERVATIONS_SEED, mint.key().as_ref()], bump)]
     pub observations: AccountLoader<'info, Observations>,
-    /// CHECK: PDA signer that owns the reward vault.
-    #[account(seeds = [POOL_AUTHORITY_SEED], bump)]
-    pub pool_authority: UncheckedAccount<'info>,
+    /// CHECK: PDA ["reward_pool"], authority of the reward vault.
+    #[account(seeds = [REWARD_POOL_SEED], bump)]
+    pub reward_pool: UncheckedAccount<'info>,
     #[account(
         mut,
-        seeds = [REWARD_VAULT_SEED, mint.key().as_ref()],
-        bump,
+        address = get_associated_token_address_with_program_id(&reward_pool.key(), &mint.key(), &anchor_spl::token_2022::ID)
+            @ FumpadError::InvalidAccount,
         token::mint = mint,
-        token::authority = pool_authority,
+        token::authority = reward_pool,
         token::token_program = token_program,
     )]
     pub reward_vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    #[account(
-        mut,
-        token::mint = mint,
-        token::authority = owner,
-        token::token_program = token_program,
-    )]
+    #[account(mut, token::mint = mint, token::authority = owner, token::token_program = token_program)]
     pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(address = anchor_spl::token_2022::ID)]
     pub token_program: Interface<'info, TokenInterface>,
@@ -68,17 +61,13 @@ pub struct Claim<'info> {
 
 /// Outcome of the checks shared by `claim` and `claim_for` (D17).
 pub(crate) enum Decision {
-    /// Pay `amount` now. The ticket is already `Claimed` and off the open list; the caller
-    /// transfers, bumps `coin.tokens_paid_out` and emits.
     PayNow { amount: u64, median: u128 },
-    /// The ticket entered the queue (`Queued`) at position `queue_len`.
     Queued { amount: u64, queue_len: u16 },
 }
 
-/// Every claim rule, identical for owner-signed and keeper auto-claims: pause, graduated
-/// coin, ticket `Open`, 90-day window, 30-min keeper median ≥ trigger with coverage,
-/// non-zero amount; then pay now iff it fits the per-claim cap and no older fitting entry
-/// waits, else queue (D16 per-wallet limit, capacity).
+/// Every claim rule, identical for owner-signed and keeper auto-claims: pause, graduated coin, ticket `Open`,
+/// challenge window over (D31), claim window, keeper median ≥ trigger with coverage, non-zero amount; then pay now
+/// iff it fits the per-claim cap and no older fitting entry waits, else queue (D16 per-wallet limit, capacity).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn decide_claim(
     global: &Global,
@@ -92,18 +81,20 @@ pub(crate) fn decide_claim(
     pool: u64,
     now: i64,
 ) -> Result<Decision> {
-    let p = coin.reward_params(&global.params); // M-1
+    let p = coin.reward_params(&global.params);
     require!(!global.is_paused(PAUSE_CLAIMS, now), FumpadError::Paused);
     require!(coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
     require!(t.status == TicketStatus::Open, FumpadError::TicketNotOpen);
+    let claimable_from =
+        t.attested_at.checked_add(global.params.ticket_challenge_secs).ok_or(FumpadError::MathOverflow)?;
+    require!(now >= claimable_from, FumpadError::TicketInChallenge);
     let deadline = t.sell_ts.checked_add(p.claim_window_secs).ok_or(FumpadError::MathOverflow)?;
     require!(now <= deadline, FumpadError::TicketExpired);
 
     let median = {
         let obs = observations.load()?;
         require_keys_eq!(obs.mint, *mint, FumpadError::InvalidAccount);
-        obs.median_price_q64(now, p.oracle_window_secs, p.oracle_min_samples)
-            .ok_or(FumpadError::InsufficientSamples)?
+        obs.median_price_q64(now, p.oracle_window_secs, p.oracle_min_samples).ok_or(FumpadError::InsufficientSamples)?
     };
     require!(meets_multiple(median, t.sell_price_q64, p.trigger_multiple_bps), FumpadError::TriggerNotMet);
 
@@ -122,7 +113,6 @@ pub(crate) fn decide_claim(
         logic::remove_open(position, ticket_key);
         Ok(Decision::PayNow { amount, median })
     } else {
-        // D16: at most MAX_QUEUED_PER_WALLET entries per wallet per coin (the ticket stays Open).
         require!(queue::count_owner(&q, &t.owner) < MAX_QUEUED_PER_WALLET, FumpadError::WalletQueueLimit);
         let queue_len =
             queue::insert(&mut q, QueueEntry { ticket: *ticket_key, owner: t.owner, amount, sell_ts: t.sell_ts })?;
@@ -156,11 +146,11 @@ pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
             coin.tokens_paid_out = coin.tokens_paid_out.saturating_add(amount);
             pay_from_vault(
                 &ctx.accounts.token_program,
-                &ctx.accounts.reward_vault,
+                &ctx.accounts.reward_vault.to_account_info(),
                 &ctx.accounts.mint,
                 &ctx.accounts.owner_token_account.to_account_info(),
-                &ctx.accounts.pool_authority,
-                ctx.bumps.pool_authority,
+                &ctx.accounts.reward_pool.to_account_info(),
+                ctx.bumps.reward_pool,
                 amount,
             )?;
             emit_event!(ctx, ClaimPaid {
@@ -181,26 +171,22 @@ pub fn handle_claim(ctx: Context<Claim>) -> Result<()> {
     Ok(())
 }
 
-/// Token-2022 transfer_checked from the reward vault, signed by the pool authority PDA.
+/// Token-2022 `transfer_checked` out of a reward-pool-owned token account (vault or escrow), signed by the
+/// `reward_pool` PDA.
 pub fn pay_from_vault<'info>(
     token_program: &Interface<'info, TokenInterface>,
-    vault: &InterfaceAccount<'info, TokenAccount>,
+    vault: &AccountInfo<'info>,
     mint: &InterfaceAccount<'info, Mint>,
     to: &AccountInfo<'info>,
-    pool_authority: &UncheckedAccount<'info>,
-    pool_authority_bump: u8,
+    reward_pool: &AccountInfo<'info>,
+    reward_pool_bump: u8,
     amount: u64,
 ) -> Result<()> {
-    let seeds: &[&[&[u8]]] = &[&[POOL_AUTHORITY_SEED, &[pool_authority_bump]]];
+    let seeds: &[&[&[u8]]] = &[&[REWARD_POOL_SEED, &[reward_pool_bump]]];
     transfer_checked(
         CpiContext::new_with_signer(
             token_program.key(),
-            TransferChecked {
-                from: vault.to_account_info(),
-                mint: mint.to_account_info(),
-                to: to.clone(),
-                authority: pool_authority.to_account_info(),
-            },
+            TransferChecked { from: vault.clone(), mint: mint.to_account_info(), to: to.clone(), authority: reward_pool.clone() },
             seeds,
         ),
         amount,

@@ -9,6 +9,8 @@ import { Badge } from "./Surface";
 import s from "./TicketCard.module.css";
 
 export const TICKET_LABEL: Record<Ticket["state"], string> = {
+  verifying: "Verifying",
+  challenge: "Challenge window",
   claimable: "Claimable",
   queued: "Queued",
   tracking: "Tracking",
@@ -27,7 +29,14 @@ export function TicketBadge({ ticket }: { ticket: Ticket }) {
         Queue #{ticket.queuePosition}
       </Badge>
     );
-  if (st === "claimed") return <Badge tone="flare-line">Paid</Badge>;
+  if (st === "claimed") return <Badge tone="flare-line">{ticket.escrowed ? "Paid to escrow" : "Paid"}</Badge>;
+  if (st === "verifying")
+    return (
+      <Badge tone="muted" dot>
+        Verifying
+      </Badge>
+    );
+  if (st === "challenge") return <Badge tone="ink">Challenge window</Badge>;
   if (st === "expired" || st === "voided") return <Badge tone="muted">{TICKET_LABEL[st]}</Badge>;
   return <Badge>{TICKET_LABEL[st]}</Badge>;
 }
@@ -35,7 +44,8 @@ export function TicketBadge({ ticket }: { ticket: Ticket }) {
 /**
  * One fumble ticket: coin, the 10× gauge, the facts, and the next action.
  * `action` is the right-hand slot (Claim button, share link…); `note` explains any
- * state that needs a sentence (queue, rebuy, graduation, expiry).
+ * state that needs a sentence (verifying, challenge window, queue, rebuy, graduation, expiry).
+ * Under the coin: where the sell happened ("sold on Axiom", "sold on FUMPAD", "sold elsewhere").
  */
 export function TicketCard({
   ticket: t,
@@ -53,7 +63,11 @@ export function TicketCard({
   const closed = t.state === "expired" || t.state === "voided";
   const days = t.expiresAt ? f.daysLeft(t.expiresAt, now) : undefined;
   const sub =
-    t.state === "queued"
+    t.state === "verifying"
+      ? "Attesting, about a minute"
+      : t.state === "challenge" && t.claimableFrom
+        ? `Claimable from ${f.dateTime(t.claimableFrom)}`
+        : t.state === "queued"
       ? "Clock paused while queued"
       : t.state === "claimed"
         ? t.claimedAt
@@ -74,8 +88,9 @@ export function TicketCard({
           <div className={s.idText}>
             <h3 className={cx("ticker", s.sym)}>${t.symbol}</h3>
             <div className={s.idSub}>
-              {t.coinName}, sold {f.date(t.sellTs)}
+              {t.coinName}, {f.date(t.sellTs)}
             </div>
+            <div className={s.src}>{f.soldOn(t)}</div>
           </div>
         </div>
 

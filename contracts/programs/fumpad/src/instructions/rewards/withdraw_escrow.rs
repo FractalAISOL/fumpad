@@ -33,13 +33,13 @@ pub struct WithdrawEscrow<'info> {
         seeds = [ESCROW_SEED, ticket.key().as_ref()],
         bump,
         token::mint = mint,
-        token::authority = pool_authority,
+        token::authority = reward_pool,
         token::token_program = token_program,
     )]
     pub escrow: Box<InterfaceAccount<'info, TokenAccount>>,
-    /// CHECK: PDA signer that owns the escrow account.
-    #[account(seeds = [POOL_AUTHORITY_SEED], bump)]
-    pub pool_authority: UncheckedAccount<'info>,
+    /// CHECK: PDA ["reward_pool"], authority of the escrow account.
+    #[account(seeds = [REWARD_POOL_SEED], bump)]
+    pub reward_pool: UncheckedAccount<'info>,
     /// Any token account of the owner for this mint.
     #[account(
         mut,
@@ -61,7 +61,7 @@ pub fn handle_withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
     require!(!a.global.is_paused(PAUSE_CLAIMS, now), FumpadError::Paused);
     require!(a.ticket.status == TicketStatus::Escrowed, FumpadError::NoEscrow);
     let amount = a.escrow.amount; // = ticket.claim_amount (+ anything donated to it)
-    let seeds: &[&[&[u8]]] = &[&[POOL_AUTHORITY_SEED, &[ctx.bumps.pool_authority]]];
+    let seeds: &[&[&[u8]]] = &[&[REWARD_POOL_SEED, &[ctx.bumps.reward_pool]]];
     if amount > 0 {
         token_interface::transfer_checked(
             CpiContext::new_with_signer(
@@ -70,7 +70,7 @@ pub fn handle_withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
                     from: a.escrow.to_account_info(),
                     mint: a.mint.to_account_info(),
                     to: a.destination.to_account_info(),
-                    authority: a.pool_authority.to_account_info(),
+                    authority: a.reward_pool.to_account_info(),
                 },
                 seeds,
             ),
@@ -83,7 +83,7 @@ pub fn handle_withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
         CloseAccount {
             account: a.escrow.to_account_info(),
             destination: a.escrow_payer.to_account_info(),
-            authority: a.pool_authority.to_account_info(),
+            authority: a.reward_pool.to_account_info(),
         },
         seeds,
     ))?;

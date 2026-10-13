@@ -2,19 +2,20 @@
 
 /**
  * Transaction hooks. The UI calls these. Every action is live when NEXT_PUBLIC_FUMPAD_API is
- * set and a wallet is connected: buy / sell / claim / set_auto_claim are built by
- * `./build` (via @fumpad/sdk) against the cluster in NEXT_PUBLIC_SOLANA_RPC, launch is
- * prepared by the API (D18). Otherwise (mock, or the demo wallet) they simulate (delay +
- * fake signature) so every flow can be exercised end to end. Amounts arrive in display
- * units and are converted with `@/data/chain` (tokensToBase / solToLamports) in `./build`.
+ * set and a wallet is connected: buy / sell / claim / set_auto_claim / creator fees / escrow are
+ * built by `./build` (the v0.7 adapter in `./v07` until @fumpad/sdk v0.7) against the cluster in
+ * NEXT_PUBLIC_SOLANA_RPC, launch is prepared by the API (D18). Otherwise (mock, or the demo
+ * wallet) they simulate (delay + fake signature) so every flow can be exercised end to end.
+ * Amounts arrive in display units and are converted with `@/data/chain` in `./build`.
  *
- * Program instructions (contracts/programs/fumpad/src/lib.rs):
- *   create_coin(name, symbol, uri) · buy(sol_in, min_tokens_out) · sell(tokens_in, min_sol_out)
- *   swap_buy / swap_sell (router, post-graduation) · claim(ticket) · close_ticket
- *   register_holdings · withdraw_creator_fees
+ * Program instructions (contracts/INTERFACE-v0.7.md §3):
+ *   router buy(amount_in, min_out, mode) / sell(amount_in, min_out) over Meteora DBC or DAMM v2
+ *   launch: DBC initialize_virtual_pool_with_token2022 → creator's DBC swap2 → register_coin
+ *   claim · set_auto_claim · withdraw_creator_fees · withdraw_escrow
+ * Sells file no ticket in the transaction: the keepers attest every qualifying sell, from any
+ * app, afterwards (D31).
  */
 
-import { type BuiltTx, customErrorCode, FUMPAD_IDL } from "@fumpad/sdk";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { DEMO_WALLET } from "@/data";
@@ -23,13 +24,14 @@ import { mockRecordTrade, mockSetAutoClaim, mockWithdrawCreatorFees } from "@/da
 import { announceOwnTx, type OwnTxKind } from "@/components/shell/live";
 import { addInstantSpent, getInstantSpent, requestConfirm, useInstantSettings, useWallet, walletActions } from "@/components/wallet/store";
 import type { SilentPolicy } from "./allowlist";
-import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, fumpadClient } from "./build";
+import { type BuiltTx, buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient } from "./build";
 import { getConnection } from "./connection";
 import { checkLaunchBinding, LAUNCH_SLIPPAGE_BPS } from "./launch";
 import { dropLaunchAuth, getLaunchAuth, type LaunchAuth } from "./launchAuth";
 import { instantDecision, lamportsSol, simulateSpend, worstCaseSpend } from "./limits";
 import { VANITY_SUFFIX } from "./program";
 import { type FumpadSigner, signFumpadTx, signLaunchMessage } from "./signer";
+import { txErrorMessage as programErrorMessage } from "./v07/errors";
 
 export interface TxOk {
   signature: string;
@@ -47,12 +49,10 @@ export type LaunchStep = "auth" | "reserve" | "sign" | "confirm" | "done";
 
 export interface BuyArgs {
   mint: string;
-  /** SOL budget, the 1% fee included. */
+  /** SOL budget, the pool fee included (a buy that completes the curve uses less; the rest comes back). */
   solIn: number;
   /** Minimum tokens after slippage: the quote the user saw × (1 − SLIPPAGE_BPS), see `./build`. */
   minTokensOut: number;
-  /** Every open ticket on this coin (≤5): the program applies the rebuy rule to them. */
-  openTickets: string[];
   /** Quoted tokens out (mock mode applies it to the simulated balance). */
   expectedOut?: number;
 }
@@ -124,8 +124,6 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** The live API base when configured (same switch as the data layer). */
 const API = process.env.NEXT_PUBLIC_FUMPAD_API?.replace(/\/+$/, "");
-/** Pyth SOL/USD PriceUpdateV2 account for sells (SDK default: the sponsored feed, on mainnet and devnet). */
-const PYTH_SOL_USD = process.env.NEXT_PUBLIC_PYTH_SOL_USD || undefined;
 
 class PrepareError extends Error {
   constructor(
@@ -171,14 +169,11 @@ async function postPrepare(body: Record<string, unknown>): Promise<{ mint: strin
   return res.json();
 }
 
-/** Program errors (preflight / confirmation) → the IDL's message, e.g. "Price has not held 10x the sell price." */
+/** Program errors (preflight / confirmation) → one sentence (FUMPAD's own codes, or Meteora's swap failures). */
 function txErrorMessage(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e ?? "");
   const logs = (e as { logs?: unknown } | null)?.logs;
-  const code = customErrorCode(raw + (logs ? JSON.stringify(logs) : ""));
-  const known = code === null ? undefined : ((FUMPAD_IDL.errors ?? []) as { code: number; msg?: string }[]).find((x) => x.code === code);
-  if (known?.msg) return known.msg.endsWith(".") ? known.msg : `${known.msg}.`;
-  return raw || "Transaction failed.";
+  return programErrorMessage(raw, Array.isArray(logs) ? logs.map(String) : undefined);
 }
 
 async function simulate(setStatus: (s: TxStatus) => void, ms = 900): Promise<TxOk> {
@@ -264,7 +259,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
               }
             : {
                 title: `${verb} up to ${fmtSol(out)} SOL?`,
-                body: `With the 1% fee, network fees and first-time account rent, that's above your instant limit of ${fmtSol(settings.maxSol)} SOL, so FUMPAD asks first. Change the limit in the wallet menu.`,
+                body: `With the pool fee, network fees and first-time account rent, that's above your instant limit of ${fmtSol(settings.maxSol)} SOL, so FUMPAD asks first. Change the limit in the wallet menu.`,
                 confirmLabel: `${verb} ${fmtSol(out)} SOL`,
               },
       );
@@ -304,7 +299,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
 
   /** Live = the API is configured and a real wallet is logged in; otherwise simulate. */
   const live = !!API && !!signer;
-  const client = useMemo(() => fumpadClient(connection, { solUsdAccount: PYTH_SOL_USD }), [connection]);
+  const client = useMemo(() => fumpadClient(connection), [connection]);
 
   /** Build → vet + sign (silently when allowed) → send → confirm. Program errors surface from preflight. */
   const sendBuilt = useCallback(
@@ -356,13 +351,13 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
             mockRecordTrade(owner, args.mint, "buy", args.solIn, args.expectedOut ?? args.minTokensOut);
             return ok;
           }
-          // Curve → buy; graduated → swap_buy (WSOL wrap/unwrap inside the program). Open
-          // tickets for the rebuy rule are read from the wallet's Position on chain. The
-          // signed sol_in may not exceed what the user entered; min_tokens_out is the shown quote's (M-9).
+          // Router buy: DBC on the curve (PartialFill), DAMM v2 after graduation; SOL wrapped into
+          // WSOL around it. The signed amount may not exceed what the user entered; min_out is the
+          // shown quote's (M-9).
           return sendBuilt(
             () => buildBuyTx(client, signer!.publicKey, args),
             "The buy failed on chain. Nothing but the network fee was spent.",
-            { action: "buy", maxSolInLamports: solToLamports(args.solIn) },
+            { action: "buy", mint: args.mint, maxSolInLamports: solToLamports(args.solIn) },
             { verb: "Buy for", kind: "buy", amountSol: args.solIn },
           );
         },
@@ -384,12 +379,11 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
             mockRecordTrade(owner, args.mint, "sell", args.tokensIn, args.expectedOut ?? args.minSolOut);
             return ok;
           }
-          // Curve → sell; graduated → swap_sell. Carries the Pyth SOL/USD account for the
-          // minimum-USD ticket check (a stale price never blocks the sell, it just files no ticket).
+          // Router sell. The keepers attest a qualifying sell afterwards (D31), like one on any app.
           return sendBuilt(
             () => buildSellTx(client, signer!.publicKey, args),
             "The sell failed on chain. Nothing but the network fee was spent.",
-            { action: "sell" },
+            { action: "sell", mint: args.mint },
             { verb: "Sell for", kind: "other", sellValueSol: value },
           );
         },
@@ -405,7 +399,12 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         async () => {
           if (!live) return simulate(setStatus, 650);
           // Pays in the same tx (ClaimPaid) or joins the queue (ClaimQueued); the UI re-reads.
-          return sendBuilt(() => buildClaimTx(client, signer!.publicKey, args), "The claim failed on chain. Nothing but the network fee was spent.", { action: "claim" }, { verb: "Claim", kind: "other" });
+          return sendBuilt(
+            () => buildClaimTx(client, signer!.publicKey, args),
+            "The claim failed on chain. Nothing but the network fee was spent.",
+            { action: "claim", mint: args.mint },
+            { verb: "Claim", kind: "other" },
+          );
         },
         "claim",
         args.mint,
@@ -512,15 +511,18 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         }
         const tx = VersionedTransaction.deserialize(Uint8Array.from(atob(p.transaction!), (ch) => ch.charCodeAt(0)));
         const initialBuyLamports = p.args.initialBuySol > 0 ? solToLamports(p.args.initialBuySol) : BigInt(0);
-        // The first buy's expected size comes from Global.params on chain, not from the API.
-        const params = initialBuyLamports > BigInt(0) ? (await client.global()).params : undefined;
-        checkLaunchBinding(tx, { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: p.args.name, symbol: p.args.symbol, uri: p.args.uri, initialBuyLamports, params });
+        // The first buy's expected size comes from the DBC config on chain, not from the API.
+        await checkLaunchBinding(
+          tx,
+          { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: p.args.name, symbol: p.args.symbol, uri: p.args.uri, initialBuyLamports },
+          (config) => client.dbcCurveStart(config),
+        );
         const spend = instant ? await instantSpend(tx, s.publicKey, "launch", p.args.initialBuySol) : BigInt(0);
         await guardInstant(spend, "Launch for");
         setLaunchStep("sign");
         setStatus("signing");
         // A wallet that rewrites the message would void the mint's signature: signFumpadTx refuses it.
-        const signed = await signFumpadTx(s, tx, { action: "launch", coSigner: p.mint, maxSolInLamports: initialBuyLamports }, instant);
+        const signed = await signFumpadTx(s, tx, { action: "launch", mint: p.mint, coSigner: p.mint, maxSolInLamports: initialBuyLamports }, instant);
         setLaunchStep("confirm");
         setStatus("confirming");
         const signature = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3 });
@@ -547,7 +549,12 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
             if (o) mockSetAutoClaim(o, args.mint, args.enabled);
             return simulate(setStatus, 600);
           }
-          return sendBuilt(() => buildSetAutoClaimTx(client, signer!.publicKey, args), "The change didn't go through.", { action: "auto-claim" }, { verb: "Change", kind: "other" });
+          return sendBuilt(
+            () => buildSetAutoClaimTx(client, signer!.publicKey, args),
+            "The change didn't go through.",
+            { action: "auto-claim", mint: args.mint },
+            { verb: "Change", kind: "other" },
+          );
         },
         "auto-claim",
         args.mint,
@@ -567,11 +574,30 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           return sendBuilt(
             () => buildWithdrawCreatorFeesTx(client, signer!.publicKey, args),
             "The withdrawal failed on chain. Nothing but the network fee was spent.",
-            { action: "withdraw" },
+            { action: "withdraw", mint: args.mint },
             { verb: "Withdraw", kind: "other" },
           );
         },
         "withdraw",
+        args.mint,
+      ),
+    [run, live, sendBuilt, client, signer],
+  );
+
+  /** D16: move a payout that went to the ticket's escrow (the owner's account refused it) into the owner's own account. */
+  const withdrawEscrow = useCallback(
+    (args: { mint: string; ticket: string }) =>
+      run(
+        async () => {
+          if (!live) return simulate(setStatus, 650);
+          return sendBuilt(
+            () => buildWithdrawEscrowTx(client, signer!.publicKey, args),
+            "The withdrawal failed on chain. Nothing but the network fee was spent.",
+            { action: "escrow", mint: args.mint },
+            { verb: "Withdraw", kind: "other" },
+          );
+        },
+        "claim",
         args.mint,
       ),
     [run, live, sendBuilt, client, signer],
@@ -598,6 +624,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
     launchStep,
     setAutoClaim,
     withdrawCreatorFees,
+    withdrawEscrow,
     reset,
     live,
     /** True when the active wallet signs without a popup (copy: "Signing…" instead of "Approve it in your wallet."). */

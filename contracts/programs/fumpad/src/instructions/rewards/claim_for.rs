@@ -16,23 +16,12 @@ use super::{
     process_queue::{check_destination, open_escrow, Dest},
 };
 
-/// D17 auto-claim: a registered keeper (`Global.keepers`) claims a ticket on its owner's
-/// behalf. Exactly the rules of `claim` (shared `decide_claim`: pause, graduated, Open,
-/// 90 days, keeper median ≥ trigger with coverage, D16 per-wallet queue limit, capacity).
-///
-/// Funds can only go to the owner: a payout lands in the owner's **canonical** Token-2022
-/// ATA (address enforced), or — if that ATA can't receive a plain transfer (missing/closed,
-/// frozen, memo required) — in the ticket's D16 escrow ["escrow", ticket], created with
-/// the keeper's lamports (`Ticket.escrow_payer` = keeper, refunded by `withdraw_escrow`).
-/// The owner pays nothing: the keeper creates a missing ATA itself (idempotent ATA create
-/// earlier in its transaction) and pays the escrow rent if one is needed.
-///
-/// The owner can opt out per coin (`set_auto_claim(false)` → `AutoClaimDisabled`); the
-/// owner-signed `claim` is unaffected either way.
+/// D17 auto-claim: a registered keeper claims a ticket on its owner's behalf (same rules as `claim`). Funds go
+/// only to the owner's canonical Token-2022 ATA, or — if it can't receive — the ticket's D16 escrow (keeper pays
+/// its rent, refunded by `withdraw_escrow`). Owners can opt out per coin (`set_auto_claim(false)`).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct ClaimFor<'info> {
-    /// A registered keeper; pays the escrow rent when one is needed.
     #[account(mut)]
     pub keeper: Signer<'info>,
     #[account(seeds = [GLOBAL_SEED], bump = global.bump)]
@@ -54,27 +43,25 @@ pub struct ClaimFor<'info> {
     pub claim_queue: AccountLoader<'info, ClaimQueue>,
     #[account(seeds = [OBSERVATIONS_SEED, mint.key().as_ref()], bump)]
     pub observations: AccountLoader<'info, Observations>,
-    /// CHECK: PDA signer that owns the reward vault.
-    #[account(seeds = [POOL_AUTHORITY_SEED], bump)]
-    pub pool_authority: UncheckedAccount<'info>,
+    /// CHECK: PDA ["reward_pool"].
+    #[account(seeds = [REWARD_POOL_SEED], bump)]
+    pub reward_pool: UncheckedAccount<'info>,
     #[account(
         mut,
-        seeds = [REWARD_VAULT_SEED, mint.key().as_ref()],
-        bump,
+        address = get_associated_token_address_with_program_id(&reward_pool.key(), &mint.key(), &anchor_spl::token_2022::ID)
+            @ FumpadError::InvalidAccount,
         token::mint = mint,
-        token::authority = pool_authority,
         token::token_program = token_program,
     )]
     pub reward_vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    /// CHECK: the ticket owner's canonical Token-2022 ATA for the mint (address enforced);
-    /// may be missing, in which case a payout is escrowed.
+    /// CHECK: the ticket owner's canonical Token-2022 ATA (address enforced); may be missing → escrow.
     #[account(
         mut,
         address = get_associated_token_address_with_program_id(&ticket.owner, &mint.key(), &anchor_spl::token_2022::ID)
             @ FumpadError::InvalidAccount,
     )]
     pub owner_ata: UncheckedAccount<'info>,
-    /// CHECK: the ticket's D16 escrow PDA ["escrow", ticket]; created only if the ATA refuses.
+    /// CHECK: the ticket's escrow PDA ["escrow", ticket]; created only if the ATA refuses.
     #[account(mut, seeds = [ESCROW_SEED, ticket.key().as_ref()], bump)]
     pub escrow: UncheckedAccount<'info>,
     #[account(address = anchor_spl::token_2022::ID)]
@@ -122,7 +109,7 @@ pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
             &a.system_program.to_account_info(),
             &a.token_program.key(),
             &a.mint.to_account_info(),
-            &a.pool_authority.to_account_info(),
+            &a.reward_pool.to_account_info(),
             &ticket_key,
         )?;
     }
@@ -130,7 +117,15 @@ pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
         Dest::Payable => &ata,
         Dest::Refuses => &escrow,
     };
-    pay_from_vault(&a.token_program, &a.reward_vault, &a.mint, to, &a.pool_authority, ctx.bumps.pool_authority, amount)?;
+    pay_from_vault(
+        &a.token_program,
+        &a.reward_vault.to_account_info(),
+        &a.mint,
+        to,
+        &a.reward_pool.to_account_info(),
+        ctx.bumps.reward_pool,
+        amount,
+    )?;
 
     let a = &mut *ctx.accounts;
     a.coin.tokens_paid_out = a.coin.tokens_paid_out.saturating_add(amount);
@@ -146,7 +141,6 @@ pub fn handle_claim_for(ctx: Context<ClaimFor>) -> Result<()> {
             triggered_by: keeper,
         }),
         Dest::Refuses => {
-            // decide_claim marked it Claimed; it is Escrowed until `withdraw_escrow`.
             a.ticket.status = TicketStatus::Escrowed;
             a.ticket.escrow_payer = keeper;
             emit_event!(ctx, ClaimEscrowed {

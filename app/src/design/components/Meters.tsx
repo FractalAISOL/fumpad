@@ -4,9 +4,9 @@ import * as f from "../format";
 import s from "./Meters.module.css";
 
 /**
- * Bonding-curve progress toward graduation (Global.params: 85 SOL on mainnet, scaled down
- * on devnet). 17 cells (5 SOL each at 85); the orange post at the end is graduation, the
- * moment claims open.
+ * Bonding-curve progress toward graduation (the DBC config's migration threshold: 85 SOL on
+ * mainnet, scaled down on devnet). 17 cells (5 SOL each at 85); the orange post at the end is
+ * graduation to the Meteora pool, the moment claims open.
  */
 export function CurveMeter({ raised, target = 85, size = "md", className }: { raised: number; target?: number; size?: "sm" | "md"; className?: string }) {
   const pct = Math.min(100, (raised / target) * 100);
@@ -35,7 +35,7 @@ export function CurveMeter({ raised, target = 85, size = "md", className }: { ra
             {sol(target / 2)}
           </span>
           <span className={s.cLbl} style={{ right: 0 }}>
-            {sol(target)} SOL
+            graduates at {sol(target)} SOL
           </span>
         </div>
       )}

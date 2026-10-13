@@ -1,28 +1,24 @@
-//! OWNER: rewards module.
+//! Claims, queue, escrow, close paths (v0.6 rules; payouts from ATA(reward_pool, mint)).
 
-pub mod hooks;
-pub mod logic;
-pub mod queue;
-pub mod register_holdings;
 pub mod claim;
-pub mod process_queue;
-pub mod close_ticket;
-pub mod withdraw_creator_fees;
-pub mod withdraw_platform_fees;
-pub mod init_claim_queue;
-pub mod withdraw_escrow;
 pub mod claim_for;
-pub mod set_auto_claim;
 pub mod close_position;
+pub mod close_ticket;
+pub mod init_claim_queue;
+pub mod logic;
+pub mod process_queue;
+pub mod queue;
+pub mod set_auto_claim;
+pub mod util;
+pub mod withdraw_escrow;
+pub mod withdraw_fees;
 
-pub use register_holdings::*;
 pub use claim::*;
-pub use process_queue::*;
-pub use close_ticket::*;
-pub use withdraw_creator_fees::*;
-pub use withdraw_platform_fees::*;
-pub use init_claim_queue::*;
-pub use withdraw_escrow::*;
 pub use claim_for::*;
-pub use set_auto_claim::*;
 pub use close_position::*;
+pub use close_ticket::*;
+pub use init_claim_queue::*;
+pub use process_queue::*;
+pub use set_auto_claim::*;
+pub use withdraw_escrow::*;
+pub use withdraw_fees::*;

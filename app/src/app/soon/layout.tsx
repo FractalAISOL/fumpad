@@ -10,7 +10,7 @@ import s from "@/components/prelaunch/Room.module.css";
 
 export const metadata: Metadata = {
   title: { absolute: "FUMPAD — The launchpad for people who sell too early.", template: "%s | FUMPAD" },
-  description: "Sell a coin through FUMPAD. If it later holds 10× your sell price, you claim 10% of the tokens you sold. Coming to Solana mainnet.",
+  description: "Sell a FUMPAD coin, here or on any app. If it later holds 10× your sell price, you claim 10% of the tokens you sold. Coming to Solana mainnet.",
   alternates: { canonical: "https://fumpad.app/" },
   openGraph: {
     type: "website",

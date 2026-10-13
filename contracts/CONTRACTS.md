@@ -1,25 +1,114 @@
-# FUMPAD contracts — working guide
+# FUMPAD contracts — working guide (v0.7, Meteora)
 
-Spec: `../docs/SPEC.md` (source of truth). Concept: `../docs/concept-overview.pdf`.
+Specs: `../docs/SPEC-v0.7-meteora.md` (source of truth for v0.7) on top of `../docs/SPEC.md` v0.6. Interface for the
+services / app: **`INTERFACE-v0.7.md`** (instructions, accounts, PDAs, layouts, events, errors, attestation bytes).
+Concept: `../docs/concept-overview.pdf`.
 
-## Programs
+## Program
 | Program | Id | Upgradeable | What |
 |---|---|---|---|
-| `fumpad` | `ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv` | yes (Squads multisig) | everything (curve, router, rewards, oracle) |
-| `fumpad_lp_locker` | `8TkV5aWsBJ9bHr96HV5iQXrCJ51XvHTTtxnufMQmEaY9` | **NO — must be made immutable at deploy** | holds every pool's LP forever; `lock` (CPI from `graduate`) + `skim` (fee growth only). SPEC §3.1 / D11 |
+| `fumpad` | `5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb` (new in v0.7, D39; **not deployed anywhere**) | yes (Squads multisig) | coins on Meteora DBC → DAMM v2, router, fee claims + split, buybacks, graduation bookkeeping, attested tickets, claims/queue/escrow, oracle samples, governance |
 
-They reference each other by hard-coded id: the locker's `FUMPAD_PROGRAM_ID` (pool-authority signer check, reward-vault / coin PDAs) and fumpad's `LP_LOCKER_PROGRAM_ID` (= `fumpad_lp_locker::ID`, CPI target). The program keypairs live in `target/deploy/` (git-ignored) — back them up; deploying under other ids means changing `declare_id!`/`FUMPAD_PROGRAM_ID` in BOTH crates (and Anchor.toml) and rebuilding both.
+`fumpad_lp_locker`, the own bonding curve, PumpSwap, graduate-to-PumpSwap, the D13 escape hatch, `register_holdings`
+and on-chain hold/rebuy/reference bookkeeping are **deleted** (SPEC v0.7 D30/D31). The program keypair is
+`target/deploy/fumpad-keypair.json` (git-ignored — back it up before any deploy; the old `ASVE6Nk8…` is not reused).
+
+External programs (raw CPI with hard-coded discriminators and byte offsets, no Meteora crates — `src/external/meteora.rs`):
+Meteora DBC `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN` (mainnet 0.2.1: `create_config`, `EvtSwap`/`EvtSwap2`) and
+DAMM v2 `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG` (0.2.4), Ed25519 precompile, Token-2022, SPL Token, ATA. Nothing
+requires DBC 0.2.2 (`create_config2`, `EvtSwap3`): FUMPAD configs are created with `create_config`, which 0.2.2 still
+accepts (the spike used `create_config2` on devnet; `create_config` on the 0.2.2 bytecode is UNVERIFIED).
 
 ## Build & test
 ```
-source ~/.cargo/env; export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-anchor build                           # builds both programs; must pass, no new warnings
-cargo test -p fumpad --lib             # pure math/state unit tests
-cargo test -p fumpad_lp_locker --lib   # locker √k accounting (property tests)
-cargo test -p tests                    # LiteSVM integration tests (needs `anchor build` first)
+export PATH="$HOME/.avm/bin:$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
+anchor build                                   # 0 warnings; IDL → target/idl/fumpad.json
+cargo test -p fumpad --lib                     # pure unit tests (attestation encoding, Ed25519 parsing, queue, oracle, sizes)
+cargo test -p tests                            # LiteSVM integration tests on the MAINNET DBC + DAMM v2 binaries
+cargo test -p tests cu_report -- --nocapture   # CU + tx-size + rent tables
+cargo test -p tests derive_exact_curves -- --ignored --nocapture   # re-derive the exact-8% DBC curves (after a DBC upgrade)
+UPDATE_VECTORS=1 cargo test -p tests vectors   # regenerate tests/vectors/*.json (otherwise checked byte for byte)
 ```
+Fixtures (`tests/fixtures/`, dumped read-only from mainnet; no mainnet transaction was sent):
+`dbc_mainnet.so` (sha256 `4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b`, programdata dump incl.
+padding), `damm_v2_mainnet.so` (`4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b`),
+`damm_v2_migration_config_mainnet.json` (`A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck`, the DAMM v2 config DBC uses
+for `Customizable`), `pyth_sol_usd_mainnet.json` (attestation USD vectors), `wsol_mint.json`. Re-dump before mainnet:
+Meteora can upgrade either program at any time (D38).
 
-## Build profile & program size
+Vectors for the services (`tests/vectors/`): `attestation.json` (sell + rebuy messages, deterministic keeper keys,
+signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from the Pyth fixture) and `dbc_config.json`
+(exact DBC `create_config` instruction data for the mainnet and devnet FUMPAD configs).
+
+## v0.7 at a glance
+- **Launch** (SPEC §2): API-built tx = DBC `initialize_virtual_pool_with_token2022` (vanity mint signs) → creator ATA →
+  creator's top-level DBC `swap2` (gets the min fee) → `register_coin`. Measured: **1,057 bytes**, 182k CU (incl. DBC).
+  `register_coin` requires the pool's config on `Global.configs` (48h-timelocked allow-list; every config re-checked
+  for the FUMPAD shape: fee claimer / leftover receiver = our PDAs, WSOL, Token-2022 6 dec, immutable authority, 100%
+  partner permanent lock, Customizable DAMM v2 `OnlyB`, creator fee 0, fixed supply, slot activation), signer = pool
+  creator, pool not completed; it creates the reward vault ATA and snapshots reward terms + fee split.
+- **DBC config** (`tests/vectors/dbc_config.json`): 1B supply, 85 SOL raise (devnet 0.85), 99% → 1.25% fee scheduler
+  over 8 × 1 slot, `enable_first_swap_with_min_fee`, **1% migration fee** (DBC only supports whole percents; D34 said
+  ≈0.75%), migrated pool 125 bps `OnlyB`. The curve is re-derived on the real binary so the reward pool is **exactly
+  80,000,000.000000 tokens** on a single-swap completion (`config_tests::derived_configs_are_exact_and_d17_shaped`);
+  start MC 30.33 SOL, ×14.69 price to graduation (D17 shape). Every extra swap rounds its output down in the pool's
+  favour, so a real trading path leaves 0 to a few base units (10⁻⁶ token each) of dust ON TOP (never less than 80M;
+  tests assert ≤ 1,000 base units).
+- **Router** `buy`/`sell`: user-signed DBC/DAMM `swap2` pass-through (15/14 ≤ n ≤ 24 accounts), canonical base ATA,
+  trader-owned WSOL, referral None, measured deltas + `RoutedTrade`. `PAUSE_TRADE` stops buys only.
+- **Fees**: `claim_fees` (DBC partner fees) / `claim_lp_fees` (DAMM v2 locked position) signed by `fee_claimer` with
+  pinned account lists, claimed into a transient WSOL PDA and unwrapped into the Coin. First DBC claim after the 8-slot
+  window → 100% buyback (D33); then 50/30/20 (platform + creator exact floors, remainder buyback).
+- **Buyback**: `buyback` PDA as payer, output straight into the reward vault, venue list pinned exactly. Pre-grad:
+  keeper-only, ±3% of the coin's last keeper sample (≤ 60 s), slice ≤ 0.5% of the curve's quote reserve, never
+  completes the curve. Post-grad: v0.6 rules on the DAMM v2 pool (30-min median ±3%, 0.5% of `token_b_amount`).
+- **Graduation**: `migrate_pool` (our wrapper of DBC `migration_damm_v2`, records the caller's flash-rent cost) and
+  `graduate` (verifies the DAMM v2 pool + our 100% locked position, `withdraw_leftover`, partner migration fee +
+  surplus, then refunds → prefunds observations + claim queue → platform). Split in two because the combined account
+  list (≈ 37 keys) doesn't fit a legacy transaction; each fits (1,081 / 1,045 bytes). Meteora's keepers may migrate
+  directly; `graduate` then skips that step.
+- **Tickets** (D31): `attest_sell` / `attest_rebuy` read the record from the Ed25519 precompile instruction right
+  before them (2 distinct active keepers; new keys frozen 6h), consumed-marker PDAs, per-coin sliding-hour cap,
+  challenge window (`void_ticket`), `close_consumed` only after the ticket is closed and the trade is older than 7 days.
+- **Claims / queue / escrow / auto-claim**: v0.6 rules, paying from `ATA(reward_pool, mint)`, plus the challenge window.
+
+## Sizes and rent (fresh layouts, D39)
+Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana rent` from CLI 4.1.2). At the older
+6,960 lamports per byte the queue would cost ≈0.571 SOL; which rate mainnet charges at deploy time is UNVERIFIED.
+
+| Account | Bytes | Rent (SOL) | Paid by |
+|---|---|---|---|
+| `fumpad.so` program data (`anchor build`, inliner flags) | 738,952 (+45) | 3.7548 | deployer |
+| Global | 1,044 | 0.00595 | admin (init) |
+| Coin | 546 | 0.00342 | creator (`register_coin`) |
+| Reward vault (Token-2022 ATA) | 170 | ≈0.00207 | creator (`register_coin`) |
+| Position | 315 | 0.00225 | attesting keeper |
+| Ticket | 276 | 0.00205 | attesting keeper |
+| Consumed | 82 | 0.00107 | attesting keeper |
+| ClaimQueue (1024) | 81,976 | 0.41709 | prefunded by `graduate` from the migration fee (D34) |
+| Observations (256) | 8,280 | 0.04271 | prefunded by `graduate` |
+
+## Compute units (worst cases, `cu_report`, mainnet binaries; ±2k run to run from PDA bumps)
+| Instruction | CU | Tx bytes | Compute budget |
+|---|---|---|---|
+| launch tx (DBC init + ATA + creator swap2 + `register_coin`) | 182k | 1,057 | 300k |
+| `buy` router DBC / DBC PartialFill completing the curve / DAMM v2 | 94k / 94k / 55k | — | default (200k) |
+| `sell` router DBC / DAMM v2 | 62k / 47k | — | default |
+| `claim_fees` (DBC) | 62k | — | default |
+| `claim_lp_fees` (DAMM v2) | 66k | — | default |
+| `execute_buyback` DBC (pre-grad, creates the WSOL ATA) / DAMM v2 (full 30-min median) | 114k / 89k | — | default |
+| `migrate_pool` (DBC migration CPI incl. DAMM v2 pool + lock) | 176k | 1,081 | set ≥ 400k |
+| `graduate` | 110k | 1,045 | set ≥ 200k |
+| `init_observations` / `init_claim_queue` × 9 (one tx) | 13k / 61k | — | default |
+| `record_samples` 1 coin (pre-grad / DAMM) / 5 coins / 10 coins | 14k / 15k / 45k / 83k | — / — / 773 / 1,268 | 10 coins need v0 + ALT |
+| `attest_sell` new position / existing position | 40k / 35k | 985 (with the Ed25519 ix) | default |
+| `attest_rebuy` queued ticket on a 1023-entry queue / voiding the front entry | 35k / 32k | — | default |
+| `claim` paid now behind 1022 entries / queued at the end / queued at the FRONT of 1023 | 72k / 72k / 71k | — | default |
+| `claim_for` paid now / escrowed (1022 scanned) | 79k / 88k | — | default |
+| `process_queue` full-queue walk / 13 paid / 13 escrowed on a full queue | 97k / 225k / 415k | — / — / 1,849 | 13 entries need v0 + ALT and ≥ 600k; a legacy tx carries 5 entries |
+| `withdraw_escrow` / `close_ticket` (full queue) / `void_ticket` / `close_consumed` / `close_position` / `set_auto_claim` | 27k / 20k / 15k / 9k / 9k / 7k | — | default |
+
+## Build profile & program size (approach unchanged; the measurements below are v0.5/v0.6 history)
 `anchor build` = `cargo build-sbf --tools-version v1.57 --arch v3` (Anchor 1.2.1 defaults; platform-tools v1.57).
 - `Cargo.toml` `[profile.release]`: `opt-level` 3 (default), `lto = "fat"`, `codegen-units = 1`, **`overflow-checks = true` (must stay)**. SBF is already `panic = abort`; the deployed `.so` is stripped by `cargo build-sbf`.
 - `.cargo/config.toml` (SBF targets only, `cfg(target_os = "solana")`; host builds/tests/IDL unaffected): `-C llvm-args=-inline-threshold=60 -inlinehint-threshold=60 -unroll-threshold=50`. Builds without the file are still correct, just ~22% bigger — keep it for `anchor build --verifiable` / `solana-verify` too (it lives in the repo, so they pick it up).
@@ -53,40 +142,36 @@ What was measured (deterministic keys, `cu_report` + `venue_tests::compute_units
 
 CU before → after (chosen build, same keys): curve `buy` 45,674 → 46,619 (+2.1%), first buy (ATA + position) 76,414 → 78,821 (+3.1%), `sell` (creates ticket) 54,516 → 55,560 (+1.9%), `swap_buy` 145,453 → 148,772 (+2.3%), `swap_sell` 127,599 → 130,876 (+2.6%), `claim` paid now 56,721 → 57,068 (+0.6%), `claim_for` escrowed 87,471 → 88,754 (+1.5%), `process_queue` full queue 13 paid 301,330 → 293,686 (−2.5%) / 13 escrowed 400,777 → 405,678 (+1.2%), `record_samples` 10 coins 108,366 → 110,595 (+2.1%), `graduate` 277,477 → 283,002 (+2.0%, budget 400k), `execute_buyback` 143,255 → 144,728 (+1.0%), `close_ticket` full-queue scan 22,479 → 23,793 (+5.8%), locker `skim` 79,637 → 80,859 (+1.5%), `settle_lp_fees` 20,320 → 20,488 (+0.8%). Every row stays under its budget in the compute table below.
 
-## Deploy (order matters)
-1. Deploy `fumpad` (upgrade authority → Squads multisig), run `initialize_global`.
-2. Deploy `fumpad_lp_locker` from `target/deploy/fumpad_lp_locker.so` with its keypair, then **remove its upgrade
-   authority immediately, before any coin can graduate**:
-   ```
-   solana program deploy target/deploy/fumpad_lp_locker.so --program-id target/deploy/fumpad_lp_locker-keypair.json
-   solana program set-upgrade-authority 8TkV5aWsBJ9bHr96HV5iQXrCJ51XvHTTtxnufMQmEaY9 --final
-   solana program show 8TkV5aWsBJ9bHr96HV5iQXrCJ51XvHTTtxnufMQmEaY9   # "Authority: none"
-   ```
-   Verify the deployed bytes against a reproducible build (`anchor build --verifiable` / `solana-verify`) and publish
-   the hash. `--final` is irreversible: a bug in the locker can then only be "fixed" by leaving its pools as they
-   are (principal stays locked; skims may stop) — re-run the locker test suite against the exact `.so` first.
-3. `graduate` fails cleanly (whole instruction reverts, coin stays `Complete`) while the locker isn't deployed, so finish step 2 before opening launches.
 
-**Upgrading `fumpad` over an existing Global** (e.g. devnet v0.5 → v0.6): `solana program extend` if the new `.so` is
-larger than the program-data account, `solana program deploy target/deploy/fumpad.so --program-id <id>` (upgrade
-authority signs), then immediately `migrate_global` signed by `Global.admin` (SDK `migrateGlobalIx`; devnet:
-`npx tsx scripts/devnet/migrate-global.ts` in `services/`). Every instruction that loads Global fails until it runs. The
-mainnet locker is immutable and unaffected (see the v0.6 notes for devnet's still-upgradeable locker).
+**v0.7:** same profile and `.cargo/config.toml` inliner flags (kept; `anchor build` picks them up); `fumpad.so` =
+**738,952 bytes** (v0.6: 835,544 with the curve + PumpSwap code; the locker is gone). 0 warnings.
 
-**Mainnet admin setup (v0.6, FINAL_REVIEW.md):** `fumpad` upgrade authority = Squads v4 ≥ 3-of-5 with a Squads time
-lock ≥ 48h; `Global.admin` = a separate 3-of-5; guardian = a 2-of-3 (after `initialize_global`: `propose_admin(admin,
-treasury, guardian)` → 48h → `accept_admin` by the admin); keepers ≤ 3 hot keys on separate infra; treasury cold.
-Order: deploy fumpad → `initialize_global` (upgrade-authority key) → hand the authority to Squads → deploy the locker
-`--final` (after re-running the full suite, incl. the mainnet PumpSwap fixtures, on that exact `.so`) → open launches.
+## Deploy (v0.7, order matters — nothing is deployed yet)
+1. Deploy `fumpad` (fresh id `5YMF…S9Fb`, upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock), then
+   `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params)` from the upgrade-authority key.
+2. `set_keepers` (3 keys, separate infra/RPCs); their attestation signatures count 6h later.
+3. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair), then
+   `queue_config(config, true)` → 48h → `execute_config` (permissionless).
+4. `propose_admin(admin, treasury, guardian)` → 48h → `accept_admin` to hand the guardian to its own multisig.
+5. Open launches. Keepers: `claim_fees` right after each coin's 8-slot window, pre-grad samples + buybacks, attestations
+   (finalized txs only), `migrate_pool` + `graduate` + `init_observations` + 9 × `init_claim_queue`, post-grad samples,
+   `claim_lp_fees`, buybacks, auto-claim, `process_queue`, `close_ticket`, `close_consumed`.
 
-`tests/src/flow.rs` drives a real coin through the whole lifecycle (used by `d10_tests.rs`
-and `e2e_tests.rs`); `Env::set_sol_usd` writes a fresh Pyth SOL/USD account.
-`tests/src/lib.rs` is the shared harness (`Env::new()` = fumpad + real PumpSwap + pump fees
-program + PumpSwap GlobalConfig, global initialized, one keeper). Devnet account dumps live
-in `tests/fixtures/` (`solana account -u d <addr> --output json -o <file>`;
-`solana program dump -u d <id> <file>.so`).
+## Open risks (v0.7)
+- Meteora's single upgrade authority can change DBC / DAMM v2 (fees, locks, layouts); DAMM v2 operators can disable
+  a pool or change its fee (D38). fumpad fails closed on the layouts it reads (owner + discriminator + length); an
+  account-list change needs a client update (router) or a program update (pinned PDA-signed lists).
+- The pre-graduation buyback guard trusts one keeper sample ≤ 60 s old: a pump landing before that sample and held
+  through the buyback is not caught on-chain (the 0.5%-of-quote-reserve slice bounds it).
+- Tickets are only as good as the 2-of-3 keeper re-derivation (D31): the 6h challenge window + guardian `void_ticket`
+  and the per-coin rate cap bound a compromised keeper pair; nothing on-chain re-checks hold time, rebuys or the
+  D10/D12 ticket price.
+- `register_coin` accepts any pool on an allow-listed config whose creator signs (not only API-built launches).
+- The 8% reward pool is exact for a single-swap completion; real paths add rounding dust on top (tests: ≤ 1,000 units).
+- Mainnet rent rate at deploy time (sizes table) — UNVERIFIED.
 
-## v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)
+## Archive: v0.3–v0.6 notes (superseded by the v0.7 fresh layouts, D39 — kept for history only)
+### v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)
 Regenerate the client from `target/idl/*.json` (`services`: `npm run sync-idl`, `npm run vectors`). Every `issue_*` test
 in `tests/src/final_review.rs` is now a `regression_*` test.
 
@@ -177,7 +262,7 @@ each — ranges are PDA-bump spread on random keys):**
 | `swap_buy` / `swap_sell` / curve `buy` | within run-to-run spread | unchanged | — |
 All rows remain far below the 1.4M limit (`cu_report` asserts < 1M).
 
-## v0.5 interface changes (D19 snipe tax, D20 graduation fee — SDK / keeper / indexer / app)
+### v0.5 interface changes (D19 snipe tax, D20 graduation fee — SDK / keeper / indexer / app)
 Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-idl`, `npm run vectors`). SPEC §3 (D20) and §4.1 (D19) have the rationale.
 
 **Params / Global** (`Params` fields appended at the end → `Params` +4 bytes, `Global` 672 → **680 bytes**: upgrade an existing Global in place with `migrate_global`, below)
@@ -208,7 +293,7 @@ Regenerate the client from `target/idl/fumpad.json` (`services`: `npm run sync-i
 
 **Compute (v0.5 deltas):** curve `buy` +~200 CU (taxed 45.9k vs normal 45.7k, existing ATA/position; `curve_tests::snipe_tax_compute_units`); `graduate` **276–279k** (+~5k: two PDA bump checks + pre-funding; still set 400k). Everything else unchanged (table below).
 
-## v0.4 interface changes (D17 — backend SDK / keeper must pick these up)
+### v0.4 interface changes (D17 — backend SDK / keeper must pick these up)
 Regenerate the client from `target/idl/fumpad.json`. SPEC §3, §5.3 and §10 have the rationale.
 
 **Defaults / constants**
@@ -252,7 +337,7 @@ Regenerate the client from `target/idl/fumpad.json`. SPEC §3, §5.3 and §10 ha
 | `execute_buyback` | 143k | no |
 All far below the 1.4M transaction limit; the 1024 queue costs ~90 CU per entry walked, every queue operation is one linear pass, so no bounded-walk cursor is needed. 13 queue entries is the most a legacy transaction can carry under 64 account locks (11 + 13 × 4).
 
-## v0.3 interface changes (backend SDK / keeper must pick these up)
+### v0.3 interface changes (backend SDK / keeper must pick these up)
 Regenerate the client from `target/idl/fumpad.json` (and `fumpad_lp_locker.json`). SPEC §10 has the rationale.
 
 **Instructions**
@@ -285,24 +370,14 @@ Regenerate the client from `target/idl/fumpad.json` (and `fumpad_lp_locker.json`
 
 **Compute:** see the v0.4 table above.
 
-## Module ownership (parallel branches — stay in your lane)
-| Module | Files you own |
-|---|---|
-| curve | `instructions/curve/*`, `math/curve.rs`, `external/pumpswap.rs` (create_pool section), `tests/src/curve*.rs` |
-| rewards | `instructions/rewards/*` (incl. `hooks.rs` bodies), `external/pyth.rs`, `tests/src/rewards*.rs` |
-| venue | `instructions/venue/*` (incl. `settle_lp_fees`), `external/pumpswap.rs` (swap/reserves section), `tests/src/venue*.rs` |
-| locker | `programs/fumpad_lp_locker/*` (keep it tiny, no admin, no new instructions), `tests/src/locker_tests.rs` |
-
-Shared files (`state/*`, `events.rs`, `constants.rs`, `error.rs`, `lib.rs`, `math/fees.rs`,
-`math/price.rs`, `tests/src/lib.rs`): change only when unavoidable, minimally, and list every
-change in your final report. Errors: add variants only inside your module's section of
-`error.rs`. New test helpers go in your own test files, not the shared harness.
-`lib.rs` entrypoint signatures are fixed; if you must change args, say so in your report.
 
 ## Rules
 - Every SOL/token amount: checked math, u128 intermediates, rounding in the protocol's favor.
 - Validate every account: PDA seeds + bump, owners, mints, token programs. No trusting the client.
-- Every state change emits an event from `events.rs` via `emit_event!(ctx, Event { .. })` (needs `#[event_cpi]`; same self-CPI as Anchor's `emit_cpi!`, which isn't used because it inlines the whole CPI per call site); in hooks without `ctx`, `hooks::emit_event`.
-- Respect `Global.paused` flags.
+- Every state change emits an event from `events.rs` via `emit_event!(ctx, Event { .. })` (needs `#[event_cpi]`; same self-CPI as Anchor's `emit_cpi!`, which isn't used because it inlines the whole CPI per call site); without `ctx`, `instructions::rewards::util::emit_event`.
+- Respect `Global.paused` flags (and their expiry).
+- CPIs signed by a fumpad PDA (`fee_claimer`, `buyback`, `reward_pool`) forward exactly pinned account lists
+  (`meteora::require_exact_accounts` or lists built from validated named accounts); user-signed pass-through only
+  for the router. Read external accounts only through `external::meteora` readers (owner + discriminator + length).
 - Keep CU in mind: no large stack arrays (SBF frame = 4KB); heap or zero-copy instead.
 - Tests: happy path AND every rejection path (each `require!` should have a test that hits it).

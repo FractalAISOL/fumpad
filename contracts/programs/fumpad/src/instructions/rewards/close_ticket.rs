@@ -9,13 +9,9 @@ use crate::{
 
 use super::{logic, queue};
 
-/// Close a finished ticket and refund its rent to the owner.
-/// - Claimed / Voided: owner only.
-/// - Open past `sell_ts + claim_window` (→ Expired) or Expired: anyone (rent still goes to
-///   the owner), so stale tickets can be cleaned up and free their open-ticket slot.
-/// - Queued: never (D5 — queued claims don't expire). Escrowed: not until
-///   `withdraw_escrow` (then Claimed).
-/// `claim_queue` is optional (rebuys remove a voided ticket's entry themselves, R-L1).
+/// Close a finished ticket and refund its rent to `rent_payer` (the attesting keeper). Permissionless for every
+/// terminal state: Claimed, Voided, Expired, and Open past `sell_ts + claim_window` (→ Expired). Queued (D5) and
+/// Escrowed (`withdraw_escrow` first) are never closable. `claim_queue` is optional (voids remove their own entry).
 #[event_cpi]
 #[derive(Accounts)]
 pub struct CloseTicket<'info> {
@@ -26,32 +22,25 @@ pub struct CloseTicket<'info> {
         mut,
         seeds = [TICKET_SEED, ticket.mint.as_ref(), ticket.owner.as_ref(), &ticket.seq.to_le_bytes()],
         bump = ticket.bump,
-        close = owner,
+        close = rent_payer,
     )]
     pub ticket: Box<Account<'info, Ticket>>,
-    /// CHECK: rent recipient; must be the ticket owner.
-    #[account(mut, address = ticket.owner @ FumpadError::InvalidAccount)]
-    pub owner: UncheckedAccount<'info>,
-    #[account(
-        mut,
-        seeds = [POSITION_SEED, ticket.mint.as_ref(), ticket.owner.as_ref()],
-        bump = position.bump,
-    )]
+    /// CHECK: rent recipient; must be `ticket.rent_payer`.
+    #[account(mut, address = ticket.rent_payer @ FumpadError::InvalidAccount)]
+    pub rent_payer: UncheckedAccount<'info>,
+    #[account(mut, seeds = [POSITION_SEED, ticket.mint.as_ref(), ticket.owner.as_ref()], bump = position.bump)]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, seeds = [CLAIM_QUEUE_SEED, ticket.mint.as_ref()], bump)]
     pub claim_queue: Option<AccountLoader<'info, ClaimQueue>>,
-    /// v0.6 (M-1): the ticket's coin — its snapshotted claim window decides expiry.
-    /// Appended after `claim_queue` (before the event-CPI pair).
     #[account(seeds = [COIN_SEED, ticket.mint.as_ref()], bump = coin.bump)]
     pub coin: Box<Account<'info, Coin>>,
 }
 
 pub fn handle_close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    let p = &ctx.accounts.coin.reward_params(&ctx.accounts.global.params); // M-1
+    let p = ctx.accounts.coin.reward_params(&ctx.accounts.global.params);
     let t = &ctx.accounts.ticket;
     let ticket_key = t.key();
-    let is_owner = ctx.accounts.caller.key() == t.owner;
 
     let final_status = match t.status {
         TicketStatus::Open => {
@@ -59,18 +48,10 @@ pub fn handle_close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
             require!(now > deadline, FumpadError::TicketNotClosable);
             TicketStatus::Expired
         }
-        TicketStatus::Expired => TicketStatus::Expired,
-        // Queued: D5, never expires. Escrowed: tokens still waiting in its escrow
-        // (`withdraw_escrow` first).
         TicketStatus::Queued | TicketStatus::Escrowed => return err!(FumpadError::TicketNotClosable),
-        s @ (TicketStatus::Claimed | TicketStatus::Voided) => {
-            require!(is_owner, FumpadError::Unauthorized);
-            s
-        }
+        s @ (TicketStatus::Expired | TicketStatus::Claimed | TicketStatus::Voided) => s,
     };
 
-    // A ticket voided while queued already left the queue in the voiding rebuy (R-L1);
-    // if the queue is passed anyway, removing is a harmless no-op (kept for old clients).
     if let Some(q) = ctx.accounts.claim_queue.as_ref() {
         let mut q = q.load_mut()?;
         require_keys_eq!(q.mint, t.mint, FumpadError::InvalidAccount);
@@ -80,8 +61,8 @@ pub fn handle_close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
     }
 
     logic::remove_open(&mut ctx.accounts.position, &ticket_key);
-    let owner = t.owner;
+    let (owner, rent_payer) = (t.owner, t.rent_payer);
     ctx.accounts.ticket.status = final_status;
-    emit_event!(ctx, TicketClosed { ticket: ticket_key, owner, final_status: final_status as u8, ts: now });
+    emit_event!(ctx, TicketClosed { ticket: ticket_key, owner, final_status: final_status as u8, rent_payer, ts: now });
     Ok(())
 }

@@ -10,8 +10,7 @@ publish = false
 [dependencies]
 anchor-lang = "1.2.1"
 fumpad = { path = "../programs/fumpad", features = ["no-entrypoint"] }
-fumpad_lp_locker = { path = "../programs/fumpad_lp_locker", features = ["no-entrypoint"] }
-litesvm = "0.18"
+litesvm = { version = "0.18", features = ["precompiles"] }
 solana-keypair = "3"
 solana-signer = "3"
 solana-transaction = "4"
@@ -22,3 +21,4 @@ solana-address = "2"
 solana-clock = "=3.2.1"
 base64 = "0.22"
 serde_json = "1"
+bytemuck = "1"

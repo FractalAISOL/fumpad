@@ -25,7 +25,7 @@ export default function TermsPage() {
     <DocPage
       title="Terms of use"
       lede="The rules for using FUMPAD's website and app. By using FUMPAD you agree to them."
-      notice={<DraftNotice updated="October 12, 2026" />}
+      notice={<DraftNotice updated="October 13, 2026" />}
       toc={TOC}
     >
       <DocSection id="status" title="Status of these terms">
@@ -62,6 +62,11 @@ export default function TermsPage() {
           A ticket is a conditional claim on one coin&apos;s reward pool, under the rules in <Link href="/how-it-works">How it works</Link>.{" "}
           <b>Fumble rewards are not insurance and are not guaranteed.</b> A claim pays only if the coin graduates, its median price holds at the trigger,
           the claim is made in time, and that coin&apos;s pool can cover it. Rules and parameters can change under the protocol&apos;s timelock.
+        </p>
+        <p>
+          Tickets are created by FUMPAD&apos;s keepers attesting qualifying sells, including sells made on other apps. An attestation can be late, can be
+          missing if a sell can&apos;t be verified, and can be voided during its challenge window if it doesn&apos;t match the chain. Other apps that trade
+          FUMPAD coins are run by third parties; FUMPAD doesn&apos;t control or endorse them.
         </p>
       </DocSection>
       <DocSection id="advice" title="No financial advice">

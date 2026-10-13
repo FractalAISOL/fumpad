@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
-/// A fumble ticket: one qualifying sell. PDA ["ticket", mint, wallet, seq.to_le_bytes()].
-/// Rent paid by the seller; refunded to `owner` on `close_ticket`.
+/// A fumble ticket: one attested qualifying sell (D31). PDA ["ticket", mint, wallet, seq.to_le_bytes()].
+/// Rent paid by the attesting keeper (`rent_payer`), refunded to it by `close_ticket`.
 #[account]
 #[derive(InitSpace)]
 pub struct Ticket {
@@ -11,21 +11,29 @@ pub struct Ticket {
     pub seq: u64,
     /// Tokens credited to this ticket, after rebuy debits.
     pub tokens: u64,
-    /// Tokens credited at creation.
+    /// Tokens credited at attestation.
     pub original_tokens: u64,
-    /// Execution price of the sell, before FUMPAD's fee: lamports per base unit, Q64.64.
+    /// Ticket price (engine's D10/D12 floor applied): lamports per base unit, Q64.64.
     pub sell_price_q64: u128,
     pub sell_usd_cents: u64,
+    /// Block time of the sell.
     pub sell_ts: i64,
     pub status: TicketStatus,
-    /// Set when the ticket enters the claim queue (expiry stops counting from here).
     pub queued_at: i64,
     /// Tokens owed, fixed at queue entry or payout (claim_bps of `tokens`).
     pub claim_amount: u64,
     pub claimed_at: i64,
-    /// D16: who paid the rent of this ticket's escrow token account (`process_queue`
-    /// cranker); refunded to it by `withdraw_escrow`. Carved from `reserved` (size unchanged).
+    /// D16: who paid the escrow token account's rent.
     pub escrow_payer: Pubkey,
+    pub source: TicketSource,
+    /// 0 DBC, 1 DAMM v2.
+    pub venue: u8,
+    /// When `attest_sell` ran; claimable from `attested_at + ticket_challenge_secs`.
+    pub attested_at: i64,
+    pub rent_payer: Pubkey,
+    /// The `consumed` marker of the attested sell.
+    pub consumed: Pubkey,
+    pub reserved: [u8; 16],
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
@@ -34,9 +42,14 @@ pub enum TicketStatus {
     Queued,
     Claimed,
     Expired,
-    /// Reduced to zero by rebuys.
+    /// Reduced to zero by rebuys, or voided by the guardian in the challenge window.
     Voided,
-    /// D16: paid from the queue into the ticket's escrow token account (["escrow", ticket])
-    /// because the owner's ATA refused the transfer; `withdraw_escrow` → `Claimed`.
+    /// D16: paid into the ticket's escrow (owner's ATA refused); `withdraw_escrow` → `Claimed`.
     Escrowed,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
+pub enum TicketSource {
+    Outside,
+    Router,
 }

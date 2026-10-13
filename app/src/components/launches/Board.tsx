@@ -48,7 +48,7 @@ const cleanSort = (v: unknown): GradSort => (v === "recent" ? "recent" : "volume
 const LANE_HINT: Record<LaneId, string> = {
   new: "Under half the curve, newest first",
   final: "Past half the curve, closest to graduating first",
-  graduated: "Trading on PumpSwap. Tickets can pay out here.",
+  graduated: "Trading on Meteora, LP locked. Tickets can pay out here.",
 };
 
 /* ── A one-second clock for ages ("12s") ─────────────────────────────────── */
@@ -529,8 +529,8 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
       try {
         const quote = await data.quoteTrade({ mint: c.mint, side: "buy", amount, wallet: address });
         // M-9: the bound is this quote (fetched on click) minus the slippage, not a later re-quote.
-        const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: minOutFromQuote(quote.amountOut), openTickets: [], expectedOut: quote.amountOut });
-        if (res) toast(`Bought ${f.tokens(quote.amountOut)} ${c.symbol}.`);
+        const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: minOutFromQuote(quote.amountOut), expectedOut: quote.amountOut });
+        if (res) toast(quote.partialFill ? `Bought the last ${f.tokens(quote.amountOut)} ${c.symbol}. That completed the curve.` : `Bought ${f.tokens(quote.amountOut)} ${c.symbol}.`);
         else toast(lastError() ?? "The buy didn't go through.");
       } catch {
         toast(`Couldn't price $${c.symbol} right now. Nothing was sent. Try again.`);
@@ -630,7 +630,7 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
         </span>
         <span className={s.rGrad}>
           <b />
-          <b>PumpSwap</b>
+          <b>Meteora pool</b>
         </span>
       </div>
 

@@ -44,8 +44,18 @@ pub fn mul_div_ceil(a: u128, b: u128, d: u128) -> Option<u128> {
     Some(q)
 }
 
+/// Meteora DBC / DAMM v2 `sqrt_price` (Q64.64 of √(quote raw / base raw)) → price in lamports per base unit,
+/// Q64.64: `sqrt² >> 64`, rounded down. None if the result doesn't fit u128 (never for FUMPAD-range prices).
+pub fn price_q64_from_sqrt(sqrt_price: u128) -> Option<u128> {
+    let (hi, lo) = widening_mul(sqrt_price, sqrt_price);
+    if hi >> 64 != 0 {
+        return None;
+    }
+    Some((hi << 64) | (lo >> 64))
+}
+
 /// a × b as (hi, lo) u128 limbs; tuples compare lexicographically, i.e. as u256.
-fn widening_mul(a: u128, b: u128) -> (u128, u128) {
+pub fn widening_mul(a: u128, b: u128) -> (u128, u128) {
     const M: u128 = u64::MAX as u128;
     let (a1, a0) = (a >> 64, a & M);
     let (b1, b0) = (b >> 64, b & M);
@@ -76,6 +86,19 @@ mod tests {
         assert!(meets_multiple(price_q64(10_000, 1_000_000).unwrap(), sell, 100_000));
         assert!(meets_multiple(u128::MAX, u128::MAX / 20, 100_000));
         assert!(!meets_multiple(u128::MAX / 11, u128::MAX / 10, 100_000));
+    }
+
+    #[test]
+    fn sqrt_price_conversion() {
+        // Spike DAMM read: sqrt 36563035070389125 → 3.9287e-9 SOL/token = 3.9287e-6 lamports per base unit.
+        let p = price_q64_from_sqrt(36_563_035_070_389_125).unwrap();
+        let lamports_per_unit = p as f64 / Q64 as f64;
+        assert!((lamports_per_unit - 3.9287e-6).abs() < 1e-9, "{lamports_per_unit}");
+        assert_eq!(price_q64_from_sqrt(1u128 << 64), Some(1u128 << 64)); // price 1
+        assert_eq!(price_q64_from_sqrt(0), Some(0));
+        assert_eq!(price_q64_from_sqrt(u128::MAX), None);
+        // Exact: (2^64 · 3)² >> 64 = 9 · 2^64.
+        assert_eq!(price_q64_from_sqrt(3u128 << 64), Some(9u128 << 64));
     }
 
     #[test]

@@ -1,880 +1,572 @@
-//! Full-stack test helpers: a REAL coin from `create_coin`, curve trading, `graduate`
-//! into the real PumpSwap program, then router / oracle / rewards on that pool. Used by
-//! the D10 tests and the end-to-end test (nothing is fabricated except Pyth bytes).
+//! Lifecycle helpers: launch (real DBC init + top-level creator swap + register_coin in one tx), router and direct
+//! trades, curve completion, migration, graduation, post-graduation setup, fee claims, samples, attestations.
 
-use anchor_lang::{
-    prelude::{AccountMeta as Meta, Pubkey},
-    pubkey, AnchorDeserialize, Discriminator, InstructionData, ToAccountMetas,
-};
-use fumpad::{
-    error::FumpadError,
-    external::pumpswap::{event_authority_pda, lp_mint_pda, pool_pda, IX_BUY_EXACT_QUOTE_IN_V2, IX_SELL_V2, WSOL_MINT},
-    state::*,
-    PUMPSWAP_GLOBAL_CONFIG, PUMPSWAP_PROGRAM_ID,
-};
-use litesvm::types::{TransactionMetadata, TransactionResult};
-use solana_account::Account;
-use solana_instruction::{AccountMeta as Meta4, Instruction};
+use anchor_lang::prelude::Pubkey;
+use fumpad::attestation::{build_ed25519_data, RebuyRecord, SellRecord};
+use fumpad::external::meteora as m;
+use litesvm::types::TransactionResult;
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
+use solana_signer::Signer;
 
+use crate::meteora::{self, WSOL};
 use crate::*;
 
-pub const T22: Pubkey = pubkey!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-pub const TOKEN: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-pub const ATA_PROGRAM: Pubkey = pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-pub const SYSTEM: Pubkey = anchor_lang::system_program::ID;
-pub const IX_SYSVAR: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
-pub const COMPUTE_BUDGET: Pubkey = pubkey!("ComputeBudget111111111111111111111111111111");
-pub const FEE_CONFIG: Pubkey = pubkey!("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx");
-pub const T0: i64 = 1_800_000_000;
-/// SOL/USD used for every priced sell.
-pub const SOL_USD: u64 = 150;
-
-// ── generic helpers ──────────────────────────────────────────────────────────
-
-pub fn pda(seeds: &[&[u8]], program: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(seeds, program).0
-}
-pub fn fpda(seeds: &[&[u8]]) -> Pubkey {
-    pda(seeds, &fumpad::ID)
-}
-pub fn ata(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
-    pda(&[owner.as_ref(), token_program.as_ref(), mint.as_ref()], &ATA_PROGRAM)
-}
-pub fn event_authority() -> Pubkey {
-    fpda(&[b"__event_authority"])
-}
-pub fn pool_authority() -> Pubkey {
-    fpda(&[fumpad::POOL_AUTHORITY_SEED])
-}
-/// L-1: the PumpSwap `user` of `execute_buyback`.
-pub fn pumpswap_signer() -> Pubkey {
-    fpda(&[fumpad::PUMPSWAP_SIGNER_SEED])
-}
-/// D11 locker accounts of a pool: (Lock PDA, locker authority PDA, LP vault ATA).
-pub fn locker_accounts(pool: &Pubkey) -> (Pubkey, Pubkey, Pubkey) {
-    let lock = pda(&[fumpad_lp_locker::LOCK_SEED, pool.as_ref()], &fumpad_lp_locker::ID);
-    let authority = pda(&[fumpad_lp_locker::AUTHORITY_SEED], &fumpad_lp_locker::ID);
-    (lock, authority, ata(&authority, &lp_mint_pda(pool), &T22))
-}
-pub fn uva(user: &Pubkey) -> Pubkey {
-    pda(&[b"user_volume_accumulator", user.as_ref()], &PUMPSWAP_PROGRAM_ID)
-}
-pub fn w(k: Pubkey) -> Meta {
-    Meta::new(k, false)
-}
-pub fn r(k: Pubkey) -> Meta {
-    Meta::new_readonly(k, false)
-}
-
-pub fn raw_ix(program: Pubkey, metas: Vec<Meta>, data: Vec<u8>) -> Instruction {
-    Instruction {
-        program_id: addr(&program),
-        accounts: metas
-            .into_iter()
-            .map(|m| Meta4 { pubkey: addr(&m.pubkey), is_signer: m.is_signer, is_writable: m.is_writable })
-            .collect(),
-        data,
-    }
-}
-
-pub fn cu_limit(units: u32) -> Instruction {
-    let mut d = vec![2u8];
-    d.extend_from_slice(&units.to_le_bytes());
-    raw_ix(COMPUTE_BUDGET, vec![], d)
-}
-
-pub fn code_of(e: FumpadError) -> u32 {
-    anchor_lang::error::ERROR_CODE_OFFSET + e as u32
-}
-
-#[track_caller]
-pub fn expect_err(res: TransactionResult, e: FumpadError) {
-    let c = code_of(e);
-    match res {
-        Ok(_) => panic!("expected {e:?} ({c}), but the transaction succeeded"),
-        Err(f) => {
-            let s = format!("{:?}", f.err);
-            assert!(s.contains(&format!("Custom({c})")), "expected {e:?} ({c}), got {s}\nlogs: {:#?}", f.meta.logs);
-        }
-    }
-}
-
-#[track_caller]
-pub fn ok(res: TransactionResult) -> TransactionMetadata {
-    match res {
-        Ok(m) => m,
-        Err(f) => panic!("tx failed: {:?}\nlogs: {:#?}", f.err, f.meta.logs),
-    }
-}
-
-/// Decode every `emit_cpi!` event of type T from a transaction's inner instructions.
-pub fn events<T: anchor_lang::Event + AnchorDeserialize + Discriminator>(m: &TransactionMetadata) -> Vec<T> {
-    let mut out = vec![];
-    for ixs in &m.inner_instructions {
-        for i in ixs {
-            let d = &i.instruction.data;
-            if d.len() >= 8 && &d[..8] == anchor_lang::event::EVENT_IX_TAG_LE {
-                let rest = &d[8..];
-                if rest.starts_with(T::DISCRIMINATOR) {
-                    out.push(T::deserialize(&mut &rest[T::DISCRIMINATOR.len()..]).unwrap());
-                }
-            }
-        }
-    }
-    out
-}
-
-pub fn token_balance(env: &Env, key: &Pubkey) -> u64 {
-    match env.account(key) {
-        Some(a) if a.data.len() >= 72 => u64::from_le_bytes(a.data[64..72].try_into().unwrap()),
-        _ => 0,
-    }
-}
-
-/// Plain token account (WSOL accounts are native: lamports = rent + amount).
-pub fn put_token_account(env: &mut Env, key: Pubkey, mint: Pubkey, owner: Pubkey, amount: u64, program: Pubkey) {
-    let mut d = vec![0u8; 165];
-    d[0..32].copy_from_slice(mint.as_ref());
-    d[32..64].copy_from_slice(owner.as_ref());
-    d[64..72].copy_from_slice(&amount.to_le_bytes());
-    d[108] = 1;
-    let rent = env.svm.minimum_balance_for_rent_exemption(165);
-    let mut lamports = rent;
-    if mint == WSOL_MINT {
-        d[109..113].copy_from_slice(&1u32.to_le_bytes());
-        d[113..121].copy_from_slice(&rent.to_le_bytes());
-        lamports += amount;
-    }
-    env.svm
-        .set_account(addr(&key), Account { lamports, data: d, owner: addr(&program), executable: false, rent_epoch: 0 })
-        .unwrap();
-}
-
-// ── the world ────────────────────────────────────────────────────────────────
-
-pub struct Flow {
-    pub env: Env,
-    pub creator: Keypair,
+pub struct TCoin {
     pub mint: Pubkey,
-    pub coin: Pubkey,
+    pub creator: Keypair,
+    pub config: Pubkey,
     pub pool: Pubkey,
-    pub pool_base: Pubkey,
-    pub pool_quote: Pubkey,
-    pub reward_vault: Pubkey,
-    pub curve_vault: Pubkey,
-    pub observations: Pubkey,
-    pub queue: Pubkey,
-    pub buyback_fee_recipient_ata: Pubkey,
 }
 
-impl Flow {
-    /// Env with every fixture the full lifecycle needs, clock at T0, and a coin created
-    /// by `creator` with default params.
-    pub fn new() -> Self {
-        Self::with_params(Params::default())
+impl TCoin {
+    pub fn coin_pda(&self) -> Pubkey {
+        pda(&[fumpad::COIN_SEED, self.mint.as_ref()])
+    }
+    pub fn damm_pool(&self) -> Pubkey {
+        meteora::damm_pool_pda(&meteora::DAMM_MIGRATION_CONFIG, &self.mint)
+    }
+    pub fn observations(&self) -> Pubkey {
+        pda(&[fumpad::OBSERVATIONS_SEED, self.mint.as_ref()])
+    }
+    pub fn claim_queue(&self) -> Pubkey {
+        pda(&[fumpad::CLAIM_QUEUE_SEED, self.mint.as_ref()])
+    }
+    pub fn base_vault(&self) -> Pubkey {
+        meteora::dbc_vault(&self.mint, &self.pool)
+    }
+    pub fn quote_vault(&self) -> Pubkey {
+        meteora::dbc_vault(&WSOL, &self.pool)
+    }
+}
+
+pub fn position_pda(mint: &Pubkey, wallet: &Pubkey) -> Pubkey {
+    pda(&[fumpad::POSITION_SEED, mint.as_ref(), wallet.as_ref()])
+}
+pub fn ticket_pda(mint: &Pubkey, wallet: &Pubkey, seq: u64) -> Pubkey {
+    pda(&[fumpad::TICKET_SEED, mint.as_ref(), wallet.as_ref(), &seq.to_le_bytes()])
+}
+pub fn escrow_pda(ticket: &Pubkey) -> Pubkey {
+    pda(&[fumpad::ESCROW_SEED, ticket.as_ref()])
+}
+pub fn sell_consumed_pda(signature: &[u8; 64], ix_key: u32) -> Pubkey {
+    let h = fumpad::instructions::sell_consumed_seeds_hash(signature);
+    pda(&[fumpad::CONSUMED_SEED, &h, &ix_key.to_le_bytes()])
+}
+pub fn rebuy_consumed_pda(signature: &[u8; 64], ix_key: u32, ticket: &Pubkey) -> Pubkey {
+    let h = fumpad::instructions::sell_consumed_seeds_hash(signature);
+    pda(&[fumpad::CONSUMED_SEED, &h, &ix_key.to_le_bytes(), ticket.as_ref()])
+}
+
+impl Env {
+    pub fn coin(&self, c: &TCoin) -> fumpad::state::Coin {
+        self.fetch(&c.coin_pda())
     }
 
-    pub fn with_params(params: Params) -> Self {
-        Self::with_mint(params, Keypair::new())
+    /// Wrap `lamports` into the user's WSOL ATA (creates it).
+    pub fn fund_wsol(&mut self, user: &Keypair, lamports: u64) {
+        let ixs = meteora::wrap_sol_ixs(&kp_pk(user), lamports);
+        ok(self.send_as(user, &ixs, &[user]));
     }
 
-    /// Like `with_params`, with a chosen mint keypair (e.g. ground for worst-case PDA bumps).
-    pub fn with_mint(params: Params, mint_kp: Keypair) -> Self {
-        let mut env = Env::with_params(params);
-        let mut c = env.svm.get_sysvar::<litesvm_clock::Clock>();
-        c.unix_timestamp = T0;
-        env.svm.set_sysvar(&c);
-        load_account_fixture(&mut env.svm, "wsol_mint.json");
-        load_account_fixture(&mut env.svm, "pump_fees_fee_config_amm.json");
-        // PumpSwap's buyback fee recipient WSOL ATA exists on mainnet/devnet.
-        let gc = env.account(&PUMPSWAP_GLOBAL_CONFIG).unwrap();
-        let bfr = Pubkey::new_from_array(gc.data[643..675].try_into().unwrap());
-        let bfr_ata = ata(&bfr, &WSOL_MINT, &TOKEN);
-        put_token_account(&mut env, bfr_ata, WSOL_MINT, bfr, 0, TOKEN);
-
-        let creator = env.new_user(10);
-        let mint = kp_pk(&mint_kp);
-        let pa = pool_authority();
-        let pool = pool_pda(0, &pa, &mint, &WSOL_MINT);
-        let mut f = Flow {
-            coin: fpda(&[fumpad::COIN_SEED, mint.as_ref()]),
-            reward_vault: fpda(&[fumpad::REWARD_VAULT_SEED, mint.as_ref()]),
-            curve_vault: fpda(&[fumpad::CURVE_VAULT_SEED, mint.as_ref()]),
-            observations: fpda(&[fumpad::OBSERVATIONS_SEED, mint.as_ref()]),
-            queue: fpda(&[fumpad::CLAIM_QUEUE_SEED, mint.as_ref()]),
-            pool_base: ata(&pool, &mint, &T22),
-            pool_quote: ata(&pool, &WSOL_MINT, &TOKEN),
-            pool,
-            mint,
-            buyback_fee_recipient_ata: bfr_ata,
-            creator,
-            env,
-        };
-        let i = ix(
-            fumpad::accounts::CreateCoin {
-                creator: kp_pk(&f.creator),
-                global: f.env.global_pda(),
-                mint,
-                mint_authority: fpda(&[fumpad::MINT_AUTHORITY_SEED]),
-                coin: f.coin,
-                pool_authority: pa,
-                reward_vault: f.reward_vault,
-                curve_vault: f.curve_vault,
-                token_program: T22,
-                system_program: SYSTEM,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::CreateCoin { name: "Fumble".into(), symbol: "FUMB".into(), uri: "https://fumpad.fun/x".into() },
-        );
-        let creator = f.creator.insecure_clone();
-        ok(f.env.send(&[i], &[&creator, &mint_kp]));
-        f.env.skip_snipe_window();
-        f
-    }
-
-    pub fn now(&self) -> i64 {
-        self.env.now()
-    }
-    pub fn coin_state(&self) -> Coin {
-        self.env.fetch(&self.coin)
-    }
-    pub fn tokens(&self, user: &Pubkey) -> u64 {
-        token_balance(&self.env, &ata(user, &self.mint, &T22))
-    }
-    pub fn pool_tokens(&self) -> u64 {
-        token_balance(&self.env, &self.reward_vault)
-    }
-    pub fn position_key(&self, user: &Pubkey) -> Pubkey {
-        fpda(&[fumpad::POSITION_SEED, self.mint.as_ref(), user.as_ref()])
-    }
-    pub fn position(&self, user: &Pubkey) -> Option<Position> {
-        self.env.account(&self.position_key(user)).filter(|a| a.lamports > 0).map(|_| self.env.fetch(&self.position_key(user)))
-    }
-    pub fn open_tickets(&self, user: &Pubkey) -> Vec<Pubkey> {
-        self.position(user)
-            .map(|p| p.open_tickets.iter().copied().filter(|k| *k != Pubkey::default()).collect())
-            .unwrap_or_default()
-    }
-    /// Rebuy-rule accounts for a buy / register_holdings: the open tickets (writable), then
-    /// the claim queue iff one of them is Queued (R-L1).
-    pub fn rebuy_metas(&self, user: &Pubkey) -> Vec<Meta> {
-        let open = self.open_tickets(user);
-        let queued = open.iter().any(|k| self.ticket(k).status == TicketStatus::Queued);
-        let mut v: Vec<Meta> = open.into_iter().map(w).collect();
-        if queued {
-            v.push(w(self.queue));
+    /// The launch transaction (SPEC v0.7 §2): DBC init (vanity mint co-signs) → creator ATA → creator's top-level
+    /// `swap2` (min fee) → `register_coin`. Creator pays (fee payer); `creator_buy` lamports from its WSOL ATA.
+    pub fn launch_ixs(&self, config: &Pubkey, creator: &Pubkey, mint: &Pubkey, creator_buy: u64) -> Vec<Instruction> {
+        let pool = meteora::dbc_pool_pda(config, mint);
+        let mut v = vec![
+            meteora::init_pool_ix(config, creator, mint, creator, "FUMPAD Test", "FMBL", "https://fumpad.fun/t.json"),
+            meteora::create_ata_idempotent_ix(creator, creator, mint, &TOKEN_2022),
+        ];
+        if creator_buy > 0 {
+            v.push(meteora::dbc_buy_ix(config, mint, creator, creator_buy, 0, 0, true));
         }
+        v.push(self.register_coin_ix(config, &pool, creator, mint));
         v
     }
 
-    pub fn next_ticket(&self, user: &Pubkey) -> Pubkey {
-        let seq = self.position(user).map_or(0, |p| p.next_ticket_seq);
-        fpda(&[fumpad::TICKET_SEED, self.mint.as_ref(), user.as_ref(), &seq.to_le_bytes()])
-    }
-    pub fn ticket(&self, key: &Pubkey) -> Ticket {
-        self.env.fetch(key)
-    }
-
-    /// Coin lamports == rent + real_sol + creator fees + platform fees + buyback lamports.
-    #[track_caller]
-    pub fn assert_invariant(&self) {
-        let acc = self.env.account(&self.coin).unwrap();
-        let c = self.coin_state();
-        let rent = self.env.svm.minimum_balance_for_rent_exemption(acc.data.len());
-        assert_eq!(
-            acc.lamports,
-            rent + c.real_sol_reserves + c.creator_fees_unclaimed + c.platform_fees_unclaimed + c.buyback_lamports,
-            "coin lamport invariant broken"
-        );
-    }
-
-    /// Current spot, Q64: curve virtual reserves before graduation, PumpSwap after.
-    pub fn spot_q64(&self) -> u128 {
-        let c = self.coin_state();
-        if c.status != CoinStatus::Graduated {
-            return ((c.virtual_sol_reserves as u128) << 64) / c.virtual_token_reserves as u128;
-        }
-        let p = self.env.account(&self.pool).unwrap();
-        let vqr = if p.data.len() >= 261 { i128::from_le_bytes(p.data[245..261].try_into().unwrap()) } else { 0 };
-        let quote = (token_balance(&self.env, &self.pool_quote) as i128 + vqr) as u128;
-        (quote << 64) / token_balance(&self.env, &self.pool_base) as u128
-    }
-
-    // ── curve ───────────────────────────────────────────────────────────────
-
-    pub fn buy_ix(&self, user: &Pubkey, sol_in: u64) -> Instruction {
-        let open = self.rebuy_metas(user);
-        ix_with_remaining(
-            fumpad::accounts::Buy {
-                user: *user,
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                pool_authority: pool_authority(),
-                curve_vault: self.curve_vault,
-                reward_vault: self.reward_vault,
-                user_token_account: ata(user, &self.mint, &T22),
-                position: self.position_key(user),
-                token_program: T22,
-                associated_token_program: ATA_PROGRAM,
-                system_program: SYSTEM,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::Buy { sol_in, min_tokens_out: 1 },
-            &open,
-        )
-    }
-
-    pub fn buy(&mut self, user: &Keypair, sol_in: u64) -> TransactionResult {
-        let i = self.buy_ix(&kp_pk(user), sol_in);
-        self.env.send_as(user, &[i], &[user])
-    }
-
-    /// Curve sell with a fresh Pyth price (refreshed when the tx is built).
-    pub fn sell_ix(&mut self, user: &Pubkey, tokens_in: u64) -> Instruction {
-        self.env.set_sol_usd(SOL_USD);
+    pub fn register_coin_ix(&self, config: &Pubkey, pool: &Pubkey, creator: &Pubkey, mint: &Pubkey) -> Instruction {
         ix(
-            fumpad::accounts::Sell {
-                user: *user,
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                pool_authority: pool_authority(),
-                curve_vault: self.curve_vault,
-                reward_vault: self.reward_vault,
-                user_token_account: ata(user, &self.mint, &T22),
-                position: self.position_key(user),
-                ticket: self.next_ticket(user),
-                sol_usd_price: PYTH_SOL_USD,
-                token_program: T22,
+            fumpad::accounts::RegisterCoin {
+                creator: *creator,
+                global: self.global(),
+                mint: *mint,
+                dbc_config: *config,
+                dbc_pool: *pool,
+                coin: self.coin_pda(mint),
+                reward_pool: self.reward_pool(),
+                reward_vault: self.reward_vault(mint),
+                token_2022_program: TOKEN_2022,
+                associated_token_program: ATA_PROGRAM,
                 system_program: SYSTEM,
-                event_authority: event_authority(),
+                event_authority: ev_auth(),
                 program: fumpad::ID,
             },
-            fumpad::instruction::Sell { tokens_in, min_sol_out: 0 },
+            fumpad::instruction::RegisterCoin {},
         )
     }
 
-    pub fn sell(&mut self, user: &Keypair, tokens_in: u64) -> TransactionResult {
-        let i = self.sell_ix(&kp_pk(user), tokens_in);
-        self.env.send_as(user, &[i], &[user])
+    /// Launch a coin on the allow-listed config with a creator buy of `creator_buy` lamports.
+    pub fn launch(&mut self, creator_buy: u64) -> TCoin {
+        let config = self.config;
+        self.launch_on(config, creator_buy)
     }
 
-    pub fn graduate(&mut self) -> TransactionResult {
-        let i = self.graduate_ix();
-        self.env.send(&[cu_limit(400_000), i], &[])
+    pub fn launch_on(&mut self, config: Pubkey, creator_buy: u64) -> TCoin {
+        let creator = self.new_user(1_000);
+        let mint = Keypair::new();
+        if creator_buy > 0 {
+            self.fund_wsol(&creator, creator_buy);
+        }
+        let ixs = self.launch_ixs(&config, &kp_pk(&creator), &kp_pk(&mint), creator_buy);
+        ok(self.send_as(&creator, &ixs, &[&creator, &mint]));
+        let mint = kp_pk(&mint);
+        TCoin { mint, creator, config, pool: meteora::dbc_pool_pda(&config, &mint) }
     }
 
-    pub fn graduate_ix(&self) -> Instruction {
-        let pa = pool_authority();
-        let lp_mint = lp_mint_pda(&self.pool);
-        let i = ix(
+    /// Skip the D33 anti-snipe window (8 slots) of a just-launched coin.
+    pub fn skip_launch_window(&mut self) {
+        self.advance_slots(meteora::SNIPE_PERIODS as u64 + 1);
+    }
+
+    // ── router ───────────────────────────────────────────────────────────────
+    fn route_ix(&self, c: &TCoin, user: &Pubkey, is_buy: bool, amount: u64, min_out: u64, mode: u8) -> Instruction {
+        let coin = self.coin(c);
+        let graduated = coin.status == fumpad::state::CoinStatus::Graduated;
+        let (program, rem) = if graduated {
+            let (input, output) =
+                if is_buy { (wsol_ata(user), base_ata(user, &c.mint)) } else { (base_ata(user, &c.mint), wsol_ata(user)) };
+            (meteora::DAMM, meteora::damm_swap_accounts(&coin.damm_pool, &c.mint, user, &input, &output))
+        } else {
+            let (input, output) =
+                if is_buy { (wsol_ata(user), base_ata(user, &c.mint)) } else { (base_ata(user, &c.mint), wsol_ata(user)) };
+            (meteora::DBC, meteora::dbc_swap_accounts(&c.config, &c.mint, user, &input, &output, false))
+        };
+        let accounts = fumpad::accounts::Route {
+            trader: *user,
+            global: self.global(),
+            coin: c.coin_pda(),
+            venue_program: program,
+            event_authority: ev_auth(),
+            program: fumpad::ID,
+        };
+        if is_buy {
+            ix_rem(accounts, fumpad::instruction::Buy { amount_in: amount, min_out, mode }, &rem)
+        } else {
+            ix_rem(accounts, fumpad::instruction::Sell { amount_in: amount, min_out }, &rem)
+        }
+    }
+
+    pub fn router_buy_ix(&self, c: &TCoin, user: &Pubkey, lamports: u64, min_out: u64, mode: u8) -> Instruction {
+        self.route_ix(c, user, true, lamports, min_out, mode)
+    }
+    pub fn router_sell_ix(&self, c: &TCoin, user: &Pubkey, tokens: u64, min_out: u64) -> Instruction {
+        self.route_ix(c, user, false, tokens, min_out, 0)
+    }
+
+    /// Router buy (wraps `lamports` first, creates the base ATA).
+    pub fn router_buy(&mut self, c: &TCoin, user: &Keypair, lamports: u64) -> TransactionResult {
+        self.router_buy_mode(c, user, lamports, 0)
+    }
+
+    pub fn router_buy_mode(&mut self, c: &TCoin, user: &Keypair, lamports: u64, mode: u8) -> TransactionResult {
+        let u = kp_pk(user);
+        let mut ixs = meteora::wrap_sol_ixs(&u, lamports);
+        ixs.push(meteora::create_ata_idempotent_ix(&u, &u, &c.mint, &TOKEN_2022));
+        ixs.push(self.router_buy_ix(c, &u, lamports, 0, mode));
+        self.send_as(user, &ixs, &[user])
+    }
+
+    pub fn router_sell(&mut self, c: &TCoin, user: &Keypair, tokens: u64) -> TransactionResult {
+        let u = kp_pk(user);
+        let ixs = vec![meteora::create_ata_idempotent_ix(&u, &u, &WSOL, &SPL_TOKEN), self.router_sell_ix(c, &u, tokens, 0)];
+        self.send_as(user, &ixs, &[user])
+    }
+
+    /// Third-party (non-FUMPAD) buy straight on the venue.
+    pub fn direct_buy(&mut self, c: &TCoin, user: &Keypair, lamports: u64) -> TransactionResult {
+        let u = kp_pk(user);
+        let coin = self.coin(c);
+        let mut ixs = meteora::wrap_sol_ixs(&u, lamports);
+        ixs.push(meteora::create_ata_idempotent_ix(&u, &u, &c.mint, &TOKEN_2022));
+        if coin.status == fumpad::state::CoinStatus::Graduated {
+            ixs.push(meteora::damm_buy_ix(&coin.damm_pool, &c.mint, &u, lamports, 0));
+        } else {
+            ixs.push(meteora::dbc_buy_ix(&c.config, &c.mint, &u, lamports, 0, 0, false));
+        }
+        self.send_as(user, &ixs, &[user])
+    }
+
+    pub fn direct_sell(&mut self, c: &TCoin, user: &Keypair, tokens: u64) -> TransactionResult {
+        let u = kp_pk(user);
+        let coin = self.coin(c);
+        let mut ixs = vec![meteora::create_ata_idempotent_ix(&u, &u, &WSOL, &SPL_TOKEN)];
+        if coin.status == fumpad::state::CoinStatus::Graduated {
+            ixs.push(meteora::damm_sell_ix(&coin.damm_pool, &c.mint, &u, tokens, 0));
+        } else {
+            ixs.push(meteora::dbc_sell_ix(&c.config, &c.mint, &u, tokens, 0));
+        }
+        self.send_as(user, &ixs, &[user])
+    }
+
+    pub fn base_balance(&self, owner: &Pubkey, mint: &Pubkey) -> u64 {
+        self.token_balance(&base_ata(owner, mint))
+    }
+
+    pub fn dbc_pool_data(&self, c: &TCoin) -> Vec<u8> {
+        self.data(&c.pool)
+    }
+
+    pub fn dbc_quote_reserve(&self, c: &TCoin) -> u64 {
+        meteora::rd_u64(&self.dbc_pool_data(c), m::DBC_POOL_QUOTE_RESERVE)
+    }
+
+    /// Complete the curve with a router PartialFill buy by a fresh whale. Returns the whale.
+    pub fn complete_curve(&mut self, c: &TCoin) -> Keypair {
+        let whale = self.new_user(200);
+        ok(self.router_buy_mode(c, &whale, 100 * SOL, m::SWAP_MODE_PARTIAL_FILL));
+        whale
+    }
+
+    // ── graduation ───────────────────────────────────────────────────────────
+    pub fn migrate_pool_ix(&self, c: &TCoin, caller: &Pubkey, nft_mint: &Pubkey) -> Instruction {
+        ix_rem(
+            fumpad::accounts::MigratePool {
+                caller: *caller,
+                global: self.global(),
+                coin: c.coin_pda(),
+                dbc_program: meteora::DBC,
+                event_authority: ev_auth(),
+                program: fumpad::ID,
+            },
+            fumpad::instruction::MigratePool {},
+            &meteora::migration_accounts(&c.config, &c.mint, nft_mint, caller),
+        )
+    }
+
+    /// `migrate_pool` by `caller` (fresh NFT mint keypair). Returns the NFT mint.
+    pub fn migrate(&mut self, c: &TCoin, caller: &Keypair) -> (TransactionResult, Pubkey) {
+        let nft = Keypair::new();
+        let i = self.migrate_pool_ix(c, &kp_pk(caller), &kp_pk(&nft));
+        let r = self.send_as(caller, &[compute_budget_ix(1_000_000), i], &[caller, &nft]);
+        (r, kp_pk(&nft))
+    }
+
+    pub fn graduate_ix(&self, c: &TCoin, caller: &Pubkey, nft_mint: &Pubkey, migrator: &Pubkey) -> Instruction {
+        ix(
             fumpad::accounts::Graduate {
-                payer: kp_pk(&self.env.payer),
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                pool_authority: pa,
-                curve_vault: self.curve_vault,
-                wsol_mint: WSOL_MINT,
-                graduation_wsol: fpda(&[fumpad::GRADUATION_WSOL_SEED, self.mint.as_ref()]),
-                amm_pool: self.pool,
-                amm_global_config: PUMPSWAP_GLOBAL_CONFIG,
-                lp_mint,
-                pool_authority_lp: ata(&pa, &lp_mint, &T22),
-                pool_base_vault: self.pool_base,
-                pool_quote_vault: self.pool_quote,
-                amm_event_authority: event_authority_pda(),
-                amm_program: PUMPSWAP_PROGRAM_ID,
-                lp_lock: locker_accounts(&self.pool).0,
-                lp_locker_authority: locker_accounts(&self.pool).1,
-                lp_vault: locker_accounts(&self.pool).2,
-                lp_locker_program: fumpad_lp_locker::ID,
-                token_program: T22,
-                quote_token_program: TOKEN,
-                associated_token_program: ATA_PROGRAM,
+                caller: *caller,
+                global: self.global(),
+                coin: c.coin_pda(),
+                mint: c.mint,
+                dbc_config: c.config,
+                dbc_pool: c.pool,
+                dbc_quote_vault: c.quote_vault(),
+                dbc_base_vault: c.base_vault(),
+                damm_config: meteora::DAMM_MIGRATION_CONFIG,
+                damm_pool: c.damm_pool(),
+                damm_position: meteora::damm_position(nft_mint),
+                position_nft_account: meteora::damm_position_nft_account(nft_mint),
+                fee_claimer: self.fee_claimer(),
+                fee_wsol: self.fee_wsol(),
+                reward_pool: self.reward_pool(),
+                reward_vault: self.reward_vault(&c.mint),
+                wsol_mint: WSOL,
+                migrator: *migrator,
+                observations: c.observations(),
+                claim_queue: c.claim_queue(),
+                token_program: SPL_TOKEN,
+                token_2022_program: TOKEN_2022,
                 system_program: SYSTEM,
-                observations: self.observations,
-                claim_queue: self.queue,
-                event_authority: event_authority(),
+                dbc_pool_authority: m::DBC_POOL_AUTHORITY,
+                dbc_event_authority: m::DBC_EVENT_AUTHORITY,
+                dbc_program: meteora::DBC,
+                event_authority: ev_auth(),
                 program: fumpad::ID,
             },
             fumpad::instruction::Graduate {},
-        );
-        i
+        )
     }
 
-    /// init_observations + `CLAIM_QUEUE_INIT_CALLS` (9) × init_claim_queue + PumpSwap volume accumulator for the
-    /// pool authority (one-time buyback setup).
-    pub fn post_graduation_setup(&mut self) {
-        let payer = kp_pk(&self.env.payer);
+    pub fn graduate(&mut self, c: &TCoin, caller: &Keypair, nft_mint: &Pubkey) -> TransactionResult {
+        let coin = self.coin(c);
+        let migrator = if coin.migrator == Pubkey::default() { kp_pk(caller) } else { coin.migrator };
+        let i = self.graduate_ix(c, &kp_pk(caller), nft_mint, &migrator);
+        self.send_as(caller, &[compute_budget_ix(400_000), i], &[caller])
+    }
+
+    /// init_observations + 9 × init_claim_queue (one tx each, keeper pays only shortfalls).
+    pub fn post_grad_setup(&mut self, c: &TCoin, payer: &Keypair) {
+        let p = kp_pk(payer);
         let obs = ix(
-            fumpad::accounts::InitObservations {
-                payer,
-                coin: self.coin,
-                observations: self.observations,
-                system_program: SYSTEM,
-            },
+            fumpad::accounts::InitObservations { payer: p, coin: c.coin_pda(), observations: c.observations(), system_program: SYSTEM },
             fumpad::instruction::InitObservations {},
         );
-        ok(self.env.send(&[obs], &[]));
+        ok(self.send_as(payer, &[obs], &[payer]));
         let q = ix(
-            fumpad::accounts::InitClaimQueue { payer, coin: self.coin, claim_queue: self.queue, system_program: SYSTEM },
+            fumpad::accounts::InitClaimQueue { payer: p, coin: c.coin_pda(), claim_queue: c.claim_queue(), system_program: SYSTEM },
             fumpad::instruction::InitClaimQueue {},
         );
-        ok(self.env.send(&vec![q; fumpad::CLAIM_QUEUE_INIT_CALLS], &[]));
-        let pa = pumpswap_signer();
-        let init_uva = raw_ix(
-            PUMPSWAP_PROGRAM_ID,
-            vec![
-                Meta::new(payer, true),
-                r(pa),
-                w(uva(&pa)),
-                r(SYSTEM),
-                r(event_authority_pda()),
-                r(PUMPSWAP_PROGRAM_ID),
-            ],
-            vec![94, 6, 202, 115, 255, 96, 232, 183],
-        );
-        ok(self.env.send(&[init_uva], &[]));
+        let qs: Vec<Instruction> = (0..fumpad::instructions::CLAIM_QUEUE_INIT_CALLS).map(|_| q.clone()).collect();
+        ok(self.send_as(payer, &qs, &[payer]));
     }
 
-    // ── router ──────────────────────────────────────────────────────────────
-
-    /// PumpSwap buy/sell v2 account list (17).
-    pub fn venue(&self, user: Pubkey, user_base: Pubkey, user_quote: Pubkey) -> Vec<Meta> {
-        vec![
-            w(self.pool),
-            w(user),
-            r(PUMPSWAP_GLOBAL_CONFIG),
-            r(self.mint),
-            r(WSOL_MINT),
-            w(user_base),
-            w(user_quote),
-            w(self.pool_base),
-            w(self.pool_quote),
-            r(T22),
-            r(TOKEN),
-            r(SYSTEM),
-            w(uva(&user)),
-            r(FEE_CONFIG),
-            w(self.buyback_fee_recipient_ata),
-            r(event_authority_pda()),
-            r(PUMPSWAP_PROGRAM_ID),
-        ]
+    /// Complete → migrate (keeper 0) → graduate → setup. Returns the NFT mint.
+    pub fn graduate_coin(&mut self, c: &TCoin) -> Pubkey {
+        if self.coin(c).status == fumpad::state::CoinStatus::Curve
+            && meteora::rd_u64(&self.dbc_pool_data(c), m::DBC_POOL_QUOTE_RESERVE) < meteora::MAINNET_THRESHOLD
+        {
+            self.complete_curve(c);
+        }
+        let k = self.keepers[0].insecure_clone();
+        let (r, nft) = self.migrate(c, &k);
+        ok(r);
+        ok(self.graduate(c, &k, &nft));
+        self.post_grad_setup(c, &k);
+        nft
     }
 
-    fn user_venue(&self, u: &Pubkey) -> Vec<Meta> {
-        self.venue(*u, ata(u, &self.mint, &T22), ata(u, &WSOL_MINT, &TOKEN))
-    }
-
-    pub fn swap_buy_ix(&self, u: &Pubkey, sol_in: u64) -> Instruction {
-        let mut rem = self.rebuy_metas(u);
-        rem.extend(self.user_venue(u));
-        ix_with_remaining(
-            fumpad::accounts::SwapBuy {
-                user: *u,
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                position: self.position_key(u),
-                user_token_account: ata(u, &self.mint, &T22),
-                user_wsol: ata(u, &WSOL_MINT, &TOKEN),
-                wsol_mint: WSOL_MINT,
-                pumpswap_program: PUMPSWAP_PROGRAM_ID,
-                token_program: TOKEN,
-                token_2022_program: T22,
-                associated_token_program: ATA_PROGRAM,
+    // ── fees ─────────────────────────────────────────────────────────────────
+    pub fn claim_fees_ix(&self, c: &TCoin, caller: &Pubkey) -> Instruction {
+        ix(
+            fumpad::accounts::ClaimFees {
+                caller: *caller,
+                global: self.global(),
+                coin: c.coin_pda(),
+                mint: c.mint,
+                dbc_config: c.config,
+                dbc_pool: c.pool,
+                dbc_base_vault: c.base_vault(),
+                dbc_quote_vault: c.quote_vault(),
+                fee_claimer: self.fee_claimer(),
+                fee_wsol: self.fee_wsol(),
+                reward_vault: self.reward_vault(&c.mint),
+                wsol_mint: WSOL,
+                token_program: SPL_TOKEN,
+                token_2022_program: TOKEN_2022,
                 system_program: SYSTEM,
-                event_authority: event_authority(),
+                dbc_pool_authority: m::DBC_POOL_AUTHORITY,
+                dbc_event_authority: m::DBC_EVENT_AUTHORITY,
+                dbc_program: meteora::DBC,
+                event_authority: ev_auth(),
                 program: fumpad::ID,
             },
-            fumpad::instruction::SwapBuy { sol_in, min_tokens_out: 1 },
-            &rem,
+            fumpad::instruction::ClaimFees {},
         )
     }
 
-    pub fn swap_buy(&mut self, user: &Keypair, sol_in: u64) -> TransactionResult {
-        let i = self.swap_buy_ix(&kp_pk(user), sol_in);
-        self.env.send_as(user, &[cu_limit(1_400_000), i], &[user])
+    pub fn claim_fees(&mut self, c: &TCoin) -> TransactionResult {
+        let k = self.keepers[0].insecure_clone();
+        let i = self.claim_fees_ix(c, &kp_pk(&k));
+        self.send_as(&k, &[i], &[&k])
     }
 
-    /// Router sell with a fresh Pyth price (refreshed when the tx is built).
-    pub fn swap_sell_ix(&mut self, u: &Pubkey, tokens_in: u64) -> Instruction {
-        self.env.set_sol_usd(SOL_USD);
-        ix_with_remaining(
-            fumpad::accounts::SwapSell {
-                user: *u,
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                position: self.position_key(u),
-                ticket: self.next_ticket(u),
-                sol_usd_price: PYTH_SOL_USD,
-                user_token_account: ata(u, &self.mint, &T22),
-                user_wsol: ata(u, &WSOL_MINT, &TOKEN),
-                wsol_mint: WSOL_MINT,
-                pumpswap_program: PUMPSWAP_PROGRAM_ID,
-                token_program: TOKEN,
-                token_2022_program: T22,
-                associated_token_program: ATA_PROGRAM,
+    pub fn claim_lp_fees_ix(&self, c: &TCoin, caller: &Pubkey, nft_mint: &Pubkey) -> Instruction {
+        let coin = self.coin(c);
+        ix(
+            fumpad::accounts::ClaimLpFees {
+                caller: *caller,
+                global: self.global(),
+                coin: c.coin_pda(),
+                mint: c.mint,
+                damm_pool: coin.damm_pool,
+                damm_position: coin.damm_position,
+                position_nft_account: meteora::damm_position_nft_account(nft_mint),
+                damm_token_a_vault: meteora::damm_vault(&c.mint, &coin.damm_pool),
+                damm_token_b_vault: meteora::damm_vault(&WSOL, &coin.damm_pool),
+                fee_claimer: self.fee_claimer(),
+                fee_wsol: self.fee_wsol(),
+                reward_vault: self.reward_vault(&c.mint),
+                wsol_mint: WSOL,
+                token_program: SPL_TOKEN,
+                token_2022_program: TOKEN_2022,
                 system_program: SYSTEM,
-                event_authority: event_authority(),
+                damm_pool_authority: m::DAMM_POOL_AUTHORITY,
+                damm_event_authority: m::DAMM_EVENT_AUTHORITY,
+                damm_program: meteora::DAMM,
+                event_authority: ev_auth(),
                 program: fumpad::ID,
             },
-            fumpad::instruction::SwapSell { tokens_in, min_sol_out: 0 },
-            &self.user_venue(u),
+            fumpad::instruction::ClaimLpFees {},
         )
     }
 
-    pub fn swap_sell(&mut self, user: &Keypair, tokens_in: u64) -> TransactionResult {
-        let i = self.swap_sell_ix(&kp_pk(user), tokens_in);
-        self.env.send_as(user, &[cu_limit(1_400_000), i], &[user])
+    pub fn claim_lp_fees(&mut self, c: &TCoin, nft_mint: &Pubkey) -> TransactionResult {
+        let k = self.keepers[0].insecure_clone();
+        let i = self.claim_lp_fees_ix(c, &kp_pk(&k), nft_mint);
+        self.send_as(&k, &[i], &[&k])
     }
 
-    /// Direct PumpSwap sell (outside FUMPAD). Ensures the trader's WSOL ATA exists.
-    pub fn direct_sell_ix(&mut self, trader: &Pubkey, base_in: u64) -> Instruction {
-        let quote = ata(trader, &WSOL_MINT, &TOKEN);
-        if self.env.account(&quote).map_or(true, |a| a.lamports == 0) {
-            put_token_account(&mut self.env, quote, WSOL_MINT, *trader, 0, TOKEN);
+    /// Coin lamport invariant (state/coin.rs).
+    #[track_caller]
+    pub fn assert_coin_invariant(&self, c: &TCoin) {
+        let coin = self.coin(c);
+        let lamports = self.lamports(&c.coin_pda());
+        let want = self.rent(8 + <fumpad::state::Coin as anchor_lang::Space>::INIT_SPACE)
+            + coin.creator_fees_unclaimed
+            + coin.platform_fees_unclaimed
+            + coin.buyback_lamports;
+        assert_eq!(lamports, want, "Coin lamport invariant");
+    }
+
+    // ── oracle ───────────────────────────────────────────────────────────────
+    pub fn record_samples_ix(&self, sampler: &Pubkey, coins: &[&TCoin]) -> Instruction {
+        let mut rem = vec![];
+        for c in coins {
+            let coin = self.coin(c);
+            let pool = if coin.status == fumpad::state::CoinStatus::Graduated { coin.damm_pool } else { c.pool };
+            rem.extend([rw(c.coin_pda()), ro(pool), rw(c.observations())]);
         }
-        let mut data = IX_SELL_V2.to_vec();
-        data.extend_from_slice(&base_in.to_le_bytes());
-        data.extend_from_slice(&0u64.to_le_bytes());
-        let mut metas = self.user_venue(trader);
-        metas[1] = Meta::new(*trader, true);
-        raw_ix(PUMPSWAP_PROGRAM_ID, metas, data)
-    }
-
-    /// Direct PumpSwap buy (outside FUMPAD) spending `quote_in` WSOL, which is credited to
-    /// the trader's WSOL ATA up front (as if the trader had wrapped it).
-    pub fn direct_buy_ix(&mut self, trader: &Pubkey, quote_in: u64, top_up: bool) -> Instruction {
-        let quote = ata(trader, &WSOL_MINT, &TOKEN);
-        let have = token_balance(&self.env, &quote);
-        if top_up || self.env.account(&quote).map_or(true, |a| a.lamports == 0) {
-            put_token_account(&mut self.env, quote, WSOL_MINT, *trader, have + quote_in, TOKEN);
-        }
-        let mut data = IX_BUY_EXACT_QUOTE_IN_V2.to_vec();
-        data.extend_from_slice(&quote_in.to_le_bytes());
-        data.extend_from_slice(&1u64.to_le_bytes());
-        let mut metas = self.user_venue(trader);
-        metas[1] = Meta::new(*trader, true);
-        raw_ix(PUMPSWAP_PROGRAM_ID, metas, data)
-    }
-
-    // ── oracle ──────────────────────────────────────────────────────────────
-
-    pub fn sample_ix(&self, sampler: &Pubkey) -> Instruction {
-        ix_with_remaining(
+        ix_rem(
             fumpad::accounts::RecordSamples {
                 sampler: *sampler,
-                global: self.env.global_pda(),
+                global: self.global(),
                 instructions: IX_SYSVAR,
-                event_authority: event_authority(),
+                event_authority: ev_auth(),
                 program: fumpad::ID,
             },
             fumpad::instruction::RecordSamples {},
-            &[w(self.coin), w(self.observations), r(self.pool), r(self.pool_base), r(self.pool_quote)],
-        )
-    }
-
-    pub fn keeper_sample(&mut self) -> TransactionResult {
-        let k = self.env.keeper.insecure_clone();
-        let i = self.sample_ix(&kp_pk(&k));
-        self.env.send_as(&k, &[i], &[&k])
-    }
-
-    /// `n` keeper samples, `spacing` seconds apart (warps before each).
-    pub fn keeper_samples(&mut self, n: usize, spacing: i64) {
-        for _ in 0..n {
-            self.env.warp(spacing);
-            ok(self.keeper_sample());
-        }
-    }
-
-    pub fn median(&self) -> Option<u128> {
-        let p = Params::default();
-        let o: Observations = self.env.fetch_zc(&self.observations);
-        o.median_price_q64(self.now(), p.oracle_window_secs, p.oracle_min_samples)
-    }
-
-    pub fn execute_buyback(&mut self, max_lamports: u64) -> TransactionResult {
-        let pa = pumpswap_signer();
-        let cranker = self.env.new_user(1);
-        let i = ix_with_remaining(
-            fumpad::accounts::ExecuteBuyback {
-                cranker: kp_pk(&cranker),
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                observations: self.observations,
-                reward_vault: self.reward_vault,
-                pumpswap_signer: pa,
-                buyback_wsol: ata(&pa, &WSOL_MINT, &TOKEN),
-                wsol_mint: WSOL_MINT,
-                pumpswap_program: PUMPSWAP_PROGRAM_ID,
-                token_program: TOKEN,
-                token_2022_program: T22,
-                associated_token_program: ATA_PROGRAM,
-                system_program: SYSTEM,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::ExecuteBuyback { max_lamports },
-            &self.venue(pa, self.reward_vault, ata(&pa, &WSOL_MINT, &TOKEN)),
-        );
-        self.env.send_as(&cranker, &[cu_limit(1_400_000), i], &[&cranker])
-    }
-
-    // ── rewards ─────────────────────────────────────────────────────────────
-
-    pub fn claim(&mut self, owner: &Keypair, ticket: Pubkey) -> TransactionResult {
-        let o = kp_pk(owner);
-        let i = ix(
-            fumpad::accounts::Claim {
-                owner: o,
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                ticket,
-                position: self.position_key(&o),
-                claim_queue: self.queue,
-                observations: self.observations,
-                pool_authority: pool_authority(),
-                reward_vault: self.reward_vault,
-                owner_token_account: ata(&o, &self.mint, &T22),
-                token_program: T22,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::Claim {},
-        );
-        self.env.send_as(owner, &[i], &[owner])
-    }
-
-    pub fn queue_state(&self) -> Box<ClaimQueue> {
-        let acc = self.env.account(&self.queue).expect("queue");
-        let n = std::mem::size_of::<ClaimQueue>();
-        let mut q: Box<ClaimQueue> = Box::new(unsafe { std::mem::zeroed() });
-        unsafe { std::ptr::copy_nonoverlapping(acc.data[8..8 + n].as_ptr(), &mut *q as *mut ClaimQueue as *mut u8, n) };
-        q
-    }
-
-    /// process_queue with quadruples for `entries` = (ticket, owner), in queue order.
-    pub fn process_queue(&mut self, max_entries: u8, entries: &[(Pubkey, Pubkey)]) -> TransactionResult {
-        let rem: Vec<Meta> = entries
-            .iter()
-            .flat_map(|(t, o)| {
-                [w(*t), w(self.position_key(o)), w(ata(o, &self.mint, &T22)), w(fpda(&[fumpad::ESCROW_SEED, t.as_ref()]))]
-            })
-            .collect();
-        let i = ix_with_remaining(
-            fumpad::accounts::ProcessQueue {
-                cranker: kp_pk(&self.env.payer),
-                global: self.env.global_pda(),
-                coin: self.coin,
-                mint: self.mint,
-                claim_queue: self.queue,
-                pool_authority: pool_authority(),
-                reward_vault: self.reward_vault,
-                token_program: T22,
-                system_program: SYSTEM,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::ProcessQueue { max_entries },
             &rem,
-        );
-        self.env.send(&[cu_limit(1_400_000), i], &[])
-    }
-
-    pub fn close_ticket(&mut self, caller: &Keypair, ticket: Pubkey) -> TransactionResult {
-        let t = self.ticket(&ticket);
-        let i = ix(
-            fumpad::accounts::CloseTicket {
-                caller: kp_pk(caller),
-                global: self.env.global_pda(),
-                coin: self.coin,
-                ticket,
-                owner: t.owner,
-                position: self.position_key(&t.owner),
-                claim_queue: Some(self.queue).filter(|_| t.queued_at != 0),
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::CloseTicket {},
-        );
-        self.env.send_as(caller, &[i], &[caller])
-    }
-
-    pub fn withdraw_creator_fees(&mut self) -> TransactionResult {
-        let c = self.creator.insecure_clone();
-        let i = ix(
-            fumpad::accounts::WithdrawCreatorFees {
-                creator: kp_pk(&c),
-                coin: self.coin,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::WithdrawCreatorFees {},
-        );
-        self.env.send_as(&c, &[i], &[&c])
-    }
-
-    pub fn withdraw_platform_fees(&mut self) -> TransactionResult {
-        let i = ix(
-            fumpad::accounts::WithdrawPlatformFees {
-                caller: kp_pk(&self.env.payer),
-                global: self.env.global_pda(),
-                coin: self.coin,
-                platform_treasury: kp_pk(&self.env.treasury),
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::WithdrawPlatformFees {},
-        );
-        self.env.send(&[i], &[])
-    }
-
-    // ── D11 locker ──────────────────────────────────────────────────────────
-
-    pub fn lp_mint(&self) -> Pubkey {
-        lp_mint_pda(&self.pool)
-    }
-    /// The locker's fixed WSOL destination: ATA(coin PDA, WSOL).
-    pub fn lp_fee_wsol(&self) -> Pubkey {
-        ata(&self.coin, &WSOL_MINT, &TOKEN)
-    }
-    pub fn lock_state(&self) -> fumpad_lp_locker::Lock {
-        self.env.fetch(&locker_accounts(&self.pool).0)
-    }
-    pub fn locked_lp(&self) -> u64 {
-        token_balance(&self.env, &locker_accounts(&self.pool).2)
-    }
-    pub fn lp_supply(&self) -> u64 {
-        u64::from_le_bytes(self.env.account(&self.pool).unwrap().data[203..211].try_into().unwrap())
-    }
-    /// (⌊√(base · quote_value)⌋, lp_supply) exactly as the locker measures them.
-    pub fn sqrt_k(&self) -> (u128, u64) {
-        let p = fumpad_lp_locker::parse_pool(&self.env.account(&self.pool).unwrap().data).unwrap();
-        let base = token_balance(&self.env, &self.pool_base) as u128;
-        let q = fumpad_lp_locker::quote_value(token_balance(&self.env, &self.pool_quote), p.virtual_quote, p.waiting_fees);
-        (fumpad_lp_locker::isqrt(base * q as u128), p.lp_supply)
-    }
-    /// Principal in √k units fixed at lock time (f64).
-    pub fn lp_principal(&self) -> f64 {
-        let l = self.lock_state();
-        l.principal_num as f64 / l.lp_supply_at_lock as f64
-    }
-    /// Value of the locked LP in √k units (f64, independent of the locker's own check).
-    pub fn locked_value(&self) -> f64 {
-        let (s, l) = self.sqrt_k();
-        self.locked_lp() as f64 * s as f64 / l as f64
-    }
-
-    /// PumpSwap deposit/withdraw account list (15).
-    pub fn liquidity_metas(&self, user: Pubkey, user_base: Pubkey, user_quote: Pubkey, user_lp: Pubkey) -> Vec<Meta> {
-        vec![
-            w(self.pool),
-            r(PUMPSWAP_GLOBAL_CONFIG),
-            r(user),
-            r(self.mint),
-            r(WSOL_MINT),
-            w(self.lp_mint()),
-            w(user_base),
-            w(user_quote),
-            w(user_lp),
-            w(self.pool_base),
-            w(self.pool_quote),
-            r(TOKEN),
-            r(T22),
-            r(event_authority_pda()),
-            r(PUMPSWAP_PROGRAM_ID),
-        ]
-    }
-
-    /// [create ATA(coin, WSOL) idempotent (payer), locker `skim`].
-    pub fn skim_ixs(&self, payer: &Pubkey) -> Vec<Instruction> {
-        let (lock, authority, lp_vault) = locker_accounts(&self.pool);
-        let venue = self.liquidity_metas(authority, self.reward_vault, self.lp_fee_wsol(), lp_vault);
-        vec![create_ata_ix(payer, &self.coin, &WSOL_MINT, &TOKEN), locker_ix(
-            fumpad_lp_locker::accounts::Skim { lock, authority, pumpswap_program: PUMPSWAP_PROGRAM_ID },
-            fumpad_lp_locker::instruction::Skim {},
-            &venue,
-        )]
-    }
-
-    pub fn skim(&mut self) -> TransactionResult {
-        let mut ixs = vec![cu_limit(400_000)];
-        ixs.extend(self.skim_ixs(&kp_pk(&self.env.payer)));
-        self.env.send(&ixs, &[])
-    }
-
-    pub fn settle_ix(&self, cranker: &Pubkey) -> Instruction {
-        ix(
-            fumpad::accounts::SettleLpFees {
-                cranker: *cranker,
-                coin: self.coin,
-                wsol_mint: WSOL_MINT,
-                lp_fee_wsol: self.lp_fee_wsol(),
-                token_program: TOKEN,
-                system_program: SYSTEM,
-                event_authority: event_authority(),
-                program: fumpad::ID,
-            },
-            fumpad::instruction::SettleLpFees {},
         )
     }
 
-    pub fn settle_lp_fees(&mut self) -> TransactionResult {
-        let i = self.settle_ix(&kp_pk(&self.env.payer));
-        self.env.send(&[i], &[])
+    pub fn sample(&mut self, keeper: usize, coins: &[&TCoin]) -> TransactionResult {
+        let k = self.keepers[keeper].insecure_clone();
+        let i = self.record_samples_ix(&kp_pk(&k), coins);
+        self.send_as(&k, &[i], &[&k])
     }
-}
 
-/// Instruction for the locker program from Anchor's generated types.
-pub fn locker_ix(accounts: impl ToAccountMetas, data: impl InstructionData, remaining: &[Meta]) -> Instruction {
-    let mut i = ix_with_remaining(accounts, data, remaining);
-    i.program_id = addr(&fumpad_lp_locker::ID);
-    i
-}
+    /// Keeper samples every 15 s for `secs` (claim/buyback median coverage).
+    pub fn sample_for(&mut self, c: &TCoin, secs: i64) {
+        let mut t = 0;
+        while t < secs {
+            ok(self.sample(0, &[c]));
+            self.warp(15);
+            t += 15;
+        }
+        ok(self.sample(0, &[c]));
+    }
 
-/// Associated Token Account `create_idempotent`.
-pub fn create_ata_ix(payer: &Pubkey, owner: &Pubkey, mint: &Pubkey, program: &Pubkey) -> Instruction {
-    raw_ix(
-        ATA_PROGRAM,
-        vec![Meta::new(*payer, true), w(ata(owner, mint, program)), r(*owner), r(*mint), r(SYSTEM), r(*program)],
-        vec![1],
-    )
-}
-
-/// Locker `emit!` events (logged as "Program data: <base64>").
-pub fn locker_events<T: AnchorDeserialize + Discriminator>(m: &TransactionMetadata) -> Vec<T> {
-    use base64::Engine;
-    m.logs
-        .iter()
-        .filter_map(|l| l.strip_prefix("Program data: "))
-        .filter_map(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
-        .filter(|d| d.starts_with(T::DISCRIMINATOR))
-        .map(|d| T::deserialize(&mut &d[T::DISCRIMINATOR.len()..]).unwrap())
-        .collect()
-}
-
-/// Locker custom error code.
-pub fn locker_code(e: fumpad_lp_locker::LockerError) -> u32 {
-    anchor_lang::error::ERROR_CODE_OFFSET + e as u32
-}
-
-#[track_caller]
-pub fn expect_custom(res: TransactionResult, code: u32) {
-    match res {
-        Ok(_) => panic!("expected Custom({code}), but the transaction succeeded"),
-        Err(f) => {
-            let s = format!("{:?}", f.err);
-            assert!(s.contains(&format!("Custom({code})")), "expected Custom({code}), got {s}\nlogs: {:#?}", f.meta.logs);
+    // ── attestations ─────────────────────────────────────────────────────────
+    /// Ed25519 precompile instruction for `message` signed by `signers`.
+    pub fn ed25519_ix(message: &[u8], signers: &[&Keypair]) -> Instruction {
+        let sigs: Vec<([u8; 32], [u8; 64])> = signers
+            .iter()
+            .map(|k| (kp_pk(k).to_bytes(), <[u8; 64]>::try_from(k.sign_message(message).as_ref()).unwrap()))
+            .collect();
+        Instruction {
+            program_id: addr(&fumpad::ED25519_PROGRAM_ID),
+            accounts: vec![],
+            data: build_ed25519_data(&sigs, message),
         }
     }
+
+    pub fn attest_sell_ix(&self, submitter: &Pubkey, r: &SellRecord) -> Instruction {
+        let pos = position_pda(&r.mint, &r.trader);
+        let seq = self.account(&pos).map(|_| self.fetch::<fumpad::state::Position>(&pos).next_ticket_seq).unwrap_or(0);
+        ix(
+            fumpad::accounts::AttestSell {
+                keeper: *submitter,
+                global: self.global(),
+                coin: pda(&[fumpad::COIN_SEED, r.mint.as_ref()]),
+                position: pos,
+                ticket: ticket_pda(&r.mint, &r.trader, seq),
+                consumed: sell_consumed_pda(&r.signature, r.ix_key),
+                instructions: IX_SYSVAR,
+                system_program: SYSTEM,
+                event_authority: ev_auth(),
+                program: fumpad::ID,
+            },
+            fumpad::instruction::AttestSell {},
+        )
+    }
+
+    /// Attest `r` signed by keepers `by` (indices), submitted by keeper `by[0]`.
+    pub fn attest_sell(&mut self, r: &SellRecord, by: &[usize]) -> TransactionResult {
+        let signers: Vec<Keypair> = by.iter().map(|&i| self.keepers[i].insecure_clone()).collect();
+        let refs: Vec<&Keypair> = signers.iter().collect();
+        let sub = signers[0].insecure_clone();
+        let ixs = vec![Self::ed25519_ix(&r.encode(), &refs), self.attest_sell_ix(&kp_pk(&sub), r)];
+        self.send_as(&sub, &ixs, &[&sub])
+    }
+
+    pub fn attest_rebuy_ix(&self, submitter: &Pubkey, r: &RebuyRecord, queued: bool) -> Instruction {
+        ix(
+            fumpad::accounts::AttestRebuy {
+                keeper: *submitter,
+                global: self.global(),
+                coin: pda(&[fumpad::COIN_SEED, r.mint.as_ref()]),
+                ticket: r.ticket,
+                position: position_pda(&r.mint, &r.owner),
+                consumed: rebuy_consumed_pda(&r.signature, r.ix_key, &r.ticket),
+                claim_queue: if queued { Some(pda(&[fumpad::CLAIM_QUEUE_SEED, r.mint.as_ref()])) } else { None },
+                instructions: IX_SYSVAR,
+                system_program: SYSTEM,
+                event_authority: ev_auth(),
+                program: fumpad::ID,
+            },
+            fumpad::instruction::AttestRebuy {},
+        )
+    }
+
+    pub fn attest_rebuy(&mut self, r: &RebuyRecord, by: &[usize], queued: bool) -> TransactionResult {
+        let signers: Vec<Keypair> = by.iter().map(|&i| self.keepers[i].insecure_clone()).collect();
+        let refs: Vec<&Keypair> = signers.iter().collect();
+        let sub = signers[0].insecure_clone();
+        let ixs = vec![Self::ed25519_ix(&r.encode(), &refs), self.attest_rebuy_ix(&kp_pk(&sub), r, queued)];
+        self.send_as(&sub, &ixs, &[&sub])
+    }
+
+    /// A valid sell record for `trader` on `c` (current pool, now − 30 s), `tokens` at `price_q64`.
+    pub fn sell_record(&self, c: &TCoin, trader: &Pubkey, tokens: u64, price_q64: u128) -> SellRecord {
+        let coin = self.coin(c);
+        let graduated = coin.status == fumpad::state::CoinStatus::Graduated;
+        let now = self.now();
+        let mut sig = [0u8; 64];
+        sig[..32].copy_from_slice(Pubkey::new_unique().as_ref());
+        SellRecord {
+            program_id: fumpad::ID,
+            cluster_tag: CLUSTER_TAG,
+            mint: c.mint,
+            pool: if graduated { coin.damm_pool } else { c.pool },
+            venue: if graduated { 1 } else { 0 },
+            signature: sig,
+            ix_key: (1 << 16) | 1,
+            trader: *trader,
+            base_amount: tokens,
+            quote_gross: fumpad::math::lamports_for(tokens, price_q64).unwrap_or(1).max(1),
+            ticket_tokens: tokens,
+            ticket_price_q64: price_q64,
+            usd_cents: 10_000,
+            pyth_publish_time: now - 31,
+            slot: self.slot(),
+            block_time: now - 30,
+        }
+    }
+}
+
+pub fn rebuy_record(t: &fumpad::state::Ticket, ticket: Pubkey, debit: u64, block_time: i64) -> RebuyRecord {
+    let mut sig = [0u8; 64];
+    sig[..32].copy_from_slice(Pubkey::new_unique().as_ref());
+    RebuyRecord {
+        program_id: fumpad::ID,
+        cluster_tag: CLUSTER_TAG,
+        mint: t.mint,
+        ticket,
+        owner: t.owner,
+        signature: sig,
+        ix_key: 1,
+        debit_tokens: debit,
+        slot: 1,
+        block_time,
+    }
+}
+
+/// Q64 price from lamports per whole token (1e6 base units).
+pub fn q64_per_token(lamports_per_token: f64) -> u128 {
+    (lamports_per_token / 1e6 * 18_446_744_073_709_551_616.0) as u128
+}
+
+/// Q64 price from a Meteora sqrt price.
+pub fn sqrt_to_q64(sqrt: u128) -> u128 {
+    fumpad::math::price_q64_from_sqrt(sqrt).unwrap()
 }

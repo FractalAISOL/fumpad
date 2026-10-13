@@ -1,277 +1,330 @@
-//! v0.4 (D17: queue capacity 1024, `claim_for`) compute-unit report: worst-case CU of the heavy instructions, each asserted to fit
-//! the 1.4M per-transaction limit. Run with `--nocapture` to print the table
-//! (`cargo test -p tests cu_report -- --nocapture`). The 10-coin `record_samples` batch is
-//! measured in `venue_tests::compute_units_and_batch_size`.
+//! Compute units per instruction, worst cases (mainnet binaries). `cargo test -p tests cu_report -- --nocapture`.
+//! Every row is asserted below the 1.4M transaction limit; rows that need more than the 200k default note it.
 
-use anchor_lang::prelude::Pubkey;
-use fumpad::{
-    math::price::price_q64,
-    state::{QueueEntry, TicketStatus},
-    CLAIM_QUEUE_CAPACITY,
-};
-use litesvm::types::TransactionResult;
-
-use crate::flow::{self as fl, Flow};
-use crate::rewards_tests::World;
+use crate::flow::*;
+use crate::meteora;
+use crate::rewards_tests::{World, M};
 use crate::*;
+use anchor_lang::prelude::AccountMeta;
+use fumpad::external::meteora as m;
+use solana_keypair::Keypair;
 
-const DAY: i64 = 86_400;
-const M: u64 = 1_000_000;
-const LIMIT: u64 = 1_400_000;
-/// D17: every path must stay well clear of the limit (redesign if one gets above this).
-const COMFORT: u64 = 1_000_000;
-
-fn cu(r: TransactionResult) -> u64 {
-    match r {
-        Ok(m) => m.compute_units_consumed,
-        Err(e) => panic!("tx failed: {:?}\n{:#?}", e.err, e.meta.logs),
+struct Report(Vec<(String, u64, usize)>);
+impl Report {
+    fn add(&mut self, name: &str, meta: &litesvm::types::TransactionMetadata, tx_bytes: usize) {
+        self.0.push((name.to_string(), meta.compute_units_consumed, tx_bytes));
     }
 }
 
-fn base_price() -> u128 {
-    price_q64(1_000, M).unwrap()
-}
-
-/// `n` real Queued entries (oldest), owners with refusing ATAs if `memo`, then the queue
-/// topped up to capacity with non-fitting filler entries (scanned, never paid).
-fn full_queue(w: &mut World, n: usize, memo: bool) -> Vec<(Pubkey, Pubkey)> {
-    let now = w.now();
-    w.set_pool(1);
-    let mut real = vec![];
-    let mut users = vec![];
+fn fill_queue(w: &mut World, n: usize, amount: u64) {
+    let key = w.c.claim_queue();
+    let mut acc = w.env.svm.get_account(&addr(&key)).unwrap();
+    let base = 8usize;
+    acc.data[base + 32..base + 34].copy_from_slice(&(n as u16).to_le_bytes());
     for i in 0..n {
-        if i % 2 == 0 {
-            users.push(w.user(0));
-        }
-        let u = users.last().unwrap();
-        let t = w.add_ticket(&u.key, 1_000 * M, base_price(), now - 10 * DAY + i as i64);
-        let i = w.claim_ix(&u.key, t, u.ata);
-        let kp = u.kp.insecure_clone();
-        cu(w.env.send(&[i], &[&kp]));
-        assert_eq!(w.ticket(&t).status, TicketStatus::Queued);
-        real.push((t, u.key));
+        let o = base + 48 + i * 80;
+        acc.data[o..o + 32].copy_from_slice(Pubkey::new_unique().as_ref());
+        acc.data[o + 32..o + 64].copy_from_slice(Pubkey::new_unique().as_ref());
+        acc.data[o + 64..o + 72].copy_from_slice(&amount.to_le_bytes());
+        acc.data[o + 72..o + 80].copy_from_slice(&(1_000 + i as i64).to_le_bytes());
     }
-    if memo {
-        for u in &users {
-            w.set_balance(u, 0, true);
-        }
-    }
-    fill_queue(w, CLAIM_QUEUE_CAPACITY, now - DAY);
-    w.set_pool(50_000_000 * M);
-    real
-}
-
-/// Top the queue up to `len` entries with huge (never fitting) filler, sell_ts ≥ `from`.
-fn fill_queue(w: &mut World, len: usize, from: i64) {
-    let mut q = w.queue_state();
-    let mut i = 0;
-    while (q.len as usize) < len {
-        let e = QueueEntry { ticket: Pubkey::new_unique(), owner: Pubkey::new_unique(), amount: u64::MAX / 4_096, sell_ts: from + i };
-        let k = q.len as usize;
-        q.entries[k] = e;
-        q.len += 1;
-        q.total_owed = q.total_owed.saturating_add(e.amount);
-        i += 1;
-    }
-    w.write_queue(&q);
+    acc.data[base + 40..base + 48].copy_from_slice(&((n as u64) * amount).to_le_bytes());
+    w.env.svm.set_account(addr(&key), acc).unwrap();
 }
 
 #[test]
 fn cu_report() {
-    let mut rows: Vec<(String, u64)> = vec![];
-    let cap = CLAIM_QUEUE_CAPACITY;
-    let budget = |w: &mut World, i, signers: &[&solana_keypair::Keypair]| {
-        cu(w.env.send(&[fl::cu_limit(1_400_000), i], signers))
-    };
+    let mut r = Report(vec![]);
 
-    // ── init_claim_queue: all CLAIM_QUEUE_INIT_CALLS (9) calls in one transaction ──
-    let mut w = World::bare(fumpad::state::CoinStatus::Graduated);
-    let i = w.init_queue_ix(&kp_pk(&w.env.payer));
-    let mut ixs = vec![fl::cu_limit(1_400_000)];
-    ixs.extend(std::iter::repeat_n(i, fumpad::CLAIM_QUEUE_INIT_CALLS));
-    rows.push((format!("init_claim_queue × {} (one tx, total)", fumpad::CLAIM_QUEUE_INIT_CALLS), cu(w.env.send(&ixs, &[]))));
-    assert_eq!(w.queue_state().mint, w.mint);
+    // ── launch, router, fees, samples, buyback (curve) ──
+    let mut env = Env::new();
+    let creator = env.new_user(10);
+    let mint = Keypair::new();
+    env.fund_wsol(&creator, SOL / 10);
+    let ixs = env.launch_ixs(&env.config.clone(), &kp_pk(&creator), &kp_pk(&mint), SOL / 10);
+    let size = env.tx_size(&creator, &ixs, &[&creator, &mint]);
+    let meta = ok(env.send_as(&creator, &ixs, &[&creator, &mint]));
+    r.add("launch tx (DBC init + ATA + creator swap2 + register_coin)", &meta, size);
+    let c = TCoin { mint: kp_pk(&mint), creator, config: env.config, pool: meteora::dbc_pool_pda(&env.config, &kp_pk(&mint)) };
+    let sniper = env.new_user(100);
+    ok(env.direct_buy(&c, &sniper, 2 * SOL));
+    env.skip_launch_window();
+    let alice = env.new_user(1_000);
+    let a = kp_pk(&alice);
+    // First router buy (creates nothing in fumpad; ATA + wrap are separate ixs in the same tx).
+    let meta = ok(env.router_buy(&c, &alice, 5 * SOL));
+    r.add("buy (router, DBC)", &meta, 0);
+    let bal = env.base_balance(&a, &c.mint);
+    let meta = ok(env.router_sell(&c, &alice, bal / 2));
+    r.add("sell (router, DBC)", &meta, 0);
+    let meta = ok(env.claim_fees(&c));
+    r.add("claim_fees (DBC, launch window → buyback)", &meta, 0);
+    ok(env.router_buy(&c, &alice, 20 * SOL));
+    let meta = ok(env.claim_fees(&c));
+    r.add("claim_fees (DBC, 50/30/20)", &meta, 0);
+    let meta = ok(env.sample(0, &[&c]));
+    r.add("record_samples (1 coin, pre-grad)", &meta, 0);
+    let k0 = env.keepers[0].insecure_clone();
+    let meta = ok(env.buyback(&c, &k0, u64::MAX));
+    r.add("execute_buyback (DBC, pre-grad; creates buyback WSOL ATA)", &meta, 0);
+    // Attest on the curve: first ticket of a wallet (creates position + ticket + marker).
+    env.warp(60);
+    let rec = env.sell_record(&c, &Pubkey::new_unique(), 1_000 * M, 1 << 40);
+    let k1 = env.keepers[1].insecure_clone();
+    let ixs = vec![Env::ed25519_ix(&rec.encode(), &[&k0, &k1]), env.attest_sell_ix(&kp_pk(&k0), &rec)];
+    let size = env.tx_size(&k0, &ixs, &[&k0]);
+    let meta = ok(env.send_as(&k0, &ixs, &[&k0]));
+    r.add("attest_sell (new position; tx incl. Ed25519 2 sigs)", &meta, size);
+    let rec2 = env.sell_record(&c, &rec.trader, 1_000 * M, 1 << 40);
+    let meta = ok(env.attest_sell(&rec2, &[0, 1]));
+    r.add("attest_sell (existing position)", &meta, 0);
 
-    // ── claim / claim_for ────────────────────────────────────────────────────
-    let mut w = World::new();
-    let u = w.user(0);
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - DAY);
-    let i = w.claim_ix(&u.key, t, u.ata);
-    rows.push(("claim (paid now, empty queue)".into(), budget(&mut w, i, &[&u.kp])));
-    // Paid now behind a FULL queue of older non-fitting entries (has_older_fitting scans all).
-    let mut w = World::new();
-    let from = w.now() - 80 * DAY;
-    fill_queue(&mut w, cap, from);
-    let u = w.user(0);
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - DAY);
-    let i = w.claim_ix(&u.key, t, u.ata);
-    rows.push((format!("claim (paid now, {cap} older entries scanned)"), budget(&mut w, i, &[&u.kp])));
-    // Queued at the end: cap−1 older entries scanned, owner count, append.
-    let mut w = World::new();
-    let from = w.now() - 80 * DAY;
-    fill_queue(&mut w, cap - 1, from);
-    let u = w.user(0);
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - DAY);
-    let i = w.claim_ix(&u.key, t, u.ata);
-    rows.push((format!("claim (queued at end, {} ahead → full)", cap - 1), budget(&mut w, i, &[&u.kp])));
-    // Queued at the FRONT of a cap−1 queue (shifts every entry; the queue is then full).
-    let mut w = World::new();
-    let from = w.now() - DAY;
-    fill_queue(&mut w, cap - 1, from);
-    w.set_pool(1);
-    let u = w.user(0);
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - 80 * DAY);
-    let i = w.claim_ix(&u.key, t, u.ata);
-    rows.push((format!("claim (queued at front, {} shifted → full)", cap - 1), budget(&mut w, i, &[&u.kp])));
-    assert_eq!(w.queue_state().len as usize, cap);
-    // claim_for (keeper): same scans plus the ATA address derivation / destination check.
-    for (front, label) in [(false, "paid now"), (true, "queued at front")] {
-        let mut w = World::new();
-        let from = w.now() - if front { DAY } else { 80 * DAY };
-        fill_queue(&mut w, cap - 1, from);
-        if front {
-            w.set_pool(1);
-        }
-        let u = w.user(0);
-        let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - if front { 80 * DAY } else { DAY });
-        let k = w.env.keeper.insecure_clone();
-        let i = w.claim_for_ix(&kp_pk(&k), t);
-        rows.push((format!("claim_for ({label}, {} in queue)", cap - 1), budget(&mut w, i, &[&k])));
-    }
-    // claim_for paid into a new escrow (memo-required ATA), behind a full queue.
-    let mut w = World::new();
-    let from = w.now() - 80 * DAY;
-    fill_queue(&mut w, cap, from);
-    let u = w.user(0);
-    w.set_balance(&u, 0, true);
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - DAY);
-    let k = w.env.keeper.insecure_clone();
-    let i = w.claim_for_ix(&kp_pk(&k), t);
-    rows.push((format!("claim_for (escrowed, {cap} older scanned)"), budget(&mut w, i, &[&k])));
-
-    // ── process_queue on a FULL queue. 13 entries per tx is the most a legacy
-    //    transaction can carry under the 64-account-lock limit (11 fixed + 13 × 4 = 63). ──
-    for n in [0usize, 1, 13] {
-        for memo in [false, true] {
-            if n == 0 && memo {
-                continue;
-            }
-            let mut w = World::new();
-            let real = full_queue(&mut w, n, memo);
-            let i = w.process_ix(13, &real);
-            let what = if n == 0 { "walk only".to_string() } else if memo { format!("{n} escrowed") } else { format!("{n} paid") };
-            rows.push((format!("process_queue ({cap} queued, {what})"), budget(&mut w, i, &[])));
-            assert_eq!(w.queue_state().len as usize, cap - n);
-        }
-    }
-    // 13 entries whose tickets were voided/closed (dropped, nothing paid).
-    let mut w = World::new();
-    let real = full_queue(&mut w, 13, false);
-    for (t, _) in &real {
-        let mut tk = w.ticket(t);
-        tk.status = TicketStatus::Voided;
-        tk.claim_amount = 0;
-        w.write_ticket(t, &tk);
-    }
-    let i = w.process_ix(13, &real);
-    rows.push((format!("process_queue ({cap} queued, 13 voided dropped)"), budget(&mut w, i, &[])));
-
-    // ── rebuy voiding the FRONT entry of a full queue (register_holdings; buy / swap_buy
-    //    share the same hook) and close_ticket scanning a full queue ──
-    let mut w = World::new();
-    let from = w.now() - DAY;
-    fill_queue(&mut w, cap - 1, from);
-    w.set_pool(1);
-    let u = w.user(0);
-    let t = w.add_ticket(&u.key, 1_000 * M, base_price(), w.now() - 2 * DAY);
-    let i = w.claim_ix(&u.key, t, u.ata);
-    cu(w.env.send(&[i], &[&u.kp]));
-    assert_eq!((w.queue_state().len as usize, w.queue_state().entries[0].ticket), (cap, t));
-    w.set_balance(&u, 10_000 * M, false);
-    let i = w.register_ix(&u, &[t]);
-    let kp = u.kp.insecure_clone();
-    rows.push((format!("register_holdings (rebuy voids front of {cap} queue)"), budget(&mut w, i, &[&kp])));
-    assert_eq!(w.ticket(&t).status, TicketStatus::Voided);
-    assert_eq!(w.queue_state().len as usize, cap - 1);
-    let from = w.now() - DAY / 2;
-    fill_queue(&mut w, cap, from);
-    let i = w.close_ix(&u.key, t, true);
-    rows.push((format!("close_ticket (voided, {cap} queue scanned)"), budget(&mut w, i, &[&kp])));
-
-    // ── graduate, router, samples on a real coin ────────────────────────────
-    let mut f = Flow::new();
-    let b = f.env.new_user(100);
-    let bk = kp_pk(&b);
-    rows.push(("buy (first: creates ATA + position)".into(), cu(f.buy(&b, SOL))));
-    rows.push(("buy (existing ATA + position)".into(), cu(f.buy(&b, SOL + 1))));
-    let held = f.tokens(&bk);
-    rows.push(("sell (creates ticket)".into(), cu(f.sell(&b, held / 2))));
-    let whale = f.env.new_user(10_000);
-    cu(f.buy(&whale, 200 * SOL));
-    rows.push(("graduate".into(), cu(f.graduate())));
-    f.post_graduation_setup();
-    let u = f.env.new_user(1_000);
-    let uk = kp_pk(&u);
-    rows.push(("swap_buy (no open tickets)".into(), cu(f.swap_buy(&u, 20 * SOL))));
-    f.keeper_samples(45, 15);
-    let held = f.tokens(&uk);
-    rows.push(("swap_sell (creates ticket)".into(), cu(f.swap_sell(&u, held / 6))));
-    for _ in 0..4 {
-        cu(f.swap_sell(&u, held / 6));
-    }
-    assert_eq!(f.open_tickets(&uk).len(), 5);
-    rows.push(("swap_buy (5 open tickets, rebuy)".into(), cu(f.swap_buy(&u, 5 * SOL))));
-    f.env.warp(15);
-    let k = f.env.keeper.insecure_clone();
-    let i = f.sample_ix(&kp_pk(&k));
-    rows.push(("record_samples (1 coin)".into(), cu(f.env.send_as(&k, &[i], &[&k]))));
-
-    println!("\n| instruction | CU |\n|---|---|");
-    for (name, c) in &rows {
-        println!("| {name} | {c} |");
-        assert!(*c < LIMIT, "{name} exceeds the 1.4M limit");
-        assert!(*c < COMFORT, "{name} is above 1M CU: too close to the limit");
-    }
-}
-
-/// The keeper's post-graduation setup with WORST-CASE PDA bumps: every `init_claim_queue` call
-/// re-derives the queue PDA (`bump` constraint → find_program_address, ~1.5k CU per extra
-/// attempt), so a coin whose queue PDA has a low bump costs far more than the average one.
-/// With the SDK's old 12k-per-call budget (108k for 9 calls) such a coin's setup failed on
-/// every keeper pass ("post-graduation setup failed: Simulation failed" for 1 of 6 coins in the
-/// local e2e). The SDK budgets (`CU.initClaimQueue` 25k/call, `CU.initObservations` 80k) must
-/// cover this case.
-#[test]
-fn post_graduation_setup_worst_case_bumps() {
-    const SDK_INIT_CLAIM_QUEUE_PER_CALL: u64 = 25_000;
-    const SDK_INIT_OBSERVATIONS: u64 = 80_000;
-    let bump = |seed: &[u8], mint: &Pubkey| Pubkey::find_program_address(&[seed, mint.as_ref()], &fumpad::ID).1;
-    let mint_kp = (0..200_000)
-        .map(|_| solana_keypair::Keypair::new())
-        .find(|k| {
-            let m = kp_pk(k);
-            bump(fumpad::CLAIM_QUEUE_SEED, &m) <= 249 && bump(fumpad::OBSERVATIONS_SEED, &m) <= 251
-        })
-        .expect("ground a worst-case mint");
-    let mut f = Flow::with_mint(fumpad::state::Params::default(), mint_kp);
-    let whale = f.env.new_user(10_000);
-    cu(f.buy(&whale, 200 * SOL));
-    cu(f.graduate());
-    let payer = kp_pk(&f.env.payer);
+    // ── completion, migration, graduation ──
+    let whale = env.new_user(200);
+    let meta = ok(env.router_buy_mode(&c, &whale, 100 * SOL, m::SWAP_MODE_PARTIAL_FILL));
+    r.add("buy (router, DBC PartialFill completing the curve)", &meta, 0);
+    let nft_kp = Keypair::new();
+    let mi = env.migrate_pool_ix(&c, &kp_pk(&k0), &kp_pk(&nft_kp));
+    let size = env.tx_size(&k0, &[compute_budget_ix(1_000_000), mi.clone()], &[&k0, &nft_kp]);
+    let meta = ok(env.send_as(&k0, &[compute_budget_ix(1_000_000), mi], &[&k0, &nft_kp]));
+    let nft = kp_pk(&nft_kp);
+    r.add("migrate_pool (DBC migration_damm_v2 CPI; budget 1M)", &meta, size);
+    let gi = env.graduate_ix(&c, &kp_pk(&k0), &nft, &kp_pk(&k0));
+    let size = env.tx_size(&k0, &[compute_budget_ix(400_000), gi.clone()], &[&k0]);
+    let meta = ok(env.graduate(&c, &k0, &nft));
+    r.add("graduate (leftover + migration fee + surplus + prefund)", &meta, size);
+    let p = kp_pk(&k0);
     let obs = ix(
-        fumpad::accounts::InitObservations { payer, coin: f.coin, observations: f.observations, system_program: fl::SYSTEM },
+        fumpad::accounts::InitObservations { payer: p, coin: c.coin_pda(), observations: c.observations(), system_program: SYSTEM },
         fumpad::instruction::InitObservations {},
     );
-    let obs_cu = cu(f.env.send(&[fl::cu_limit(SDK_INIT_OBSERVATIONS as u32), obs], &[]));
+    let meta = ok(env.send_as(&k0, &[obs], &[&k0]));
+    r.add("init_observations", &meta, 0);
     let q = ix(
-        fumpad::accounts::InitClaimQueue { payer, coin: f.coin, claim_queue: f.queue, system_program: fl::SYSTEM },
+        fumpad::accounts::InitClaimQueue { payer: p, coin: c.coin_pda(), claim_queue: c.claim_queue(), system_program: SYSTEM },
         fumpad::instruction::InitClaimQueue {},
     );
-    let mut ixs = vec![fl::cu_limit((SDK_INIT_CLAIM_QUEUE_PER_CALL * fumpad::CLAIM_QUEUE_INIT_CALLS as u64) as u32)];
-    ixs.extend(vec![q; fumpad::CLAIM_QUEUE_INIT_CALLS]);
-    let q_cu = cu(f.env.send(&ixs, &[]));
-    println!("worst-case bumps: init_observations {obs_cu} CU, init_claim_queue × 9 {q_cu} CU");
-    assert!(q_cu > 108_000, "the old 9 × 12k budget is too small for this coin ({q_cu})");
-    assert!(q_cu < SDK_INIT_CLAIM_QUEUE_PER_CALL * fumpad::CLAIM_QUEUE_INIT_CALLS as u64);
-    assert!(obs_cu < SDK_INIT_OBSERVATIONS);
+    let qs: Vec<_> = (0..fumpad::instructions::CLAIM_QUEUE_INIT_CALLS).map(|_| q.clone()).collect();
+    let meta = ok(env.send_as(&k0, &qs, &[&k0]));
+    r.add("init_claim_queue × 9 (one tx, total)", &meta, 0);
+
+    // ── graduated: router, LP fees, samples, buyback ──
+    let meta = ok(env.router_buy(&c, &alice, 5 * SOL));
+    r.add("buy (router, DAMM v2)", &meta, 0);
+    let bal = env.base_balance(&a, &c.mint);
+    let meta = ok(env.router_sell(&c, &alice, bal / 3));
+    r.add("sell (router, DAMM v2)", &meta, 0);
+    let meta = ok(env.claim_lp_fees(&c, &nft));
+    r.add("claim_lp_fees (DAMM v2 position)", &meta, 0);
+    // 10 coins in one record_samples: graduate 9 more coins.
+    let mut coins = vec![];
+    for _ in 0..9 {
+        let cc = env.launch(SOL / 10);
+        env.skip_launch_window();
+        env.graduate_coin(&cc);
+        coins.push(cc);
+    }
+    env.warp(20);
+    let meta = ok(env.sample(0, &[&c]));
+    r.add("record_samples (1 coin, DAMM)", &meta, 0);
+    env.warp(20);
+    let refs: Vec<&TCoin> = std::iter::once(&c).chain(coins.iter().take(4)).collect();
+    let i = env.record_samples_ix(&kp_pk(&k0), &refs);
+    let size = env.tx_size(&k0, &[i], &[&k0]);
+    let meta = ok(env.sample(0, &refs));
+    r.add("record_samples (5 coins, legacy tx)", &meta, size);
+    env.warp(20);
+    let refs: Vec<&TCoin> = std::iter::once(&c).chain(coins.iter()).collect();
+    let i = env.record_samples_ix(&kp_pk(&k0), &refs);
+    let size = env.tx_size(&k0, &[i], &[&k0]);
+    let meta = ok(env.sample(0, &refs));
+    r.add("record_samples (10 coins; needs v0 + ALT for size)", &meta, size);
+    env.warp(15);
+    env.sample_for(&c, 1_800);
+    let meta = ok(env.buyback(&c, &k0, u64::MAX));
+    r.add("execute_buyback (DAMM v2, full 30-min median)", &meta, 0);
+
+    // ── tickets & claims on a full queue (worst cases) ──
+    let mut w = World::new();
+    let u = w.user();
+    let tq = w.ticket(&kp_pk(&u), 2_000 * M);
+    let tpay = w.ticket(&kp_pk(&u), 1_000 * M);
+    let tfor = w.ticket(&kp_pk(&u), 1_000 * M);
+    let tesc = w.ticket(&kp_pk(&u), 1_000 * M);
+    w.ready();
+    fill_queue(&mut w, fumpad::CLAIM_QUEUE_CAPACITY - 2, 1_000_000_000 * M);
+    let meta = ok(w.claim(&u, &tpay));
+    r.add("claim (paid now, behind 1022 non-fitting entries)", &meta, 0);
+    // Queued at the FRONT of a nearly full queue (older than every fabricated entry? no: fabricated are older) →
+    // inserted at the end; then the front insert case: a ticket older than all entries.
+    let meta = ok(w.claim_for(1, &tfor));
+    r.add("claim_for (paid now, scan 1022)", &meta, 0);
+    let pool = w.pool();
+    w.set_pool(1_000 * M);
+    let meta = ok(w.claim(&u, &tq));
+    r.add("claim (queued at the end, queue → 1023)", &meta, 0);
+    w.set_pool(pool);
+    // attest_rebuy on the queued ticket: queue entry update over a 1023 queue.
+    let tk = w.t(&tq);
+    let rb = rebuy_record(&tk, tq, 10 * M, tk.sell_ts + 60);
+    let meta = ok(w.env.attest_rebuy(&rb, &[0, 1], true));
+    r.add("attest_rebuy (queued ticket, 1023-entry queue)", &meta, 0);
+    w.remove_ata(&kp_pk(&u));
+    let meta = ok(w.claim_for(1, &tesc));
+    r.add("claim_for (escrowed, scan 1022)", &meta, 0);
+    let p = w.env.payer.insecure_clone();
+    let i = w.process_ix(&kp_pk(&p), 13, &[]);
+    let meta = ok(w.env.send_as(&p, &[compute_budget_ix(1_400_000), i], &[&p]));
+    r.add("process_queue (walk 1023, none fit)", &meta, 0);
+
+    // process_queue paying 13 entries / escrowing 13 on a full queue: 13 real queued tickets at the front.
+    let mut w = World::new();
+    let users: Vec<Keypair> = (0..7).map(|_| w.user()).collect();
+    let mut tickets = vec![];
+    for (i, u) in users.iter().enumerate() {
+        for j in 0..2 {
+            if tickets.len() == 13 {
+                break;
+            }
+            let t = w.ticket_at(&kp_pk(u), 2_000 * M, w.low_price(), 3_000 - (i * 2 + j) as i64);
+            tickets.push(t);
+        }
+    }
+    w.ready();
+    w.set_pool(1_000 * M);
+    for (i, t) in tickets.iter().enumerate() {
+        ok(w.claim(&users[i / 2], t));
+    }
+    // Append fabricated newer entries up to capacity (they sort after the real ones).
+    let key = w.c.claim_queue();
+    let mut acc = w.env.svm.get_account(&addr(&key)).unwrap();
+    let base = 8usize;
+    let len = u16::from_le_bytes([acc.data[base + 32], acc.data[base + 33]]) as usize;
+    for i in len..fumpad::CLAIM_QUEUE_CAPACITY {
+        let o = base + 48 + i * 80;
+        acc.data[o..o + 32].copy_from_slice(Pubkey::new_unique().as_ref());
+        acc.data[o + 32..o + 64].copy_from_slice(Pubkey::new_unique().as_ref());
+        acc.data[o + 64..o + 72].copy_from_slice(&(1_000_000_000 * M).to_le_bytes());
+        acc.data[o + 72..o + 80].copy_from_slice(&(i64::MAX - 10_000 + i as i64).to_le_bytes());
+    }
+    acc.data[base + 32..base + 34].copy_from_slice(&(fumpad::CLAIM_QUEUE_CAPACITY as u16).to_le_bytes());
+    w.env.svm.set_account(addr(&key), acc).unwrap();
+    w.set_pool(1_000_000 * M);
+    // Escrow all 13 (missing ATAs) — the most expensive crank.
+    for u in &users {
+        w.remove_ata(&kp_pk(u));
+    }
+    let p = w.env.payer.insecure_clone();
+    let i = w.process_ix(&kp_pk(&p), 13, &tickets);
+    let size = w.env.tx_size(&p, &[compute_budget_ix(1_400_000), i.clone()], &[&p]);
+    let meta = ok(w.env.send_as(&p, &[compute_budget_ix(1_400_000), i], &[&p]));
+    r.add("process_queue (full 1024 queue, 13 escrowed)", &meta, size);
+    let side = w.side_account(&users[0]);
+    let meta = ok(w.withdraw_escrow(&users[0], &tickets[0], &side));
+    r.add("withdraw_escrow", &meta, 0);
+    let meta = ok(w.close_ticket(&tickets[0], true));
+    r.add("close_ticket (claimed, full queue passed)", &meta, 0);
+
+    // A paid-crank batch: 13 entries paid directly.
+    let mut w = World::new();
+    let users: Vec<Keypair> = (0..7).map(|_| w.user()).collect();
+    let mut tickets = vec![];
+    for (i, u) in users.iter().enumerate() {
+        for j in 0..2 {
+            if tickets.len() == 13 {
+                break;
+            }
+            tickets.push(w.ticket_at(&kp_pk(u), 2_000 * M, w.low_price(), 3_000 - (i * 2 + j) as i64));
+        }
+    }
+    w.ready();
+    w.set_pool(1_000 * M);
+    for (i, t) in tickets.iter().enumerate() {
+        ok(w.claim(&users[i / 2], t));
+    }
+    w.set_pool(1_000_000 * M);
+    let p = w.env.payer.insecure_clone();
+    let i = w.process_ix(&kp_pk(&p), 13, &tickets);
+    let meta = ok(w.env.send_as(&p, &[compute_budget_ix(1_400_000), i], &[&p]));
+    r.add("process_queue (13 paid)", &meta, 0);
+
+    // Front insert into a 1023-entry queue (every fabricated entry is newer), then a rebuy voiding that front entry.
+    let mut w = World::new();
+    let u = w.user();
+    let tq = w.ticket(&kp_pk(&u), 2_000 * M);
+    w.ready();
+    let key = w.c.claim_queue();
+    let mut acc = w.env.svm.get_account(&addr(&key)).unwrap();
+    let n = fumpad::CLAIM_QUEUE_CAPACITY - 1;
+    acc.data[8 + 32..8 + 34].copy_from_slice(&(n as u16).to_le_bytes());
+    for i in 0..n {
+        let o = 8 + 48 + i * 80;
+        acc.data[o..o + 32].copy_from_slice(Pubkey::new_unique().as_ref());
+        acc.data[o + 32..o + 64].copy_from_slice(Pubkey::new_unique().as_ref());
+        acc.data[o + 64..o + 72].copy_from_slice(&(1_000_000_000 * M).to_le_bytes());
+        acc.data[o + 72..o + 80].copy_from_slice(&(i64::MAX - 10_000 + i as i64).to_le_bytes());
+    }
+    w.env.svm.set_account(addr(&key), acc).unwrap();
+    w.set_pool(1_000 * M);
+    let meta = ok(w.claim(&u, &tq));
+    r.add("claim (queued at the FRONT, 1023 entries shifted → full)", &meta, 0);
+    let tk = w.t(&tq);
+    let rb = rebuy_record(&tk, tq, 10_000 * M, tk.sell_ts + 60);
+    let meta = ok(w.env.attest_rebuy(&rb, &[0, 1], true));
+    r.add("attest_rebuy (voids the front entry of a full queue)", &meta, 0);
+
+    // void / close_consumed / set_auto_claim / close_position.
+    let mut w = World::new();
+    let u = w.user();
+    let t = w.ticket(&kp_pk(&u), 1_000 * M);
+    let consumed = w.t(&t).consumed;
+    let rent_payer = w.t(&t).rent_payer;
+    let admin = w.env.admin.insecure_clone();
+    let v = ix(
+        fumpad::accounts::VoidTicket { authority: kp_pk(&admin), global: w.env.global(), ticket: t, position: position_pda(&w.c.mint, &kp_pk(&u)), event_authority: ev_auth(), program: fumpad::ID },
+        fumpad::instruction::VoidTicket { reason: 1 },
+    );
+    let meta = ok(w.env.send(&[v], &[&admin]));
+    r.add("void_ticket", &meta, 0);
+    let meta = ok(w.close_ticket(&t, false));
+    r.add("close_ticket (voided, no queue)", &meta, 0);
+    let meta = ok(w.set_auto_claim(&u, false));
+    r.add("set_auto_claim", &meta, 0);
+    w.env.warp(fumpad::MAX_MAX_ATTEST_AGE_SECS + 1);
+    let cc = ix(
+        fumpad::accounts::CloseConsumed { caller: kp_pk(&w.env.payer), global: w.env.global(), consumed, rent_payer, ticket: t, event_authority: ev_auth(), program: fumpad::ID },
+        fumpad::instruction::CloseConsumed {},
+    );
+    let meta = ok(w.env.send(&[cc], &[]));
+    r.add("close_consumed", &meta, 0);
+    let pos = position_pda(&w.c.mint, &kp_pk(&u));
+    let i = ix_rem(
+        fumpad::accounts::ClosePosition { signer: kp_pk(&u), position: pos, rent_payer, event_authority: ev_auth(), program: fumpad::ID },
+        fumpad::instruction::ClosePosition {},
+        &[AccountMeta::new_readonly(t, false)],
+    );
+    let meta = ok(w.env.send_as(&u, &[i], &[&u]));
+    r.add("close_position (1 ticket)", &meta, 0);
+
+    let so = std::fs::metadata(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/fumpad.so")).unwrap().len() as usize;
+    println!("\n| Account | bytes | rent (LiteSVM, mainnet features) |\n|---|---|---|");
+    for (n, len) in [
+        ("fumpad.so program data (+45 header)", so + 45),
+        ("Global", 1_044),
+        ("Coin", 546),
+        ("Position", 315),
+        ("Ticket", 276),
+        ("Consumed", 82),
+        ("ClaimQueue", 81_976),
+        ("Observations", 8_280),
+    ] {
+        println!("| {n} | {len} | {} |", w.env.rent(len));
+    }
+    println!("\n| Instruction (worst case measured) | CU | tx bytes |\n|---|---|---|");
+    for (n, cu, b) in &r.0 {
+        let bytes = if *b > 0 { b.to_string() } else { "—".into() };
+        println!("| {n} | {cu} | {bytes} |");
+        assert!(*cu < 1_400_000, "{n}: {cu}");
+    }
 }
+

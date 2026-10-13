@@ -1,74 +1,66 @@
 use anchor_lang::prelude::*;
 
 use crate::constants::*;
-use crate::state::{CoinFees, SnipeConfig};
 
-/// Singleton config. PDA ["global"].
+/// Singleton config. PDA ["global"]. v0.7 fresh layout (D39).
 #[account]
 #[derive(InitSpace)]
 pub struct Global {
     pub bump: u8,
-    /// Squads multisig in production.
+    /// Squads multisig in production: queues params/configs (48h), proposes authority changes (48h), sets keepers,
+    /// pauses, migrates the layout.
     pub admin: Pubkey,
-    /// Receives the platform share of fees on `withdraw_platform_fees`.
+    /// Receives platform fees (`withdraw_platform_fees`).
     pub platform_treasury: Pubkey,
-    /// Keys allowed to sign `record_samples`. Pubkey::default() = empty slot.
+    /// M-2: may only stop things (`set_pause`, `cancel_*`, `void_ticket`).
+    pub guardian: Pubkey,
+    /// Keeper keys (samples, auto-claim, attestations). Pubkey::default() = empty slot.
     pub keepers: [Pubkey; MAX_KEEPERS],
+    /// When each keeper slot got its current key (`set_keepers`); its attestation signatures count only after
+    /// `KEEPER_ATTEST_FREEZE_SECS`.
+    pub keeper_added_at: [i64; MAX_KEEPERS],
+    /// Part of every attestation message (0 mainnet-beta, 1 devnet, 2 localnet/test). Set once at init.
+    pub cluster_tag: u8,
     /// Bitmask of `PAUSE_*` flags; in force only until `pause_expires_at` (M-3).
     pub paused: u8,
-    pub params: Params,
-    /// M-2 (v0.6): may `set_pause`, `cancel_params` and `cancel_admin` — never queue or
-    /// propose. Pubkey::default() = none (only the admin can then). Carved from `reserved`.
-    pub guardian: Pubkey,
-    /// M-3 (v0.6): `paused` flags lapse at this unix time (`set_pause` sets now +
-    /// `MAX_PAUSE_SECS`; renewing needs another `set_pause`). Carved from `reserved`.
     pub pause_expires_at: i64,
-    /// M-2 (v0.6): earliest `accept_admin` time of the proposed authority change
-    /// (`pending_admin`, …); 0 = no proposal. Carved from `reserved`.
-    pub pending_admin_eta: i64,
-    pub reserved: [u8; 80],
-    /// D15: params queued by `queue_params`, applied by `execute_params` once
-    /// `pending_eta` has passed. `pending_eta == 0` = nothing queued.
-    /// (Appended in v0.3: Global grew by `Params::INIT_SPACE + 8` bytes.)
+    pub params: Params,
+    /// D15: params queued by `queue_params`; `pending_eta == 0` = nothing queued.
     pub pending_params: Params,
     pub pending_eta: i64,
-    /// M-2 (appended in v0.6, Global 680 → 776 bytes): the authority set proposed by
-    /// `propose_admin`, applied by `accept_admin` — signed by `pending_admin` itself — once
-    /// `pending_admin_eta` has passed (48h). The guardian or the admin can `cancel_admin`.
+    /// M-2: authority set proposed by `propose_admin`.
     pub pending_admin: Pubkey,
     pub pending_treasury: Pubkey,
     pub pending_guardian: Pubkey,
+    pub pending_admin_eta: i64,
+    /// SPEC v0.7 §2: allow-list of FUMPAD DBC configs (Pubkey::default() = empty slot).
+    pub configs: [Pubkey; MAX_CONFIGS],
+    /// Pending allow-list change (`queue_config`); `pending_config_eta == 0` = none.
+    pub pending_config: Pubkey,
+    pub pending_config_add: u8,
+    pub pending_config_eta: i64,
+    pub reserved: [u8; 128],
 }
 
 pub const PAUSE_LAUNCH: u8 = 1 << 0;
-/// Curve buys, router buys/sells and buybacks. Never curve sells (M-3: holders can always exit).
+/// Router buys and buybacks. Never router sells (users can always exit, and can sell on Meteora directly anyway).
 pub const PAUSE_TRADE: u8 = 1 << 1;
 pub const PAUSE_CLAIMS: u8 = 1 << 2;
-/// L-5 (v0.6): `graduate` (e.g. during a PumpSwap incident). The D13 hatch still opens after 7 days.
+/// `migrate_pool` + `graduate` bookkeeping (never Meteora's own migration).
 pub const PAUSE_GRADUATE: u8 = 1 << 3;
-/// Every defined flag; `set_pause` rejects other bits.
-pub const PAUSE_ALL: u8 = PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS | PAUSE_GRADUATE;
+/// v0.7: `attest_sell`, `attest_rebuy`.
+pub const PAUSE_ATTEST: u8 = 1 << 4;
+pub const PAUSE_ALL: u8 = PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS | PAUSE_GRADUATE | PAUSE_ATTEST;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 pub struct Params {
-    // Token + curve
-    pub total_supply: u64,
-    pub reward_pool_supply: u64,
-    pub curve_supply: u64,
-    pub lp_supply: u64,
-    pub initial_virtual_sol: u64,
-    pub initial_virtual_token: u64,
-    pub graduation_lamports: u64,
-    /// Taken from raised SOL at graduation (covers account rent; may include a platform fee).
-    pub graduation_fee_lamports: u64,
-
-    // Fees (bps of the SOL side of every FUMPAD trade)
-    pub fee_bps: u16,
-    pub fee_pool_share_bps: u16,
+    // D32 fee split of our share (snapshotted per coin)
+    pub fee_buyback_share_bps: u16,
     pub fee_platform_share_bps: u16,
     pub fee_creator_share_bps: u16,
 
-    // Rewards
+    // Rewards (snapshotted per coin, M-1). min_hold / rebuy are inputs of the off-chain engine (and rebuy is
+    // re-checked by `attest_rebuy`).
     pub trigger_multiple_bps: u32,
     pub claim_bps: u16,
     pub max_claim_pool_bps: u16,
@@ -78,7 +70,7 @@ pub struct Params {
     pub claim_window_secs: i64,
     pub max_open_tickets: u8,
 
-    // Oracle / buyback
+    // Oracle / buyback (global)
     pub oracle_window_secs: i64,
     pub oracle_min_spacing_secs: i64,
     pub oracle_min_samples: u16,
@@ -86,30 +78,21 @@ pub struct Params {
     pub buyback_max_deviation_bps: u16,
     pub buyback_max_pool_bps: u16,
 
-    // Pyth
+    // Pyth (engine inputs; the program checks |block_time − publish_time| of each attestation)
     pub sol_usd_feed_id: [u8; 32],
     pub max_price_age_secs: u64,
 
-    // D19 snipe protection (appended in v0.5; snapshotted per coin at `create_coin`)
-    /// Curve buys within this many slots after the launch slot pay the snipe tax (0 = off).
-    pub snipe_window_slots: u16,
-    /// Tax at the launch slot, bps; the schedule is min(this, ⌈10_000·(W − d)/W⌉) at offset d.
-    pub snipe_start_bps: u16,
+    // D31 attestations
+    pub max_attest_age_secs: i64,
+    pub max_attest_tokens_per_hour_bps: u16,
+    pub ticket_challenge_secs: i64,
+    pub attest_threshold: u8,
 }
 
 impl Default for Params {
     fn default() -> Self {
         Self {
-            total_supply: DEFAULT_TOTAL_SUPPLY,
-            reward_pool_supply: DEFAULT_REWARD_POOL_SUPPLY,
-            curve_supply: DEFAULT_CURVE_SUPPLY,
-            lp_supply: DEFAULT_LP_SUPPLY,
-            initial_virtual_sol: DEFAULT_INITIAL_VIRTUAL_SOL,
-            initial_virtual_token: DEFAULT_INITIAL_VIRTUAL_TOKEN,
-            graduation_lamports: DEFAULT_GRADUATION_LAMPORTS,
-            graduation_fee_lamports: DEFAULT_GRADUATION_FEE_LAMPORTS,
-            fee_bps: DEFAULT_FEE_BPS,
-            fee_pool_share_bps: DEFAULT_FEE_POOL_SHARE_BPS,
+            fee_buyback_share_bps: DEFAULT_FEE_BUYBACK_SHARE_BPS,
             fee_platform_share_bps: DEFAULT_FEE_PLATFORM_SHARE_BPS,
             fee_creator_share_bps: DEFAULT_FEE_CREATOR_SHARE_BPS,
             trigger_multiple_bps: DEFAULT_TRIGGER_MULTIPLE_BPS,
@@ -128,30 +111,16 @@ impl Default for Params {
             buyback_max_pool_bps: DEFAULT_BUYBACK_MAX_POOL_BPS,
             sol_usd_feed_id: PYTH_SOL_USD_FEED_ID,
             max_price_age_secs: DEFAULT_MAX_PRICE_AGE_SECS,
-            snipe_window_slots: DEFAULT_SNIPE_WINDOW_SLOTS,
-            snipe_start_bps: DEFAULT_SNIPE_START_BPS,
+            max_attest_age_secs: DEFAULT_MAX_ATTEST_AGE_SECS,
+            max_attest_tokens_per_hour_bps: DEFAULT_MAX_ATTEST_TOKENS_PER_HOUR_BPS,
+            ticket_challenge_secs: DEFAULT_TICKET_CHALLENGE_SECS,
+            attest_threshold: ATTEST_THRESHOLD,
         }
     }
 }
 
 impl Params {
-    /// D14: the fee parameters a new coin snapshots at `create_coin`.
-    pub fn coin_fees(&self) -> CoinFees {
-        CoinFees {
-            graduation_fee_lamports: self.graduation_fee_lamports,
-            fee_bps: self.fee_bps,
-            fee_pool_share_bps: self.fee_pool_share_bps,
-            fee_platform_share_bps: self.fee_platform_share_bps,
-            fee_creator_share_bps: self.fee_creator_share_bps,
-        }
-    }
-
-    /// D19: the snipe schedule a new coin snapshots at `create_coin` (launch slot = now).
-    pub fn snipe_config(&self, launch_slot: u64) -> SnipeConfig {
-        SnipeConfig { launch_slot, window_slots: self.snipe_window_slots, start_bps: self.snipe_start_bps }
-    }
-
-    /// M-1: the reward terms a new coin snapshots at `create_coin` (live tickets keep them).
+    /// M-1: the reward terms a new coin snapshots at `register_coin` (live tickets keep them).
     pub fn reward_terms(&self) -> RewardTerms {
         RewardTerms {
             trigger_multiple_bps: self.trigger_multiple_bps,
@@ -165,21 +134,18 @@ impl Params {
         }
     }
 
-    /// Checks run on initialize / queue / execute / migrate: the D14 caps plus a bounded range
-    /// for every param (M-1 / L-2, v0.6 — constants.rs), and D20 curve consistency.
+    pub fn fee_split(&self) -> FeeSplitBps {
+        FeeSplitBps {
+            buyback_bps: self.fee_buyback_share_bps,
+            platform_bps: self.fee_platform_share_bps,
+            creator_bps: self.fee_creator_share_bps,
+        }
+    }
+
+    /// Bounds for every param (v0.6 M-1/L-2 plus the v0.7 attestation params). Inclusive ranges.
     pub fn is_valid(&self) -> bool {
-        let fees = self.graduation_fee_lamports <= MAX_GRADUATION_FEE_LAMPORTS
-            && self.fee_bps <= MAX_FEE_BPS
-            && self.fee_pool_share_bps as u32 + self.fee_platform_share_bps as u32 + self.fee_creator_share_bps as u32
-                == BPS_DENOM as u32;
-        let supply = self.reward_pool_supply.checked_add(self.curve_supply).and_then(|s| s.checked_add(self.lp_supply))
-            == Some(self.total_supply)
-            && self.reward_pool_supply > 0
-            && self.lp_supply > 0
-            && self.curve_supply > 0
-            && self.initial_virtual_token > self.curve_supply
-            && self.initial_virtual_sol > 0
-            && self.curve_consistent();
+        let fees = self.fee_buyback_share_bps as u32 + self.fee_platform_share_bps as u32 + self.fee_creator_share_bps as u32
+            == BPS_DENOM as u32;
         let rewards = (MIN_TRIGGER_MULTIPLE_BPS..=MAX_TRIGGER_MULTIPLE_BPS).contains(&self.trigger_multiple_bps)
             && (MIN_CLAIM_BPS..=MAX_CLAIM_BPS).contains(&self.claim_bps)
             && (MIN_MAX_CLAIM_POOL_BPS..=MAX_MAX_CLAIM_POOL_BPS).contains(&self.max_claim_pool_bps)
@@ -200,50 +166,21 @@ impl Params {
             && self.keeper_stale_secs > s
             && (MIN_BUYBACK_MAX_DEVIATION_BPS..=MAX_BUYBACK_MAX_DEVIATION_BPS).contains(&self.buyback_max_deviation_bps)
             && (MIN_BUYBACK_MAX_POOL_BPS..=MAX_BUYBACK_MAX_POOL_BPS).contains(&self.buyback_max_pool_bps)
-            // execute_buyback's haircut must stay < 100% (else every buyback is InvalidParams).
-            && (self.buyback_max_deviation_bps as u64
-                + crate::instructions::venue::execute_buyback::BUYBACK_VENUE_FEE_ALLOWANCE_BPS
-                + 2 * self.buyback_max_pool_bps as u64)
+            // execute_buyback's haircut must stay < 100% (else every buyback fails).
+            && (self.buyback_max_deviation_bps as u64 + BUYBACK_VENUE_FEE_ALLOWANCE_BPS + 2 * self.buyback_max_pool_bps as u64)
                 < BPS_DENOM;
-        // The feed is pinned to Pyth SOL/USD: a different feed needs a program upgrade.
         let pyth = self.sol_usd_feed_id == PYTH_SOL_USD_FEED_ID
             && (MIN_MAX_PRICE_AGE_SECS..=MAX_MAX_PRICE_AGE_SECS).contains(&self.max_price_age_secs);
-        let snipe = self.snipe_window_slots <= MAX_SNIPE_WINDOW_SLOTS && self.snipe_start_bps <= MAX_SNIPE_START_BPS;
-        fees && supply && rewards && oracle && pyth && snipe
-    }
-
-    /// D20 / L-2: the curve constants, `graduation_lamports` and the graduation fee agree.
-    /// With V0 = initial_virtual_sol, T0 = initial_virtual_token, T1 = T0 − curve_supply (virtual
-    /// tokens left at completion), V1 = V0·T0/T1 and raise R = V1 − V0:
-    ///   * `graduation_lamports` ≈ R (it is informational — the curve completes when its tokens
-    ///     run out — but must describe the curve);
-    ///   * R > graduation fee (else no coin could ever graduate);
-    ///   * LP opening price (R − fee) / lp_supply ≈ curve final price V1 / T1 (continuity).
-    /// "≈" = within `CURVE_CONSISTENCY_TOLERANCE_BPS`.
-    pub fn curve_consistent(&self) -> bool {
-        fn close(a: u128, b: u128) -> bool {
-            a.abs_diff(b).checked_mul(BPS_DENOM as u128).is_some_and(|d| {
-                b.checked_mul(CURVE_CONSISTENCY_TOLERANCE_BPS as u128).is_some_and(|t| d <= t)
-            })
-        }
-        let (v0, t0) = (self.initial_virtual_sol as u128, self.initial_virtual_token as u128);
-        let Some(t1) = t0.checked_sub(self.curve_supply as u128).filter(|&t| t > 0) else { return false };
-        let v1 = v0 * t0 / t1; // < 2^128: both factors < 2^64
-        let raise = v1 - v0;
-        let fee = self.graduation_fee_lamports as u128;
-        if raise <= fee || !close(self.graduation_lamports as u128, raise) {
-            return false;
-        }
-        match ((raise - fee).checked_mul(t1), v1.checked_mul(self.lp_supply as u128)) {
-            (Some(lp_open), Some(curve_end)) => close(lp_open, curve_end),
-            _ => false,
-        }
+        let attest = (MIN_MAX_ATTEST_AGE_SECS..=MAX_MAX_ATTEST_AGE_SECS).contains(&self.max_attest_age_secs)
+            && (MIN_ATTEST_TOKENS_PER_HOUR_BPS..=MAX_ATTEST_TOKENS_PER_HOUR_BPS)
+                .contains(&self.max_attest_tokens_per_hour_bps)
+            && (MIN_TICKET_CHALLENGE_SECS..=MAX_TICKET_CHALLENGE_SECS).contains(&self.ticket_challenge_secs)
+            && self.attest_threshold == ATTEST_THRESHOLD;
+        fees && rewards && oracle && pyth && attest
     }
 }
 
-/// M-1 (v0.6): reward terms snapshotted per coin at `create_coin` (`Coin.rewards`), like the
-/// fees (D14): a params change (timelocked, bounded) applies only to coins created after it.
-/// Coins created before v0.6 hold zeros and keep using `Global.params` (`Coin::reward_params`).
+/// M-1: reward terms snapshotted per coin at `register_coin` (`Coin.rewards`).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
 pub struct RewardTerms {
     pub trigger_multiple_bps: u32,
@@ -256,34 +193,26 @@ pub struct RewardTerms {
     pub max_open_tickets: u8,
 }
 
-impl RewardTerms {
-    /// Zeros = a coin created before v0.6 (no snapshot).
-    pub fn is_set(&self) -> bool {
-        self.trigger_multiple_bps != 0
-    }
-
-    /// `global` with these terms applied (when set).
-    pub fn apply(&self, global: &Params) -> Params {
-        if !self.is_set() {
-            return *global;
-        }
-        Params {
-            trigger_multiple_bps: self.trigger_multiple_bps,
-            claim_bps: self.claim_bps,
-            max_claim_pool_bps: self.max_claim_pool_bps,
-            min_sell_usd_cents: self.min_sell_usd_cents,
-            min_hold_secs: self.min_hold_secs,
-            rebuy_window_secs: self.rebuy_window_secs,
-            claim_window_secs: self.claim_window_secs,
-            max_open_tickets: self.max_open_tickets,
-            ..*global
-        }
-    }
+/// D32: split of our fee share, snapshotted per coin (D14 spirit).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct FeeSplitBps {
+    pub buyback_bps: u16,
+    pub platform_bps: u16,
+    pub creator_bps: u16,
 }
 
 impl Global {
     pub fn is_keeper(&self, key: &Pubkey) -> bool {
         *key != Pubkey::default() && self.keepers.iter().any(|k| k == key)
+    }
+    /// A keeper whose key may count toward an attestation at `now` (past its 6h freeze).
+    pub fn is_active_attester(&self, key: &Pubkey, now: i64) -> bool {
+        *key != Pubkey::default()
+            && self
+                .keepers
+                .iter()
+                .zip(self.keeper_added_at.iter())
+                .any(|(k, at)| k == key && now >= at.saturating_add(KEEPER_ATTEST_FREEZE_SECS))
     }
     /// `flag` is paused and the pause hasn't lapsed (M-3).
     pub fn is_paused(&self, flag: u8, now: i64) -> bool {
@@ -292,5 +221,38 @@ impl Global {
     /// M-2: the admin, or the guardian if one is set.
     pub fn is_admin_or_guardian(&self, key: &Pubkey) -> bool {
         *key == self.admin || (self.guardian != Pubkey::default() && *key == self.guardian)
+    }
+    pub fn is_allowed_config(&self, config: &Pubkey) -> bool {
+        *config != Pubkey::default() && self.configs.iter().any(|c| c == config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_valid_and_bounds() {
+        let p = Params::default();
+        assert!(p.is_valid());
+        let bad: [fn(&mut Params); 12] = [
+            |p| p.fee_creator_share_bps += 1,
+            |p| p.trigger_multiple_bps = 49_999,
+            |p| p.claim_bps = 2_501,
+            |p| p.max_open_tickets = 0,
+            |p| p.oracle_min_samples = 1,
+            |p| p.sol_usd_feed_id = [0; 32],
+            |p| p.max_price_age_secs = 29,
+            |p| p.max_attest_age_secs = MAX_MAX_ATTEST_AGE_SECS + 1,
+            |p| p.max_attest_tokens_per_hour_bps = 0,
+            |p| p.ticket_challenge_secs = 3_599,
+            |p| p.attest_threshold = 1,
+            |p| p.buyback_max_deviation_bps = 1_000_0,
+        ];
+        for f in bad {
+            let mut q = p;
+            f(&mut q);
+            assert!(!q.is_valid());
+        }
     }
 }

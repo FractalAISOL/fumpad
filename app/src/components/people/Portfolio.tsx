@@ -3,7 +3,7 @@
 /**
  * The wallet profile's right panel: a readout of what the wallet holds and has made, then
  * Positions, Closed, Created and Tickets. Every figure is measured: chain balances, spot
- * prices, and cost basis from the wallet's FUMPAD trades (average cost, fumble payouts at
+ * prices, and cost basis from the wallet's trades on each coin's pools, any app (average cost, fumble payouts at
  * zero cost). Nothing is projected.
  *
  * Live: per-coin `coin` messages reprice positions and refresh created coins in place;
@@ -54,7 +54,7 @@ export interface PortfolioData {
   tickets: Ticket[];
 }
 
-const PARTIAL_NOTE = "Includes tokens acquired outside FUMPAD; cost basis covers FUMPAD trades only.";
+const PARTIAL_NOTE = "Includes tokens that arrived by transfer or another pool; cost basis covers trades on the coin's own pools only.";
 const OPEN_STATES = new Set<Ticket["state"]>(["claimable", "tracking", "awaiting-graduation", "queued"]);
 
 /* ── URL state ─────────────────────────────────────────────────────────────── */
@@ -210,8 +210,8 @@ function Readout({ data }: { data: PortfolioData }) {
         </div>
       </dl>
       <p className={s.method}>
-        Measured from FUMPAD trades at average cost; fumble payouts count at zero cost.
-        {partial ? " Rows marked partial hold tokens from outside FUMPAD, so their P&L covers FUMPAD trades only." : ""}
+        Measured from your trades on each coin&apos;s pools, on any app, at average cost; fumble payouts count at zero cost.
+        {partial ? " Rows marked partial hold tokens that arrived by transfer, so their P&L covers trades only." : ""}
       </p>
     </div>
   );
@@ -421,7 +421,7 @@ function Positions({ rows, own }: { rows: WalletPosition[]; own: boolean }) {
       className={s.table}
       empty={
         <EmptyState title="No open positions" compact action={own ? <Button href="/launches" variant="line" size="sm">Browse launches</Button> : undefined}>
-          {own ? "Buy any coin through FUMPAD and it shows up here with what you paid for it." : "This wallet holds no FUMPAD coins right now."}
+          {own ? "Buy any FUMPAD coin, here or on any app, and it shows up here with what you paid for it." : "This wallet holds no FUMPAD coins right now."}
         </EmptyState>
       }
     />
@@ -517,7 +517,7 @@ function Closed({ rows, own }: { rows: ClosedPosition[]; own: boolean }) {
       className={s.table}
       empty={
         <EmptyState title="Nothing closed yet" compact>
-          {own ? "Coins you sell out of completely through FUMPAD land here with what you made or lost." : "This wallet hasn't fully exited a coin through FUMPAD."}
+          {own ? "Coins you sell out of completely land here with what you made or lost." : "This wallet hasn't fully exited a FUMPAD coin."}
         </EmptyState>
       }
     />

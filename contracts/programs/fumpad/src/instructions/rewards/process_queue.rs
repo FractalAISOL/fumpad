@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     claim::pay_from_vault,
-    hooks::{create_pda_account_owned, read_ticket, write_ticket},
+    util::{create_pda_account_owned, read_ticket, write_ticket},
     logic,
 };
 
@@ -61,15 +61,14 @@ pub struct ProcessQueue<'info> {
     pub mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, seeds = [CLAIM_QUEUE_SEED, mint.key().as_ref()], bump)]
     pub claim_queue: AccountLoader<'info, ClaimQueue>,
-    /// CHECK: PDA signer that owns the reward vault.
-    #[account(seeds = [POOL_AUTHORITY_SEED], bump)]
-    pub pool_authority: UncheckedAccount<'info>,
+    /// CHECK: PDA ["reward_pool"], authority of the reward vault and of every escrow.
+    #[account(seeds = [REWARD_POOL_SEED], bump)]
+    pub reward_pool: UncheckedAccount<'info>,
     #[account(
         mut,
-        seeds = [REWARD_VAULT_SEED, mint.key().as_ref()],
-        bump,
+        address = get_associated_token_address_with_program_id(&reward_pool.key(), &mint.key(), &anchor_spl::token_2022::ID)
+            @ FumpadError::InvalidAccount,
         token::mint = mint,
-        token::authority = pool_authority,
         token::token_program = token_program,
     )]
     pub reward_vault: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -150,7 +149,7 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                                 &a.system_program.to_account_info(),
                                 &a.token_program.key(),
                                 &a.mint.to_account_info(),
-                                &a.pool_authority.to_account_info(),
+                                &a.reward_pool.to_account_info(),
                                 &e.ticket,
                             )?;
                             t.status = TicketStatus::Escrowed;
@@ -161,11 +160,11 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
                     write_ticket(ti, &t)?;
                     pay_from_vault(
                         &ctx.accounts.token_program,
-                        &ctx.accounts.reward_vault,
+                        &ctx.accounts.reward_vault.to_account_info(),
                         &ctx.accounts.mint,
                         to,
-                        &ctx.accounts.pool_authority,
-                        ctx.bumps.pool_authority,
+                        &ctx.accounts.reward_pool.to_account_info(),
+                        ctx.bumps.reward_pool,
                         e.amount,
                     )?;
                     pool -= e.amount; // fits() ⇒ amount ≤ pool
@@ -213,7 +212,7 @@ pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max
 }
 
 /// D16: create the ticket's escrow token account ["escrow", ticket] (Token-2022, mint =
-/// the coin, authority = pool authority), rent paid by `payer` (the cranker / `claim_for`
+/// the coin, authority = `reward_pool`), rent paid by `payer` (the cranker / `claim_for`
 /// keeper, recorded in `Ticket.escrow_payer` and refunded by `withdraw_escrow`).
 pub(crate) fn open_escrow<'info>(
     payer: &AccountInfo<'info>,
@@ -221,7 +220,7 @@ pub(crate) fn open_escrow<'info>(
     system_program: &AccountInfo<'info>,
     token_program: &Pubkey,
     mint: &AccountInfo<'info>,
-    pool_authority: &AccountInfo<'info>,
+    reward_pool: &AccountInfo<'info>,
     ticket: &Pubkey,
 ) -> Result<()> {
     let (key, bump) = Pubkey::find_program_address(&[ESCROW_SEED, ticket.as_ref()], &crate::ID);
@@ -236,7 +235,7 @@ pub(crate) fn open_escrow<'info>(
     )?;
     token_interface::initialize_account3(CpiContext::new(
         *token_program,
-        InitializeAccount3 { account: escrow.clone(), mint: mint.clone(), authority: pool_authority.clone() },
+        InitializeAccount3 { account: escrow.clone(), mint: mint.clone(), authority: reward_pool.clone() },
     ))
 }
 

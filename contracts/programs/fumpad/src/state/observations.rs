@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::OBSERVATION_CAPACITY;
 
-/// Ring buffer of PumpSwap spot-price samples for one graduated coin.
+/// Ring buffer of DAMM v2 spot-price samples (from `sqrt_price`) for one graduated coin.
 /// PDA ["observations", mint]. Zero-copy; created by `init_observations` after graduation.
 /// OWNER: venue/oracle module.
 #[account(zero_copy)]

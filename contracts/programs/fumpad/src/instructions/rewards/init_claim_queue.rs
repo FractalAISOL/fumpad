@@ -6,7 +6,7 @@ use crate::{
     state::{ClaimQueue, Coin, CoinStatus},
 };
 
-use super::hooks::create_pda_account;
+use super::util::create_pda_account;
 
 /// Max growth of an account's data per instruction (CPI-created accounts and `resize`).
 pub const MAX_DATA_INCREASE: usize = 10_240;
