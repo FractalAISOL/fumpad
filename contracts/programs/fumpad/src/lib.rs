@@ -29,14 +29,16 @@ pub mod fumpad {
     use super::*;
 
     // ── admin / governance ──────────────────────────────────────────────────
-    pub fn initialize_global(
-        ctx: Context<InitializeGlobal>,
+    /// remaining_accounts = the initial DBC config allow-list (0..=8, validated like `execute_config` add).
+    pub fn initialize_global<'info>(
+        ctx: Context<'info, InitializeGlobal<'info>>,
         admin: Pubkey,
         platform_treasury: Pubkey,
         cluster_tag: u8,
         params: Params,
+        keepers: [Pubkey; MAX_KEEPERS],
     ) -> Result<()> {
-        instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params)
+        instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params, keepers)
     }
 
     pub fn queue_params(ctx: Context<AdminOnly>, params: Params) -> Result<()> {

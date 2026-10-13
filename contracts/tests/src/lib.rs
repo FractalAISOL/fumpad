@@ -173,8 +173,20 @@ impl Env {
         env
     }
 
-    /// Global + keepers only (no DBC config).
+    /// Global + keepers only (no DBC config). Keepers go through `set_keepers` + the 6h freeze (the running-system
+    /// path); `uninit` + `initialize_global_ix` cover the bootstrap path.
     pub fn bare(params: fumpad::state::Params) -> Self {
+        let mut env = Self::uninit();
+        let init = env.initialize_global_ix(params, [Pubkey::default(); 3], &[]);
+        ok(env.send(&[init], &[]));
+        let keepers = [kp_pk(&env.keepers[0]), kp_pk(&env.keepers[1]), kp_pk(&env.keepers[2])];
+        ok(env.set_keepers(keepers));
+        env.warp(fumpad::KEEPER_ATTEST_FREEZE_SECS);
+        env
+    }
+
+    /// Programs + funded keys, Global NOT initialized (payer = fumpad upgrade authority).
+    pub fn uninit() -> Self {
         let mut svm = LiteSVM::new();
         let payer = Keypair::new();
         let admin = Keypair::new();
@@ -192,31 +204,37 @@ impl Env {
         load_account_fixture(&mut svm, "wsol_mint.json");
         // DBC fronts DAMM v2 rent from its pool authority during migration ("flash rent"); mainnet keeps it funded.
         svm.airdrop(&addr(&fumpad::external::meteora::DBC_POOL_AUTHORITY), 100 * SOL).unwrap();
+        Env { svm, payer, admin, treasury, keepers, config: Pubkey::default() }
+    }
 
-        let mut env = Env { svm, payer, admin, treasury, keepers, config: Pubkey::default() };
+    /// `initialize_global` signed by `self.payer` (the upgrade authority): admin/treasury from the Env, cluster tag
+    /// `CLUSTER_TAG`, the given bootstrap keepers and configs (remaining accounts).
+    pub fn initialize_global_ix(&self, params: fumpad::state::Params, keepers: [Pubkey; 3], configs: &[Pubkey]) -> Instruction {
+        self.initialize_global_ix_by(&kp_pk(&self.payer), params, keepers, configs)
+    }
+
+    pub fn initialize_global_ix_by(&self, payer: &Pubkey, params: fumpad::state::Params, keepers: [Pubkey; 3], configs: &[Pubkey]) -> Instruction {
         let program_data =
             Pubkey::find_program_address(&[fumpad::ID.as_ref()], &anchor_lang::solana_program::bpf_loader_upgradeable::ID).0;
-        let init = ix(
+        let mut i = ix(
             fumpad::accounts::InitializeGlobal {
-                payer: kp_pk(&env.payer),
-                global: env.global(),
+                payer: *payer,
+                global: self.global(),
                 program: fumpad::ID,
                 program_data,
                 system_program: SYSTEM,
                 event_authority: ev_auth(),
             },
             fumpad::instruction::InitializeGlobal {
-                admin: kp_pk(&env.admin),
-                platform_treasury: kp_pk(&env.treasury),
+                admin: kp_pk(&self.admin),
+                platform_treasury: kp_pk(&self.treasury),
                 cluster_tag: CLUSTER_TAG,
                 params,
+                keepers,
             },
         );
-        ok(env.send(&[init], &[]));
-        let keepers = [kp_pk(&env.keepers[0]), kp_pk(&env.keepers[1]), kp_pk(&env.keepers[2])];
-        ok(env.set_keepers(keepers));
-        env.warp(fumpad::KEEPER_ATTEST_FREEZE_SECS);
-        env
+        i.accounts.extend(configs.iter().map(|c| ro(*c)));
+        i
     }
 
     pub fn set_keepers(&mut self, keepers: [Pubkey; 3]) -> TransactionResult {

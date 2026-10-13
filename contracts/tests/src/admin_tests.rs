@@ -34,23 +34,117 @@ fn with_guardian(env: &mut Env) -> Keypair {
 
 #[test]
 fn initialize_global_only_by_upgrade_authority_and_validates() {
-    // A second init is impossible (PDA exists); a fresh SVM where a stranger tries is covered by the constraint.
-    let mut env = Env::bare(Params::default());
+    // A stranger (not the upgrade authority) can't initialize, not even with an empty bootstrap.
+    let mut env = Env::uninit();
     let rando = env.new_user(10);
-    let program_data =
-        Pubkey::find_program_address(&[fumpad::ID.as_ref()], &anchor_lang::solana_program::bpf_loader_upgradeable::ID).0;
-    let i = ix(
-        fumpad::accounts::InitializeGlobal {
-            payer: kp_pk(&rando),
-            global: env.global(),
-            program: fumpad::ID,
-            program_data,
-            system_program: SYSTEM,
-            event_authority: ev_auth(),
-        },
-        fumpad::instruction::InitializeGlobal { admin: kp_pk(&rando), platform_treasury: kp_pk(&rando), cluster_tag: 0, params: Params::default() },
-    );
-    assert!(env.send_as(&rando, &[i], &[&rando]).is_err());
+    let i = env.initialize_global_ix_by(&kp_pk(&rando), Params::default(), [Pubkey::default(); 3], &[]);
+    assert_fumpad_err(env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
+    // Duplicate bootstrap keepers, invalid params → InvalidParams.
+    let k = kp_pk(&env.keepers[0]);
+    let i = env.initialize_global_ix(Params::default(), [k, k, Pubkey::default()], &[]);
+    assert_fumpad_err(env.send(&[i], &[]), FumpadError::InvalidParams);
+    let mut p = Params::default();
+    p.ticket_challenge_secs = 10;
+    let i = env.initialize_global_ix(p, [Pubkey::default(); 3], &[]);
+    assert_fumpad_err(env.send(&[i], &[]), FumpadError::InvalidParams);
+    // The upgrade authority succeeds once; a second init is impossible (PDA exists).
+    let i = env.initialize_global_ix(Params::default(), [Pubkey::default(); 3], &[]);
+    ok(env.send(&[i], &[]));
+    env.warp(1);
+    let i = env.initialize_global_ix(Params::default(), [Pubkey::default(); 3], &[]);
+    assert!(env.send(&[i], &[]).is_err());
+}
+
+/// Bootstrap (deploy runbook): the upgrade authority's `initialize_global` sets the initial keepers and DBC config
+/// allow-list with no 6h attest freeze and no 48h config timelock; every later change keeps its freeze / timelock.
+#[test]
+fn bootstrap_keepers_attest_immediately_and_bootstrap_config_registers_immediately() {
+    let mut env = Env::uninit();
+    let config = env.create_dbc_config(&meteora::mainnet_config_params());
+    let keepers = [kp_pk(&env.keepers[0]), kp_pk(&env.keepers[1]), kp_pk(&env.keepers[2])];
+    let i = env.initialize_global_ix(Params::default(), keepers, &[config]);
+    let meta = ok(env.send(&[i], &[]));
+    let g: Global = env.fetch(&env.global());
+    assert_eq!((g.keepers, g.keeper_added_at, g.configs[0], g.cluster_tag), (keepers, [0; 3], config, CLUSTER_TAG));
+    assert!(g.configs[1..].iter().all(|c| *c == Pubkey::default()));
+    assert_eq!((g.pending_config_eta, g.pending_eta), (0, 0));
+    assert_eq!(event::<GlobalInitialized>(&meta).admin, kp_pk(&env.admin));
+    let ks: KeepersSet = event(&meta);
+    assert_eq!((ks.keepers, ks.added_at), (keepers, [0; 3]));
+    let cu: ConfigUpdated = event(&meta);
+    assert_eq!((cu.config, cu.add), (config, true));
+    // The bootstrap config registers coins right away (no 48h), and the bootstrap keepers attest right away (no 6h).
+    env.config = config;
+    let t0 = env.now();
+    let c = env.launch(SOL / 10);
+    env.skip_launch_window();
+    env.warp(60);
+    let r = env.sell_record(&c, &Pubkey::new_unique(), 10_000_000_000, 1 << 50);
+    ok(env.attest_sell(&r, &[0, 1]));
+    let r = env.sell_record(&c, &Pubkey::new_unique(), 10_000_000_000, 1 << 50);
+    ok(env.attest_sell(&r, &[2, 1]));
+    assert!(env.now() - t0 < fumpad::KEEPER_ATTEST_FREEZE_SECS);
+    // A later set_keepers still freezes the NEW key for 6h; bootstrap keys that stay keep "no freeze".
+    let fresh = env.new_user(10);
+    ok(env.set_keepers([keepers[0], keepers[1], kp_pk(&fresh)]));
+    let g: Global = env.fetch(&env.global());
+    assert_eq!(g.keeper_added_at, [0, 0, env.now()]);
+    env.keepers[2] = fresh.insecure_clone();
+    let r = env.sell_record(&c, &Pubkey::new_unique(), 10_000_000_000, 1 << 50);
+    assert_fumpad_err(env.attest_sell(&r, &[2, 0]), FumpadError::NotEnoughKeeperSignatures);
+    ok(env.attest_sell(&r, &[0, 1]));
+    env.warp(fumpad::KEEPER_ATTEST_FREEZE_SECS);
+    let r = env.sell_record(&c, &Pubkey::new_unique(), 10_000_000_000, 1 << 50);
+    ok(env.attest_sell(&r, &[2, 0]));
+    // A bootstrap key removed and re-added is a new key: frozen again.
+    ok(env.set_keepers([Pubkey::default(), keepers[1], kp_pk(&fresh)]));
+    ok(env.set_keepers([keepers[0], keepers[1], kp_pk(&fresh)]));
+    let r = env.sell_record(&c, &Pubkey::new_unique(), 10_000_000_000, 1 << 50);
+    assert_fumpad_err(env.attest_sell(&r, &[0, 2]), FumpadError::NotEnoughKeeperSignatures);
+    // A later config add keeps its 48h timelock.
+    let second = env.create_dbc_config(&meteora::mainnet_config_params());
+    ok(env.queue_config(second, true));
+    assert_fumpad_err(env.execute_config(second), FumpadError::TimelockNotElapsed);
+}
+
+/// Bootstrap configs are validated exactly like `execute_config` add: non-FUMPAD configs, non-DBC accounts,
+/// duplicates and more than 8 are rejected (the whole init fails).
+#[test]
+fn bootstrap_rejects_invalid_configs() {
+    let mut env = Env::uninit();
+    let good = env.create_dbc_config(&meteora::mainnet_config_params());
+    let mut p = meteora::mainnet_config_params();
+    p.creator_trading_fee_percentage = 10;
+    let bad = env.create_dbc_config(&p);
+    let none = [Pubkey::default(); 3];
+    let i = env.initialize_global_ix(Params::default(), none, &[good, bad]);
+    assert_fumpad_err(env.send(&[i], &[]), FumpadError::InvalidConfig);
+    // fee claimer not ours
+    let k = Keypair::new();
+    let i = meteora::create_config_ix(&kp_pk(&k), &Pubkey::new_unique(), &env.reward_pool(), &kp_pk(&env.payer), &meteora::mainnet_config_params());
+    ok(env.send(&[i], &[&k]));
+    let i = env.initialize_global_ix(Params::default(), none, &[kp_pk(&k)]);
+    assert_fumpad_err(env.send(&[i], &[]), FumpadError::InvalidConfig);
+    // not a DBC account
+    let i = env.initialize_global_ix(Params::default(), none, &[kp_pk(&env.admin)]);
+    assert!(env.send(&[i], &[]).is_err());
+    // duplicate
+    let i = env.initialize_global_ix(Params::default(), none, &[good, good]);
+    assert_fumpad_err(env.send(&[i], &[]), FumpadError::InvalidParams);
+    // more than 8
+    let nine: Vec<Pubkey> = (0..9).map(|_| good).collect();
+    let i = env.initialize_global_ix(Params::default(), none, &nine);
+    assert_fumpad_err(env.send(&[i], &[]), FumpadError::ConfigListFull);
+    // A config that isn't bootstrapped can't register a coin.
+    let i = env.initialize_global_ix(Params::default(), none, &[good]);
+    ok(env.send(&[i], &[]));
+    let g: Global = env.fetch(&env.global());
+    assert_eq!(&g.configs[..2], &[good, Pubkey::default()]);
+    let other = env.create_dbc_config(&meteora::mainnet_config_params());
+    let creator = env.new_user(10);
+    let mint = Keypair::new();
+    let ixs = env.launch_ixs(&other, &kp_pk(&creator), &kp_pk(&mint), 0);
+    assert_fumpad_err(env.send_as(&creator, &ixs, &[&creator, &mint]), FumpadError::ConfigNotAllowed);
 }
 
 #[test]

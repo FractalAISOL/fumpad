@@ -188,3 +188,10 @@ decision; each pins down something the spec left open or that the mainnet binari
    negative balance or an attested ticket the engine can't map blocks only that wallet, until it fully exits
    (`history_inconsistent`). Non-swap vault movements in a swap tx (donations, pool-program transfers, SyncNative)
    are accounted, and token-account owner changes move the balance between wallets like a transfer.
+23. **Bootstrap without timelocks (deploy).** `initialize_global` sets the INITIAL keeper set and the INITIAL DBC config
+   allow-list (≤ 8, each validated exactly like `execute_config` add): the initial keepers attest immediately
+   (`keeper_added_at = 0`, no 6 h freeze) and the initial configs register coins immediately (no 48 h timelock).
+   Only the program's upgrade authority can initialize, and it could replace the program anyway; the timelocks and
+   freezes protect an already-running system, so every later `set_keepers` (6 h freeze for new keys) and config
+   change (48 h) keeps them. Three keeper slots means the jobs keeper (samples, `claim_for`, pre-graduation
+   buybacks) shares a key with one attestor (devnet: attestor-1).

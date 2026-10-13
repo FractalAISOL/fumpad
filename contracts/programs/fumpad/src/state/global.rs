@@ -210,14 +210,15 @@ impl Global {
     pub fn is_keeper(&self, key: &Pubkey) -> bool {
         *key != Pubkey::default() && self.keepers.iter().any(|k| k == key)
     }
-    /// A keeper whose key may count toward an attestation at `now` (past its 6h freeze).
+    /// A keeper whose key may count toward an attestation at `now`: past its 6h freeze, or a bootstrap keeper set by
+    /// `initialize_global` (`keeper_added_at == 0`, no freeze; `set_keepers` never stores 0).
     pub fn is_active_attester(&self, key: &Pubkey, now: i64) -> bool {
         *key != Pubkey::default()
             && self
                 .keepers
                 .iter()
                 .zip(self.keeper_added_at.iter())
-                .any(|(k, at)| k == key && now >= at.saturating_add(KEEPER_ATTEST_FREEZE_SECS))
+                .any(|(k, at)| k == key && (*at == 0 || now >= at.saturating_add(KEEPER_ATTEST_FREEZE_SECS)))
     }
     /// `flag` is paused and the pause hasn't lapsed (M-3).
     pub fn is_paused(&self, flag: u8, now: i64) -> bool {

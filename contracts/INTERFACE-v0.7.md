@@ -83,12 +83,12 @@ Notation: `(s)` signer, `(w)` writable, `[ev]` = trailing `event_authority`, `pr
 ### Admin / governance
 | Ix | Args | Accounts | Notes |
 |---|---|---|---|
-| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params` | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority | guardian = admin; keepers empty; config allow-list empty. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Event `GlobalInitialized` |
+| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3]` | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the 48h timelock**. Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper) and one `ConfigUpdated { add: true }` per config |
 | `queue_params` | `params: Params` | admin (s), global (w) [ev] | 48h timelock (D15). `Params::is_valid`. Event `ParamsQueued` |
 | `execute_params` | — | caller (s), global (w) [ev] | permissionless after eta. Event `ParamsUpdated` |
 | `cancel_params` | — | authority (s; admin or guardian), global (w) [ev] | Event `ParamsCancelled` |
 | `set_pause` | `paused: u8` | authority (s; admin or guardian), global (w) [ev] | bits ⊆ `PAUSE_ALL` (0b1_1111); non-zero lapses after 7 days. Event `PauseSet` |
-| `set_keepers` | `keepers: [Pubkey; 3]` | admin (s), global (w) [ev] | immediate. A key not in the previous set gets `keeper_added_at = now`: its attestation signatures count only from `now + 6h` (`KEEPER_ATTEST_FREEZE_SECS`). Event `KeepersSet` |
+| `set_keepers` | `keepers: [Pubkey; 3]` | admin (s), global (w) [ev] | immediate. A key not in the previous set gets `keeper_added_at = now` (never 0): its attestation signatures count only from `now + 6h` (`KEEPER_ATTEST_FREEZE_SECS`). Keys that stay keep their timestamp (a bootstrap key stays at 0 = no freeze; removed and re-added = a new key, frozen). Event `KeepersSet` |
 | `propose_admin` | `new_admin, platform_treasury, guardian: Pubkey` | admin (s), global (w) [ev] | 48h. Event `AdminProposed` |
 | `accept_admin` | — | new_admin (s; = pending_admin), global (w) [ev] | Event `AdminAccepted` |
 | `cancel_admin` | — | authority (s; admin or guardian), global (w) [ev] | Event `AdminProposalCancelled` |
@@ -244,7 +244,7 @@ trader, position.next_ticket_seq]`, created), consumed (w; sell PDA, created), i
 system_program [ev]. The instruction **immediately before** it must be an Ed25519 precompile instruction whose
 signature entries all reference data inside that instruction (`*_instruction_index == u16::MAX`), all over the same
 284-byte message (§4.1); ≥ `attest_threshold` (2) **distinct** active keeper keys (in `Global.keepers`, past their
-6h freeze) must be among the signers; other signers are ignored. The record is read from that message.
+6h freeze, or bootstrap keepers with `keeper_added_at == 0`) must be among the signers; other signers are ignored. The record is read from that message.
 Checks (fail → error, nothing created): not `PAUSE_ATTEST`; `program_id`, `cluster_tag`; `mint == coin.mint`;
 venue bit0 = 0 → `pool == coin.dbc_pool`, 1 → `pool == coin.damm_pool ≠ default`; `trader ∉ {default,
 coin.creator}`; `usd_cents ≥ coin.rewards.min_sell_usd_cents`; `0 < ticket_tokens ≤ base_amount`; `quote_gross > 0`;
@@ -480,6 +480,13 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 6056 LamportInvariant · 6057 RebuyOutOfWindow · **6058 PoolDisabled**.
 
 ## 8. Changelog
+### 2026-10-13 b — bootstrap keepers + configs in `initialize_global` (devnet/mainnet deploy; services follow)
+1. `initialize_global` takes a trailing arg `keepers: [Pubkey; 3]` and the initial DBC configs as remaining accounts
+   (0–8, read-only, validated like `execute_config` add). Bootstrap keepers get `keeper_added_at = 0` and attest at
+   once; bootstrap configs are allow-listed at once. Extra events `KeepersSet` + `ConfigUpdated` in the init tx.
+2. Active attester rule: `keeper_added_at == 0 || now ≥ keeper_added_at + 6h`; `set_keepers` stores `max(now, 1)`
+   for new keys. SDK `activeKeepers` follows. No account layout change.
+
 ### 2026-10-13 — fixes of `REVIEW-v0.7.md` + off-chain review L1/L3 (services / app must follow)
 1. `register_coin`: optional trailing account `launch_signer` (signer) before the event-CPI pair; required when the
    new param `Params.launch_signer` (appended Pubkey; `Params` 136 → 168 bytes, `Global.reserved` 128 → 64, Global

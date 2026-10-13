@@ -160,12 +160,16 @@ everything else within noise.
 
 ## Deploy (v0.7, order matters — nothing is deployed yet)
 1. Deploy `fumpad` (devnet: id `5YMF…S9Fb`; **mainnet: its own fresh keypair + `declare_id!`** — never the devnet
-   id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock), then `initialize_global(admin, treasury,
-   cluster_tag (0 mainnet / 1 devnet), params)` from the upgrade-authority key. Set `params.launch_signer` to the
-   API's launch co-signer key (or queue it later: 48h) so only API-built launch txs register.
-2. `set_keepers` (3 keys, separate infra/RPCs); their attestation signatures count 6h later.
-3. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair), then
-   `queue_config(config, true)` → 48h → `execute_config` (permissionless).
+   id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock — transfer it AFTER step 3, init needs the key).
+2. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair).
+3. `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params, keepers)` from the
+   upgrade-authority key, with the DBC config as a remaining account. **Bootstrap:** the 3 keepers (separate
+   infra/RPCs) attest at once (`keeper_added_at = 0`, no 6h freeze) and the config is allow-listed at once (no 48h
+   timelock; validated like `execute_config` add) — only the upgrade authority can initialize and it could replace
+   the program anyway. Every later `set_keepers` (6h freeze for new keys) and `queue_config` (48h) keeps its delay.
+   Set `params.launch_signer` to the API's launch co-signer key (or queue it later: 48h) so only API-built launch txs
+   register. Devnet: `services/scripts/devnet/bootstrap-v07.ts` does 2–3 (+ funding, verification); runbook
+   `services/DEPLOY-v07.md`; rehearsed locally by `npm run bootstrap:rehearsal` (services/).
 4. `propose_admin(admin, treasury, guardian)` → 48h → `accept_admin` to hand the guardian to its own multisig.
 5. Open launches. Keepers: `claim_fees` right after each coin's 8-slot window, pre-grad samples + buybacks, attestations
    (finalized txs only), `migrate_pool` + `graduate` + `init_observations` + 9 × `init_claim_queue`, post-grad samples,
@@ -224,8 +228,10 @@ shorter or shifted layouts, `WrongAccount` for a wrong discriminator. Tests: `lo
 **Params validation (`Params::is_valid`)** — every param bounded (`constants.rs` `MIN_*` / `MAX_*`, SPEC §6.2), feed
 pinned to `PYTH_SOL_USD_FEED_ID`, `curve_consistent()` (graduation_lamports = curve raise ±10 bps, raise > fee, LP
 opening price = curve final price ±10 bps). Local/devnet test windows (e.g. 2 s hold, 60 s oracle window) are no
-longer accepted by `initialize_global` / `queue_params`: the local stack seeds its Global into the genesis
-(`services/scripts/local/harness.ts` `startValidator({ global })`).
+longer accepted by `initialize_global` / `queue_params`: the local e2e stack seeds its Global into the genesis
+(`services/scripts/local/harness.ts` `startValidator({ global })`) — v0.7: only for its out-of-bounds windows
+(10 s challenge, 5 s hold, 60 s oracle window); keepers + configs need no seeding since the `initialize_global`
+bootstrap, which `npm run bootstrap:rehearsal` exercises on a local validator.
 
 **Instructions**
 | Change | Details |

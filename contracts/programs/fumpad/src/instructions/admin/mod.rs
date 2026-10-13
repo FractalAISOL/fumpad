@@ -13,8 +13,8 @@ use crate::{
     constants::*,
     error::FumpadError,
     events::{
-        AdminAccepted, AdminProposalCancelled, AdminProposed, GlobalInitialized, KeepersSet, ParamsCancelled,
-        ParamsQueued, ParamsUpdated, PauseSet,
+        AdminAccepted, AdminProposalCancelled, AdminProposed, ConfigUpdated, GlobalInitialized, KeepersSet,
+        ParamsCancelled, ParamsQueued, ParamsUpdated, PauseSet,
     },
     state::{Global, Params, PAUSE_ALL},
 };
@@ -25,7 +25,8 @@ pub struct InitializeGlobal<'info> {
     pub payer: Signer<'info>,
     #[account(init, payer = payer, space = 8 + Global::INIT_SPACE, seeds = [GLOBAL_SEED], bump)]
     pub global: Box<Account<'info, Global>>,
-    /// Only the program's upgrade authority may initialize (prevents front-running init).
+    /// Only the program's upgrade authority may initialize (prevents front-running init; it is also why the initial
+    /// keepers and configs skip their freeze / timelock).
     #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ FumpadError::Unauthorized)]
     pub program: Program<'info, crate::program::Fumpad>,
     #[account(constraint = program_data.upgrade_authority_address == Some(payer.key()) @ FumpadError::Unauthorized)]
@@ -36,22 +37,36 @@ pub struct InitializeGlobal<'info> {
     pub event_authority: UncheckedAccount<'info>,
 }
 
-pub fn handle_initialize_global(
-    ctx: Context<InitializeGlobal>,
+/// Bootstrap (initial keepers + config allow-list) with no timelock and no keeper freeze: only the program's upgrade
+/// authority can initialize, and it could replace the program anyway; the timelocks protect a running system. Every
+/// later change (`set_keepers`, `queue_config`) keeps its freeze / timelock. remaining_accounts = the initial DBC
+/// configs (0..=8, read-only), each validated exactly like `execute_config` add (INTERFACE §5.4).
+pub fn handle_initialize_global<'info>(
+    ctx: Context<'info, InitializeGlobal<'info>>,
     admin: Pubkey,
     platform_treasury: Pubkey,
     cluster_tag: u8,
     params: Params,
+    keepers: [Pubkey; MAX_KEEPERS],
 ) -> Result<()> {
     require!(params.is_valid(), FumpadError::InvalidParams);
     require_keys_neq!(admin, Pubkey::default(), FumpadError::InvalidParams);
     require_keys_neq!(platform_treasury, Pubkey::default(), FumpadError::InvalidParams);
+    validate_keeper_set(&keepers)?;
+    let mut configs = [Pubkey::default(); MAX_CONFIGS];
+    require!(ctx.remaining_accounts.len() <= MAX_CONFIGS, FumpadError::ConfigListFull);
+    for (i, info) in ctx.remaining_accounts.iter().enumerate() {
+        validate_config(info)?;
+        require!(!configs[..i].contains(info.key), FumpadError::InvalidParams);
+        configs[i] = *info.key;
+    }
     let g = &mut ctx.accounts.global;
     g.bump = ctx.bumps.global;
     g.admin = admin;
     g.platform_treasury = platform_treasury;
     g.guardian = admin;
-    g.keepers = [Pubkey::default(); MAX_KEEPERS];
+    g.keepers = keepers;
+    // 0 = no attestation freeze for the bootstrap set (`is_active_attester`: now ≥ 0 + 6h).
     g.keeper_added_at = [0; MAX_KEEPERS];
     g.cluster_tag = cluster_tag;
     g.paused = 0;
@@ -63,13 +78,27 @@ pub fn handle_initialize_global(
     g.pending_treasury = Pubkey::default();
     g.pending_guardian = Pubkey::default();
     g.pending_admin_eta = 0;
-    g.configs = [Pubkey::default(); MAX_CONFIGS];
+    g.configs = configs;
     g.pending_config = Pubkey::default();
     g.pending_config_add = 0;
     g.pending_config_eta = 0;
     g.reserved = [0; 64];
     let ts = Clock::get()?.unix_timestamp;
     emit_event!(ctx, GlobalInitialized { admin, platform_treasury, guardian: admin, cluster_tag, params, ts });
+    if keepers.iter().any(|k| *k != Pubkey::default()) {
+        emit_event!(ctx, KeepersSet { keepers, added_at: [0; MAX_KEEPERS], ts });
+    }
+    for config in configs.into_iter().filter(|c| *c != Pubkey::default()) {
+        emit_event!(ctx, ConfigUpdated { config, add: true, ts });
+    }
+    Ok(())
+}
+
+/// Keeper list rule shared by `initialize_global` and `set_keepers`: non-default keys are distinct.
+fn validate_keeper_set(keepers: &[Pubkey; MAX_KEEPERS]) -> Result<()> {
+    for (i, k) in keepers.iter().enumerate() {
+        require!(*k == Pubkey::default() || !keepers[..i].contains(k), FumpadError::InvalidParams);
+    }
     Ok(())
 }
 
@@ -154,9 +183,7 @@ pub fn handle_set_pause(ctx: Context<GuardianOrAdmin>, paused: u8) -> Result<()>
 /// Immediate (incident response). A key not in the previous set starts a 6h attestation freeze (SPEC v0.7 §7);
 /// keys that stay keep their timestamp. Duplicates are rejected.
 pub fn handle_set_keepers(ctx: Context<AdminOnly>, keepers: [Pubkey; MAX_KEEPERS]) -> Result<()> {
-    for (i, k) in keepers.iter().enumerate() {
-        require!(*k == Pubkey::default() || !keepers[..i].contains(k), FumpadError::InvalidParams);
-    }
+    validate_keeper_set(&keepers)?;
     let now = Clock::get()?.unix_timestamp;
     let g = &mut ctx.accounts.global;
     let mut added_at = [0i64; MAX_KEEPERS];
@@ -166,7 +193,8 @@ pub fn handle_set_keepers(ctx: Context<AdminOnly>, keepers: [Pubkey; MAX_KEEPERS
         }
         added_at[i] = match g.keepers.iter().position(|old| old == k) {
             Some(j) => g.keeper_added_at[j],
-            None => now,
+            // never 0: 0 marks a bootstrap keeper (no freeze)
+            None => now.max(1),
         };
     }
     g.keepers = keepers;
