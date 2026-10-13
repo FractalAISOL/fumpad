@@ -115,7 +115,8 @@ decision; each pins down something the spec left open or that the mainnet binari
    flash-rent cost) + `graduate` (steps 2–4). One instruction needs ≈ 37 accounts and doesn't fit a legacy tx. Anyone
    may migrate directly on DBC; `graduate` skips done steps (leftover, migration fee, surplus each checked by DBC
    flags). `graduate` accepts any DAMM v2 config whose `pool_creator_authority` is DBC's pool authority (not only
-   `A8gM…`) and a position holding ≥ 99.99% of the liquidity permanently locked (100% measured).
+   `A8gM…`) and a position of that pool whose NFT `fee_claimer` holds, with all its liquidity permanently locked —
+   never compared with the pool's totals (REVIEW-v0.7 H-1; see 15).
 4. **Fee claims are two instructions** (§3.2): `claim_fees` (DBC partner fees; the first one after `launch_slot +
    launch_window_slots` sends 100% to buyback, D33) and `claim_lp_fees` (DAMM v2 position; requires the launch flag
    settled). Claimed WSOL is unwrapped into the Coin account (lamport invariant). Split: platform and creator get
@@ -128,13 +129,14 @@ decision; each pins down something the spec left open or that the mainnet binari
    args, and its consumed marker is per (trade, ticket) because one buy can debit several tickets.
 6. **Attestation checks.** Submitter must be a keeper (it pays and gets back the rent). `block_time ∈ [created_at −
    60 s, now + 60 s]`, `slot ≥ launch_slot`, `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs` (default
-   60 s per §5.4; Pyth is no longer read on-chain). The hourly cap is a sliding hour (current bucket + time-weighted
-   previous bucket). `attest_rebuy` re-checks `sell_ts ≤ block_time ≤ sell_ts + rebuy_window`.
+   60 s per §5.4; Pyth is no longer read on-chain). The hourly cap defers instead of rejecting (see 16).
+   `attest_rebuy` re-checks `sell_ts ≤ block_time ≤ sell_ts + rebuy_window`.
 7. **Replay markers** are closable only after their ticket is closed AND the trade is older than the max attestation
    age bound (7 days), so a closed marker can never let the same trade be attested again.
 8. **Rent payers.** Position, ticket and consumed rent are the attesting keeper's; `close_ticket` is permissionless
-   for every terminal state; `close_position` may be signed by the wallet or the rent payer; rent always returns to
-   the payer.
+   for every terminal state; `close_position` may be signed by the wallet, or by the rent payer only while the
+   wallet hasn't opted out of auto-claim (REVIEW-v0.7 L-1: closing would delete the D17 opt-out); rent always
+   returns to the payer.
 9. **Statuses.** `Complete` is set only when the router itself completes the curve; `graduate` accepts `Curve` or
    `Complete` once DBC reports the pool migrated. `PAUSE_GRADUATE` covers `migrate_pool` and `graduate`.
 10. **Pre-graduation samples** are keeper-only, spaced like keeper samples, and stored in the Coin (no ring before
@@ -146,3 +148,31 @@ decision; each pins down something the spec left open or that the mainnet binari
 13. **Keeper freeze**: per key; keys that stay in the set keep their original timestamp.
 14. **Rent figures** in `contracts/CONTRACTS.md` are measured with LiteSVM 0.18's mainnet feature set (claim queue
    0.417 SOL vs 0.571 SOL in v0.6); the rate in force at deploy time is UNVERIFIED.
+15. **Graduation position / LP fees (REVIEW-v0.7 H-1).** Anyone can add liquidity to the DAMM v2 pool, lock it and
+   (the NFT account has no ImmutableOwner) hand the NFT to `fee_claimer`. So `graduate` checks only what identifies a
+   FUMPAD position (pool = the canonical pool, NFT held by `fee_claimer`, fully permanently locked) and
+   `claim_lp_fees` accepts every `fee_claimer`-held position of the coin's pool: extra liquidity can't block
+   graduation, and a donated position recorded first can't strand the fees of DBC's 100% position.
+16. **Rate cap = deferral (§5.2 "excess → retry later, never lost"; REVIEW-v0.7 M-1).** Per-coin leaky bucket: a
+   ticket over `max_attest_tokens_per_hour_bps` of supply per hour is still created, with `attested_at` (its
+   effective time: claimable and guardian-voidable until `attested_at + ticket_challenge_secs`) pushed back so that
+   at most one hour's cap becomes effective at once and the rest at the cap rate. `attest_sell` never fails on the
+   cap, so an honest sell can't expire behind it. Rebuy debits and guardian voids release their tokens' capacity
+   while the coin has a backlog. Chosen over "release only" (which still loses honest sells when real volume
+   exceeds the cap for `max_attest_age`) because it is the simplest design where the cap can only delay.
+17. **Correctable voids (REVIEW-v0.7 L-2).** `void_ticket(reason, reopen)`: `reopen = true` for a wrong attestation
+   of a possibly honest trade (engine bug) reopens the trade's replay marker for ONE corrected attestation (any
+   message except the voided one, recorded as `Consumed.message_hash`); `reopen = false` (fraud) keeps the trade
+   consumed. A live ticket always blocks a second attestation of its trade.
+18. **Leftover (D35; REVIEW-v0.7 I-1).** When someone else called DBC's permissionless `withdraw_leftover` first,
+   `graduate` records the leftover as the reward-vault balance minus the coin's buybacks. WSOL pre-funded into the
+   transient `fee_wsol` isn't partner surplus: excluded from the setup budget, returned to the caller.
+19. **Launch binding (§2; off-chain review L1).** `Params.launch_signer` (default unset): when set, `register_coin`
+   must be co-signed by that key — the API signs the launch tx it builds, as it co-signs the vanity mint — so only
+   API-built launches register. Changed through the params timelock (48 h). Verified on the mainnet DBC 0.2.1
+   binary: `enable_first_swap_with_min_fee` gives the min fee to one swap of the pool-creation tx only (extra
+   top-level swaps pay 99%), so `register_coin` doesn't introspect the tx.
+20. **Clusters.** Devnet and mainnet use different fumpad program ids (`5YMF…` is devnet's); attestation messages
+   bind program id and `cluster_tag`. `record_samples` skips `Complete` coins instead of failing the batch; the
+   router refuses a DAMM v2 pool disabled by its operator (`PoolDisabled`, D38). `void_ticket` references the coin
+   and mint (indexers crawling by mint see voids; `TicketVoided.coin`).
