@@ -486,9 +486,30 @@ mod smoke {
     }
 }
 
-#[cfg(test)]
-mod config_tests;
+/// fumpad events of type `E` emitted by a transaction (event self-CPI data = EVENT_IX_TAG_LE ‖ disc ‖ borsh).
+pub fn events<E: anchor_lang::AnchorDeserialize + anchor_lang::Discriminator>(meta: &TransactionMetadata) -> Vec<E> {
+    let tag = anchor_lang::event::EVENT_IX_TAG_LE;
+    let mut out = vec![];
+    for list in &meta.inner_instructions {
+        for ii in list {
+            let d = &ii.instruction.data;
+            if d.len() >= 16 && &d[..8] == tag && &d[8..16] == E::DISCRIMINATOR {
+                out.push(E::deserialize(&mut &d[16..]).expect("event decode"));
+            }
+        }
+    }
+    out
+}
+
+pub fn event<E: anchor_lang::AnchorDeserialize + anchor_lang::Discriminator>(meta: &TransactionMetadata) -> E {
+    events::<E>(meta).into_iter().next().expect("event emitted")
+}
 
 pub mod flow;
+
+#[cfg(test)]
+mod attest_tests;
+#[cfg(test)]
+mod config_tests;
 #[cfg(test)]
 mod lifecycle_tests;

@@ -538,7 +538,7 @@ impl Env {
             ticket_price_q64: price_q64,
             usd_cents: 10_000,
             pyth_publish_time: now - 31,
-            slot: self.slot().saturating_sub(10),
+            slot: self.slot(),
             block_time: now - 30,
         }
     }
