@@ -1,5 +1,7 @@
 import type { Commitment } from "@solana/web3.js";
 
+import { loadMeteoraConfig, type MeteoraIndexerConfig } from "./meteora/config.js";
+
 export interface IndexerConfig {
   databaseUrl: string;
   rpcUrl: string;
@@ -39,6 +41,8 @@ export interface IndexerConfig {
   finalizeDropAfterSecs: number;
   healthPort?: number;
   logLevel: string;
+  /** Meteora DBC/DAMM v2 trade indexing; absent or `enabled: false` = off (default). */
+  meteora?: MeteoraIndexerConfig;
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
@@ -93,5 +97,6 @@ export function loadIndexerConfig(env = process.env): IndexerConfig {
     finalizeDropAfterSecs: num(env.FINALIZE_DROP_AFTER_SECS, 180),
     healthPort: env.PORT ? Number(env.PORT) : env.HEALTH_PORT ? Number(env.HEALTH_PORT) : undefined,
     logLevel: env.LOG_LEVEL ?? "info",
+    meteora: loadMeteoraConfig(env),
   };
 }

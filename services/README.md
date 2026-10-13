@@ -6,6 +6,7 @@ TypeScript (Node 22, strict, ESM), npm workspaces, plus one Rust binary. Built a
 ```
 services/
   sdk/       @fumpad/sdk      typed client: PDAs, instruction builders, PumpSwap pass-through, math, quotes, events
+  meteora/   @fumpad/meteora  Meteora DBC + DAMM v2 trade parser (any app/router), v1-tx RPC client, ATTESTATION.md
   indexer/   @fumpad/indexer  chain → Postgres (events, current state, derived game/safety layer)
   api/       @fumpad/api      REST + WebSocket implementing the app's FumpadData contract (+ D18 launch prepare)
   keeper/    @fumpad/keeper   cranks per SPEC §5.4/§7 (+ D17 auto-claim)
@@ -120,6 +121,18 @@ errors (TriggerNotMet, InsufficientSamples, WalletQueueLimit, AutoClaimDisabled,
 - `events.ts` emit_cpi decoding (authority-checked, failed txs ignored) + locker `Program data:` logs via the invoke stack.
 - `client.ts` `FumpadClient`: reads chain state and returns ready instruction lists (`buildBuy/Sell/Launch/Claim/...`,
   cranks), polling confirmation (no websocket dependency).
+
+### Meteora trades from any app (feature flag, migration 008)
+`@fumpad/meteora` `parseMeteoraTrades(tx)` turns every DBC / DAMM v2 swap in a confirmed tx (direct or CPI'd by
+Jupiter, Axiom, OKX, DFlow, …; json / jsonParsed; legacy / v0 / **v1** txs) into an exact record keyed by
+`(signature, ixKey)`, from the programs' `emit_cpi` events (decoded with the on-chain IDLs, `npm run sync-idl -w
+@fumpad/meteora`) and cross-checked against vault balance deltas (fail closed). Fixtures: 25 real mainnet txs
+(`npm run fixtures -w @fumpad/meteora`). Keeper/contract rules: `meteora/ATTESTATION.md`.
+Indexer: `METEORA_INDEXER_ENABLED=true` + `METEORA_DBC_CONFIGS` and/or `METEORA_MINTS` (`indexer/src/meteora/`):
+own cursors (configs, mints, migrated DAMM v2 pools), own tables (`meteora_pools`, `meteora_transactions`,
+`meteora_trades`, `meteora_parse_issues`), same M-4/M-5/H-1 rules as the main pipeline, webhook hints fanned out.
+Off by default; nothing in the curve tables changes. Note: the main pipeline fetches with
+`maxSupportedTransactionVersion: 0`; a version-1 tx on a watched address can't be fetched by it (see report).
 
 ### Indexer
 Tables (`migrations/001_init.sql`): raw `transactions`/`events` (with re-decodable `raw`), `coins`, `trades`,

@@ -12,6 +12,7 @@ import { Deriver } from "./derive.js";
 import { Finalizer } from "./finality.js";
 import { Ingestor } from "./ingest.js";
 import { createLogger, type Logger } from "./log.js";
+import { MeteoraIndexer } from "./meteora/index.js";
 import { loadParams } from "./params.js";
 import { heliusWebhookHandler, subscribeLogs } from "./sources/push.js";
 import { RpcSource } from "./sources/rpc.js";
@@ -35,6 +36,8 @@ export class Indexer {
   readonly finalizer: Finalizer;
   readonly chainSync: ChainSync;
   readonly deriver: Deriver;
+  /** Only when METEORA_INDEXER_ENABLED=true. */
+  readonly meteora?: MeteoraIndexer;
   private params: Params = DEFAULT_PARAMS;
   private timers: NodeJS.Timeout[] = [];
   private server?: Server;
@@ -58,6 +61,14 @@ export class Indexer {
     this.rpc = new RpcSource(this.conn, this.db, this.ingestor, { commitment: cfg.commitment, pageSize: cfg.pageSize, backfillFromSlot: cfg.backfillFromSlot, reconcileDepth: cfg.reconcileDepth }, this.log);
     this.finalizer = new Finalizer(this.conn, this.db, () => this.params, this.log, { dropMisses: cfg.finalizeDropMisses, dropAfterSecs: cfg.finalizeDropAfterSecs });
     this.deriver = new Deriver(this.conn, this.db, this.log, { fundingLookupsPerCycle: cfg.fundingLookupsPerCycle, claimWindowSecs: () => this.params.claimWindowSecs });
+    if (cfg.meteora?.enabled) {
+      this.meteora = new MeteoraIndexer(cfg.meteora, this.db, this.log, {
+        rpcUrl: cfg.rpcUrl,
+        commitment: cfg.commitment,
+        dropMisses: cfg.finalizeDropMisses,
+        dropAfterSecs: cfg.finalizeDropAfterSecs,
+      });
+    }
   }
 
   async reloadParams() {
@@ -68,6 +79,7 @@ export class Indexer {
     await migrate(this.db, (m) => this.log.info(m));
     await this.reloadParams();
     await this.rpc.ensureCursors();
+    if (this.meteora) await this.meteora.start();
     this.log.info({ rpc: redactUrl(this.cfg.rpcUrl), commitment: this.cfg.commitment, webhook: this.cfg.webhookEnabled }, "indexer starting");
 
     const loop = (name: string, ms: number, fn: () => Promise<unknown>, firstDelay = 0) => {
@@ -88,13 +100,19 @@ export class Indexer {
     loop("derive", this.cfg.deriveIntervalMs, () => this.deriver.runOnce());
     loop("params", 60_000, () => this.reloadParams());
     loop("heartbeat", 15_000, () => this.heartbeat());
+    if (this.meteora && this.cfg.meteora) {
+      const m = this.meteora;
+      loop("meteora-poll", this.cfg.meteora.pollIntervalMs, () => m.source.pollOnce());
+      loop("meteora-reconcile", this.cfg.meteora.reconcileIntervalMs, () => m.source.reconcile(), this.cfg.meteora.reconcileIntervalMs);
+      loop("meteora-finalize", this.cfg.meteora.finalizeIntervalMs, () => m.finalizer.runOnce());
+    }
     if (this.cfg.wsUrl) this.unsubscribe = subscribeLogs(this.conn, () => this.rpc.poke(), this.log);
 
     if (this.cfg.healthPort || this.cfg.webhookPort) {
       // Only mounted when enabled; config refuses to boot an enabled webhook without a secret.
       const webhook =
         this.cfg.webhookEnabled && this.cfg.webhookSecret
-          ? heliusWebhookHandler((sigs) => this.rpc.hint(sigs), this.log, { secret: this.cfg.webhookSecret, maxBodyBytes: this.cfg.webhookMaxBodyBytes })
+          ? heliusWebhookHandler((sigs) => this.hint(sigs), this.log, { secret: this.cfg.webhookSecret, maxBodyBytes: this.cfg.webhookMaxBodyBytes })
           : null;
       this.server = createServer((req, res) => {
         if (webhook && req.method === "POST" && (req.url === "/helius" || req.url?.startsWith("/helius?"))) return void webhook(req, res);
@@ -109,6 +127,12 @@ export class Indexer {
       });
       await new Promise<void>((r) => this.server!.listen(this.cfg.healthPort ?? this.cfg.webhookPort, r));
     }
+  }
+
+  /** Webhook hints (signatures only, re-fetched from our RPC by each consumer). */
+  private hint(sigs: string[]) {
+    this.rpc.hint(sigs);
+    this.meteora?.source.hint(sigs);
   }
 
   /** Liveness + version into `meta` for the API's /v1/status (no extra network hop between services). */
@@ -146,6 +170,7 @@ export class Indexer {
       finalizer: this.finalizer.stats,
       chainSync: this.chainSync.stats,
       derive: this.deriver.stats,
+      ...(this.meteora ? { meteora: this.meteora.stats } : {}),
     };
   }
 

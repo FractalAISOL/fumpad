@@ -7,6 +7,7 @@ export * from "./handlers.js";
 export * from "./indexer.js";
 export * from "./ingest.js";
 export * from "./log.js";
+export * from "./meteora/index.js";
 export * from "./params.js";
 export * from "./replay.js";
 export * from "./safeFetch.js";
