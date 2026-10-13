@@ -63,6 +63,34 @@ export async function migrate(db: pg.Pool, log: (m: string) => void = () => {}):
   return applied;
 }
 
+/** meta key binding a database to the fumpad program id its rows describe. */
+export const PROGRAM_BINDING_KEY = "fumpad_program_id";
+
+/**
+ * Bind the database to `programId` on first start, and refuse to run against a database bound to another
+ * program (a previous version's DB, or a reset schema that an old process re-filled). Returns what it did.
+ */
+export async function bindProgram(db: Queryable, programId: string): Promise<"bound" | "ok"> {
+  const cur = await getMeta<{ programId?: string } | string>(db, PROGRAM_BINDING_KEY);
+  const bound = typeof cur === "string" ? cur : cur?.programId;
+  if (bound && bound !== programId)
+    throw new Error(
+      `database is bound to fumpad program ${bound}, this build indexes ${programId}: point DATABASE_URL at the right database, or reset the schema with every old service stopped (DEPLOY-v07.md §3)`,
+    );
+  if (bound) return "ok";
+  await setMeta(db, PROGRAM_BINDING_KEY, { programId, at: new Date().toISOString() });
+  return "bound";
+}
+
+/**
+ * Coins this program never registered: v0.7's CoinRegistered always sets `dbc_pool`, a v0.6 indexer's insert
+ * never does. Rows like these mean an old-version process wrote into this database (see purge-coin.ts).
+ */
+export async function foreignCoins(db: Queryable, limit = 20): Promise<string[]> {
+  const r = await db.query<{ mint: string }>("SELECT mint FROM coins WHERE dbc_pool IS NULL ORDER BY created_at LIMIT $1", [limit]);
+  return r.rows.map((x) => x.mint);
+}
+
 export async function getMeta<T>(db: Queryable, key: string): Promise<T | null> {
   const r = await db.query<{ value: T }>("SELECT value FROM meta WHERE key = $1", [key]);
   return r.rows[0]?.value ?? null;

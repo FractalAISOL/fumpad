@@ -4,7 +4,8 @@
  *  fees      claim_fees: the coin's FIRST claim right after the launch window (slot ≥ launch_slot +
  *            launch_window_slots, D33: 100% → buyback), then whenever the DBC pool's unclaimed partner
  *            fee ≥ FEES_MIN_LAMPORTS (every FEES_INTERVAL_SECS at most); claim_lp_fees on graduated coins
- *            every LP_FEES_INTERVAL_SECS (simulated first; NothingToClaim = skip).
+ *            every LP_FEES_INTERVAL_SECS, only when the locked position has quote (WSOL) fees pending
+ *            (read from the DAMM v2 pool + position accounts; NothingToClaim = a quiet skip).
  *  graduate  a completed DBC pool that Meteora's keepers haven't migrated within MIGRATE_GRACE_SECS →
  *            migrate_pool (fresh position-NFT keypair, 600k CU); a migrated pool → graduate (finds the
  *            locked DAMM v2 position), then init_observations + 9× init_claim_queue.
@@ -15,7 +16,8 @@
  *            0.5% of the curve's quote reserve and never completing the curve; post-grad within ±band of
  *            the covered 30-min keeper median, slice ≤ 0.5% of the pool's SOL. Pre-checked like the program.
  *  autoclaim claim_for every attested Open ticket past its challenge window whose trigger holds on the
- *            covered median (owner not opted out; D16 wallet queue limit respected).
+ *            covered median (owner not opted out; D16 wallet queue limit respected). Logs what happened
+ *            from the tx's events: paid / escrowed / queued.
  *  queue     process_queue for exactly the entries the program's skip-ahead walk pays (H-4).
  *  close     close_ticket for terminal tickets (rent back to the attesting keeper) and Open tickets past
  *            the claim window (→ Expired); close_consumed for this keeper's markers older than 7 days
@@ -89,6 +91,9 @@ import {
   withdrawPlatformFeesIx,
   CLAIM_QUEUE_CAPACITY,
   MAX_QUEUED_PER_WALLET,
+  decodeFumpadEvents,
+  type FumpadEvent,
+  type TxLike,
 } from "@fumpad/sdk";
 
 import { Alerter } from "./alerts.js";
@@ -214,6 +219,45 @@ export function spotTwapQ64(obs: readonly SpotObservation[], now: bigint, minSam
 /** L5: next buyback time — interval × (1 + U[0, jitter)), from a CSPRNG (not guessable by a sandwicher). */
 export function nextBuybackDelayMs(intervalSecs: number, jitter: number, rand: () => number = () => randomInt(0, 1_000_000) / 1_000_000): number {
   return Math.round(intervalSecs * 1000 * (1 + Math.max(0, jitter) * rand()));
+}
+
+// DAMM v2 (cp-amm) zero-copy layouts, verified against a devnet pool + locked position:
+// Pool: fee_b_per_liquidity u256 @520. Position: fee_b_per_token_checkpoint u256 @104, fee_b_pending u64 @144,
+// unlocked / vested / permanent_locked liquidity u128 @152 / @168 / @184.
+const uLE = (d: Uint8Array, o: number, n: number) => {
+  let v = 0n;
+  for (let i = n - 1; i >= 0; i--) v = (v << 8n) | BigInt(d[o + i]);
+  return v;
+};
+const LIQUIDITY_SCALE = 128n;
+
+/**
+ * Quote-side (token B = WSOL) LP fees a DAMM v2 position could claim right now: fee_b_pending + liquidity ×
+ * (pool.fee_b_per_liquidity − position.checkpoint) >> 128 (cp-amm's own accrual). `claim_lp_fees` credits only
+ * the WSOL it receives, so 0 here = the program would fail with NothingToClaim. null = account too short.
+ */
+export function pendingLpQuoteFees(pool: Uint8Array, position: Uint8Array): bigint | null {
+  if (pool.length < 552 || position.length < 200) return null;
+  const perLiquidity = uLE(pool, 520, 32);
+  const checkpoint = uLE(position, 104, 32);
+  const liquidity = uLE(position, 152, 16) + uLE(position, 168, 16) + uLE(position, 184, 16);
+  const delta = perLiquidity > checkpoint ? perLiquidity - checkpoint : 0n;
+  return uLE(position, 144, 8) + ((liquidity * delta) >> LIQUIDITY_SCALE);
+}
+
+export type ClaimForOutcome = { kind: "paid" | "escrowed" | "queued"; amount: bigint; queueLen?: number } | { kind: "unknown" };
+
+/** What a claim_for transaction did for `ticket`, from its fumpad events (ClaimPaid / ClaimEscrowed / ClaimQueued). */
+export function claimForOutcome(events: FumpadEvent[], ticket: PublicKey): ClaimForOutcome {
+  const t = ticket.toBase58();
+  for (const e of events) {
+    const d = e.data as { ticket?: PublicKey; amount?: bigint; queueLen?: number };
+    if (!d.ticket || d.ticket.toBase58() !== t) continue;
+    if (e.name === "ClaimPaid") return { kind: "paid", amount: d.amount ?? 0n };
+    if (e.name === "ClaimEscrowed") return { kind: "escrowed", amount: d.amount ?? 0n };
+    if (e.name === "ClaimQueued") return { kind: "queued", amount: d.amount ?? 0n, queueLen: d.queueLen };
+  }
+  return { kind: "unknown" };
 }
 
 /** |spot − guard| ≤ band (bps) — the program's PriceDeviation check. */
@@ -468,6 +512,8 @@ export class Keeper {
   async runFees(): Promise<number> {
     let n = 0;
     const skip = SKIP(["NothingToClaim", "LaunchWindowActive", "LaunchFeesUnsettled"]);
+    // Expected "nothing to do" answers: logged at debug by the sender, not as a failed tx every cycle.
+    const quiet = SKIP(["NothingToClaim"]);
     for (const c of this.coins.values()) {
       const k = c.coin;
       const windowEnd = k.launchSlot + k.launchWindowSlots;
@@ -476,7 +522,7 @@ export class Keeper {
       if (first || due) {
         n += await this.guard(`fees:${k.mint.toBase58()}`, async () => {
           c.lastFeesAt = Date.now();
-          const r = await this.sender.send(first ? "claim_fees(launch window)" : "claim_fees", { instructions: [cu(200_000), claimFeesIx(this.keeperKey, this.refs(c))] }, { retries: 1 });
+          const r = await this.sender.send(first ? "claim_fees(launch window)" : "claim_fees", { instructions: [cu(200_000), claimFeesIx(this.keeperKey, this.refs(c))] }, { retries: 1, quietCodes: quiet });
           if (!r.ok) {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
             throw new Error(`claim_fees failed: ${r.error}`);
@@ -490,7 +536,15 @@ export class Keeper {
           c.lastLpFeesAt = Date.now();
           const nft = await this.positionNftMint(c);
           if (!nft) return 0;
-          const r = await this.sender.send("claim_lp_fees", { instructions: [cu(200_000), claimLpFeesIx(this.keeperKey, { ...this.refs(c), dammPosition: k.dammPosition, positionNftMint: nft })] }, { retries: 0 });
+          // Pre-check from account data: after graduation the position usually has nothing pending, and a
+          // claim would only fail its simulation with NothingToClaim (6021) every cycle.
+          const [poolAcc, posAcc] = await this.conn.getMultipleAccountsInfo([k.dammPool, k.dammPosition]);
+          const pending = poolAcc && posAcc ? pendingLpQuoteFees(poolAcc.data, posAcc.data) : null;
+          if (pending === 0n) {
+            this.log.debug({ mint: k.mint.toBase58() }, "claim_lp_fees: nothing pending");
+            return 0;
+          }
+          const r = await this.sender.send("claim_lp_fees", { instructions: [cu(200_000), claimLpFeesIx(this.keeperKey, { ...this.refs(c), dammPosition: k.dammPosition, positionNftMint: nft })] }, { retries: 0, quietCodes: quiet });
           if (!r.ok) {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
             throw new Error(`claim_lp_fees failed: ${r.error}`);
@@ -720,12 +774,30 @@ export class Keeper {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
             throw new Error(`claim_for failed: ${r.error}`);
           }
-          this.log.info({ mint: k.mint.toBase58(), ticket: t.key.toBase58(), owner: t.ticket.owner.toBase58() }, "auto-claimed");
+          await this.logClaimFor(r, k.mint, t.key, t.ticket.owner);
           return 1;
         });
       }
     }
     return n;
+  }
+
+  /** claim_for queues the ticket when the pool can't pay it now: say which of paid / escrowed / queued happened. */
+  private async logClaimFor(r: { signature?: string; simulated?: boolean }, mint: PublicKey, ticket: PublicKey, owner: PublicKey) {
+    const base = { mint: mint.toBase58(), ticket: ticket.toBase58(), owner: owner.toBase58(), signature: r.signature };
+    if (r.simulated || !r.signature) return void this.log.info(base, "auto-claim simulated");
+    let outcome: ClaimForOutcome = { kind: "unknown" };
+    try {
+      const tx = await this.conn.getTransaction(r.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+      if (tx) outcome = claimForOutcome(decodeFumpadEvents(tx as unknown as TxLike), ticket);
+    } catch (e) {
+      this.log.debug({ ...base, err: String(e) }, "claim_for events unavailable");
+    }
+    if (outcome.kind === "unknown") return void this.log.info(base, "auto-claim sent (outcome unknown: events unavailable)");
+    const fields = { ...base, amount: outcome.amount.toString(), ...(outcome.queueLen !== undefined ? { queueLen: outcome.queueLen } : {}) };
+    if (outcome.kind === "paid") this.log.info(fields, "auto-claim paid");
+    else if (outcome.kind === "escrowed") this.log.info(fields, "auto-claim escrowed (owner's account refuses transfers; withdrawable)");
+    else this.log.info(fields, "auto-claim queued (pool can't pay it now; process_queue pays it later)");
   }
 
   async runQueues(): Promise<number> {

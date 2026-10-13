@@ -3,11 +3,11 @@ import { createServer, type Server } from "node:http";
 
 import { Connection } from "@solana/web3.js";
 
-import { DEFAULT_PARAMS, type Params } from "@fumpad/sdk";
+import { DEFAULT_PARAMS, FUMPAD_PROGRAM_ID, type Params } from "@fumpad/sdk";
 
 import { ChainSync } from "./chainSync.js";
 import type { IndexerConfig } from "./config.js";
-import { createPool, type Db, migrate, setMeta } from "./db.js";
+import { bindProgram, createPool, type Db, foreignCoins, migrate, setMeta } from "./db.js";
 import { Deriver } from "./derive.js";
 import { Finalizer } from "./finality.js";
 import { Ingestor } from "./ingest.js";
@@ -85,6 +85,11 @@ export class Indexer {
 
   async start(): Promise<void> {
     await migrate(this.db, (m) => this.log.info(m));
+    // A database belongs to one program id: refuse another version's DB instead of mixing their rows.
+    if ((await bindProgram(this.db, FUMPAD_PROGRAM_ID.toBase58())) === "bound") this.log.info({ program: FUMPAD_PROGRAM_ID.toBase58() }, "database bound to this program id");
+    const foreign = await foreignCoins(this.db);
+    if (foreign.length)
+      this.log.error({ mints: foreign }, "coins not registered by this program are in the database (an old-version indexer wrote them); purge each with scripts/ops/purge-coin.ts");
     await this.reloadParams();
     await this.rpc.ensureCursors();
     if (this.meteora) await this.meteora.start();
