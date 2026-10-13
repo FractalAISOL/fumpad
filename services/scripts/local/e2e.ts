@@ -13,11 +13,7 @@
  * window are auto-claimed → third-party DAMM v2 trades → the watcher re-derives every attestation (all
  * match) → API checks. Exits non-zero on any failed check.
  */
-import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { Keypair, LAMPORTS_PER_SOL, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 
 import {
   SNIPE_PERIODS,
@@ -30,7 +26,6 @@ import {
   decodeTokenAccount,
   coinPda,
   customErrorCode,
-  DBC_POOL_AUTHORITY,
   FUMPAD_ERROR,
   FUMPAD_PROGRAM_ID,
   inspectLaunchTx,
@@ -41,11 +36,11 @@ import {
   ticketPda,
   type TxLike,
 } from "@fumpad/sdk";
-import { createPool, migrate } from "@fumpad/indexer";
 import { signLaunchAuth } from "@fumpad/api";
 
-import { airdrop, createFumpadConfig, directDammBuy, directDammSell, directDbcBuy, directDbcSell, LOCAL_PARAMS, routedBuy, routedSell, tokenBalance, transferSol } from "./actors.js";
-import { buildGrinder, keypair, keypairPath, LOCAL, type Postgres, type Service, sleep, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
+import { airdrop, directDammBuy, directDammSell, directDbcBuy, directDbcSell, routedBuy, routedSell, tokenBalance } from "./actors.js";
+import { sleep, waitFor } from "./harness.js";
+import { type Stack, startStack } from "./stack.js";
 
 export interface E2EReport {
   ok: boolean;
@@ -61,122 +56,26 @@ const SOL = BigInt(LAMPORTS_PER_SOL);
 export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (s: string) => void; grinderThreads?: number } = {}): Promise<E2EReport> {
   const log = opts.log ?? ((s: string) => console.log(s));
   const t0 = Date.now();
-  const rpcPort = opts.rpcPort ?? 8899;
-  const apiPort = opts.apiPort ?? 18080;
-  const indexerPort = apiPort + 1;
-  const keeperPort = apiPort + 2;
-  const watcherPort = apiPort + 3;
-  const api = `http://127.0.0.1:${apiPort}`;
   const checks: E2EReport["checks"] = [];
   const check = (name: string, ok: boolean, detail?: string) => {
     checks.push({ name, ok, detail });
     log(`${ok ? "  ✔" : "  ✘"} ${name}${detail ? ` — ${detail}` : ""}`);
   };
-  const ssrSecret = randomBytes(24).toString("hex");
-  const get = async <T>(path: string, base = api): Promise<T> => {
-    const r = await fetch(base + path, { headers: { "x-fumpad-ssr": ssrSecret } });
-    if (!r.ok) throw new Error(`${path} → ${r.status} ${await r.text()}`);
-    return (await r.json()) as T;
-  };
 
-  let v: Validator | undefined;
-  let pg: Postgres | undefined;
-  const services: Service[] = [];
+  let stack: Stack | undefined;
   let ws: WebSocket | undefined;
   const wsEvents: string[] = [];
   let M = "";
   try {
-    log("▶ starting Postgres + solana-test-validator (fumpad v0.7 + mainnet DBC/DAMM v2)");
-    pg = await startPostgres();
-    const mdb = createPool(pg.url, 2);
-    await migrate(mdb);
-    await mdb.end();
-    const mintPoolKey = randomBytes(32).toString("hex");
-    services.push(startBinary("grinder", buildGrinder(), [], { DATABASE_URL: pg.url, MINT_POOL_KEY: mintPoolKey, POOL_TARGET: "1", POOL_POLL_SECS: "2", GRINDER_THREADS: String(opts.grinderThreads ?? 6) }));
-
-    const auth = keypair("upgrade-authority");
-    const admin = Keypair.generate();
-    const treasury = Keypair.generate();
-    const keepers = [keypair("keeper"), keypair("keeper2"), keypair("keeper3")];
-    const config = Keypair.generate();
-    // Launch binding (off-chain review L1): only API-built launches (co-signed by its launch key) register.
-    const launchKey = Keypair.generate();
-    const params = { ...LOCAL_PARAMS, launchSigner: launchKey.publicKey };
-    v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), params, configs: [config.publicKey] } });
-    const conn = new Connection(v.rpcUrl, "confirmed");
+    stack = await startStack({ rpcPort: opts.rpcPort, apiPort: opts.apiPort, grinderThreads: opts.grinderThreads, log });
+    const { conn, config, api, get, ports } = stack;
+    const pg = stack.pg;
+    const watcherPort = ports.watcher;
     const [creator, alice, bob, dave, eve, whale] = Array.from({ length: 6 }, () => Keypair.generate());
-    for (const k of [auth, admin, ...keepers, creator, alice, bob, dave, eve]) await airdrop(conn, k.publicKey, 20);
+    for (const k of [creator, alice, bob, dave, eve]) await airdrop(conn, k.publicKey, 20);
     await airdrop(conn, whale.publicKey, 50);
-    // DBC's pool authority fronts the migration's flash rent (mainnet: Meteora keeps it funded).
-    await transferSol(conn, admin, DBC_POOL_AUTHORITY, 10n * SOL);
-    await createFumpadConfig(conn, admin, config);
-    log("✓ chain ready: Global seeded (local windows, 3 keepers, FUMPAD DBC config allow-listed), config created");
 
-    // ── services ─────────────────────────────────────────────────────────────
-    const common = { DATABASE_URL: pg.url, RPC_URL: v.rpcUrl, LOG_LEVEL: "info" };
-    services.push(
-      startService("indexer", "indexer/src/main.ts", {
-        ...common,
-        WS_URL: v.wsUrl,
-        PORT: String(indexerPort),
-        POLL_INTERVAL_MS: "1000",
-        METEORA_POLL_INTERVAL_MS: "1000",
-        FINALIZE_INTERVAL_MS: "5000",
-        METEORA_FINALIZE_INTERVAL_MS: "5000",
-        DERIVE_INTERVAL_MS: "3000",
-        RECONCILE_INTERVAL_MS: "15000",
-        FETCH_METADATA: "false",
-      }),
-    );
-    await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${indexerPort}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5" }));
-    await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
-    services.push(
-      startService("keeper", "keeper/src/main.ts", {
-        RPC_URL: v.rpcUrl,
-        KEEPER_KEYPAIR: keypairPath("keeper"),
-        PORT: String(keeperPort),
-        LOG_LEVEL: "info",
-        LOOP_MS: "1000",
-        FULL_RATE_SECS: "3",
-        HEARTBEAT_SECS: "20",
-        SCAN_INTERVAL_SECS: "2",
-        TICKET_SCAN_INTERVAL_SECS: "2",
-        BUYBACK_MIN_LAMPORTS: "100000",
-        BUYBACK_INTERVAL_SECS: "4",
-        FEES_MIN_LAMPORTS: "100000",
-        FEES_INTERVAL_SECS: "5",
-        LP_FEES_INTERVAL_SECS: "10",
-        MIGRATE_GRACE_SECS: "0",
-        QUEUE_INTERVAL_SECS: "3",
-        AUTOCLAIM_INTERVAL_SECS: "3",
-        CLOSE_INTERVAL_SECS: "5",
-        PLATFORM_FEES_MIN_LAMPORTS: "1000000",
-        PRIORITY_MIN_MICROLAMPORTS: "1000",
-        MIN_KEEPER_LAMPORTS: "1000000000",
-      }),
-    );
-    for (let i = 0; i < 3; i++) {
-      services.push(
-        startService(`attestor${i + 1}`, "keeper/src/main.ts", {
-          KEEPER_MODE: "attestor",
-          RPC_URL: v.rpcUrl,
-          DATABASE_URL: pg.url,
-          KEEPER_KEYPAIR: keypairPath(i === 0 ? "keeper" : `keeper${i + 1}`),
-          PYTH_SOURCE: "constant",
-          PYTH_CONSTANT_USD: "150",
-          ATTEST_LOOP_MS: "2000",
-          ATTEST_FALLBACK_SUBMIT_SECS: "10",
-          LOG_LEVEL: "info",
-        }),
-      );
-    }
-    services.push(startService("watcher", "keeper/src/main.ts", { KEEPER_MODE: "watcher", RPC_URL: v.rpcUrl, PORT: String(watcherPort), PYTH_SOURCE: "constant", PYTH_CONSTANT_USD: "150", WATCH_LOOP_MS: "3000", WATCH_GRACE_SECS: "120", LOG_LEVEL: "info" }));
-    await waitFor("keeper health", async () => (await fetch(`http://127.0.0.1:${keeperPort}/health`)).status > 0, 60_000);
-    await waitFor("watcher health", async () => (await fetch(`http://127.0.0.1:${watcherPort}/health`)).ok, 60_000);
-    log("✓ indexer, api, grinder, keeper, 3 attestors, watcher running");
-
-    ws = new WebSocket(`ws://127.0.0.1:${apiPort}/v1/ws`);
+    ws = new WebSocket(`ws://127.0.0.1:${ports.api}/v1/ws`);
     ws.onmessage = (m) => {
       const msg = JSON.parse(String(m.data)) as { type: string; event?: { kind: string } };
       if (msg.type === "feed" && msg.event) wsEvents.push(msg.event.kind);
@@ -204,6 +103,7 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number };
     const launchTx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
     const info = inspectLaunchTx(launchTx);
+    const launchKey = stack.launchKey;
     check(
       "prepare: DBC init → creator top-level swap2 → register_coin, creator pays, only the mint + the API launch key signed",
       info.feePayer === creator.publicKey.toBase58() && [...info.signed].sort().join() === [prepared.mint, launchKey.publicKey.toBase58()].sort().join() && info.buyLamports === SOL / 20n && info.dbcConfig === config.publicKey.toBase58(),
@@ -313,7 +213,7 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
 
     // ── fees / buyback ───────────────────────────────────────────────────────
     const fees = await waitFor("FeesClaimed / BuybackExecuted indexed", async () => {
-      const r = await rows<{ n: string; b: string }>(pg!.url, `SELECT (SELECT count(*) FROM fee_claims WHERE mint = '${M}') n, (SELECT count(*) FROM buybacks WHERE mint = '${M}') b`);
+      const r = await rows<{ n: string; b: string }>(pg.url, `SELECT (SELECT count(*) FROM fee_claims WHERE mint = '${M}') n, (SELECT count(*) FROM buybacks WHERE mint = '${M}') b`);
       return Number(r[0].n) > 0 ? r[0] : null;
     }, 120_000, 3_000);
     check("keeper claimed fees (launch window first) and the indexer recorded them", Number(fees.n) > 0, `fee claims ${fees.n}, buybacks ${fees.b}`);
@@ -348,20 +248,11 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     return { ok: checks.every((c) => c.ok), mint: M, checks, counts, wsEvents, durationSec: Math.round((Date.now() - t0) / 1000) };
   } catch (e) {
     check(`scenario aborted: ${String(e).slice(0, 400)}`, false);
-    const dir = join(LOCAL, "e2e-logs");
-    mkdirSync(dir, { recursive: true });
-    for (const s of services) {
-      writeFileSync(join(dir, `${s.name}.log`), s.logs.join("\n"));
-      const tail = s.logs.filter((l) => /error|warn|fail|"level":(40|50)/i.test(l)).slice(-6);
-      if (tail.length) log(`── ${s.name} ──\n${tail.map((l) => l.slice(0, 500)).join("\n")}`);
-    }
-    log(`service logs: ${dir}`);
+    if (stack) log(`service logs: ${stack.dumpLogs("e2e-logs")}`);
     return { ok: false, mint: M, checks, counts: {}, wsEvents, durationSec: Math.round((Date.now() - t0) / 1000) };
   } finally {
     ws?.close();
-    for (const s of services.reverse()) await s.stop();
-    await v?.stop();
-    await pg?.stop();
+    await stack?.stop();
   }
 }
 

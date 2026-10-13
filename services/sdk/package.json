@@ -28,6 +28,8 @@
     "@types/bn.js": "^5.1.6"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
   ]
 }

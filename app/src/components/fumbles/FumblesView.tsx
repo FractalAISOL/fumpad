@@ -56,7 +56,8 @@ function note(t: Ticket, p: ProtocolParams): React.ReactNode {
     parts.push(
       <>
         Attested. It already counts toward 10×; claims open {t.claimableFrom ? <>at {f.dateTime(t.claimableFrom)} UTC</> : "after the challenge window"}, once the{" "}
-        {f.duration(p.ticketChallengeSecs)} window to catch a bad attestation has passed.
+        {f.duration(p.ticketChallengeSecs)} window to catch a bad attestation has passed
+        {t.effectiveAt && t.attestedAt && t.effectiveAt > t.attestedAt ? <> (it started at {f.dateTime(t.effectiveAt)} UTC: a busy hour on this coin deferred it)</> : null}.
       </>,
     );
   }
@@ -100,7 +101,9 @@ function note(t: Ticket, p: ProtocolParams): React.ReactNode {
   }
   if (t.state === "voided")
     parts.push(
-      t.voidReason === "guardian" ? (
+      t.voidReason === "guardian" && t.reopened ? (
+        <>Reopened for correction: the attestation didn&apos;t match the chain, so this ticket was voided and the keepers will attest the sell again. The corrected ticket replaces it.</>
+      ) : t.voidReason === "guardian" ? (
         <>Voided in the challenge window: the attestation didn&apos;t match the chain, so this ticket never counted.</>
       ) : (
         <>Rebuys within {rebuy} brought this ticket to zero.</>

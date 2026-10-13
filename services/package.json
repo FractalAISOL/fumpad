@@ -20,6 +20,7 @@
     "test:integration": "vitest run --project integration",
     "sync-idl": "node scripts/sync-idl.mjs",
     "local": "tsx scripts/local-e2e.ts",
+    "local:app": "tsx scripts/local/app-stack.ts",
     "validator": "tsx scripts/local/dev-chain.ts",
     "api-types": "node scripts/gen-api-types.mjs",
     "test:all": "vitest run"

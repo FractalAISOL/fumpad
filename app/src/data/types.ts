@@ -168,7 +168,12 @@ export interface Ticket {
   sellSignature?: string;
   /** When the 2-of-3 keeper attestation landed (absent while verifying). */
   attestedAt?: Millis;
-  /** attestedAt + the challenge window: the earliest time a claim can pay. */
+  /**
+   * When the ticket takes effect (`TicketAttested.effective_at`, INTERFACE-v0.7 §8.4): the attestation
+   * time, or later when the coin's attestation rate cap deferred it. Absent from older APIs (= attestedAt).
+   */
+  effectiveAt?: Millis;
+  /** effectiveAt (else attestedAt) + the challenge window: the earliest time a claim can pay. */
   claimableFrom?: Millis;
   /** What the sell actually filled at. Differs from sellPrice when the floor applied. */
   execPrice: number;
@@ -209,6 +214,11 @@ export interface Ticket {
   rebuyDebited: number;
   /** Why a voided ticket was voided: rebuys took it to zero, or the guardian voided a bad attestation. */
   voidReason?: "rebuy" | "guardian";
+  /**
+   * Guardian void with `reopen` (`TicketVoided.reopened`, INTERFACE-v0.7 §8.2): the sell was reopened for
+   * correction, so the keepers can attest it again (a corrected ticket replaces this one).
+   */
+  reopened?: boolean;
   /** D17: the keeper may claim this coin's tickets for the owner (per coin; on unless opted out). */
   autoClaim: boolean;
   /** The keeper claimed (or queued) this ticket on the owner's behalf. */
