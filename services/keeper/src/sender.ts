@@ -92,7 +92,7 @@ export class Sender {
         const sim = await this.conn.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "confirmed" });
         this.stats.simulated++;
         const ok = !sim.value.err;
-        this.log.info({ job: label, dryRun: true, ok, err: sim.value.err, units: sim.value.unitsConsumed }, "simulated");
+        this.log.info({ job: label, dryRun: true, ok, err: sim.value.err, units: sim.value.unitsConsumed, ...(ok ? {} : { logs: (sim.value.logs ?? []).slice(-25) }) }, "simulated");
         return { ok, simulated: true, code: customErrorCode(sim.value.err), error: ok ? undefined : JSON.stringify(sim.value.err), logs: sim.value.logs, unitsConsumed: sim.value.unitsConsumed };
       }
       try {
@@ -107,6 +107,9 @@ export class Sender {
           const logs = e instanceof TxFailedError ? e.logs : e.logs;
           const code = customErrorCode(e instanceof TxFailedError ? e.err : e.message);
           this.stats.failed++;
+          // The simulation / execution logs are what explains a failure ("Simulation failed" alone
+          // doesn't): keep the tail, where the failing program logs its error.
+          this.log.warn({ job: label, code, err: e.message.split("\n")[0], logs: (logs ?? []).slice(-8) }, "tx failed");
           return { ok: false, code, error: e.message.split("\n")[0], logs };
         }
         // Expired / timed out / RPC hiccup: retry with a fresh blockhash.

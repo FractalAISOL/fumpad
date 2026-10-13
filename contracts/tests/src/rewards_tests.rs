@@ -186,7 +186,8 @@ impl World {
             reference: Default::default(),
             fees: fumpad::state::Params::default().coin_fees(),
             snipe: Default::default(),
-            reserved: [0; 60],
+            rewards: fumpad::state::Params::default().reward_terms(),
+            reserved: [0; 19],
         };
         w.write_coin(&c);
         w
@@ -534,6 +535,7 @@ impl World {
             fumpad::accounts::CloseTicket {
                 caller: *caller,
                 global: self.env.global_pda(),
+                coin: self.coin,
                 ticket,
                 owner: t.owner,
                 position: self.position_key(&t.owner),
@@ -764,7 +766,7 @@ fn claim_rejections_auth_status_pause() {
     // Paused.
     let admin = w.env.admin.insecure_clone();
     let pause = ix(
-        fumpad::accounts::AdminOnly { admin: kp_pk(&admin), global: w.env.global_pda() },
+        fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&admin), global: w.env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
         fumpad::instruction::SetPause { paused: PAUSE_CLAIMS },
     );
     ok(w.env.send(&[pause], &[&admin]));
@@ -1631,7 +1633,7 @@ fn auto_claim_rejects_queued_expired_voided_and_unchanged_rules() {
     let (_, tp) = user_with_ticket(&mut w, 1_000 * M, DAY);
     let admin = w.env.admin.insecure_clone();
     let i = ix(
-        fumpad::accounts::AdminOnly { admin: kp_pk(&admin), global: w.env.global_pda() },
+        fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&admin), global: w.env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
         fumpad::instruction::SetPause { paused: PAUSE_CLAIMS },
     );
     ok(w.env.send(&[i], &[&admin]));

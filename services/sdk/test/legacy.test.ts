@@ -6,10 +6,10 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
-import { decodeGlobal, GLOBAL_ACCOUNT_LEN, globalNeedsMigration, upgradeLegacyGlobal } from "../src/accounts.js";
+import { decodeGlobal, GLOBAL_ACCOUNT_LEN, globalNeedsMigration, isPaused, upgradeLegacyGlobal } from "../src/accounts.js";
 import { bn } from "../src/borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "../src/coder.js";
-import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID } from "../src/constants.js";
+import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID, PAUSE_CLAIMS, PAUSE_TRADE } from "../src/constants.js";
 import { decodeEventRaw, decodeTransactionEvents, type TxLike } from "../src/events.js";
 import { paramsToIdl } from "../src/instructions/fumpad.js";
 import { DEFAULT_PARAMS } from "../src/params.js";
@@ -99,42 +99,79 @@ describe("legacy (v0.4) events", () => {
   });
 });
 
-describe("legacy (672-byte) Global", () => {
+describe("legacy (672 / 680-byte) Global", () => {
+  const guardian = Keypair.generate().publicKey;
   const current = () => {
     const g = {
       bump: 255, admin: user, platform_treasury: mint, keepers: [user, mint, user], paused: 2,
-      params: paramsToIdl({ ...DEFAULT_PARAMS, feeBps: 120 }), reserved: new Array(128).fill(0),
+      params: paramsToIdl({ ...DEFAULT_PARAMS, feeBps: 120 }),
+      guardian, pause_expires_at: bn(77n), pending_admin_eta: bn(0n), reserved: new Array(80).fill(0),
       pending_params: paramsToIdl(DEFAULT_PARAMS), pending_eta: bn(5n),
+      pending_admin: mint, pending_treasury: mint, pending_guardian: mint,
     };
     return fumpadCoder().accounts.encode("Global", g);
   };
+  /** Pre-v0.6 bytes: governance tail dropped, carved region zeroed, `cut` bytes off both Params. */
+  const legacy = (d: Uint8Array, cut: number) => {
+    const o = 170;
+    const region = new Uint8Array(128);
+    region.set(d.subarray(o + 187 + 48, o + 187 + 128), 48);
+    return Uint8Array.from([
+      ...d.subarray(0, o + 187 - cut), ...region, ...d.subarray(o + 187 + 128, o + 187 + 128 + 187 - cut), ...d.subarray(o + 2 * 187 + 128, d.length - 96),
+    ]);
+  };
 
-  it("current layout: 680 bytes, no migration needed", async () => {
+  it("current layout: 776 bytes (v0.6), no migration needed", async () => {
     const d = new Uint8Array(await current());
     expect(d.length).toBe(GLOBAL_ACCOUNT_LEN);
-    expect(GLOBAL_ACCOUNT_LEN).toBe(680);
+    expect(GLOBAL_ACCOUNT_LEN).toBe(776);
     expect(globalNeedsMigration(d)).toBe(false);
     const g = decodeGlobal(d);
     expect(g.legacyLayout).toBeUndefined();
     expect(g.params.snipeWindowSlots).toBe(4);
+    expect(g.guardian.equals(guardian)).toBe(true);
+    expect(g.pauseExpiresAt).toBe(77n);
+    expect(g.pendingAdmin.equals(mint)).toBe(true);
+    expect(isPaused(g, PAUSE_TRADE, 76n)).toBe(true);
+    expect(isPaused(g, PAUSE_TRADE, 77n)).toBe(false);
+    expect(isPaused(g, PAUSE_CLAIMS, 0n)).toBe(false);
   });
 
-  it("decodes the 672-byte layout with the snipe params zeroed", async () => {
+  it("decodes the 672-byte (v0.4) and 680-byte (v0.5) layouts as an old program behaves", async () => {
     const d = new Uint8Array(await current());
-    const o = 170;
-    const old = Uint8Array.from([...d.subarray(0, o + 183), ...d.subarray(o + 187, o + 187 + 128 + 183), ...d.subarray(o + 187 + 128 + 187)]);
-    expect(old.length).toBe(672);
-    expect(globalNeedsMigration(old)).toBe(true);
-    const g = decodeGlobal(old);
-    expect(g.legacyLayout).toBe(true);
-    expect(g.params.feeBps).toBe(120);
-    expect(g.params.snipeWindowSlots).toBe(0);
-    expect(g.pendingEta).toBe(5n);
-    expect(g.paused).toBe(2);
-    expect(g.admin.equals(user)).toBe(true);
-    expect(upgradeLegacyGlobal(old).length).toBe(680);
-    expect(() => upgradeLegacyGlobal(old.subarray(0, 600))).toThrow(/unknown Global layout/);
+    for (const [cut, len, snipe] of [[4, 672, 0], [0, 680, 4]] as const) {
+      const old = legacy(d, cut);
+      expect(old.length).toBe(len);
+      expect(globalNeedsMigration(old)).toBe(true);
+      const g = decodeGlobal(old);
+      expect(g.legacyLayout).toBe(true);
+      expect(g.params.feeBps).toBe(120);
+      expect(g.params.snipeWindowSlots).toBe(snipe);
+      expect(g.pendingEta).toBe(5n);
+      expect(g.paused).toBe(2);
+      expect(g.admin.equals(user)).toBe(true);
+      expect(g.guardian.equals(user)).toBe(true); // guardian = admin (what migrate_global sets)
+      expect(isPaused(g, PAUSE_TRADE, 1n << 40n)).toBe(true); // pre-v0.6 pauses never lapse
+      expect(g.pendingAdminEta).toBe(0n);
+      expect(upgradeLegacyGlobal(old).length).toBe(776);
+    }
+    expect(() => upgradeLegacyGlobal(d.subarray(0, 600))).toThrow(/unknown Global layout/);
   });
 });
 
-
+describe("legacy (v0.5) admin events", () => {
+  it("decodes v0.5 ParamsCancelled / GlobalMigrated (v0.6 appended fields) as zero, flagged legacy", () => {
+    const pc = payload("ParamsCancelled", { ts: bn(9n), authority: user });
+    const gm = payload("GlobalMigrated", {
+      old_len: 672, new_len: 680, snipe_window_slots: 4, snipe_start_bps: 9_900, rent_paid: bn(5n), ts: bn(6n), guardian: user, pause_expires_at: bn(7n),
+    });
+    const evs = decodeTransactionEvents(txOf([legacy(pc, 32), legacy(gm, 40), pc]));
+    expect(evs.map((e) => [e.name, e.legacy])).toEqual([["ParamsCancelled", true], ["GlobalMigrated", true], ["ParamsCancelled", undefined]]);
+    if (evs[0].name !== "ParamsCancelled" || evs[1].name !== "GlobalMigrated" || evs[2].name !== "ParamsCancelled") throw new Error();
+    expect(evs[0].data.ts).toBe(9n);
+    expect(evs[0].data.authority.toBase58()).toBe("11111111111111111111111111111111");
+    expect(evs[1].data.rentPaid).toBe(5n);
+    expect(evs[1].data.pauseExpiresAt).toBe(0n);
+    expect(evs[2].data.authority.equals(user)).toBe(true);
+  });
+});

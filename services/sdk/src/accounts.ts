@@ -46,6 +46,31 @@ export interface CoinAccount {
   fees: CoinFees;
   /** D19 (v0.5): launch slot + snipe-tax schedule snapshotted at create_coin (zeros = none). */
   snipe: SnipeConfig;
+  /**
+   * v0.6 (M-1): reward terms snapshotted at create_coin — use `coinRewardParams(coin, global)`,
+   * not Global.params, for this coin's trigger / claim size / cap / windows. Zeros = a coin
+   * created before v0.6 (it follows Global.params).
+   */
+  rewards: RewardTerms;
+}
+
+/** v0.6 (M-1) per-coin reward snapshot (`Coin.rewards`). */
+export interface RewardTerms {
+  triggerMultipleBps: number;
+  claimBps: number;
+  maxClaimPoolBps: number;
+  minSellUsdCents: bigint;
+  minHoldSecs: bigint;
+  rebuyWindowSecs: bigint;
+  claimWindowSecs: bigint;
+  maxOpenTickets: number;
+}
+
+/** The params that govern a coin's rewards: Global.params with the coin's snapshot applied (M-1). */
+export function coinRewardParams(coin: Pick<CoinAccount, "rewards">, global: Params): Params {
+  const r = coin.rewards;
+  if (!r || r.triggerMultipleBps === 0) return global;
+  return { ...global, ...r };
 }
 
 export interface GlobalAccount {
@@ -53,17 +78,34 @@ export interface GlobalAccount {
   admin: PublicKey;
   platformTreasury: PublicKey;
   keepers: PublicKey[];
+  /** PAUSE_* bits; in force only while `now < pauseExpiresAt` (v0.6 M-3) — use `isPaused`. */
   paused: number;
   params: Params;
+  /** v0.6 (M-2): may set_pause / cancel_params / cancel_admin (default = admin). */
+  guardian: PublicKey;
+  /** v0.6 (M-3): unix secs when `paused` lapses (0 = not paused). */
+  pauseExpiresAt: bigint;
+  /** v0.6 (M-2): earliest accept_admin of the proposal below (0 = none). */
+  pendingAdminEta: bigint;
   /** D15: queued params change (valid when pendingEta ≠ 0). */
   pendingParams: Params;
   pendingEta: bigint;
+  /** v0.6 (M-2): proposed authority set (valid when pendingAdminEta ≠ 0). */
+  pendingAdmin: PublicKey;
+  pendingTreasury: PublicKey;
+  pendingGuardian: PublicKey;
   /**
-   * v0.5: the account still has a pre-v0.5 layout (672 bytes) — the program was upgraded (or
-   * not yet) without `migrate_global`. Appended params decode as 0 (snipe tax off, which is what
-   * a pre-v0.5 program does).
+   * The account still has a pre-v0.6 layout (672 bytes v0.3/v0.4, 680 bytes v0.5) — the
+   * program was upgraded (or not yet) without `migrate_global`. Fields added since decode as an
+   * old program behaves: appended params 0 (snipe tax off), guardian = admin, an active pause
+   * never lapses (pauseExpiresAt = i64 max), no proposal.
    */
   legacyLayout?: boolean;
+}
+
+/** v0.6 (M-3): `flag` is paused at unix time `now` (pauses lapse at `pauseExpiresAt`). */
+export function isPaused(g: Pick<GlobalAccount, "paused" | "pauseExpiresAt">, flag: number, now: bigint | number): boolean {
+  return (g.paused & flag) !== 0 && BigInt(now) < g.pauseExpiresAt;
 }
 
 export interface PositionAccount {
@@ -129,30 +171,42 @@ export function decodeCoin(data: Uint8Array): CoinAccount {
 // ── Global layout versions (mirrors contracts `instructions/admin/migrate_global.rs`) ──
 /** Bytes before `Global.params` (discriminator, bump, admin, treasury, keepers, paused). */
 const GLOBAL_PARAMS_OFFSET = 8 + 1 + 32 + 32 + 32 * MAX_KEEPERS + 1;
+/** Region between the two `Params` copies: v0.6 guardian 32 | pause_expires_at 8 | pending_admin_eta 8 | reserved 80. */
 const GLOBAL_RESERVED_LEN = 128;
-/** Serialized `Params` length, current (v0.5) and older layouts `migrate_global` upgrades. */
+/** v0.6 (M-2): pending_admin | pending_treasury | pending_guardian, appended after pending_eta. */
+const GOVERNANCE_TAIL_LEN = 96;
+/** Serialized `Params` length (current; unchanged since v0.5). */
 export const PARAMS_LEN = 187;
-export const LEGACY_PARAMS_LENS = [183] as const;
-const globalLen = (paramsLen: number) => GLOBAL_PARAMS_OFFSET + 2 * paramsLen + GLOBAL_RESERVED_LEN + 8;
-/** Current Global account size (v0.5: 680 bytes). */
-export const GLOBAL_ACCOUNT_LEN = globalLen(PARAMS_LEN);
+/** `Params` lengths of the pre-v0.6 layouts `migrate_global` upgrades: 672 (v0.3/v0.4), 680 (v0.5). */
+export const LEGACY_PARAMS_LENS = [183, 187] as const;
+const legacyGlobalLen = (paramsLen: number) => GLOBAL_PARAMS_OFFSET + 2 * paramsLen + GLOBAL_RESERVED_LEN + 8;
+/** Current Global account size (v0.6: 776 bytes). */
+export const GLOBAL_ACCOUNT_LEN = legacyGlobalLen(PARAMS_LEN) + GOVERNANCE_TAIL_LEN;
+const I64_MAX = (1n << 63n) - 1n;
 
 /** True if `data` is an older Global layout that `migrate_global` must upgrade. */
 export function globalNeedsMigration(data: Uint8Array): boolean {
-  return data.length !== GLOBAL_ACCOUNT_LEN && LEGACY_PARAMS_LENS.some((p) => globalLen(p) === data.length);
+  return data.length !== GLOBAL_ACCOUNT_LEN && LEGACY_PARAMS_LENS.some((p) => legacyGlobalLen(p) === data.length);
 }
 
 /**
- * The bytes of a legacy Global in the current layout, with the appended `Params` fields zeroed in
- * both copies (read-side only; on chain `migrate_global` sets them from its args).
+ * The bytes of a legacy Global in the current layout (read-side only): appended `Params` fields
+ * zeroed in both copies, guardian = admin, an active pause never lapsing (pre-v0.6 programs have
+ * no expiry), no authority proposal. On chain `migrate_global` sets the snipe params from its
+ * args and starts a 7-day expiry for an active pause.
  */
 export function upgradeLegacyGlobal(data: Uint8Array): Uint8Array {
-  const p = LEGACY_PARAMS_LENS.find((x) => globalLen(x) === data.length);
+  const p = LEGACY_PARAMS_LENS.find((x) => legacyGlobalLen(x) === data.length);
   if (p === undefined) throw new Error(`unknown Global layout (${data.length} bytes)`);
   const pad = new Uint8Array(PARAMS_LEN - p);
   const o = GLOBAL_PARAMS_OFFSET;
   const pend = o + p + GLOBAL_RESERVED_LEN;
-  const parts = [data.subarray(0, o + p), pad, data.subarray(o + p, pend + p), pad, data.subarray(pend + p)];
+  const region = new Uint8Array(data.subarray(o + p, pend));
+  region.set(data.subarray(9, 41), 0); // guardian = admin
+  const paused = data[o - 1];
+  new DataView(region.buffer).setBigInt64(32, paused ? I64_MAX : 0n, true); // pause_expires_at
+  new DataView(region.buffer).setBigInt64(40, 0n, true); // pending_admin_eta
+  const parts = [data.subarray(0, o + p), pad, region, data.subarray(pend, pend + p), pad, data.subarray(pend + p), new Uint8Array(GOVERNANCE_TAIL_LEN)];
   const out = new Uint8Array(GLOBAL_ACCOUNT_LEN);
   let at = 0;
   for (const part of parts) {
@@ -162,7 +216,7 @@ export function upgradeLegacyGlobal(data: Uint8Array): Uint8Array {
   return out;
 }
 
-/** Decode Global; tolerates the pre-v0.5 672-byte layout (`legacyLayout: true`). */
+/** Decode Global; tolerates the pre-v0.6 672/680-byte layouts (`legacyLayout: true`). */
 export function decodeGlobal(data: Uint8Array): GlobalAccount {
   const legacy = globalNeedsMigration(data);
   const bytes = legacy ? upgradeLegacyGlobal(data) : data;

@@ -7,6 +7,7 @@ import {
   DEFAULT_PARAMS,
   directBuyIx,
   FumpadClient,
+  globalPda,
   initializeGlobalIx,
   type Params,
   setKeepersIx,
@@ -22,6 +23,10 @@ import {
 } from "@fumpad/sdk";
 
 /** Fast local params: 2s maturity; 60 s oracle window (6 × 10 s coverage buckets), ≥3 keeper samples, 2 s spacing. */
+/**
+ * Short test windows for the local stack. Outside `Params::is_valid` bounds since v0.6 (hold ≥ 60 s,
+ * oracle window ≥ 10 min, …): seed them into the genesis with `startValidator({ global })`.
+ */
 export const LOCAL_PARAMS: Params = {
   ...DEFAULT_PARAMS,
   minHoldSecs: 2n,
@@ -36,9 +41,15 @@ export async function airdrop(conn: Connection, to: PublicKey, sol: number) {
   await confirmSignature(conn, sig, bh.lastValidBlockHeight, "confirmed");
 }
 
+/**
+ * initialize_global + set_keepers — unless the Global was pre-seeded into the genesis
+ * (`startValidator({ global })`, needed for LOCAL_PARAMS since v0.6 bounds refuse them).
+ */
 export async function initGlobal(c: FumpadClient, upgradeAuthority: Keypair, admin: Keypair, treasury: PublicKey, keeper: PublicKey, params = LOCAL_PARAMS) {
-  await c.send(upgradeAuthority, { instructions: [initializeGlobalIx({ payer: upgradeAuthority.publicKey, admin: admin.publicKey, platformTreasury: treasury, params })] });
-  await c.send(admin, { instructions: [setKeepersIx(admin.publicKey, [keeper])] });
+  if (!(await c.connection.getAccountInfo(globalPda()))) {
+    await c.send(upgradeAuthority, { instructions: [initializeGlobalIx({ payer: upgradeAuthority.publicKey, admin: admin.publicKey, platformTreasury: treasury, params })] });
+    await c.send(admin, { instructions: [setKeepersIx(admin.publicKey, [keeper])] });
+  }
   // The PumpSwap buyback-fee recipient's WSOL ATA exists on mainnet/devnet; create it here.
   const ix = await c.ensureBuybackFeeRecipientIx(admin.publicKey);
   if (ix) await c.send(admin, { instructions: [ix] });

@@ -150,6 +150,11 @@ fn pool_authority() -> Pubkey {
     pda(&[fumpad::POOL_AUTHORITY_SEED], &fumpad::ID)
 }
 
+/// L-1 (v0.6): the PumpSwap `user` of `execute_buyback`.
+fn pumpswap_signer() -> Pubkey {
+    pda(&[fumpad::PUMPSWAP_SIGNER_SEED], &fumpad::ID)
+}
+
 fn event_authority() -> Pubkey {
     pda(&[b"__event_authority"], &fumpad::ID)
 }
@@ -242,7 +247,8 @@ fn put_coin(env: &mut Env, mint: Pubkey, pool: Pubkey, status: CoinStatus, buyba
         reference: ReferencePrice::new(pool_spot_q64(env, &pool), START_TS - 30),
         fees: env.fetch::<fumpad::state::Global>(&env.global_pda()).params.coin_fees(),
         snipe: Default::default(),
-        reserved: [0; 60],
+        rewards: env.fetch::<fumpad::state::Global>(&env.global_pda()).params.reward_terms(),
+        reserved: [0; 19],
     };
     let mut data = Vec::new();
     coin.try_serialize(&mut data).unwrap();
@@ -309,8 +315,8 @@ fn setup_with(params: Params) -> Fx {
     let reward_vault = pda(&[fumpad::REWARD_VAULT_SEED, mint.as_ref()], &fumpad::ID);
     put_token_account(&mut env, reward_vault, mint, pool_authority(), 0, T22);
 
-    // One-time buyback setup: PumpSwap volume accumulator for pool_authority.
-    let pa = pool_authority();
+    // One-time buyback setup: PumpSwap volume accumulator for the buyback signer (L-1).
+    let pa = pumpswap_signer();
     let init_uva = raw_ix(
         PUMPSWAP_PROGRAM_ID,
         vec![
@@ -529,8 +535,8 @@ impl Fx {
             mint: self.mint,
             observations: self.observations,
             reward_vault: self.reward_vault,
-            pool_authority: pool_authority(),
-            buyback_wsol: ata(&pool_authority(), &WSOL_MINT, &TOKEN),
+            pumpswap_signer: pumpswap_signer(),
+            buyback_wsol: ata(&pumpswap_signer(), &WSOL_MINT, &TOKEN),
             wsol_mint: WSOL_MINT,
             pumpswap_program: PUMPSWAP_PROGRAM_ID,
             token_program: TOKEN,
@@ -543,7 +549,7 @@ impl Fx {
     }
 
     fn buyback_venue(&self) -> Vec<Meta> {
-        self.venue(pool_authority(), self.reward_vault, ata(&pool_authority(), &WSOL_MINT, &TOKEN))
+        self.venue(pumpswap_signer(), self.reward_vault, ata(&pumpswap_signer(), &WSOL_MINT, &TOKEN))
     }
 
     fn buyback(&mut self, max_lamports: u64) -> TransactionResult {
@@ -591,7 +597,7 @@ impl Fx {
     fn set_pause(&mut self, flags: u8) {
         let admin = self.env.admin.insecure_clone();
         let ix = ix(
-            fumpad::accounts::AdminOnly { admin: kp_pk(&admin), global: self.env.global_pda() },
+            fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&admin), global: self.env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
             fumpad::instruction::SetPause { paused: flags },
         );
         expect_ok(self.env.send(&[ix], &[&admin]));

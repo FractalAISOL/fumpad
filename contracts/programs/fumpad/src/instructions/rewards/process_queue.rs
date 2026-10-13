@@ -87,8 +87,8 @@ pub(crate) enum Dest {
 
 pub fn handle_process_queue<'info>(ctx: Context<'info, ProcessQueue<'info>>, max_entries: u8) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    let p = ctx.accounts.global.params;
-    require!(!ctx.accounts.global.is_paused(PAUSE_CLAIMS), FumpadError::Paused);
+    let p = ctx.accounts.coin.reward_params(&ctx.accounts.global.params); // M-1
+    require!(!ctx.accounts.global.is_paused(PAUSE_CLAIMS, now), FumpadError::Paused);
     let mint = ctx.accounts.mint.key();
     let rem = ctx.remaining_accounts;
     require!(rem.len() % QUEUE_ENTRY_ACCOUNTS == 0, FumpadError::InvalidAccount);

@@ -4,7 +4,7 @@ use crate::{
     constants::*,
     error::FumpadError,
     events::TicketClosed,
-    state::{ClaimQueue, Global, Position, Ticket, TicketStatus},
+    state::{ClaimQueue, Coin, Global, Position, Ticket, TicketStatus},
 };
 
 use super::{logic, queue};
@@ -40,11 +40,15 @@ pub struct CloseTicket<'info> {
     pub position: Box<Account<'info, Position>>,
     #[account(mut, seeds = [CLAIM_QUEUE_SEED, ticket.mint.as_ref()], bump)]
     pub claim_queue: Option<AccountLoader<'info, ClaimQueue>>,
+    /// v0.6 (M-1): the ticket's coin — its snapshotted claim window decides expiry.
+    /// Appended after `claim_queue` (before the event-CPI pair).
+    #[account(seeds = [COIN_SEED, ticket.mint.as_ref()], bump = coin.bump)]
+    pub coin: Box<Account<'info, Coin>>,
 }
 
 pub fn handle_close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    let p = &ctx.accounts.global.params;
+    let p = &ctx.accounts.coin.reward_params(&ctx.accounts.global.params); // M-1
     let t = &ctx.accounts.ticket;
     let ticket_key = t.key();
     let is_owner = ctx.accounts.caller.key() == t.owner;

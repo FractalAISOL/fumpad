@@ -9,12 +9,15 @@
 //! received tokens must be at least the median-fair amount minus the band, fee and impact
 //! allowances, so even a manipulated pool can't make it overpay beyond that.
 //!
-//! The PumpSwap `user` is the POOL_AUTHORITY PDA (no data, signs via seeds), paying from
+//! The PumpSwap `user` is the PUMPSWAP_SIGNER PDA (L-1, v0.6: no data, signs via seeds, owns
+//! nothing but its WSOL ATA — the reward vault it buys into belongs to `pool_authority`, which
+//! never signs here), paying from
 //! its WSOL ATA. One-time client setup: PumpSwap `init_user_volume_accumulator(payer,
-//! user = pool_authority)`, because pool_authority holds no SOL to pay for it.
+//! user = pumpswap_signer)`, because the signer holds no SOL to pay for it. The venue slice
+//! must be exactly the 17 `buy_exact_quote_in_v2` accounts.
 //!
 //! remaining_accounts = PumpSwap `buy_exact_quote_in_v2` accounts with
-//!   user = pool_authority, user_base_token_account = reward_vault,
+//!   user = pumpswap_signer, user_base_token_account = reward_vault,
 //!   user_quote_token_account = buyback_wsol.
 
 use anchor_lang::prelude::*;
@@ -64,14 +67,15 @@ pub struct ExecuteBuyback<'info> {
         token::token_program = token_2022_program,
     )]
     pub reward_vault: Box<InterfaceAccount<'info, TokenAccount>>,
-    /// CHECK: PDA with no data; PumpSwap `user` for buybacks (signs via seeds).
-    #[account(mut, seeds = [POOL_AUTHORITY_SEED], bump)]
-    pub pool_authority: UncheckedAccount<'info>,
+    /// CHECK: L-1 PDA ["pumpswap_signer"], no data; PumpSwap `user` for buybacks (signs via
+    /// seeds). Holds nothing but `buyback_wsol`.
+    #[account(mut, seeds = [PUMPSWAP_SIGNER_SEED], bump)]
+    pub pumpswap_signer: UncheckedAccount<'info>,
     #[account(
         init_if_needed,
         payer = cranker,
         associated_token::mint = wsol_mint,
-        associated_token::authority = pool_authority,
+        associated_token::authority = pumpswap_signer,
         associated_token::token_program = token_program,
     )]
     pub buyback_wsol: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -93,11 +97,11 @@ fn mul_div(a: u128, b: u128, d: u128) -> Result<u128> {
 pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>, max_lamports: u64) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let venue = ctx.remaining_accounts;
-    let authority_bump = ctx.bumps.pool_authority;
+    let authority_bump = ctx.bumps.pumpswap_signer;
     let a = &mut *ctx.accounts;
     let p = a.global.params;
 
-    require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_TRADE, now), FumpadError::Paused);
     require!(a.coin.status == CoinStatus::Graduated, FumpadError::WrongCoinStatus);
 
     let wsol_info = a.buyback_wsol.to_account_info();
@@ -107,7 +111,7 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
         &VenueExpect {
             pool: a.coin.amm_pool,
             base_mint: a.mint.key(),
-            user: a.pool_authority.key(),
+            user: a.pumpswap_signer.key(),
             user_base: vault_info.key(),
             user_quote: wsol_info.key(),
         },
@@ -141,10 +145,10 @@ pub fn handle_execute_buyback<'info>(ctx: Context<'info, ExecuteBuyback<'info>>,
 
     // Move `spend` lamports Coin → buyback WSOL account and wrap. Coin invariant: the
     // lamports leave together with the matching `buyback_lamports` decrement.
-    let seeds: &[&[u8]] = &[POOL_AUTHORITY_SEED, &[authority_bump]];
+    let seeds: &[&[u8]] = &[PUMPSWAP_SIGNER_SEED, &[authority_bump]];
     wrap_from_program_account(
         &a.coin.to_account_info(),
-        &a.pool_authority.to_account_info(),
+        &a.pumpswap_signer.to_account_info(),
         seeds,
         &wsol_info,
         &a.system_program.to_account_info(),

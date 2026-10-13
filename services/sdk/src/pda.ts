@@ -43,6 +43,8 @@ const f = (seeds: Uint8Array[]) => find(seeds, FUMPAD_PROGRAM_ID);
 export const globalPda = () => f([SEEDS.global]);
 export const mintAuthorityPda = () => f([SEEDS.mintAuthority]);
 export const poolAuthorityPda = () => f([SEEDS.poolAuthority]);
+/** v0.6 L-1: PumpSwap `user` of `execute_buyback` (buyback WSOL = its ATA). */
+export const pumpswapSignerPda = () => f([SEEDS.pumpswapSigner]);
 export const eventAuthorityPda = () => f([SEEDS.eventAuthority]);
 export const coinPda = (mint: PublicKey) => f([SEEDS.coin, mint.toBytes()]);
 export const rewardVaultPda = (mint: PublicKey) => f([SEEDS.rewardVault, mint.toBytes()]);

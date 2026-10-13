@@ -63,13 +63,13 @@ fn regression_admin_cannot_retroactively_take_raised_sol() {
     );
     expect_err(f.env.send_as(&rando, &[i], &[&rando]), FumpadError::Unauthorized);
     // The maximum allowed fee, queued: not executable before 48h; cancellable.
-    let max = Params { graduation_fee_lamports: SOL, fee_bps: 200, ..Params::default() };
+    let max = Params { fee_bps: 200, ..crate::curve_tests::params_for_graduation_fee(SOL) };
     ok(f.env.queue_params(max));
     f.env.warp(fumpad::PARAMS_TIMELOCK_SECS - 1);
     expect_err(f.env.execute_params(), FumpadError::TimelockNotElapsed);
     let cancel = ix(
-        fumpad::accounts::CancelParams {
-            admin: kp_pk(&f.env.admin),
+        fumpad::accounts::GuardianOrAdmin {
+            authority: kp_pk(&f.env.admin),
             global: f.env.global_pda(),
             event_authority: event_authority(),
             program: fumpad::ID,
@@ -151,7 +151,7 @@ fn regression_graduate_leaves_buyback_wsol_alone() {
     // Coin A graduates; its buyback crank runs once → ATA(pool_authority, WSOL) now persists
     // (rent paid by the buyback cranker).
     let (mut a, _) = graduated();
-    let shared = ata(&pool_authority(), &WSOL_MINT, &TOKEN);
+    let shared = ata(&pumpswap_signer(), &WSOL_MINT, &TOKEN); // L-1: the buyback signer's ATA
     let t = a.env.new_user(100);
     ok(a.swap_buy(&t, 20 * SOL));
     a.keeper_samples(130, 15);

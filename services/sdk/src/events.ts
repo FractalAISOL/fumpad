@@ -50,7 +50,8 @@ export interface HoldingsRegisteredEvent { mint: PublicKey; wallet: PublicKey; a
 // v0.3
 export interface ParamsQueuedEvent { params: Record<string, unknown>; eta: bigint; ts: bigint }
 export interface ParamsUpdatedEvent { params: Record<string, unknown>; ts: bigint }
-export interface ParamsCancelledEvent { ts: bigint }
+/** v0.6: `authority` = the admin or the guardian (M-2); zero key on pre-v0.6 payloads. */
+export interface ParamsCancelledEvent { ts: bigint; authority: PublicKey }
 export interface CurveReopenedEvent { mint: PublicKey; completedAt: bigint; ts: bigint }
 export interface ClaimEscrowedEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; escrow: PublicKey; amount: bigint; ts: bigint; triggeredBy: PublicKey }
 // v0.4
@@ -58,7 +59,20 @@ export interface AutoClaimSetEvent { mint: PublicKey; wallet: PublicKey; enabled
 export interface EscrowWithdrawnEvent { mint: PublicKey; ticket: PublicKey; owner: PublicKey; destination: PublicKey; amount: bigint; ts: bigint }
 // v0.5
 /** `migrate_global` grew a legacy Global (old → new length; the appended params it set). */
-export interface GlobalMigratedEvent { oldLen: number; newLen: number; snipeWindowSlots: number; snipeStartBps: number; rentPaid: bigint; ts: bigint }
+export interface GlobalMigratedEvent { oldLen: number; newLen: number; snipeWindowSlots: number; snipeStartBps: number; rentPaid: bigint; ts: bigint;
+  /** v0.6: guardian after migration (= admin for a pre-v0.6 Global) and when migrated pause flags lapse. */
+  guardian: PublicKey; pauseExpiresAt: bigint }
+// v0.6 (final pre-mainnet review)
+export interface GlobalInitializedEvent { admin: PublicKey; platformTreasury: PublicKey; guardian: PublicKey; params: Record<string, unknown>; ts: bigint }
+/** M-3: pause flags lapse at `expiresAt` (0 = unpaused). */
+export interface PauseSetEvent { paused: number; expiresAt: bigint; authority: PublicKey; ts: bigint }
+export interface KeepersSetEvent { keepers: PublicKey[]; ts: bigint }
+/** M-2: `accept_admin` (by the new admin) possible from `eta`. */
+export interface AdminProposedEvent { admin: PublicKey; platformTreasury: PublicKey; guardian: PublicKey; eta: bigint; ts: bigint }
+export interface AdminAcceptedEvent { previousAdmin: PublicKey; admin: PublicKey; platformTreasury: PublicKey; guardian: PublicKey; ts: bigint }
+export interface AdminProposalCancelledEvent { authority: PublicKey; ts: bigint }
+/** L-4: a wallet closed its Position (rent back). */
+export interface PositionClosedEvent { mint: PublicKey; wallet: PublicKey; ts: bigint }
 // locker
 export interface LockedEvent { pool: PublicKey; mint: PublicKey; lpLocked: bigint; lpSupply: bigint; sqrtK: bigint }
 export interface SkimmedEvent { pool: PublicKey; mint: PublicKey; lpWithdrawn: bigint; baseOut: bigint; quoteOut: bigint; lpHeld: bigint }
@@ -86,6 +100,13 @@ export interface EventMap {
   EscrowWithdrawn: EscrowWithdrawnEvent;
   AutoClaimSet: AutoClaimSetEvent;
   GlobalMigrated: GlobalMigratedEvent;
+  GlobalInitialized: GlobalInitializedEvent;
+  PauseSet: PauseSetEvent;
+  KeepersSet: KeepersSetEvent;
+  AdminProposed: AdminProposedEvent;
+  AdminAccepted: AdminAcceptedEvent;
+  AdminProposalCancelled: AdminProposalCancelledEvent;
+  PositionClosed: PositionClosedEvent;
   Locked: LockedEvent;
   Skimmed: SkimmedEvent;
 }
@@ -201,6 +222,8 @@ export const LEGACY_EVENT_PADS: Partial<Record<EventName, { at: number | "end"; 
   Graduated: [{ at: "end", bytes: 24 }], // v0.5: caller_refund, setup_prefunded, platform_fee
   ParamsQueued: [{ at: 183, bytes: 4 }], // v0.5: Params + snipe_window_slots, snipe_start_bps
   ParamsUpdated: [{ at: 183, bytes: 4 }],
+  ParamsCancelled: [{ at: "end", bytes: 32 }], // v0.6: authority
+  GlobalMigrated: [{ at: "end", bytes: 40 }], // v0.6: guardian, pause_expires_at
 };
 
 let discNames: { name: EventName; disc: Uint8Array }[] | undefined;

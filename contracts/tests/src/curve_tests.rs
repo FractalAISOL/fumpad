@@ -13,7 +13,7 @@ use fumpad::{
         fees::{compute_fee, snipe_curve_offer, snipe_tax},
         price::price_q64,
     },
-    state::{Coin, CoinStatus, Params, Position, SnipeConfig, PAUSE_CLAIMS, PAUSE_LAUNCH, PAUSE_TRADE},
+    state::{Coin, CoinStatus, Params, Position, SnipeConfig, PAUSE_CLAIMS, PAUSE_GRADUATE, PAUSE_LAUNCH, PAUSE_TRADE},
 };
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata, TransactionResult};
 use solana_keypair::Keypair;
@@ -293,7 +293,7 @@ fn graduate(env: &mut Env, mint: &Pubkey) -> TransactionResult {
 
 fn set_pause(env: &mut Env, flags: u8) {
     let i = ix(
-        fumpad::accounts::AdminOnly { admin: kp_pk(&env.admin), global: env.global_pda() },
+        fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&env.admin), global: env.global_pda(), event_authority: crate::flow::event_authority(), program: fumpad::ID },
         fumpad::instruction::SetPause { paused: flags },
     );
     let admin = env.admin.insecure_clone();
@@ -308,6 +308,35 @@ fn env_with(params: Params) -> Env {
 }
 fn env() -> Env {
     env_with(Params::default())
+}
+
+/// Default params with the curve re-derived (constants.rs formula, SPEC §3) for initial
+/// virtual SOL `v0`, raise `raise` and graduation fee `fee`, so the LP opens at the curve's
+/// final price — `Params::is_valid` enforces that continuity since v0.6 (L-2).
+pub fn curve_params(v0: u64, raise: u64, fee: u64) -> Params {
+    let d = Params::default();
+    let n = d.total_supply - d.reward_pool_supply;
+    let (v0f, rf, ff) = (v0 as f64, raise as f64, fee as f64);
+    let v1 = v0f + rf;
+    let t1 = n as f64 / (rf / v0f + (rf - ff) / v1);
+    let curve = (t1 * rf / v0f).round() as u64;
+    Params {
+        initial_virtual_sol: v0,
+        initial_virtual_token: (t1 * v1 / v0f).round() as u64,
+        curve_supply: curve,
+        lp_supply: n - curve,
+        graduation_lamports: raise,
+        graduation_fee_lamports: fee,
+        ..d
+    }
+}
+
+/// `curve_params` for the default 30 SOL virtual / 85 SOL raise and graduation fee `fee`.
+pub fn params_for_graduation_fee(fee: u64) -> Params {
+    if fee == fumpad::DEFAULT_GRADUATION_FEE_LAMPORTS {
+        return Params::default(); // the exact constants (rounded the same way)
+    }
+    curve_params(fumpad::DEFAULT_INITIAL_VIRTUAL_SOL, fumpad::DEFAULT_GRADUATION_LAMPORTS, fee)
 }
 
 /// Fill the curve with one big buy from `whale`; returns the tx metadata.
@@ -661,11 +690,9 @@ fn trade_rejections() {
     // (Simulated by asking the math directly; on-chain the wallet cap hits first.)
     assert!(quote_sell(&reserves(&c), c.virtual_token_reserves).is_none());
 
-    // Pause.
+    // Pause: buys stop, curve sells never do (M-3, v0.6 — holders can always exit).
     set_pause(&mut env, PAUSE_TRADE);
     assert_fumpad_err(buy(&mut env, &u, &mint, SOL, 1), FumpadError::Paused);
-    assert_fumpad_err(sell(&mut env, &u, &mint, held / 2, 0), FumpadError::Paused);
-    set_pause(&mut env, PAUSE_LAUNCH | PAUSE_CLAIMS);
     ok(sell(&mut env, &u, &mint, held, net));
     assert_lamport_invariant(&env, &mint);
 }
@@ -876,13 +903,11 @@ fn graduate_flow(params: Params) {
         assert_eq!(ev.caller_refund, gross_rent.min(p.graduation_fee_lamports));
     }
 
-    // Price continuity: PumpSwap opens at the curve's final price — exactly so for the
-    // default fee the curve constants are derived with (D20, SPEC §3).
+    // Price continuity: PumpSwap opens at the curve's final price — for every fee, since
+    // `is_valid` requires curve constants derived with it (D20, SPEC §3; L-2 v0.6).
     let pool_price = price_q64(sol_deposited, p.lp_supply).unwrap();
     let diff = pool_price.abs_diff(curve_price);
-    if p.graduation_fee_lamports == Params::default().graduation_fee_lamports {
-        assert!(diff * 1_000_000 <= curve_price, "curve {curve_price} vs pool {pool_price}");
-    }
+    assert!(diff * 1_000_000 <= curve_price, "curve {curve_price} vs pool {pool_price}");
 
     let g: Coin = env.fetch(&coin_pda(&mint));
     assert_eq!(g.status, CoinStatus::Graduated);
@@ -929,20 +954,20 @@ fn graduate_creates_pumpswap_pool_and_locks_lp() {
 /// the keeper tops up the rest and the platform gets nothing.
 #[test]
 fn graduate_with_partial_fee_funds_setup_in_order() {
-    graduate_flow(Params { graduation_fee_lamports: SOL / 4, ..Params::default() });
+    graduate_flow(params_for_graduation_fee(SOL / 4));
 }
 
 /// Fee 0 (pre-D20 behaviour): the caller pays its rent, the keeper the whole setup.
 #[test]
 fn graduate_with_zero_fee_leaves_setup_to_callers() {
-    graduate_flow(Params { graduation_fee_lamports: 0, ..Params::default() });
+    graduate_flow(params_for_graduation_fee(0));
 }
 
 /// A fee too small to make a fresh PDA rent-exempt is not split into dust: it refunds the
 /// caller as far as it goes.
 #[test]
 fn graduate_with_tiny_fee_refunds_caller_only() {
-    graduate_flow(Params { graduation_fee_lamports: 1_000, ..Params::default() });
+    graduate_flow(params_for_graduation_fee(1_000));
 }
 
 #[test]
@@ -1009,18 +1034,45 @@ fn graduate_rejections() {
 
 /// Pause flags don't block graduation (liquidity must be able to leave the curve).
 #[test]
-fn graduate_is_permissionless_and_not_paused() {
+fn graduate_is_permissionless_and_has_its_own_pause() {
     let mut env = env();
     let creator = env.new_user(10);
     let mint = create_coin(&mut env, &creator);
     let whale = env.new_user(1_000);
     complete_curve(&mut env, &mint, &whale);
-    set_pause(&mut env, PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS);
-    // A random wallet pays and signs.
     let rando = env.new_user(1);
-    let i = ix(graduate_accounts(&env, &kp_pk(&rando), &mint), fumpad::instruction::Graduate {});
+    let grad = |env: &Env| ix(graduate_accounts(env, &kp_pk(&rando), &mint), fumpad::instruction::Graduate {});
+    // L-5 (v0.6): PAUSE_GRADUATE stops it…
+    set_pause(&mut env, PAUSE_GRADUATE);
+    let i = grad(&env);
+    assert_fumpad_err(env.send_as(&rando, &[cu_limit(GRADUATE_CU), i], &[&rando]), FumpadError::Paused);
+    // …the other flags don't, and a random wallet pays and signs.
+    set_pause(&mut env, PAUSE_LAUNCH | PAUSE_TRADE | PAUSE_CLAIMS);
+    let i = grad(&env);
     ok(env.send_as(&rando, &[cu_limit(GRADUATE_CU), i], &[&rando]));
     assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).status, CoinStatus::Graduated);
+}
+
+/// L-5 + M-3: a graduation pause lapses after 7 days on its own (`MAX_PAUSE_SECS`), and a
+/// coin held in `Complete` by it reopens its curve for sells (D13) — the pause can't trap SOL.
+#[test]
+fn graduate_pause_lapses_and_escape_hatch_still_opens() {
+    let mut env = env();
+    let creator = env.new_user(10);
+    let mint = create_coin(&mut env, &creator);
+    let whale = env.new_user(1_000);
+    complete_curve(&mut env, &mint, &whale);
+    set_pause(&mut env, PAUSE_GRADUATE);
+    assert_fumpad_err(graduate(&mut env, &mint), FumpadError::Paused);
+    env.warp(fumpad::ESCAPE_HATCH_SECS);
+    let held = token_amount(&env, &ata(&kp_pk(&whale), &mint, &TOKEN_2022));
+    ok(sell(&mut env, &whale, &mint, held / 10, 0)); // hatch: Complete → Curve
+    assert_eq!(env.fetch::<Coin>(&coin_pda(&mint)).status, CoinStatus::Curve);
+    // Re-complete; the pause (7 days, = MAX_PAUSE_SECS) has lapsed by now: graduation runs.
+    set_pause(&mut env, PAUSE_GRADUATE);
+    env.warp(fumpad::MAX_PAUSE_SECS);
+    complete_curve(&mut env, &mint, &whale);
+    ok(graduate(&mut env, &mint));
 }
 
 /// Griefing check: anyone can pre-create the pool's ATAs (their addresses are
@@ -1066,7 +1118,8 @@ fn graduate_survives_precreated_pool_token_accounts() {
 /// tokens and must be rejected rather than silently taking the lamport.
 #[test]
 fn dust_buy_rounding_to_zero_is_rejected() {
-    let params = Params { initial_virtual_sol: 10 * fumpad::DEFAULT_INITIAL_VIRTUAL_TOKEN, ..Params::default() };
+    let v0 = 10 * fumpad::DEFAULT_INITIAL_VIRTUAL_TOKEN;
+    let params = curve_params(v0, v0 / 30 * 85, fumpad::DEFAULT_GRADUATION_FEE_LAMPORTS);
     let mut env = env_with(params);
     let creator = env.new_user(10);
     let mint = create_coin(&mut env, &creator);
@@ -1091,7 +1144,7 @@ fn graduate_uses_fee_snapshotted_at_create() {
     let too_big = Params { graduation_fee_lamports: raised, graduation_lamports: 200 * SOL, ..Params::default() };
     assert_fumpad_err(env.queue_params(too_big), FumpadError::InvalidParams);
     // At the cap: accepted after 48h, but not for this (already created) coin.
-    env.set_params_timelocked(Params { graduation_fee_lamports: SOL, ..Params::default() });
+    env.set_params_timelocked(params_for_graduation_fee(SOL));
     let before = env.fetch::<Coin>(&coin_pda(&mint));
     let meta = ok(graduate(&mut env, &mint));
     let c = env.fetch::<Coin>(&coin_pda(&mint));

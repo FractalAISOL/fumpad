@@ -13,6 +13,7 @@ import { FUMPAD_IDL, fumpadCoder } from "../coder.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   FUMPAD_PROGRAM_ID,
+  MAX_CLOSE_POSITION_TICKETS,
   MAX_KEEPERS,
   PUMPSWAP_GLOBAL_CONFIG,
   PYTH_SOL_USD_ACCOUNT,
@@ -33,6 +34,7 @@ import {
   positionPda,
   programDataPda,
   pumpEventAuthorityPda,
+  pumpswapSignerPda,
   ticketPda,
   wsolAta,
 } from "../pda.js";
@@ -96,13 +98,17 @@ export function executeParamsIx(caller: PublicKey): TransactionInstruction {
   return ix("execute_params", { caller, global: globalPda() });
 }
 
-/** D15: drop the queued params change (admin). */
-export function cancelParamsIx(admin: PublicKey): TransactionInstruction {
-  return ix("cancel_params", { admin, global: globalPda() });
+/** D15: drop the queued params change. v0.6 (M-2): `authority` = the admin or the guardian. */
+export function cancelParamsIx(authority: PublicKey): TransactionInstruction {
+  return ix("cancel_params", { authority, global: globalPda() });
 }
 
-export function setPauseIx(admin: PublicKey, paused: number): TransactionInstruction {
-  return ix("set_pause", { admin, global: globalPda() }, { paused });
+/**
+ * v0.6 (M-2 / M-3): admin or guardian, immediate. Non-zero flags (PAUSE_*; others rejected) are in
+ * force for 7 days (`Global.pause_expires_at`) unless renewed; 0 unpauses. Curve sells are never paused.
+ */
+export function setPauseIx(authority: PublicKey, paused: number): TransactionInstruction {
+  return ix("set_pause", { authority, global: globalPda() }, { paused });
 }
 
 export function setKeepersIx(admin: PublicKey, keepers: PublicKey[]): TransactionInstruction {
@@ -112,15 +118,36 @@ export function setKeepersIx(admin: PublicKey, keepers: PublicKey[]): Transactio
   return ix("set_keepers", { admin, global: globalPda() }, { keepers: slots });
 }
 
-export function setAdminIx(admin: PublicKey, newAdmin: PublicKey, platformTreasury: PublicKey): TransactionInstruction {
-  return ix("set_admin", { admin, global: globalPda() }, { newAdmin, platformTreasury });
+/**
+ * v0.6 (M-2, replaces `set_admin`): the admin proposes a new admin / treasury / guardian (all
+ * non-zero; keep a field by passing its current value). `acceptAdminIx` by `newAdmin` applies it
+ * after 48h (`Global.pending_admin_eta`); `cancelAdminIx` (admin or guardian) drops it.
+ */
+export function proposeAdminIx(a: {
+  admin: PublicKey;
+  newAdmin: PublicKey;
+  platformTreasury: PublicKey;
+  guardian: PublicKey;
+}): TransactionInstruction {
+  return ix("propose_admin", { admin: a.admin, global: globalPda() }, { newAdmin: a.newAdmin, platformTreasury: a.platformTreasury, guardian: a.guardian });
+}
+
+/** v0.6 (M-2): signed by `Global.pending_admin` once `pending_admin_eta` has passed. */
+export function acceptAdminIx(newAdmin: PublicKey): TransactionInstruction {
+  return ix("accept_admin", { newAdmin, global: globalPda() });
+}
+
+/** v0.6 (M-2): admin or guardian drops the open authority proposal. */
+export function cancelAdminIx(authority: PublicKey): TransactionInstruction {
+  return ix("cancel_admin", { authority, global: globalPda() });
 }
 
 /**
- * v0.5: grow a Global written by an older program (672 bytes, v0.3/v0.4) to the current layout
- * in place, right after the program upgrade. `admin` = `Global.admin` (signs, pays the extra
- * rent). Only the newly appended params are set (in `params` and `pending_params`); no-op on a
- * current Global. Check with `globalNeedsMigration(data)` first.
+ * Grow a Global written by an older program (672 bytes v0.3/v0.4, 680 bytes v0.5) to the current
+ * (v0.6, 776-byte) layout in place, right after the program upgrade. `admin` = `Global.admin`
+ * (signs, pays the extra rent). Only new fields are set: from 672 the snipe params (from these
+ * args, in `params` and `pending_params`); always guardian = admin, active pause flags lapse in
+ * 7 days, no authority proposal. No-op on a current Global. Check `globalNeedsMigration(data)`.
  */
 export function migrateGlobalIx(a: { admin: PublicKey; snipeWindowSlots: number; snipeStartBps: number }): TransactionInstruction {
   return ix("migrate_global", { admin: a.admin, global: globalPda() }, { args: { snipeWindowSlots: a.snipeWindowSlots, snipeStartBps: a.snipeStartBps } });
@@ -220,8 +247,8 @@ export function sellIx(a: {
   );
 }
 
-/** `graduate` (permissionless). ~270k CU; send with `CU.graduate` (400k). */
-export function graduateIx(a: { payer: PublicKey; mint: PublicKey; extra?: AccountMeta[] }): TransactionInstruction {
+/** `graduate` (permissionless). ~300–320k CU; send with `CU.graduate` (400k). v0.6 (L-1): no extra accounts. */
+export function graduateIx(a: { payer: PublicKey; mint: PublicKey }): TransactionInstruction {
   const c = coinAddresses(a.mint);
   const pa = poolAuthorityPda();
   return ix(
@@ -250,8 +277,6 @@ export function graduateIx(a: { payer: PublicKey; mint: PublicKey; extra?: Accou
       observations: c.observations,
       claimQueue: c.claimQueue,
     },
-    {},
-    a.extra ?? [],
   );
 }
 
@@ -365,7 +390,22 @@ export function closeTicketIx(a: {
     owner: a.owner,
     position: positionPda(a.mint, a.owner),
     claimQueue: a.queued ? coinAddresses(a.mint).claimQueue : null,
+    // v0.6 (M-1): the coin's snapshotted claim window decides expiry.
+    coin: coinPda(a.mint),
   });
+}
+
+/**
+ * v0.6 (L-4): the wallet closes its Position on `mint` and gets the rent back. Requires no
+ * open/queued ticket and every ticket it ever created (seq 0..nextTicketSeq) already closed
+ * (`closeTicketIx` first); those ticket PDAs are passed as remaining accounts (≤ 64). Hold
+ * credit is forfeited.
+ */
+export function closePositionIx(a: { wallet: PublicKey; mint: PublicKey; nextTicketSeq: bigint }): TransactionInstruction {
+  if (a.nextTicketSeq > BigInt(MAX_CLOSE_POSITION_TICKETS)) throw new Error(`position has ${a.nextTicketSeq} tickets (max ${MAX_CLOSE_POSITION_TICKETS})`);
+  const tickets: AccountMeta[] = [];
+  for (let s = 0n; s < a.nextTicketSeq; s++) tickets.push(r(ticketPda(a.mint, a.wallet, s)));
+  return ix("close_position", { wallet: a.wallet, position: positionPda(a.mint, a.wallet) }, {}, tickets);
 }
 
 export function withdrawCreatorFeesIx(a: { creator: PublicKey; mint: PublicKey }): TransactionInstruction {
@@ -488,8 +528,9 @@ export function swapSellIx(a: {
 }
 
 /**
- * Post-graduation buyback crank (permissionless). The PumpSwap `user` is the pool
- * authority PDA; one-time setup: `initUserVolumeAccumulatorIx(payer, poolAuthorityPda())`.
+ * Post-graduation buyback crank (permissionless). v0.6 (L-1): the PumpSwap `user` is the
+ * dedicated `pumpswap_signer` PDA (buyback WSOL = its ATA) and the venue slice is exactly the 17
+ * v2 accounts; one-time setup: `initUserVolumeAccumulatorIx(payer, pumpswapSignerPda())`.
  */
 export function executeBuybackIx(a: {
   cranker: PublicKey;
@@ -498,7 +539,7 @@ export function executeBuybackIx(a: {
   buybackFeeRecipient: PublicKey;
 }): TransactionInstruction {
   const c = coinAddresses(a.mint);
-  const pa = poolAuthorityPda();
+  const ps = pumpswapSignerPda();
   return ix(
     "execute_buyback",
     {
@@ -508,14 +549,14 @@ export function executeBuybackIx(a: {
       mint: a.mint,
       observations: c.observations,
       rewardVault: c.rewardVault,
-      poolAuthority: pa,
-      buybackWsol: wsolAta(pa),
+      pumpswapSigner: ps,
+      buybackWsol: wsolAta(ps),
       tokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     },
     { maxLamports: a.maxLamports },
-    venueAccounts(venuePool(a.mint), pa, c.rewardVault, wsolAta(pa), a.buybackFeeRecipient),
+    venueAccounts(venuePool(a.mint), ps, c.rewardVault, wsolAta(ps), a.buybackFeeRecipient),
   );
 }
 

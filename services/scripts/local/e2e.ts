@@ -99,14 +99,16 @@ export async function runE2E(
       }),
     );
     const auth = keypair("upgrade-authority");
-    v = await startValidator({ rpcPort, upgradeAuthority: auth });
+    const admin = Keypair.generate();
+    const treasury = Keypair.generate();
+    const keeper = keypair("keeper");
+    // v0.6: LOCAL_PARAMS (short windows) are outside the on-chain bounds → seeded into the genesis.
+    const global = { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: [keeper.publicKey], params: LOCAL_PARAMS };
+    v = await startValidator({ rpcPort, upgradeAuthority: auth, global });
     const conn = new Connection(v.rpcUrl, "confirmed");
     const c = new FumpadClient(conn);
 
     // Actors: each funded by its own funder wallet so the funding graph is realistic.
-    const admin = Keypair.generate();
-    const treasury = Keypair.generate();
-    const keeper = keypair("keeper");
     const [creator, alice, bob, dave, eve, whale] = Array.from({ length: 6 }, () => Keypair.generate());
     const carol = Keypair.generate(); // creator's alt: funded BY the creator
     for (const k of [auth, admin, keeper]) await airdrop(conn, k.publicKey, 100);
@@ -208,23 +210,34 @@ export async function runE2E(
       const tx = await conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
       return { sig, events: decodeTransactionEvents(tx as unknown as TxLike), ticket: b.ticket };
     };
-    // D19: wait out the snipe window (4 slots) so these buys pay the normal fee.
-    await sleep(2_500);
+    // D19: wait out the snipe window (4 slots) so these buys pay the normal fee — by SLOT, not
+    // wall time: under load (the grinder burns 6 cores here) 2.5 s can still be inside the window,
+    // and a 25–99% snipe tax left alice's half-sell under $50 (no ticket → the e2e failed).
+    const snipe = (await c.coin(mint))!.snipe;
+    await waitFor("snipe window over", async () => BigInt(await conn.getSlot("confirmed")) >= snipe.launchSlot + BigInt(snipe.windowSlots) + 1n, 30_000, 200);
     // D17 (8% pool): eve buys enough that her claim stays > 10% of the pool (queued).
     await buy(alice, 1n);
     await buy(eve, 4n);
-    await sleep(3_500); // > min_hold_secs (2 s) on the chain clock
+    // > min_hold_secs on the CHAIN clock (it can lag the wall clock on a busy machine — the
+    // grinder burns 6 cores at this point — and then the first sells silently file no ticket).
+    const holdOver = async () => {
+      const t = await c.chainTime();
+      await waitFor("hold period on the chain clock", async () => (await c.chainTime()) > t + LOCAL_PARAMS.minHoldSecs + 1n, 30_000, 300);
+    };
+    await holdOver();
     const aliceSell = await sellPart(alice, 1n, 2n);
     const eveSell = await sellPart(eve, 19n, 20n);
     await buy(carol, 1n);
     await buy(dave, 1n);
     await buy(bob, 1n);
     log("✓ launch + 5 curve buys");
-    await sleep(3_500);
+    await holdOver();
     const carolSell = await sellPart(carol, 1n, 2n);
     const daveSell = await sellPart(dave, 1n, 2n);
     const bobTiny = await c.send(bob, await c.buildSell({ user: bob.publicKey, mint, tokensIn: 1_000_000n })); // ≈ $0.0x → no ticket
-    check("curve sells create tickets (matured, ≥ $50)", [aliceSell, eveSell, carolSell, daveSell].every((s) => s.events.some((e) => e.name === "TicketCreated")));
+    const sells = { alice: aliceSell, eve: eveSell, carol: carolSell, dave: daveSell };
+    const noTicket = Object.entries(sells).filter(([, s]) => !s.events.some((e) => e.name === "TicketCreated")).map(([n]) => n);
+    check("curve sells create tickets (matured, ≥ $50)", noTicket.length === 0, noTicket.length ? `no ticket: ${noTicket.join(", ")}` : undefined);
     const bobTx = await conn.getTransaction(bobTiny, { maxSupportedTransactionVersion: 0, commitment: "confirmed" });
     check("sell under $50 files no ticket", !decodeTransactionEvents(bobTx as unknown as TxLike).some((e) => e.name === "TicketCreated"));
     // D17: auto-claim is on by default; eve opts out on this coin and will claim by hand.
@@ -389,6 +402,28 @@ export async function runE2E(
       return [seed.toString("hex"), seed.toString("base64"), bs58.encode(seed), bs58.encode(Keypair.fromSeed(seed).secretKey), Array.from(seed).join(",")].some((n) => allLogs.includes(n));
     });
     check("no mint secret in any service log", !leaked && allLogs.includes("launch prepared"), `${left.length} pooled secrets checked against ${allLogs.length} log bytes`);
+
+    // The keeper must end healthy: /health ok with no failing job (it flags a job after 3
+    // consecutive failures), and the post-graduation setup never failed for any coin (it did
+    // for low-bump coins before the bump-aware init_claim_queue budget).
+    type KeeperHealth = { ok: boolean; failingJobs: string[] };
+    const keeperLog = () => (services.find((s) => s.name === "keeper")?.logs ?? []).join("\n");
+    const keeperHealthy = await waitFor("keeper healthy (no failing job)", async () => {
+      const h = (await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json()) as KeeperHealth;
+      return h.ok && h.failingJobs.length === 0 ? h : undefined;
+    }, 60_000, 2_000).then(
+      () => ({ ok: true, detail: "" }),
+      async () => {
+        const h = (await (await fetch(`http://127.0.0.1:${keeperPort}/health`)).json()) as KeeperHealth;
+        return { ok: false, detail: `failing: ${h.failingJobs.join(", ")}` };
+      },
+    );
+    const setupFailures = keeperLog().split("\n").filter((l) => l.includes("post-graduation setup failed"));
+    check(
+      "keeper health: no failing jobs at the end, post-graduation setup never failed",
+      keeperHealthy.ok && setupFailures.length === 0,
+      [keeperHealthy.detail, ...setupFailures.slice(0, 2)].filter(Boolean).join(" ; ").slice(0, 600),
+    );
 
     const counts: Record<string, number> = {};
     for (const t of ["vanity_mints", "transactions", "events", "coins", "trades", "tickets", "claims", "queue_entries", "samples", "buybacks", "lp_skims", "lp_settlements", "fee_withdrawals", "external_trades", "feed_events", "wallet_flags", "user_stats"]) counts[t] = await countRows(pg.url, t);

@@ -38,6 +38,11 @@ pub fn kp_pk(k: &Keypair) -> Pubkey {
     pk(&k.pubkey())
 }
 
+/// fumpad's Anchor event-authority PDA (`#[event_cpi]` accounts).
+pub fn fumpad_event_authority() -> Pubkey {
+    Pubkey::find_program_address(&[b"__event_authority"], &fumpad::ID).0
+}
+
 /// Build a v4 instruction for the fumpad program from Anchor's generated types.
 pub fn ix(accounts: impl ToAccountMetas, data: impl InstructionData) -> Instruction {
     ix_with_remaining(accounts, data, &[])
@@ -107,6 +112,7 @@ impl Env {
                 program: fumpad::ID,
                 program_data,
                 system_program: anchor_lang::system_program::ID,
+                event_authority: fumpad_event_authority(),
             },
             fumpad::instruction::InitializeGlobal {
                 admin: kp_pk(&env.admin),
@@ -118,7 +124,7 @@ impl Env {
         let mut keepers = [Pubkey::default(); fumpad::MAX_KEEPERS];
         keepers[0] = kp_pk(&env.keeper);
         let set = ix(
-            fumpad::accounts::AdminOnly { admin: kp_pk(&env.admin), global },
+            fumpad::accounts::AdminOnly { admin: kp_pk(&env.admin), global, event_authority: fumpad_event_authority(), program: fumpad::ID },
             fumpad::instruction::SetKeepers { keepers },
         );
         let admin = env.admin.insecure_clone();
@@ -335,7 +341,7 @@ mod smoke {
         let mut env = Env::new();
         let rando = env.new_user(1);
         let bad = ix(
-            fumpad::accounts::AdminOnly { admin: kp_pk(&rando), global: env.global_pda() },
+            fumpad::accounts::GuardianOrAdmin { authority: kp_pk(&rando), global: env.global_pda(), event_authority: fumpad_event_authority(), program: fumpad::ID },
             fumpad::instruction::SetPause { paused: 7 },
         );
         assert!(env.send(&[bad], &[&rando]).is_err());

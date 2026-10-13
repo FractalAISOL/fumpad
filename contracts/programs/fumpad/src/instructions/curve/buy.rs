@@ -82,11 +82,11 @@ pub struct Buy<'info> {
 
 pub fn handle_buy<'info>(ctx: Context<'info, Buy<'info>>, sol_in: u64, min_tokens_out: u64) -> Result<()> {
     let a = &mut *ctx.accounts;
-    require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
-    require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
-    require!(sol_in > 0, FumpadError::ZeroAmount);
     let clock = Clock::get()?;
     let now = clock.unix_timestamp;
+    require!(!a.global.is_paused(PAUSE_TRADE, now), FumpadError::Paused);
+    require!(a.coin.status == CoinStatus::Curve, FumpadError::WrongCoinStatus);
+    require!(sol_in > 0, FumpadError::ZeroAmount);
 
     // Canonical ATA balance before the buy (R-L2 observation).
     let balance_before = a.user_token_account.amount;

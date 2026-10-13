@@ -85,7 +85,7 @@ pub struct CreateCoin<'info> {
 pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String, uri: String) -> Result<()> {
     let a = &mut *ctx.accounts;
     let p = a.global.params;
-    require!(!a.global.is_paused(PAUSE_LAUNCH), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_LAUNCH, Clock::get()?.unix_timestamp), FumpadError::Paused);
     require!(
         name.len() <= MAX_NAME_LEN && symbol.len() <= MAX_SYMBOL_LEN && uri.len() <= MAX_URI_LEN,
         FumpadError::MetadataTooLong
@@ -209,7 +209,9 @@ pub fn handle_create_coin(ctx: Context<CreateCoin>, name: String, symbol: String
     coin.fees = p.coin_fees();
     // D19: launch slot + snipe schedule, likewise fixed at launch.
     coin.snipe = p.snipe_config(clock.slot);
-    coin.reserved = [0; 60];
+    // M-1: reward terms, likewise fixed at launch (params changes apply to new coins only).
+    coin.rewards = p.reward_terms();
+    coin.reserved = [0; 19];
 
     emit_event!(ctx, CoinCreated { mint: mint_key, creator, name, symbol, uri, ts: now });
     Ok(())

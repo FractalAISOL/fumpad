@@ -47,6 +47,10 @@ pub fn event_authority() -> Pubkey {
 pub fn pool_authority() -> Pubkey {
     fpda(&[fumpad::POOL_AUTHORITY_SEED])
 }
+/// L-1: the PumpSwap `user` of `execute_buyback`.
+pub fn pumpswap_signer() -> Pubkey {
+    fpda(&[fumpad::PUMPSWAP_SIGNER_SEED])
+}
 /// D11 locker accounts of a pool: (Lock PDA, locker authority PDA, LP vault ATA).
 pub fn locker_accounts(pool: &Pubkey) -> (Pubkey, Pubkey, Pubkey) {
     let lock = pda(&[fumpad_lp_locker::LOCK_SEED, pool.as_ref()], &fumpad_lp_locker::ID);
@@ -172,6 +176,11 @@ impl Flow {
     }
 
     pub fn with_params(params: Params) -> Self {
+        Self::with_mint(params, Keypair::new())
+    }
+
+    /// Like `with_params`, with a chosen mint keypair (e.g. ground for worst-case PDA bumps).
+    pub fn with_mint(params: Params, mint_kp: Keypair) -> Self {
         let mut env = Env::with_params(params);
         let mut c = env.svm.get_sysvar::<litesvm_clock::Clock>();
         c.unix_timestamp = T0;
@@ -185,7 +194,6 @@ impl Flow {
         put_token_account(&mut env, bfr_ata, WSOL_MINT, bfr, 0, TOKEN);
 
         let creator = env.new_user(10);
-        let mint_kp = Keypair::new();
         let mint = kp_pk(&mint_kp);
         let pa = pool_authority();
         let pool = pool_pda(0, &pa, &mint, &WSOL_MINT);
@@ -356,6 +364,11 @@ impl Flow {
     }
 
     pub fn graduate(&mut self) -> TransactionResult {
+        let i = self.graduate_ix();
+        self.env.send(&[cu_limit(400_000), i], &[])
+    }
+
+    pub fn graduate_ix(&self) -> Instruction {
         let pa = pool_authority();
         let lp_mint = lp_mint_pda(&self.pool);
         let i = ix(
@@ -391,7 +404,7 @@ impl Flow {
             },
             fumpad::instruction::Graduate {},
         );
-        self.env.send(&[cu_limit(400_000), i], &[])
+        i
     }
 
     /// init_observations + `CLAIM_QUEUE_INIT_CALLS` (9) × init_claim_queue + PumpSwap volume accumulator for the
@@ -413,7 +426,7 @@ impl Flow {
             fumpad::instruction::InitClaimQueue {},
         );
         ok(self.env.send(&vec![q; fumpad::CLAIM_QUEUE_INIT_CALLS], &[]));
-        let pa = pool_authority();
+        let pa = pumpswap_signer();
         let init_uva = raw_ix(
             PUMPSWAP_PROGRAM_ID,
             vec![
@@ -589,7 +602,7 @@ impl Flow {
     }
 
     pub fn execute_buyback(&mut self, max_lamports: u64) -> TransactionResult {
-        let pa = pool_authority();
+        let pa = pumpswap_signer();
         let cranker = self.env.new_user(1);
         let i = ix_with_remaining(
             fumpad::accounts::ExecuteBuyback {
@@ -599,7 +612,7 @@ impl Flow {
                 mint: self.mint,
                 observations: self.observations,
                 reward_vault: self.reward_vault,
-                pool_authority: pa,
+                pumpswap_signer: pa,
                 buyback_wsol: ata(&pa, &WSOL_MINT, &TOKEN),
                 wsol_mint: WSOL_MINT,
                 pumpswap_program: PUMPSWAP_PROGRAM_ID,
@@ -684,6 +697,7 @@ impl Flow {
             fumpad::accounts::CloseTicket {
                 caller: kp_pk(caller),
                 global: self.env.global_pda(),
+                coin: self.coin,
                 ticket,
                 owner: t.owner,
                 position: self.position_key(&t.owner),

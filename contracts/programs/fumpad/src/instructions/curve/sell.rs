@@ -12,7 +12,7 @@ use crate::{
     events::{CurveCompleted, CurveReopened, Trade},
     instructions::rewards::hooks::{self, SellHookAccounts, SellInfo},
     math::{curve::quote_sell, fees::compute_fee, price::price_q64},
-    state::{Coin, CoinStatus, Global, Position, PAUSE_TRADE},
+    state::{Coin, CoinStatus, Global, Position},
 };
 
 /// Sell on the bonding curve. The user receives the curve's SOL output minus the
@@ -79,7 +79,8 @@ pub struct Sell<'info> {
 
 pub fn handle_sell<'info>(ctx: Context<'info, Sell<'info>>, tokens_in: u64, min_sol_out: u64) -> Result<()> {
     let a = &mut *ctx.accounts;
-    require!(!a.global.is_paused(PAUSE_TRADE), FumpadError::Paused);
+    // M-3 (v0.6): curve sells are NEVER paused — pre-graduation the curve is the only venue,
+    // so holders (incl. the D13 escape hatch) can always exit. `PAUSE_TRADE` stops buys only.
     require!(tokens_in > 0, FumpadError::ZeroAmount);
     let now = Clock::get()?.unix_timestamp;
     // D13 escape hatch: a coin stuck in `Complete` (graduation impossible, e.g. PumpSwap

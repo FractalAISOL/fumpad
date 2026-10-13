@@ -97,7 +97,10 @@ export const LP_LOCKER_IDL: Idl = {
           }
         },
         {
-          "name": "pool"
+          "name": "pool",
+          "docs": [
+            "creator checked in the handler."
+          ]
         },
         {
           "name": "lp_mint"

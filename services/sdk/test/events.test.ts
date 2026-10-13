@@ -134,6 +134,8 @@ describe("event decoding", () => {
         "AutoClaimSet", "BuybackExecuted", "ClaimEscrowed", "ClaimPaid", "ClaimQueued", "CoinCreated", "CurveCompleted", "CurveReopened", "EscrowWithdrawn",
         "FeesWithdrawn", "GlobalMigrated", "Graduated", "HoldingsRegistered", "LpFeesSettled", "ParamsCancelled", "ParamsQueued", "ParamsUpdated",
         "SampleRecorded", "TicketClosed", "TicketCreated", "TicketDebited", "Trade",
+        // v0.6
+        "AdminAccepted", "AdminProposalCancelled", "AdminProposed", "GlobalInitialized", "KeepersSet", "PauseSet", "PositionClosed",
       ].sort(),
     );
     expect((LP_LOCKER_IDL.events as { name: string }[]).map((e) => e.name).sort()).toEqual(["Locked", "Skimmed"]);

@@ -80,12 +80,12 @@ pub struct CreatePoolAccounts<'a, 'info> {
     pub program: &'a AccountInfo<'info>,
 }
 
-/// Raw CPI into PumpSwap `create_pool`. `extra` accounts are appended verbatim so a
-/// PumpSwap upgrade that only appends accounts needs a client change, not an upgrade.
+/// Raw CPI into PumpSwap `create_pool` with exactly its 18 IDL accounts (L-1, v0.6: no
+/// caller-supplied extras ride along under the pool authority's signature; a PumpSwap
+/// account-list change now needs a program upgrade).
 pub fn create_pool<'info>(
     accts: &CreatePoolAccounts<'_, 'info>,
     args: &CreatePoolArgs,
-    extra: &[AccountInfo<'info>],
     signer_seeds: &[&[&[u8]]],
 ) -> Result<()> {
     require_keys_eq!(*accts.program.key, PUMPSWAP_PROGRAM_ID, crate::error::FumpadError::WrongVenue);
@@ -109,16 +109,12 @@ pub fn create_pool<'info>(
         (accts.event_authority, false),
         (accts.program, false),
     ];
-    let mut metas = Vec::with_capacity(ordered.len() + extra.len());
-    let mut infos = Vec::with_capacity(ordered.len() + extra.len());
+    let mut metas = Vec::with_capacity(ordered.len());
+    let mut infos = Vec::with_capacity(ordered.len());
     for (i, (info, writable)) in ordered.iter().enumerate() {
         let signer = i == 2; // creator
         metas.push(if *writable { AccountMeta::new(*info.key, signer) } else { AccountMeta::new_readonly(*info.key, signer) });
         infos.push((*info).clone());
-    }
-    for e in extra {
-        metas.push(if e.is_writable { AccountMeta::new(*e.key, e.is_signer) } else { AccountMeta::new_readonly(*e.key, e.is_signer) });
-        infos.push(e.clone());
     }
     let mut data = PUMPSWAP_IX_CREATE_POOL.to_vec();
     args.serialize(&mut data)?;
@@ -171,8 +167,13 @@ pub mod venue_idx {
 }
 /// The venue slice must contain at least the validated prefix.
 pub const VENUE_MIN_ACCOUNTS: usize = 9;
-/// Hard cap so a client can't make us copy an unbounded list into the CPI.
+/// Hard cap so a client can't make us copy an unbounded list into the CPI (user-signed
+/// router swaps: the trader's own signature, so extras are harmless and keep forward
+/// compatibility with PumpSwap account-list appends).
 pub const VENUE_MAX_ACCOUNTS: usize = 40;
+/// L-1 (v0.6): `buy_exact_quote_in_v2` / `sell_v2` account count (external-idl/pump_amm.json).
+/// A CPI signed by a FUMPAD PDA forwards exactly this many accounts — never caller extras.
+pub const VENUE_V2_ACCOUNTS: usize = 17;
 
 // Pool layout (after the 8-byte discriminator), from the IDL `Pool` type.
 const POOL_OFF_BASE_MINT: usize = 8 + 1 + 2 + 32; // 43 (bump u8, index u16, creator)
@@ -340,7 +341,8 @@ fn ix_data(disc: [u8; 8], a: u64, b: u64) -> Vec<u8> {
 
 /// CPI into PumpSwap with the venue slice as the account list. `program` must be the
 /// PumpSwap program account. With `pda_user_seeds`, the `user` meta is marked signer and
-/// the PDA signs; no other account ever gets a signature it didn't bring.
+/// the PDA signs; no other account ever gets a signature it didn't bring, and (L-1) the slice
+/// must then be exactly PumpSwap's `VENUE_V2_ACCOUNTS` accounts.
 fn invoke_venue<'info>(
     venue: &[AccountInfo<'info>],
     program: &AccountInfo<'info>,
@@ -348,6 +350,7 @@ fn invoke_venue<'info>(
     pda_user_seeds: Option<&[&[u8]]>,
 ) -> Result<()> {
     require_keys_eq!(program.key(), PUMPSWAP_PROGRAM_ID, FumpadError::WrongVenue);
+    require!(pda_user_seeds.is_none() || venue.len() == VENUE_V2_ACCOUNTS, FumpadError::WrongVenue);
     let metas = venue
         .iter()
         .enumerate()

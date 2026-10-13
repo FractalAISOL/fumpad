@@ -233,3 +233,45 @@ fn cu_report() {
         assert!(*c < COMFORT, "{name} is above 1M CU: too close to the limit");
     }
 }
+
+/// The keeper's post-graduation setup with WORST-CASE PDA bumps: every `init_claim_queue` call
+/// re-derives the queue PDA (`bump` constraint → find_program_address, ~1.5k CU per extra
+/// attempt), so a coin whose queue PDA has a low bump costs far more than the average one.
+/// With the SDK's old 12k-per-call budget (108k for 9 calls) such a coin's setup failed on
+/// every keeper pass ("post-graduation setup failed: Simulation failed" for 1 of 6 coins in the
+/// local e2e). The SDK budgets (`CU.initClaimQueue` 25k/call, `CU.initObservations` 80k) must
+/// cover this case.
+#[test]
+fn post_graduation_setup_worst_case_bumps() {
+    const SDK_INIT_CLAIM_QUEUE_PER_CALL: u64 = 25_000;
+    const SDK_INIT_OBSERVATIONS: u64 = 80_000;
+    let bump = |seed: &[u8], mint: &Pubkey| Pubkey::find_program_address(&[seed, mint.as_ref()], &fumpad::ID).1;
+    let mint_kp = (0..200_000)
+        .map(|_| solana_keypair::Keypair::new())
+        .find(|k| {
+            let m = kp_pk(k);
+            bump(fumpad::CLAIM_QUEUE_SEED, &m) <= 249 && bump(fumpad::OBSERVATIONS_SEED, &m) <= 251
+        })
+        .expect("ground a worst-case mint");
+    let mut f = Flow::with_mint(fumpad::state::Params::default(), mint_kp);
+    let whale = f.env.new_user(10_000);
+    cu(f.buy(&whale, 200 * SOL));
+    cu(f.graduate());
+    let payer = kp_pk(&f.env.payer);
+    let obs = ix(
+        fumpad::accounts::InitObservations { payer, coin: f.coin, observations: f.observations, system_program: fl::SYSTEM },
+        fumpad::instruction::InitObservations {},
+    );
+    let obs_cu = cu(f.env.send(&[fl::cu_limit(SDK_INIT_OBSERVATIONS as u32), obs], &[]));
+    let q = ix(
+        fumpad::accounts::InitClaimQueue { payer, coin: f.coin, claim_queue: f.queue, system_program: fl::SYSTEM },
+        fumpad::instruction::InitClaimQueue {},
+    );
+    let mut ixs = vec![fl::cu_limit((SDK_INIT_CLAIM_QUEUE_PER_CALL * fumpad::CLAIM_QUEUE_INIT_CALLS as u64) as u32)];
+    ixs.extend(vec![q; fumpad::CLAIM_QUEUE_INIT_CALLS]);
+    let q_cu = cu(f.env.send(&ixs, &[]));
+    println!("worst-case bumps: init_observations {obs_cu} CU, init_claim_queue × 9 {q_cu} CU");
+    assert!(q_cu > 108_000, "the old 9 × 12k budget is too small for this coin ({q_cu})");
+    assert!(q_cu < SDK_INIT_CLAIM_QUEUE_PER_CALL * fumpad::CLAIM_QUEUE_INIT_CALLS as u64);
+    assert!(obs_cu < SDK_INIT_OBSERVATIONS);
+}

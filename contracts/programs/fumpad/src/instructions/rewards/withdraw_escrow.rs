@@ -58,7 +58,7 @@ pub struct WithdrawEscrow<'info> {
 pub fn handle_withdraw_escrow(ctx: Context<WithdrawEscrow>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let a = &mut *ctx.accounts;
-    require!(!a.global.is_paused(PAUSE_CLAIMS), FumpadError::Paused);
+    require!(!a.global.is_paused(PAUSE_CLAIMS, now), FumpadError::Paused);
     require!(a.ticket.status == TicketStatus::Escrowed, FumpadError::NoEscrow);
     let amount = a.escrow.amount; // = ticket.claim_amount (+ anything donated to it)
     let seeds: &[&[&[u8]]] = &[&[POOL_AUTHORITY_SEED, &[ctx.bumps.pool_authority]]];

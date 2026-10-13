@@ -16,12 +16,14 @@ import { keypair, keypairPath, LOCAL, startPostgres, startValidator } from "./ha
 
 const auth = keypair("upgrade-authority");
 const keeper = keypair("keeper");
-const v = await startValidator({ upgradeAuthority: auth });
+const admin = Keypair.generate();
+const treasury = Keypair.generate().publicKey;
+// v0.6: LOCAL_PARAMS are outside the on-chain bounds → the Global is seeded into the genesis.
+const v = await startValidator({ upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury, keepers: [keeper.publicKey], params: LOCAL_PARAMS } });
 const pg = await startPostgres();
 const conn = new Connection(v.rpcUrl, "confirmed");
-const admin = Keypair.generate();
 for (const k of [auth, admin, keeper]) await airdrop(conn, k.publicKey, 100);
-await initGlobal(new FumpadClient(conn), auth, admin, Keypair.generate().publicKey, keeper.publicKey, LOCAL_PARAMS);
+await initGlobal(new FumpadClient(conn), auth, admin, treasury, keeper.publicKey, LOCAL_PARAMS);
 
 const env = `RPC_URL=${v.rpcUrl}\nWS_URL=${v.wsUrl}\nDATABASE_URL=${pg.url}\nKEEPER_KEYPAIR=${keypairPath("keeper")}\nSOL_USD_FALLBACK=150\n`;
 writeFileSync(join(LOCAL, "dev.env"), env);

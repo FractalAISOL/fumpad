@@ -14,6 +14,54 @@ export type Fumpad = {
   },
   "instructions": [
     {
+      "name": "acceptAdmin",
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "newAdmin",
+          "docs": [
+            "Must be `Global.pending_admin` (proves the new key works before it takes over)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "buy",
       "discriminator": [
         102,
@@ -276,7 +324,55 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "cancelAdmin",
+      "discriminator": [
+        169,
+        143,
+        43,
+        87,
+        189,
+        134,
+        146,
+        216
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "cancelParams",
+      "docs": [
+        "M-2: admin or guardian."
+      ],
       "discriminator": [
         100,
         172,
@@ -289,11 +385,8 @@ export type Fumpad = {
       ],
       "accounts": [
         {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "global"
-          ]
+          "name": "authority",
+          "signer": true
         },
         {
           "name": "global",
@@ -871,6 +964,67 @@ export type Fumpad = {
       "args": []
     },
     {
+      "name": "closePosition",
+      "docs": [
+        "L-4 (v0.6): the wallet closes its Position (no open tickets; remaining_accounts = every",
+        "ticket PDA it ever created, all closed) and gets the rent back."
+      ],
+      "discriminator": [
+        123,
+        134,
+        81,
+        0,
+        49,
+        68,
+        98,
+        98
+      ],
+      "accounts": [
+        {
+          "name": "wallet",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  111,
+                  115,
+                  105,
+                  116,
+                  105,
+                  111,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "position.mint",
+                "account": "position"
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "closeTicket",
       "discriminator": [
         66,
@@ -994,6 +1148,31 @@ export type Fumpad = {
                   101,
                   117,
                   101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "ticket.mint",
+                "account": "ticket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "coin",
+          "docs": [
+            "v0.6 (M-1): the ticket's coin — its snapshotted claim window decides expiry.",
+            "Appended after `claim_queue` (before the event-CPI pair)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  105,
+                  110
                 ]
               },
               {
@@ -1338,7 +1517,10 @@ export type Fumpad = {
           }
         },
         {
-          "name": "poolAuthority",
+          "name": "pumpswapSigner",
+          "docs": [
+            "seeds). Holds nothing but `buyback_wsol`."
+          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -1346,19 +1528,20 @@ export type Fumpad = {
                 "kind": "const",
                 "value": [
                   112,
-                  111,
-                  111,
-                  108,
-                  95,
-                  97,
                   117,
-                  116,
-                  104,
-                  111,
-                  114,
+                  109,
+                  112,
+                  115,
+                  119,
+                  97,
+                  112,
+                  95,
+                  115,
                   105,
-                  116,
-                  121
+                  103,
+                  110,
+                  101,
+                  114
                 ]
               }
             ]
@@ -1371,7 +1554,7 @@ export type Fumpad = {
             "seeds": [
               {
                 "kind": "account",
-                "path": "poolAuthority"
+                "path": "pumpswapSigner"
               },
               {
                 "kind": "account",
@@ -1999,7 +2182,8 @@ export type Fumpad = {
         {
           "name": "program",
           "docs": [
-            "Only the program's upgrade authority may initialize (prevents front-running init)."
+            "Only the program's upgrade authority may initialize (prevents front-running init).",
+            "Also the program account the L-3 event self-CPI needs."
           ],
           "address": "ASVE6Nk8T1c2Uv81vjPeNDnX54nHGWg98G1afYt2j8Cv"
         },
@@ -2009,6 +2193,38 @@ export type Fumpad = {
         {
           "name": "systemProgram",
           "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "eventAuthority",
+          "docs": [
+            "struct already has a `program` account)."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -2267,6 +2483,71 @@ export type Fumpad = {
         {
           "name": "maxEntries",
           "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "proposeAdmin",
+      "docs": [
+        "M-2 (replaces `set_admin`): propose a new admin / treasury / guardian; the new admin",
+        "applies it with `accept_admin` after 48h; the guardian or admin can `cancel_admin`."
+      ],
+      "discriminator": [
+        121,
+        214,
+        199,
+        212,
+        87,
+        39,
+        117,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "global"
+          ]
+        },
+        {
+          "name": "global",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  108,
+                  111,
+                  98,
+                  97,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "newAdmin",
+          "type": "pubkey"
+        },
+        {
+          "name": "platformTreasury",
+          "type": "pubkey"
+        },
+        {
+          "name": "guardian",
+          "type": "pubkey"
         }
       ]
     },
@@ -2839,57 +3120,6 @@ export type Fumpad = {
       ]
     },
     {
-      "name": "setAdmin",
-      "discriminator": [
-        251,
-        163,
-        0,
-        52,
-        91,
-        194,
-        187,
-        92
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "global"
-          ]
-        },
-        {
-          "name": "global",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  103,
-                  108,
-                  111,
-                  98,
-                  97,
-                  108
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "newAdmin",
-          "type": "pubkey"
-        },
-        {
-          "name": "platformTreasury",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
       "name": "setAutoClaim",
       "docs": [
         "D17: the position's wallet opts out of / back into keeper auto-claim for this coin."
@@ -2991,6 +3221,12 @@ export type Fumpad = {
               }
             ]
           }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
         }
       ],
       "args": [
@@ -3007,6 +3243,9 @@ export type Fumpad = {
     },
     {
       "name": "setPause",
+      "docs": [
+        "M-2 / M-3: admin or guardian; flags lapse after 7 days unless renewed."
+      ],
       "discriminator": [
         63,
         32,
@@ -3019,11 +3258,8 @@ export type Fumpad = {
       ],
       "accounts": [
         {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "global"
-          ]
+          "name": "authority",
+          "signer": true
         },
         {
           "name": "global",
@@ -3043,6 +3279,12 @@ export type Fumpad = {
               }
             ]
           }
+        },
+        {
+          "name": "eventAuthority"
+        },
+        {
+          "name": "program"
         }
       ],
       "args": [
@@ -4046,6 +4288,45 @@ export type Fumpad = {
   ],
   "events": [
     {
+      "name": "adminAccepted",
+      "discriminator": [
+        174,
+        12,
+        76,
+        139,
+        158,
+        99,
+        110,
+        254
+      ]
+    },
+    {
+      "name": "adminProposalCancelled",
+      "discriminator": [
+        158,
+        7,
+        69,
+        243,
+        15,
+        126,
+        0,
+        184
+      ]
+    },
+    {
+      "name": "adminProposed",
+      "discriminator": [
+        129,
+        249,
+        226,
+        227,
+        199,
+        82,
+        110,
+        243
+      ]
+    },
+    {
       "name": "autoClaimSet",
       "discriminator": [
         53,
@@ -4176,6 +4457,19 @@ export type Fumpad = {
       ]
     },
     {
+      "name": "globalInitialized",
+      "discriminator": [
+        142,
+        186,
+        188,
+        168,
+        64,
+        228,
+        8,
+        20
+      ]
+    },
+    {
       "name": "globalMigrated",
       "discriminator": [
         75,
@@ -4212,6 +4506,19 @@ export type Fumpad = {
         167,
         74,
         96
+      ]
+    },
+    {
+      "name": "keepersSet",
+      "discriminator": [
+        25,
+        180,
+        116,
+        180,
+        247,
+        137,
+        20,
+        144
       ]
     },
     {
@@ -4264,6 +4571,32 @@ export type Fumpad = {
         11,
         136,
         169
+      ]
+    },
+    {
+      "name": "pauseSet",
+      "discriminator": [
+        175,
+        57,
+        198,
+        136,
+        192,
+        66,
+        204,
+        73
+      ]
+    },
+    {
+      "name": "positionClosed",
+      "discriminator": [
+        157,
+        163,
+        227,
+        228,
+        13,
+        97,
+        138,
+        121
       ]
     },
     {
@@ -4517,9 +4850,100 @@ export type Fumpad = {
       "code": 6036,
       "name": "unsupportedGlobalLayout",
       "msg": "Global account layout is unknown or newer than this program (migrate_global never shrinks)"
+    },
+    {
+      "code": 6037,
+      "name": "noPendingAdmin",
+      "msg": "No admin change is proposed"
+    },
+    {
+      "code": 6038,
+      "name": "positionNotEmpty",
+      "msg": "Position still has open or unclosed tickets"
     }
   ],
   "types": [
+    {
+      "name": "adminAccepted",
+      "docs": [
+        "M-2: the proposed admin accepted; `admin`, `platform_treasury`, `guardian` are now live."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previousAdmin",
+            "type": "pubkey"
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "platformTreasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "adminProposalCancelled",
+      "docs": [
+        "M-2: a proposal was cancelled (by the admin or the guardian)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "adminProposed",
+      "docs": [
+        "M-2: the admin proposed a new admin / treasury / guardian; `accept_admin` from `eta`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "platformTreasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "eta",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
     {
       "name": "autoClaimSet",
       "docs": [
@@ -4892,11 +5316,25 @@ export type Fumpad = {
             }
           },
           {
+            "name": "rewards",
+            "docs": [
+              "M-1 (v0.6): reward terms (trigger, claim size, per-claim cap, $ minimum, hold, rebuy and",
+              "claim windows, open-ticket limit) snapshotted at `create_coin`, so a params change never",
+              "re-prices this coin's tickets. Occupies 41 bytes of the former 60-byte `reserved`;",
+              "coins created before v0.6 read zeros and use `Global.params` (`reward_params`)."
+            ],
+            "type": {
+              "defined": {
+                "name": "rewardTerms"
+              }
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                60
+                19
               ]
             }
           }
@@ -5133,7 +5571,7 @@ export type Fumpad = {
           {
             "name": "paused",
             "docs": [
-              "Bitmask of `PAUSE_*` flags."
+              "Bitmask of `PAUSE_*` flags; in force only until `pause_expires_at` (M-3)."
             ],
             "type": "u8"
           },
@@ -5146,11 +5584,35 @@ export type Fumpad = {
             }
           },
           {
+            "name": "guardian",
+            "docs": [
+              "M-2 (v0.6): may `set_pause`, `cancel_params` and `cancel_admin` — never queue or",
+              "propose. Pubkey::default() = none (only the admin can then). Carved from `reserved`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauseExpiresAt",
+            "docs": [
+              "M-3 (v0.6): `paused` flags lapse at this unix time (`set_pause` sets now +",
+              "`MAX_PAUSE_SECS`; renewing needs another `set_pause`). Carved from `reserved`."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "pendingAdminEta",
+            "docs": [
+              "M-2 (v0.6): earliest `accept_admin` time of the proposed authority change",
+              "(`pending_admin`, …); 0 = no proposal. Carved from `reserved`."
+            ],
+            "type": "i64"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                128
+                80
               ]
             }
           },
@@ -5169,6 +5631,58 @@ export type Fumpad = {
           },
           {
             "name": "pendingEta",
+            "type": "i64"
+          },
+          {
+            "name": "pendingAdmin",
+            "docs": [
+              "M-2 (appended in v0.6, Global 680 → 776 bytes): the authority set proposed by",
+              "`propose_admin`, applied by `accept_admin` — signed by `pending_admin` itself — once",
+              "`pending_admin_eta` has passed (48h). The guardian or the admin can `cancel_admin`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pendingTreasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "pendingGuardian",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "globalInitialized",
+      "docs": [
+        "L-3: `initialize_global`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "platformTreasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "params",
+            "type": {
+              "defined": {
+                "name": "params"
+              }
+            }
+          },
+          {
+            "name": "ts",
             "type": "i64"
           }
         ]
@@ -5208,6 +5722,20 @@ export type Fumpad = {
           },
           {
             "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "guardian",
+            "docs": [
+              "v0.6 (M-2): the guardian after migration (= the admin for a pre-v0.6 Global)."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pauseExpiresAt",
+            "docs": [
+              "v0.6 (M-3): when the migrated pause flags lapse (now + 7 days if any flag was set)."
+            ],
             "type": "i64"
           }
         ]
@@ -5281,6 +5809,30 @@ export type Fumpad = {
           {
             "name": "added",
             "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "keepersSet",
+      "docs": [
+        "L-3: `set_keepers` (immediate; keepers can only trigger samples of on-chain reserves)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "keepers",
+            "type": {
+              "array": [
+                "pubkey",
+                3
+              ]
+            }
           },
           {
             "name": "ts",
@@ -5596,6 +6148,13 @@ export type Fumpad = {
           {
             "name": "ts",
             "type": "i64"
+          },
+          {
+            "name": "authority",
+            "docs": [
+              "v0.6: the admin or the guardian (M-2)."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -5639,6 +6198,33 @@ export type Fumpad = {
                 "name": "params"
               }
             }
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "pauseSet",
+      "docs": [
+        "L-3 / M-3: `set_pause` by the admin or the guardian; flags lapse at `expires_at` (0 = none set)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "paused",
+            "type": "u8"
+          },
+          {
+            "name": "expiresAt",
+            "type": "i64"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
           },
           {
             "name": "ts",
@@ -5745,6 +6331,29 @@ export type Fumpad = {
       }
     },
     {
+      "name": "positionClosed",
+      "docs": [
+        "L-4: a wallet closed its empty Position (rent back to it)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "queueEntry",
       "serialization": "bytemuck",
       "repr": {
@@ -5800,6 +6409,51 @@ export type Fumpad = {
               "Time of the last touch point; 0 = never initialized."
             ],
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rewardTerms",
+      "docs": [
+        "M-1 (v0.6): reward terms snapshotted per coin at `create_coin` (`Coin.rewards`), like the",
+        "fees (D14): a params change (timelocked, bounded) applies only to coins created after it.",
+        "Coins created before v0.6 hold zeros and keep using `Global.params` (`Coin::reward_params`)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "triggerMultipleBps",
+            "type": "u32"
+          },
+          {
+            "name": "claimBps",
+            "type": "u16"
+          },
+          {
+            "name": "maxClaimPoolBps",
+            "type": "u16"
+          },
+          {
+            "name": "minSellUsdCents",
+            "type": "u64"
+          },
+          {
+            "name": "minHoldSecs",
+            "type": "i64"
+          },
+          {
+            "name": "rebuyWindowSecs",
+            "type": "i64"
+          },
+          {
+            "name": "claimWindowSecs",
+            "type": "i64"
+          },
+          {
+            "name": "maxOpenTickets",
+            "type": "u8"
           }
         ]
       }
@@ -6205,6 +6859,16 @@ export type Fumpad = {
       "name": "positionSeed",
       "type": "bytes",
       "value": "[112, 111, 115, 105, 116, 105, 111, 110]"
+    },
+    {
+      "name": "pumpswapSignerSeed",
+      "docs": [
+        "L-1 (v0.6): [\"pumpswap_signer\"] — the PumpSwap `user` of `execute_buyback`. Owns only its",
+        "WSOL ATA (and its PumpSwap volume accumulator): a PumpSwap CPI it signs can't touch any",
+        "reward vault, curve vault or escrow (those belong to `pool_authority`)."
+      ],
+      "type": "bytes",
+      "value": "[112, 117, 109, 112, 115, 119, 97, 112, 95, 115, 105, 103, 110, 101, 114]"
     },
     {
       "name": "rewardVaultSeed",
