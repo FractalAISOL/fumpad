@@ -14,7 +14,11 @@
  *
  * The slippage bound is never a fresh re-quote (M-9): it is the quote the user saw, minus
  * SLIPPAGE_BPS, so a price that moved against them before signing fails on chain instead of
- * filling at the new price.
+ * filling at the new price. That quote comes from the API, so it isn't trusted either (V7-M3):
+ * `prepareBuy` / `prepareSell` quote the trade again from the pool accounts over the app's own RPC
+ * (@fumpad/sdk's DBC / DAMM v2 math), refuse a minimum below that quote × (1 − MAX_SLIPPAGE_BPS),
+ * and hand the allow-list a policy with the exact amount in and that floor, which it enforces on
+ * the router instruction.
  */
 import { type Commitment, type Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import {
@@ -26,14 +30,21 @@ import {
   coinPda,
   computeBudgetIxs,
   createAtaIdempotentIx,
+  DAMM_V2_PROGRAM_ID,
   DBC_CONFIG_SIZE,
   DBC_PROGRAM_ID,
   dbcPoolPda,
   type DbcPoolConfig,
   decodeCoin,
+  decodeDammPool,
   decodeDbcConfig,
+  decodeDbcPool,
   decodeTicket,
   FUMPAD_PROGRAM_ID,
+  quoteDammBuy,
+  quoteDammSell,
+  quoteDbcBuy,
+  quoteDbcSell,
   routerBuyIx,
   routerSellIx,
   setAutoClaimIx,
@@ -44,15 +55,24 @@ import {
   type Venue,
   withdrawCreatorFeesIx,
   withdrawEscrowIx,
+  withSlippage,
   wrapSolIxs,
   WSOL_MINT,
 } from "@fumpad/sdk";
 import { baseToTokens, solToLamports, tokensToBase } from "../data/chain";
+import type { SilentPolicy } from "./allowlist";
 
 export type { BuiltTx };
 
 /** Slippage applied to the quote the user saw (bps). The UI and the builders share it. */
 export const SLIPPAGE_BPS = 200;
+
+/**
+ * V7-M3: the most a shown minimum may sit below the app's own quote of the same trade (bps). Above
+ * SLIPPAGE_BPS so an honest quote a moment old still passes; a lowballed one (a compromised API
+ * inviting a sandwich) is refused before anything is signed.
+ */
+export const MAX_SLIPPAGE_BPS = 500;
 
 /** `amountOut` of the shown quote → the minimum the user accepts, in display units. */
 export function minOutFromQuote(amountOut: number, slippageBps = SLIPPAGE_BPS): number {
@@ -80,6 +100,13 @@ export class CoinNotTradable extends Error {
   constructor(why: string) {
     super(why);
     this.name = "CoinNotTradable";
+  }
+}
+
+export class QuoteRefused extends Error {
+  constructor() {
+    super("The quote is out of date or doesn't match the pool's price right now, so nothing was signed. Check the new quote and try again.");
+    this.name = "QuoteRefused";
   }
 }
 
@@ -204,6 +231,34 @@ export class FumpadClient {
     };
   }
 
+  /**
+   * V7-M3: the trade quoted from the pool accounts over this connection (not the API): DBC on the
+   * curve (a buy as PartialFill, like the router sends it), DAMM v2 after graduation. Base units /
+   * lamports in, the output after fees out.
+   */
+  async quote(a: { mint: PublicKey; side: "buy" | "sell"; amountIn: bigint }): Promise<{ venue: Venue; amountOut: bigint; partialFill: boolean }> {
+    const r = await this.route(a.mint);
+    if (r.venue === "dbc") {
+      const [cfgInfo, poolInfo, slot] = await Promise.all([
+        this.connection.getAccountInfo(r.coin.dbcConfig, this.commitment),
+        this.connection.getAccountInfo(r.coin.dbcPool!, this.commitment),
+        this.connection.getSlot(this.commitment),
+      ]);
+      if (!cfgInfo || !cfgInfo.owner.equals(DBC_PROGRAM_ID) || !poolInfo || !poolInfo.owner.equals(DBC_PROGRAM_ID)) throw new LayoutError("curve");
+      const cfg = readDbcConfig(new Uint8Array(cfgInfo.data));
+      const pool = decodeDbcPool(new Uint8Array(poolInfo.data));
+      if (!pool.baseMint.equals(a.mint) || !pool.config.equals(r.coin.dbcConfig)) throw new LayoutError("curve");
+      const q = a.side === "buy" ? quoteDbcBuy(cfg, pool, a.amountIn, BigInt(slot), { partialFill: true }) : quoteDbcSell(cfg, pool, a.amountIn, BigInt(slot));
+      return { venue: r.venue, amountOut: q.amountOut, partialFill: q.partialFill };
+    }
+    const info = await this.connection.getAccountInfo(r.coin.dammPool!, this.commitment);
+    if (!info || !info.owner.equals(DAMM_V2_PROGRAM_ID)) throw new LayoutError("pool");
+    const pool = decodeDammPool(new Uint8Array(info.data));
+    if (!pool.tokenAMint.equals(a.mint) || !pool.tokenBMint.equals(WSOL_MINT)) throw new LayoutError("pool");
+    const q = a.side === "buy" ? quoteDammBuy(pool, a.amountIn) : quoteDammSell(pool, a.amountIn);
+    return { venue: r.venue, amountOut: q.amountOut, partialFill: false };
+  }
+
   /** A FUMPAD DBC config (for the launch's first-buy check). */
   async dbcConfig(config: PublicKey): Promise<DbcPoolConfig> {
     const info = await this.connection.getAccountInfo(config, this.commitment);
@@ -221,6 +276,43 @@ export class FumpadClient {
 
 export function fumpadClient(connection: Connection): FumpadClient {
   return new FumpadClient(connection, { commitment: "confirmed" });
+}
+
+/**
+ * V7-M3: the floor for a trade's minimum, from the app's own quote; refuses a shown minimum below it.
+ * Returns the policy the allow-list enforces on the router instruction (exact amount in, min out ≥ floor).
+ */
+async function boundTrade(client: FumpadClient, a: { mint: PublicKey; side: "buy" | "sell"; amountIn: bigint; minOut: bigint }): Promise<SilentPolicy> {
+  const q = await client.quote(a);
+  const floor = withSlippage(q.amountOut, MAX_SLIPPAGE_BPS);
+  if (floor <= BigInt(0) || a.minOut < floor) throw new QuoteRefused();
+  const mint = a.mint.toBase58();
+  return a.side === "buy"
+    ? { action: "buy", mint, maxSolInLamports: a.amountIn, amountIn: a.amountIn, minOut: floor }
+    : { action: "sell", mint, amountIn: a.amountIn, minOut: floor };
+}
+
+export interface PreparedTrade {
+  built: BuiltTx;
+  policy: SilentPolicy;
+}
+
+/** Router buy, checked against the app's own quote (V7-M3): the transaction and the allow-list policy it must pass. */
+export async function prepareBuy(client: FumpadClient, wallet: PublicKey, a: { mint: string; solIn: number; minTokensOut: number }): Promise<PreparedTrade> {
+  const mint = new PublicKey(a.mint);
+  const amountIn = solToLamports(a.solIn);
+  const minOut = minTokensBase(a.minTokensOut);
+  const policy = await boundTrade(client, { mint, side: "buy", amountIn, minOut });
+  return { built: await client.buildBuy({ user: wallet, mint, lamportsIn: amountIn, minTokensOut: minOut }), policy };
+}
+
+/** Router sell, checked against the app's own quote (V7-M3). */
+export async function prepareSell(client: FumpadClient, wallet: PublicKey, a: { mint: string; tokensIn: number; minSolOut: number }): Promise<PreparedTrade> {
+  const mint = new PublicKey(a.mint);
+  const amountIn = tokensToBase(a.tokensIn);
+  const minOut = minLamports(a.minSolOut);
+  const policy = await boundTrade(client, { mint, side: "sell", amountIn, minOut });
+  return { built: await client.buildSell({ user: wallet, mint, tokensIn: amountIn, minLamportsOut: minOut }), policy };
 }
 
 /** Router buy for `solIn` (fee included); `minTokensOut` is the shown quote after slippage (display tokens). */

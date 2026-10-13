@@ -29,9 +29,10 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { DAMM_V2_PROGRAM_ID, DBC_PROGRAM_ID, FUMPAD_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, coinAta, coinPda, createAtaIdempotentIx, wsolAta } from "@fumpad/sdk";
+import { withSlippage, DAMM_V2_PROGRAM_ID, DBC_PROGRAM_ID, FUMPAD_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, coinAta, coinPda, createAtaIdempotentIx, wsolAta } from "@fumpad/sdk";
 import { SilentSignRefused, type SilentPolicy, vetFumpadTx } from "./allowlist";
-import { FumpadClient, readCoin, readDbcConfig } from "./build";
+import { FumpadClient, MAX_SLIPPAGE_BPS, prepareBuy, prepareSell, QuoteRefused, readCoin, readDbcConfig } from "./build";
+import { FUMPAD_PROGRAM_ADDRESS } from "./cluster";
 import { checkLaunchBinding } from "./launch";
 import { checkPreparedLaunch } from "./program";
 
@@ -44,6 +45,7 @@ interface Fixture {
   escrowTicket: string;
   txs: { name: string; note: string; wallet: string; policy: Record<string, string>; tx: string; signature?: string }[];
   accounts: Record<string, { address: string; owner: string; data: string }>;
+  quoteSlots: Record<string, string>;
 }
 const F = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures/local-v07.json"), "utf8")) as Fixture;
 const MINT = new PublicKey(F.mint);
@@ -55,6 +57,9 @@ const policyOf = (p: Record<string, string>): SilentPolicy => ({
   mint: p.mint,
   ...(p.maxSolInLamports !== undefined ? { maxSolInLamports: BigInt(p.maxSolInLamports) } : {}),
   ...(p.coSigner !== undefined ? { coSigner: p.coSigner } : {}),
+  ...(p.amountIn !== undefined ? { amountIn: BigInt(p.amountIn) } : {}),
+  ...(p.minOut !== undefined ? { minOut: BigInt(p.minOut) } : {}),
+  ...(p.ticket !== undefined ? { ticket: p.ticket } : {}),
 });
 const txOf = (name: string) => {
   const t = F.txs.find((x) => x.name === name);
@@ -69,7 +74,7 @@ function recompile(t: VersionedTransaction, ixs: TransactionInstruction[]): Vers
   return new VersionedTransaction(new TransactionMessage({ payerKey: t.message.staticAccountKeys[0], recentBlockhash: t.message.recentBlockhash, instructions: ixs }).compileToV0Message());
 }
 const replaceKey = (ix: TransactionInstruction, i: number, k: PublicKey) =>
-  new TransactionInstruction({ programId: ix.programId, data: ix.data, keys: ix.keys.map((m, j) => (j === i ? { ...m, pubkey: k } : m)) });
+  new TransactionInstruction({ programId: ix.programId, data: ix.data, keys: ix.keys.map((m, j) => (j === i ? { ...m, pubkey: k, isSigner: false } : m)) });
 const withData = (ix: TransactionInstruction, f: (d: Buffer) => void) => {
   const d = Buffer.from(ix.data);
   f(d);
@@ -80,6 +85,10 @@ const isFumpad = (ix: TransactionInstruction) => ix.programId.equals(FUMPAD_PROG
 const USER_TXS = ["buy-dbc", "buy-dbc-2", "sell-dbc", "sell-dbc-all", "set-auto-claim", "buy-dbc-partialfill", "buy-damm", "sell-damm", "claim", "withdraw-escrow", "withdraw-creator-fees"];
 
 describe("captured v0.7 transactions (local stack)", () => {
+  it("cluster.ts's program id (server components read it without web3) is the SDK's", () => {
+    assert.equal(FUMPAD_PROGRAM_ADDRESS, FUMPAD_PROGRAM_ID.toBase58());
+  });
+
   it("covers every flow the app signs, each landed", () => {
     for (const n of ["launch", ...USER_TXS]) assert.ok(txOf(n).signature, `${n} landed`);
     // The venues the router went to: DBC on the curve (PartialFill), DAMM v2 after graduation (ExactIn).
@@ -122,6 +131,9 @@ function fakeConnection(): Connection {
   const conn = {
     setCoin(k: string) {
       coinKey = k;
+    },
+    async getSlot() {
+      return Number(F.quoteSlots.dbcPool);
     },
     async getAccountInfo(k: PublicKey): Promise<AccountInfo<Buffer> | null> {
       const a = k.equals(coinPda(MINT)) ? F.accounts[coinKey] : byAddress.get(k.toBase58());
@@ -172,6 +184,37 @@ describe("the app's builders rebuild the captured transactions byte for byte", (
     await same("withdraw-creator-fees", () => client.buildWithdrawCreatorFees({ creator: w("withdraw-creator-fees"), mint: MINT }));
   });
 
+  it("V7-M3: prepareBuy / prepareSell quote the captured pools locally and refuse a lowballed shown minimum", async () => {
+    for (const [n, coinKey] of [
+      ["buy-dbc", "coinCurve"],
+      ["buy-damm", "coinGraduated"],
+    ] as const) {
+      conn.setCoin(coinKey);
+      const t = txOf(n);
+      const r = router(n);
+      const local = await client.quote({ mint: MINT, side: "buy", amountIn: r.amountIn });
+      const floor = withSlippage(local.amountOut, MAX_SLIPPAGE_BPS);
+      // The trade panel's real minimum (from the API quote) cleared the app's own floor.
+      assert.ok(r.minOut >= floor, n);
+      const ok = await prepareBuy(client, t.wallet, { mint: F.mint, solIn: Number(r.amountIn) / 1e9, minTokensOut: Number(r.minOut) / 1e6 });
+      assert.equal(ok.policy.minOut, floor);
+      assert.equal(ok.policy.amountIn, r.amountIn);
+      vetFumpadTx(recompile(t.vtx, ok.built.instructions), t.wallet, ok.policy);
+      // A compromised API quoting 10% low, or zero: nothing is built.
+      for (const shown of [(Number(floor) * 0.9) / 1e6, 0]) {
+        await assert.rejects(prepareBuy(client, t.wallet, { mint: F.mint, solIn: Number(r.amountIn) / 1e9, minTokensOut: shown }), QuoteRefused);
+      }
+    }
+    conn.setCoin("coinGraduated");
+    const seller = txOf("sell-damm").wallet;
+    const tokensIn = BigInt(1_000_000_000_000);
+    const q = await client.quote({ mint: MINT, side: "sell", amountIn: tokensIn });
+    const floor = withSlippage(q.amountOut, MAX_SLIPPAGE_BPS);
+    const okSell = await prepareSell(client, seller, { mint: F.mint, tokensIn: 1_000_000, minSolOut: Number(q.amountOut) / 1e9 });
+    assert.equal(okSell.policy.minOut, floor);
+    await assert.rejects(prepareSell(client, seller, { mint: F.mint, tokensIn: 1_000_000, minSolOut: (Number(floor) - 10) / 1e9 }), QuoteRefused);
+  });
+
   it("decodes the captured Coin accounts and refuses them for another mint", () => {
     assert.equal(readCoin(Buffer.from(F.accounts.coinCurve.data, "base64"), MINT).status, "curve");
     assert.equal(readCoin(Buffer.from(F.accounts.coinGraduated.data, "base64"), MINT).status, "graduated");
@@ -211,6 +254,8 @@ describe("tampered real transactions are refused", () => {
       const ixs = ixsOf(t.vtx);
       const i = ixs.findIndex(isFumpad);
       for (let k = 1; k < ixs[i].keys.length; k++) {
+        // The one account left free: withdraw_escrow's escrow payer (the program requires Ticket.escrow_payer; it only gets the escrow rent back).
+        if (n === "withdraw-escrow" && k === 7) continue;
         const ixs2 = ixs.slice();
         ixs2[i] = replaceKey(ixs[i], k, other);
         refused(() => vetFumpadTx(recompile(t.vtx, ixs2), t.wallet, t.policy), undefined);
@@ -284,13 +329,32 @@ describe("tampered real transactions are refused", () => {
       const r = ixs.findIndex(isFumpad);
       const bigger = ixs.slice();
       bigger[r] = withData(ixs[r], (d) => d.writeBigUInt64LE(max + BigInt(1), 8));
-      refused(() => vetFumpadTx(recompile(t.vtx, bigger), t.wallet, t.policy), /more SOL/);
+      refused(() => vetFumpadTx(recompile(t.vtx, bigger), t.wallet, t.policy), /differs from what you entered/);
+      refused(() => vetFumpadTx(recompile(t.vtx, bigger), t.wallet, { ...t.policy, amountIn: max + BigInt(1) }), /more SOL/);
       const s = ixs.findIndex((ix) => ix.programId.equals(SystemProgram.programId));
       const wrapMore = ixs.slice();
       wrapMore[s] = withData(ixs[s], (d) => d.writeBigUInt64LE(max * BigInt(10), 4));
       refused(() => vetFumpadTx(recompile(t.vtx, wrapMore), t.wallet, t.policy), /more SOL/);
     }
     refused(() => vetFumpadTx(txOf("launch").vtx, txOf("launch").wallet, { ...txOf("launch").policy, maxSolInLamports: BigInt(1) }), /more SOL/);
+  });
+
+  it("V7-M3: every captured trade carries the app's own quote floor, and a lower min_out is refused", () => {
+    for (const n of ["buy-dbc", "buy-dbc-2", "sell-dbc", "sell-dbc-all", "buy-dbc-partialfill", "buy-damm", "sell-damm"]) {
+      const t = txOf(n);
+      const ixs = ixsOf(t.vtx);
+      const r = ixs.findIndex(isFumpad);
+      const minOut = u64(ixs[r].data, 16);
+      assert.ok(t.policy.minOut! > BigInt(0) && minOut >= t.policy.minOut!, n);
+      assert.equal(u64(ixs[r].data, 8), t.policy.amountIn, n);
+      for (const low of [BigInt(0), t.policy.minOut! - BigInt(1)]) {
+        const lowered = ixs.slice();
+        lowered[r] = withData(ixs[r], (d) => d.writeBigUInt64LE(low, 16));
+        refused(() => vetFumpadTx(recompile(t.vtx, lowered), t.wallet, t.policy), /minimum output/);
+      }
+      // Without the bounds (the pre-fix policy) nothing is signed.
+      refused(() => vetFumpadTx(t.vtx, t.wallet, { action: t.policy.action, mint: t.policy.mint, maxSolInLamports: t.policy.maxSolInLamports }), /minimum output/);
+    }
   });
 
   it("claims, escrow and fees paying or acting for someone else", () => {
@@ -307,8 +371,9 @@ describe("tampered real transactions are refused", () => {
     // Signed by another wallet than the one that built it.
     for (const n of USER_TXS) refused(() => vetFumpadTx(txOf(n).vtx, other, txOf(n).policy), /fee payer/);
     // The action's instruction under another action's policy.
-    refused(() => vetFumpadTx(claim.vtx, claim.wallet, { action: "escrow", mint: F.mint }), /doesn't use/);
-    refused(() => vetFumpadTx(txOf("sell-dbc").vtx, txOf("sell-dbc").wallet, { action: "buy", mint: F.mint, maxSolInLamports: BigInt(1e12) }), /doesn't use/);
+    refused(() => vetFumpadTx(claim.vtx, claim.wallet, { action: "escrow", mint: F.mint, ticket: F.ticket }), /doesn't use/);
+    const sp = txOf("sell-dbc").policy;
+    refused(() => vetFumpadTx(txOf("sell-dbc").vtx, txOf("sell-dbc").wallet, { ...sp, action: "buy", maxSolInLamports: BigInt(1e12) }), /doesn't use/);
   });
 
   it("the real launch with any byte of its message changed (the mint's signature no longer verifies)", () => {

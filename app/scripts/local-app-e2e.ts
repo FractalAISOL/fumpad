@@ -21,7 +21,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { coinAta, coinPda, decodeCoin, decodeTicket, decodeTokenAccount, TOKEN_2022_PROGRAM_ID } from "@fumpad/sdk";
 import type { SilentPolicy } from "../src/chain/allowlist";
-import { buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient, minOutFromQuote } from "../src/chain/build";
+import { buildClaimTx, buildSetAutoClaimTx, prepareBuy, prepareSell, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient, minOutFromQuote } from "../src/chain/build";
 import { prepareLaunchSigned, sendBuilt, signAndSendLaunch } from "../src/chain/flow";
 import type { FumpadSigner } from "../src/chain/signer";
 import { ApiFumpadData } from "../src/data/api";
@@ -72,6 +72,7 @@ interface CapturedTx {
 }
 const captured: CapturedTx[] = [];
 const accounts: Record<string, { address: string; owner: string; data: string }> = {};
+const quoteSlots: Record<string, string> = {};
 let pending: { name: string; note: string; policy: SilentPolicy } | null = null;
 
 const policyJson = (p: SilentPolicy): Record<string, string> =>
@@ -114,11 +115,48 @@ async function run(name: string, note: string, signer: FumpadSigner, build: Para
   return signature;
 }
 
+/** The API caches pool accounts for 2 s (api/src/chain.ts quote): a quote right after a trade would still price the old pool. */
+const settle = () => sleep(2_500);
+
 const tokens = async (owner: PublicKey, mint: PublicKey) => {
   const a = await connection.getAccountInfo(coinAta(owner, mint), "confirmed");
   return a ? decodeTokenAccount(new Uint8Array(a.data)).amount : BigInt(0);
 };
 const coinOnChain = async (mint: PublicKey) => decodeCoin(new Uint8Array((await connection.getAccountInfo(coinPda(mint), "confirmed"))!.data));
+
+/** Token-2022 on the owner's coin account: Reallocate(+MemoTransfer) then Enable/DisableRequiredMemoTransfers. Not an app flow. */
+async function memoRequired(owner: Keypair, mint: PublicKey, on: boolean) {
+  const acct = coinAta(owner.publicKey, mint);
+  const ixs: TransactionInstruction[] = [];
+  if (on)
+    ixs.push(
+      new TransactionInstruction({
+        programId: TOKEN_2022_PROGRAM_ID,
+        keys: [
+          { pubkey: acct, isSigner: false, isWritable: true },
+          { pubkey: owner.publicKey, isSigner: true, isWritable: true },
+          { pubkey: new PublicKey("11111111111111111111111111111111"), isSigner: false, isWritable: false },
+          { pubkey: owner.publicKey, isSigner: true, isWritable: false },
+        ],
+        data: Buffer.from([29, 8, 0]), // Reallocate [MemoTransfer]
+      }),
+    );
+  ixs.push(
+    new TransactionInstruction({
+      programId: TOKEN_2022_PROGRAM_ID,
+      keys: [
+        { pubkey: acct, isSigner: false, isWritable: true },
+        { pubkey: owner.publicKey, isSigner: true, isWritable: false },
+      ],
+      data: Buffer.from([30, on ? 0 : 1]), // MemoTransferExtension: Enable / Disable
+    }),
+  );
+  const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  const t = new VersionedTransaction(new TransactionMessage({ payerKey: owner.publicKey, recentBlockhash: blockhash, instructions: ixs }).compileToV0Message());
+  t.sign([owner]);
+  const res = await connection.confirmTransaction(await connection.sendRawTransaction(t.serialize()), "confirmed");
+  if (res.value.err) throw new Error(`memo-required ${on} failed: ${JSON.stringify(res.value.err)}`);
+}
 
 /* ── scenario ───────────────────────────────────────────────────────────── */
 
@@ -159,44 +197,44 @@ async function main() {
   await waitFor("launch window over", async () => (await connection.getSlot("confirmed")) > launchSlot + 12, 30_000, 500);
 
   // ── curve trades through the router (quote from the data layer → minOut → build → vet → sign) ──
+  /** The pool the app quotes from, as it stood right before a captured trade (for the V7-M3 tests). */
+  const snapPool = async (key: string) => {
+    const c = await coinOnChain(mint);
+    await snapshot(key, c.status === "graduated" ? c.dammPool : c.dbcPool);
+    quoteSlots[key] = String(await connection.getSlot("confirmed"));
+  };
   const buy = async (who: FumpadSigner, name: string, note: string, sol: number) => {
+    await settle();
+    if (name === "buy-dbc" || name === "buy-damm") await snapPool(name === "buy-dbc" ? "dbcPool" : "dammPool");
     const q = await data.quoteTrade({ mint: M, side: "buy", amount: sol, wallet: who.publicKey.toBase58() });
     const args = { mint: M, solIn: sol, minTokensOut: minOutFromQuote(q.amountOut) };
-    await run(name, note, who, () => buildBuyTx(client, who.publicKey, args), { action: "buy", mint: M, maxSolInLamports: solToLamports(sol) });
+    // The trade panel's path: the shown (API) quote's minimum, checked against the app's own quote (V7-M3).
+    const p = await prepareBuy(client, who.publicKey, args);
+    await run(name, note, who, () => p, p.policy);
     return q;
   };
   const sell = async (who: FumpadSigner, name: string, note: string, base: bigint) => {
     const amt = baseToTokens(base);
+    await settle();
     const q = await data.quoteTrade({ mint: M, side: "sell", amount: amt, wallet: who.publicKey.toBase58() });
     const args = { mint: M, tokensIn: amt, minSolOut: minOutFromQuote(q.amountOut) };
-    await run(name, note, who, () => buildSellTx(client, who.publicKey, args), { action: "sell", mint: M });
+    const p = await prepareSell(client, who.publicKey, args);
+    await run(name, note, who, () => p, p.policy);
     return q;
   };
-  const qb = await buy(trader, "buy-dbc", "router buy on the curve (DBC swap2, PartialFill mode), 0.1 SOL", 0.1);
+  const qb = await buy(trader, "buy-dbc", "router buy on the curve (DBC swap2, PartialFill mode), 0.12 SOL", 0.12);
   check("buy (DBC): quote venue dbc, tokens landed", qb.venue === "dbc" && (await tokens(trader.publicKey, mint)) > BigInt(0));
-  await buy(trader2, "buy-dbc-2", "router buy on the curve, second wallet", 0.1);
+  // Small enough that both tickets fit the coin's attestation cap (20% of supply per hour).
+  await buy(trader2, "buy-dbc-2", "router buy on the curve, second wallet", 0.05);
   await sleep(7_000); // > the local 5 s hold
   const traderBal = await tokens(trader.publicKey, mint);
-  await sell(trader, "sell-dbc", "router sell on the curve (DBC swap2 ExactIn), half the bag", traderBal / BigInt(2));
-  check("sell (DBC): half the bag sold", (await tokens(trader.publicKey, mint)) < traderBal);
+  await sell(trader, "sell-dbc", "router sell on the curve (DBC swap2 ExactIn), 30% of the bag (its 10% claim fits the reward pool's per-claim cap, so it pays at once)", (traderBal * BigInt(3)) / BigInt(10));
+  check("sell (DBC): 30% of the bag sold", (await tokens(trader.publicKey, mint)) < traderBal);
   await sell(trader2, "sell-dbc-all", "router sell of the whole bag (second wallet)", await tokens(trader2.publicKey, mint));
-  // trader2 closes its empty coin account, so the keeper's auto-claim can't pay it and escrows (D16).
-  {
-    const close = new TransactionInstruction({
-      programId: TOKEN_2022_PROGRAM_ID,
-      keys: [
-        { pubkey: coinAta(trader2Kp.publicKey, mint), isSigner: false, isWritable: true },
-        { pubkey: trader2Kp.publicKey, isSigner: false, isWritable: true },
-        { pubkey: trader2Kp.publicKey, isSigner: true, isWritable: false },
-      ],
-      data: Buffer.from([9]),
-    });
-    const { blockhash } = await connection.getLatestBlockhash("confirmed");
-    const t = new VersionedTransaction(new TransactionMessage({ payerKey: trader2Kp.publicKey, recentBlockhash: blockhash, instructions: [close] }).compileToV0Message());
-    t.sign([trader2Kp]);
-    await connection.confirmTransaction(await connection.sendRawTransaction(t.serialize()), "confirmed");
-  }
-
+  // trader2's coin account starts requiring memos on incoming transfers (Token-2022 MemoTransfer), so the
+  // keeper's auto-claim (a plain transfer) is refused and the payout goes to the ticket's escrow (D16).
+  // (A missing account isn't enough: the keeper creates it before claim_for.)
+  await memoRequired(trader2Kp, mint, true);
   // ── ticket states through the data layer ──
   const states = new Set<string>();
   const watchTicket = async (owner: PublicKey) => {
@@ -248,7 +286,7 @@ async function main() {
     return t && t.state === "claimable" ? t : null;
   }, 300_000, 3_000);
   const before = await tokens(trader.publicKey, mint);
-  await run("claim", "claim: pays 10% of the ticket from the reward vault into the owner's account", trader, () => buildClaimTx(client, trader.publicKey, { mint: M, ticket: claimable.id }), { action: "claim", mint: M });
+  await run("claim", "claim: pays 10% of the ticket from the reward vault into the owner's account", trader, () => buildClaimTx(client, trader.publicKey, { mint: M, ticket: claimable.id }), { action: "claim", mint: M, ticket: claimable.id });
   const after = await tokens(trader.publicKey, mint);
   const claimedT = decodeTicket(new Uint8Array((await connection.getAccountInfo(new PublicKey(claimable.id), "confirmed"))!.data));
   check("claim: paid (or queued) on chain", claimedT.status === "claimed" ? after > before : claimedT.status === "queued", `${claimedT.status}, +${baseToTokens(after - before)} tokens`);
@@ -266,8 +304,10 @@ async function main() {
     return t && t.status === "escrowed" ? t : null;
   }, 240_000, 3_000);
   await snapshot("ticketEscrowed", t2);
-  await run("withdraw-escrow", "withdraw_escrow: the escrowed payout into the owner's (re-created) account", trader2, () => buildWithdrawEscrowTx(client, trader2.publicKey, { mint: M, ticket: t2.toBase58() }), { action: "escrow", mint: M });
-  check("withdraw_escrow: tokens back in trader2's account", (await tokens(trader2.publicKey, mint)) === esc.claimAmount, `${baseToTokens(esc.claimAmount)} tokens`);
+  await memoRequired(trader2Kp, mint, false); // the owner's account takes plain transfers again
+  const t2Before = await tokens(trader2.publicKey, mint);
+  await run("withdraw-escrow", "withdraw_escrow: the escrowed payout into the owner's (re-created) account", trader2, () => buildWithdrawEscrowTx(client, trader2.publicKey, { mint: M, ticket: t2.toBase58() }), { action: "escrow", mint: M, ticket: t2.toBase58() });
+  check("withdraw_escrow: tokens back in trader2's account", (await tokens(trader2.publicKey, mint)) === t2Before + esc.claimAmount, `${baseToTokens(esc.claimAmount)} tokens`);
 
   // ── creator fees ──
   await waitFor("creator fees accrued", async () => (await coinOnChain(mint)).creatorFeesUnclaimed > BigInt(0), 120_000);
@@ -295,6 +335,7 @@ async function main() {
       escrowTicket: tk2.id,
       txs: captured,
       accounts,
+      quoteSlots,
     };
     writeFileSync(OUT, JSON.stringify(out, null, 2) + "\n");
     console.log(`captured ${captured.length} transactions + ${Object.keys(accounts).length} accounts → ${OUT}`);

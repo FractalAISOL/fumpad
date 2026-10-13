@@ -24,7 +24,7 @@ import { mockRecordTrade, mockSetAutoClaim, mockWithdrawCreatorFees } from "@/da
 import { announceOwnTx, type OwnTxKind } from "@/components/shell/live";
 import { addInstantSpent, getInstantSpent, requestConfirm, useInstantSettings, useWallet, walletActions } from "@/components/wallet/store";
 import type { SilentPolicy } from "./allowlist";
-import { type BuiltTx, buildBuyTx, buildClaimTx, buildSellTx, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient } from "./build";
+import { type BuiltTx, type PreparedTrade, buildClaimTx, prepareBuy, prepareSell, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient } from "./build";
 import { getConnection } from "./connection";
 import { txErrorMessage as programErrorMessage } from "./errors";
 import { type PrepareArgs, prepareLaunchSigned, sendBuilt as sendBuiltTx, signAndSendLaunch } from "./flow";
@@ -267,7 +267,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   /** Build → vet + sign (silently when allowed) → send → confirm (`./flow`). */
   const sendBuilt = useCallback(
     async (
-      build: () => Promise<BuiltTx> | BuiltTx,
+      build: () => Promise<BuiltTx | PreparedTrade> | BuiltTx,
       failed: string,
       policy: SilentPolicy,
       guard: { verb: string; kind: "buy" | "other"; amountSol?: number; sellValueSol?: number },
@@ -320,7 +320,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           // WSOL around it. The signed amount may not exceed what the user entered; min_out is the
           // shown quote's (M-9).
           return sendBuilt(
-            () => buildBuyTx(client, signer!.publicKey, args),
+            () => prepareBuy(client, signer!.publicKey, args),
             "The buy failed on chain. Nothing but the network fee was spent.",
             { action: "buy", mint: args.mint, maxSolInLamports: solToLamports(args.solIn) },
             { verb: "Buy for", kind: "buy", amountSol: args.solIn },
@@ -346,7 +346,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           }
           // Router sell. The keepers attest a qualifying sell afterwards (D31), like one on any app.
           return sendBuilt(
-            () => buildSellTx(client, signer!.publicKey, args),
+            () => prepareSell(client, signer!.publicKey, args),
             "The sell failed on chain. Nothing but the network fee was spent.",
             { action: "sell", mint: args.mint },
             { verb: "Sell for", kind: "other", sellValueSol: value },
@@ -367,7 +367,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           return sendBuilt(
             () => buildClaimTx(client, signer!.publicKey, args),
             "The claim failed on chain. Nothing but the network fee was spent.",
-            { action: "claim", mint: args.mint },
+            { action: "claim", mint: args.mint, ticket: args.ticket },
             { verb: "Claim", kind: "other" },
           );
         },
@@ -538,7 +538,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           return sendBuilt(
             () => buildWithdrawEscrowTx(client, signer!.publicKey, args),
             "The withdrawal failed on chain. Nothing but the network fee was spent.",
-            { action: "escrow", mint: args.mint },
+            { action: "escrow", mint: args.mint, ticket: args.ticket },
             { verb: "Withdraw", kind: "other" },
           );
         },

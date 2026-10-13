@@ -9,7 +9,7 @@
  */
 import { type Connection, type PublicKey, VersionedTransaction } from "@solana/web3.js";
 import type { SilentPolicy } from "./allowlist";
-import type { BuiltTx, FumpadClient } from "./build";
+import type { BuiltTx, FumpadClient, PreparedTrade } from "./build";
 import { checkLaunchBinding, LAUNCH_SLIPPAGE_BPS } from "./launch";
 import { dropLaunchAuth, getLaunchAuth, type LaunchAuth } from "./launchAuth";
 import { type FumpadSigner, signFumpadTx, signLaunchMessage } from "./signer";
@@ -127,9 +127,24 @@ export interface SendOpts {
 }
 
 /** Build → vet + sign (silently when allowed) → send → confirm. Program errors surface from preflight. */
-export async function sendBuilt(build: () => Promise<BuiltTx> | BuiltTx, policy: SilentPolicy, o: SendOpts): Promise<{ signature: string; tx: VersionedTransaction }> {
+export async function sendBuilt(
+  build: () => Promise<BuiltTx | PreparedTrade> | BuiltTx | PreparedTrade,
+  policy: SilentPolicy,
+  o: SendOpts,
+): Promise<{ signature: string; tx: VersionedTransaction }> {
   o.onStage?.("building");
-  const built = await build();
+  const b = await build();
+  let built: BuiltTx;
+  if ("built" in b) {
+    // A trade checked against the app's own quote (V7-M3) brings its own, tighter policy; it must
+    // be for the same action and coin, and spend no more than the caller allows.
+    const p = b.policy;
+    const max = policy.maxSolInLamports;
+    if (p.action !== policy.action || p.mint !== policy.mint || (max !== undefined && (p.maxSolInLamports === undefined || p.maxSolInLamports > max)))
+      throw new Error("Refusing to sign: the trade doesn't match what you entered.");
+    policy = p;
+    built = b.built;
+  } else built = b;
   const { tx, blockhash, lastValidBlockHeight } = await o.client.toTransaction(o.signer.publicKey, built);
   if (built.signers?.length) tx.sign(built.signers);
   await o.beforeSign?.(tx);

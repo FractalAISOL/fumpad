@@ -107,6 +107,15 @@ export interface SilentPolicy {
   maxSolInLamports?: bigint;
   /** Launch only: the reserved mint, which the API already signed as (D18). */
   coSigner?: string;
+  /**
+   * Buys and sells (required, V7-M3): the router's exact `amount_in` (lamports / base units) and the
+   * lowest `min_out` the app accepts, i.e. its own quote of the trade from the pool accounts minus
+   * the max slippage (`./build.ts` `prepareBuy` / `prepareSell`), never the API's number.
+   */
+  amountIn?: bigint;
+  minOut?: bigint;
+  /** Claims and escrow withdrawals (required): the ticket the user picked (base58). */
+  ticket?: string;
 }
 
 export class SilentSignRefused extends Error {
@@ -254,13 +263,16 @@ function vetTokenIx(ix: Ix, wallet: PublicKey, allowSync: boolean): "sync" | "cl
  * accounts, the wallet's own canonical token accounts in the right direction, no referral.
  * Returns the buy's SOL.
  */
-function vetRouterTrade(ix: Ix, side: "buy" | "sell", wallet: PublicKey, mint: PublicKey): bigint {
+function vetRouterTrade(ix: Ix, side: "buy" | "sell", wallet: PublicKey, mint: PublicKey, policy: SilentPolicy): bigint {
   if (ix.data.length !== (side === "buy" ? 25 : 24)) refuse(`malformed ${side}`);
   const mode = side === "buy" ? ix.data[24] : 0;
   if (mode !== 0 && mode !== 1) refuse("unexpected swap mode");
   const amountIn = u64(ix.data, 8);
   const minOut = u64(ix.data, 16);
   if (amountIn === BigInt(0)) refuse(`empty ${side}`);
+  // V7-M3: the amount the user entered, and a real slippage bound from the app's own quote.
+  if (amountIn !== policy.amountIn) refuse(`the ${side} amount differs from what you entered`);
+  if (minOut < policy.minOut!) refuse("its minimum output is below the price the pool quotes right now");
   if (ix.keys.length < 6 || !ix.keys[0].equals(wallet)) refuse("it acts for another wallet");
   const venueProgram = ix.keys[3];
   const remaining = ix.keys.slice(6);
@@ -333,11 +345,11 @@ function vetDbcFirstBuy(ix: Ix, wallet: PublicKey, mint: PublicKey, config: Publ
 }
 
 /** The exact SDK instruction a claim-side action must be (accounts re-derived, data re-encoded). */
-function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_fees" | "withdraw_escrow", wallet: PublicKey, mint: PublicKey): void {
+function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_fees" | "withdraw_escrow", wallet: PublicKey, mint: PublicKey, ticket: PublicKey | null): void {
   switch (main) {
     case "claim": {
-      // The ticket is the one free account (the program checks its owner and mint); the payout goes to the wallet's own account.
-      const want = ix.keys.length === 14 ? rebuilt(() => claimIx({ owner: wallet, mint, ticket: ix.keys[4] })) : null;
+      // The ticket the user picked (the program also checks its owner and mint); the payout goes to the wallet's own account.
+      const want = ticket ? claimIx({ owner: wallet, mint, ticket }) : null;
       if (!want || !isExactly(ix, want)) refuse("unexpected claim accounts");
       return;
     }
@@ -348,11 +360,11 @@ function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_
       if (!isExactly(ix, withdrawCreatorFeesIx(wallet, mint))) refuse("unexpected withdrawal accounts");
       return;
     case "withdraw_escrow": {
-      // Free: the ticket (program-checked owner, mint, status) and the escrow payer (must be
-      // Ticket.escrow_payer on chain; it only gets the escrow's rent back). The payout goes to the wallet's own account.
+      // The ticket the user picked; the one free account is the escrow payer (the program requires it
+      // to be Ticket.escrow_payer, and it only gets the escrow's rent back). The payout goes to the wallet's own account.
       const want =
-        ix.keys.length === 11
-          ? rebuilt(() => withdrawEscrowIx({ owner: wallet, mint, ticket: ix.keys[3], destination: coinAtaOf(wallet, mint), escrowPayer: ix.keys[7] }))
+        ticket && ix.keys.length === 11
+          ? rebuilt(() => withdrawEscrowIx({ owner: wallet, mint, ticket, destination: coinAtaOf(wallet, mint), escrowPayer: ix.keys[7] }))
           : null;
       if (!want || !isExactly(ix, want)) refuse("unexpected escrow accounts");
       return;
@@ -377,6 +389,16 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
   if (action === "launch" ? policy.coSigner !== policy.mint : policy.coSigner !== undefined)
     refuse(action === "launch" ? "a launch needs its reserved mint" : "it asks for unexpected signers");
   if (WRAPS.includes(action) && policy.maxSolInLamports === undefined) refuse("a buy needs a spending limit");
+  if ((action === "buy" || action === "sell") && (policy.amountIn === undefined || policy.minOut === undefined || policy.minOut <= BigInt(0)))
+    refuse("a trade needs its amount and a minimum output");
+  let ticket: PublicKey | null = null;
+  if (action === "claim" || action === "escrow") {
+    try {
+      ticket = new PublicKey(policy.ticket ?? "");
+    } catch {
+      return refuse("a claim needs its ticket");
+    }
+  }
   const { ixs, isSigner } = open(tx, wallet, policy.coSigner ? [policy.coSigner] : []);
   const rest = vetComputeBudget(ixs);
   if (!isSigner(wallet)) refuse("your wallet isn't a signer");
@@ -418,10 +440,10 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
       if (mains++) refuse("it repeats the action");
       // Every user instruction's first account is the acting wallet, as signer.
       if (!ix.keys[0]?.equals(wallet) || !isSigner(ix.keys[0])) refuse("it acts for another wallet");
-      if (main === "buy" || main === "sell") buys += vetRouterTrade(ix, main, wallet, mint);
+      if (main === "buy" || main === "sell") buys += vetRouterTrade(ix, main, wallet, mint, policy);
       else if (main === "register_coin") {
         if (!isExactly(ix, registerCoinIx({ creator: wallet, mint, dbcConfig: init!.config }))) refuse("it registers a different coin");
-      } else vetUserIx(ix, main, wallet, mint);
+      } else vetUserIx(ix, main, wallet, mint, ticket);
     } else {
       refuse(`it calls a program FUMPAD doesn't use (${p.toBase58().slice(0, 8)}…)`);
     }

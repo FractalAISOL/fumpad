@@ -107,6 +107,7 @@ const BLOCKHASH = "11111111111111111111111111111111";
 const SOL = BigInt(1_000_000_000);
 const TENTH = SOL / BigInt(10);
 const M = mint.toBase58();
+const T = ticket.toBase58();
 
 function tx(ixs: TransactionInstruction[], payer = wallet, alts: AddressLookupTableAccount[] = []): VersionedTransaction {
   return new VersionedTransaction(new TransactionMessage({ payerKey: payer, recentBlockhash: BLOCKHASH, instructions: ixs }).compileToV0Message(alts));
@@ -119,14 +120,16 @@ const swapAccounts = (venue: Venue, side: Side, trader = wallet, m = mint) =>
 const routerBuy = (venue: Venue = "dbc", amountIn = TENTH, accounts = swapAccounts(venue, "buy")) =>
   routerBuyIx({ trader: wallet, mint, venue, swapAccounts: accounts, amountIn, minOut: BigInt(1) });
 const routerSell = (venue: Venue = "dbc", accounts = swapAccounts(venue, "sell")) =>
-  routerSellIx({ trader: wallet, mint, venue, swapAccounts: accounts, amountIn: BigInt(5_000_000), minOut: BigInt(1) });
+  routerSellIx({ trader: wallet, mint, venue, swapAccounts: accounts, amountIn: SELL_IN, minOut: BigInt(1) });
 const coinAtaIx = (owner = wallet, m = mint) => createAtaIdempotentIx(wallet, owner, m, TOKEN_2022_PROGRAM_ID, coinAta(owner, m));
 const wsolAtaIx = () => createAtaIdempotentIx(wallet, wallet, WSOL_MINT, TOKEN_PROGRAM_ID, wsolAta(wallet));
 /** Exactly what `FumpadClient.buildBuy` / `buildSell` (`./build.ts`) emit. */
 const buyTx = (venue: Venue = "dbc", lamports = TENTH, buy = routerBuy(venue, lamports)) =>
   tx([...cb(), coinAtaIx(), ...wrapSolIxs(wallet, lamports), buy, unwrapSolIx(wallet)]);
 const sellTx = (venue: Venue = "dbc", sell = routerSell(venue)) => tx([...cb(), wsolAtaIx(), sell, unwrapSolIx(wallet)]);
-const buyPolicy = (max = TENTH): SilentPolicy => ({ action: "buy", mint: M, maxSolInLamports: max });
+const buyPolicy = (max = TENTH, amountIn = max): SilentPolicy => ({ action: "buy", mint: M, maxSolInLamports: max, amountIn, minOut: BigInt(1) });
+const SELL_IN = BigInt(5_000_000);
+const sellPolicy: SilentPolicy = { action: "sell", mint: M, amountIn: SELL_IN, minOut: BigInt(1) };
 /** Replace the key at `i` of an instruction (a tampered account list). */
 function withKey(ix: TransactionInstruction, i: number, k: PublicKey): TransactionInstruction {
   return new TransactionInstruction({ programId: ix.programId, data: ix.data, keys: ix.keys.map((m, j) => (j === i ? { ...m, pubkey: k } : m)) });
@@ -183,15 +186,15 @@ describe("vetFumpadTx: allowed shapes", () => {
   it("router buy and sell on the curve (DBC) and after graduation (DAMM v2)", () => {
     assert.equal(vetFumpadTx(buyTx("dbc"), wallet, buyPolicy()).solInLamports, TENTH);
     assert.equal(vetFumpadTx(buyTx("damm"), wallet, buyPolicy()).solInLamports, TENTH);
-    assert.equal(vetFumpadTx(sellTx("dbc"), wallet, { action: "sell", mint: M }).solInLamports, BigInt(0));
-    vetFumpadTx(sellTx("damm"), wallet, { action: "sell", mint: M });
+    assert.equal(vetFumpadTx(sellTx("dbc"), wallet, sellPolicy).solInLamports, BigInt(0));
+    vetFumpadTx(sellTx("damm"), wallet, sellPolicy);
   });
 
   it("claim, auto-claim, creator fees, escrow", () => {
-    vetFumpadTx(tx([...cb(), coinAtaIx(), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M });
+    vetFumpadTx(tx([...cb(), coinAtaIx(), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M, ticket: T });
     vetFumpadTx(tx([...cb(), setAutoClaimIx({ wallet, mint, enabled: false })]), wallet, { action: "auto-claim", mint: M });
     vetFumpadTx(tx([withdrawCreatorFeesIx({ creator: wallet, mint })]), wallet, { action: "withdraw", mint: M });
-    vetFumpadTx(tx([...cb(), coinAtaIx(), withdrawEscrowIx({ owner: wallet, mint, ticket, escrowPayer: other })]), wallet, { action: "escrow", mint: M });
+    vetFumpadTx(tx([...cb(), coinAtaIx(), withdrawEscrowIx({ owner: wallet, mint, ticket, escrowPayer: other })]), wallet, { action: "escrow", mint: M, ticket: T });
   });
 
   it("a launch, with and without the creator's first buy, co-signed by the mint", () => {
@@ -215,13 +218,28 @@ describe("vetFumpadTx: allowed shapes", () => {
 
 describe("vetFumpadTx: router trades", () => {
   it("refuses a buy above the amount entered, counting the router amount and the SOL wrapped", () => {
-    refused(() => vetFumpadTx(buyTx("dbc", SOL), wallet, buyPolicy()), /more SOL/);
+    refused(() => vetFumpadTx(buyTx("dbc", SOL), wallet, buyPolicy()), /differs from what you entered/);
+    refused(() => vetFumpadTx(buyTx("dbc", SOL), wallet, buyPolicy(TENTH, SOL)), /more SOL/);
     // A small router amount but a big wrap.
     refused(() => vetFumpadTx(tx([...cb(), ...wrapSolIxs(wallet, SOL), routerBuy("dbc", TENTH), unwrapSolIx(wallet)]), wallet, buyPolicy()), /more SOL/);
     // Two wraps summed.
     refused(() => vetFumpadTx(tx([...wrapSolIxs(wallet, TENTH), ...wrapSolIxs(wallet, TENTH), routerBuy()]), wallet, buyPolicy()), /more SOL/);
     // Two buys in one transaction.
-    refused(() => vetFumpadTx(tx([routerBuy(), routerBuy()]), wallet, buyPolicy(SOL)), /repeats/);
+    refused(() => vetFumpadTx(tx([routerBuy(), routerBuy()]), wallet, buyPolicy(SOL, TENTH)), /repeats/);
+  });
+
+  it("V7-M3: refuses a min_out below the app's own quote floor, a trade without bounds, another amount", () => {
+    const lowBuy = routerBuyIx({ trader: wallet, mint, venue: "dbc", swapAccounts: swapAccounts("dbc", "buy"), amountIn: TENTH, minOut: BigInt(0) });
+    refused(() => vetFumpadTx(buyTx("dbc", TENTH, lowBuy), wallet, buyPolicy()), /minimum output/);
+    const floor = BigInt(1_000_000);
+    const atFloor = routerBuyIx({ trader: wallet, mint, venue: "damm", swapAccounts: swapAccounts("damm", "buy"), amountIn: TENTH, minOut: floor });
+    vetFumpadTx(buyTx("damm", TENTH, atFloor), wallet, { ...buyPolicy(), minOut: floor });
+    refused(() => vetFumpadTx(buyTx("damm", TENTH, atFloor), wallet, { ...buyPolicy(), minOut: floor + BigInt(1) }), /minimum output/);
+    refused(() => vetFumpadTx(sellTx("dbc"), wallet, { ...sellPolicy, minOut: BigInt(2) }), /minimum output/);
+    refused(() => vetFumpadTx(sellTx("dbc"), wallet, { ...sellPolicy, amountIn: SELL_IN - BigInt(1) }), /differs/);
+    refused(() => vetFumpadTx(sellTx("dbc"), wallet, { action: "sell", mint: M }), /minimum output/);
+    refused(() => vetFumpadTx(sellTx("dbc"), wallet, { ...sellPolicy, minOut: BigInt(0) }), /minimum output/);
+    refused(() => vetFumpadTx(buyTx(), wallet, { action: "buy", mint: M, maxSolInLamports: TENTH }), /minimum output/);
   });
 
   it("refuses a buy without a spending limit", () => {
@@ -256,7 +274,7 @@ describe("vetFumpadTx: router trades", () => {
     refused(() => vetFumpadTx(tamper(3, other, "damm"), wallet, buyPolicy()), /own token accounts/);
     refused(() => vetFumpadTx(tamper(11, other, "damm"), wallet, buyPolicy()), /own token accounts/); // DAMM referral
     // Buy accounts on a sell (direction swapped), and the reverse.
-    refused(() => vetFumpadTx(tx([routerSell("dbc", swapAccounts("dbc", "buy"))]), wallet, { action: "sell", mint: M }), /own token accounts/);
+    refused(() => vetFumpadTx(tx([routerSell("dbc", swapAccounts("dbc", "buy"))]), wallet, sellPolicy), /own token accounts/);
     refused(() => vetFumpadTx(tx([routerBuy("damm", TENTH, swapAccounts("damm", "sell"))]), wallet, buyPolicy()), /own token accounts/);
     // DAMM accounts under the DBC venue (or vice versa), an extra account, a missing one.
     refused(
@@ -312,10 +330,7 @@ describe("vetFumpadTx: SOL and token moves", () => {
     );
     refused(
       () =>
-        vetFumpadTx(tx([routerSell(), SystemProgram.transfer({ fromPubkey: wallet, toPubkey: wsolAta(wallet), lamports: 1 })]), wallet, {
-          action: "sell",
-          mint: M,
-        }),
+        vetFumpadTx(tx([routerSell(), SystemProgram.transfer({ fromPubkey: wallet, toPubkey: wsolAta(wallet), lamports: 1 })]), wallet, sellPolicy),
       /moves SOL/,
     );
     refused(
@@ -323,7 +338,7 @@ describe("vetFumpadTx: SOL and token moves", () => {
         vetFumpadTx(
           tx([claimIx({ owner: wallet, mint, ticket }), SystemProgram.transfer({ fromPubkey: wallet, toPubkey: wsolAta(wallet), lamports: 1 })]),
           wallet,
-          { action: "claim", mint: M },
+          { action: "claim", mint: M, ticket: T },
         ),
       /moves SOL/,
     );
@@ -346,11 +361,11 @@ describe("vetFumpadTx: SOL and token moves", () => {
       () => vetFumpadTx(tx([routerBuy(), tokenIx([4, 1, 0, 0, 0, 0, 0, 0, 0], [wsolAta(wallet), other, wallet])]), wallet, buyPolicy()),
       /token instruction/,
     );
-    refused(() => vetFumpadTx(tx([routerSell(), tokenIx([9], [wsolAta(wallet), other, wallet])]), wallet, { action: "sell", mint: M }), /token instruction/);
+    refused(() => vetFumpadTx(tx([routerSell(), tokenIx([9], [wsolAta(wallet), other, wallet])]), wallet, sellPolicy), /token instruction/);
     refused(() => vetFumpadTx(tx([routerBuy(), tokenIx([17], [other])]), wallet, buyPolicy()), /token instruction/);
     // SyncNative has no place in a sell; nothing touches tokens on a claim; Token-2022 is never called.
-    refused(() => vetFumpadTx(tx([routerSell(), tokenIx([17], [wsolAta(wallet)])]), wallet, { action: "sell", mint: M }), /token instruction/);
-    refused(() => vetFumpadTx(tx([claimIx({ owner: wallet, mint, ticket }), unwrapSolIx(wallet)]), wallet, { action: "claim", mint: M }), /token instruction/);
+    refused(() => vetFumpadTx(tx([routerSell(), tokenIx([17], [wsolAta(wallet)])]), wallet, sellPolicy), /token instruction/);
+    refused(() => vetFumpadTx(tx([claimIx({ owner: wallet, mint, ticket }), unwrapSolIx(wallet)]), wallet, { action: "claim", mint: M, ticket: T }), /token instruction/);
     refused(
       () =>
         vetFumpadTx(
@@ -363,13 +378,13 @@ describe("vetFumpadTx: SOL and token moves", () => {
   });
 
   it("refuses SOL wrapped without a buy", () => {
-    refused(() => vetFumpadTx(tx([...wrapSolIxs(wallet, TENTH), routerSell()]), wallet, { action: "sell", mint: M }), /moves SOL/);
+    refused(() => vetFumpadTx(tx([...wrapSolIxs(wallet, TENTH), routerSell()]), wallet, sellPolicy), /moves SOL/);
   });
 
   it("creates token accounts only for the wallet, for this coin (and WSOL when trading)", () => {
-    refused(() => vetFumpadTx(tx([coinAtaIx(other), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M }), /isn't yours/);
+    refused(() => vetFumpadTx(tx([coinAtaIx(other), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M, ticket: T }), /isn't yours/);
     refused(() => vetFumpadTx(tx([coinAtaIx(wallet, otherMint), routerBuy()]), wallet, buyPolicy()), /another token/);
-    refused(() => vetFumpadTx(tx([wsolAtaIx(), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M }), /another token/);
+    refused(() => vetFumpadTx(tx([wsolAtaIx(), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M, ticket: T }), /another token/);
     const wrongProgram = createAtaIdempotentIx(
       wallet,
       wallet,
@@ -390,9 +405,9 @@ describe("vetFumpadTx: SOL and token moves", () => {
 
 describe("vetFumpadTx: claims and the rest", () => {
   it("refuses instructions the action doesn't use", () => {
-    refused(() => vetFumpadTx(tx([routerBuy()]), wallet, { action: "sell", mint: M }), /doesn't use/);
-    refused(() => vetFumpadTx(tx([setAutoClaimIx({ wallet, mint, enabled: true })]), wallet, { action: "claim", mint: M }), /doesn't use/);
-    refused(() => vetFumpadTx(tx([registerCoinIx({ creator: wallet, mint, config })]), wallet, { action: "claim", mint: M }), /doesn't use/);
+    refused(() => vetFumpadTx(tx([routerBuy()]), wallet, sellPolicy), /doesn't use/);
+    refused(() => vetFumpadTx(tx([setAutoClaimIx({ wallet, mint, enabled: true })]), wallet, { action: "claim", mint: M, ticket: T }), /doesn't use/);
+    refused(() => vetFumpadTx(tx([registerCoinIx({ creator: wallet, mint, config })]), wallet, { action: "claim", mint: M, ticket: T }), /doesn't use/);
     // A FUMPAD instruction outside the user set (e.g. an admin call) never matches.
     refused(() =>
       vetFumpadTx(
@@ -407,10 +422,14 @@ describe("vetFumpadTx: claims and the rest", () => {
 
   it("refuses a claim paying another account, auto-claim for another coin, odd flags", () => {
     refused(
-      () => vetFumpadTx(tx([withKey(claimIx({ owner: wallet, mint, ticket }), 10, coinAta(other, mint))]), wallet, { action: "claim", mint: M }),
+      () => vetFumpadTx(tx([withKey(claimIx({ owner: wallet, mint, ticket }), 10, coinAta(other, mint))]), wallet, { action: "claim", mint: M, ticket: T }),
       /claim accounts/,
     );
-    refused(() => vetFumpadTx(tx([claimIx({ owner: wallet, mint: otherMint, ticket })]), wallet, { action: "claim", mint: M }), /claim accounts/);
+    refused(() => vetFumpadTx(tx([claimIx({ owner: wallet, mint: otherMint, ticket })]), wallet, { action: "claim", mint: M, ticket: T }), /claim accounts/);
+    // Another ticket than the one the user picked, or no ticket in the policy.
+    refused(() => vetFumpadTx(tx([claimIx({ owner: wallet, mint, ticket: other })]), wallet, { action: "claim", mint: M, ticket: T }), /claim accounts/);
+    refused(() => vetFumpadTx(tx([claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M }), /needs its ticket/);
+    refused(() => vetFumpadTx(tx([withdrawEscrowIx({ owner: wallet, mint, ticket: other, escrowPayer: other })]), wallet, { action: "escrow", mint: M, ticket: T }), /escrow accounts/);
     refused(() => vetFumpadTx(tx([setAutoClaimIx({ wallet, mint: otherMint, enabled: true })]), wallet, { action: "auto-claim", mint: M }), /auto-claim/);
     const flag = setAutoClaimIx({ wallet, mint, enabled: true });
     refused(
@@ -424,10 +443,7 @@ describe("vetFumpadTx: claims and the rest", () => {
     refused(() => vetFumpadTx(tx([withdrawCreatorFeesIx({ creator: wallet, mint: otherMint })]), wallet, { action: "withdraw", mint: M }), /withdrawal/);
     refused(
       () =>
-        vetFumpadTx(tx([withdrawEscrowIx({ owner: wallet, mint, ticket, escrowPayer: other, destination: coinAta(other, mint) })]), wallet, {
-          action: "escrow",
-          mint: M,
-        }),
+        vetFumpadTx(tx([withdrawEscrowIx({ owner: wallet, mint, ticket, escrowPayer: other, destination: coinAta(other, mint) })]), wallet, { action: "escrow", mint: M, ticket: T }),
       /escrow/,
     );
   });
@@ -435,7 +451,7 @@ describe("vetFumpadTx: claims and the rest", () => {
   it("refuses a transaction acting for or paid by someone else", () => {
     refused(() => vetFumpadTx(buyTx("dbc", TENTH), other, buyPolicy()), /fee payer/);
     refused(() => vetFumpadTx(tx([routerBuy()], other), wallet, buyPolicy()), /fee payer/);
-    refused(() => vetFumpadTx(tx([claimIx({ owner: other, mint, ticket })]), wallet, { action: "claim", mint: M }), /signers/);
+    refused(() => vetFumpadTx(tx([claimIx({ owner: other, mint, ticket })]), wallet, { action: "claim", mint: M, ticket: T }), /signers/);
   });
 
   it("refuses lookup tables, outsized priority fees and odd compute budget instructions", () => {

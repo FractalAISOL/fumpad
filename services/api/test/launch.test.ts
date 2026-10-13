@@ -76,11 +76,12 @@ describe("POST /v1/launch/prepare body", () => {
 });
 
 describe("app/src/chain stays in sync with the v0.7 program", () => {
-  it("program id (cluster.ts → v07/ids.ts), vanity suffix, IDL account lists the app relies on", () => {
+  it("program id (cluster.ts; the rest from @fumpad/sdk), vanity suffix, IDL account lists the app relies on", () => {
     const chainDir = join(dirname(fileURLToPath(import.meta.url)), "../../../app/src/chain/");
     expect(readFileSync(chainDir + "cluster.ts", "utf8")).toContain(`FUMPAD_PROGRAM_ADDRESS = "${FUMPAD_PROGRAM_ID.toBase58()}"`);
-    expect(readFileSync(chainDir + "v07/ids.ts", "utf8")).toContain("new PublicKey(FUMPAD_PROGRAM_ADDRESS)");
-    expect(readFileSync(chainDir + "program.ts", "utf8")).toContain(`VANITY_SUFFIX = "${FUMPAD_VANITY_SUFFIX}"`);
+    // The app's instruction encoders, PDAs and vanity suffix are the SDK's own (no app copies left).
+    expect(readFileSync(chainDir + "program.ts", "utf8")).toContain("VANITY_SUFFIX = FUMPAD_VANITY_SUFFIX");
+    expect(FUMPAD_VANITY_SUFFIX).toBe("fmbL");
     expect(idlInstruction(FUMPAD_IDL, "set_auto_claim").accounts.map((a) => a.name)).toEqual(["wallet", "position", "event_authority", "program"]);
     expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(13);
   });
