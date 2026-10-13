@@ -133,10 +133,6 @@ fn route<'info>(ctx: Context<'info, Route<'info>>, is_buy: bool, amount_in: u64,
         coin.status = CoinStatus::Complete;
         coin.completed_at = ts;
     }
-    let mut rd = [0u8; 16];
-    rd[..8].copy_from_slice(&base_amount.to_le_bytes());
-    rd[8..].copy_from_slice(&quote_moved.to_le_bytes());
-    set_return_data(&rd);
     emit_event!(ctx, RoutedTrade {
         mint,
         trader,
@@ -153,6 +149,11 @@ fn route<'info>(ctx: Context<'info, Route<'info>>, is_buy: bool, amount_in: u64,
     if completed {
         emit_event!(ctx, CurveCompleted { mint, dbc_pool: pool_key, ts });
     }
+    // Last, so no later CPI resets it: base ‖ quote moved (u64 LE each).
+    let mut rd = [0u8; 16];
+    rd[..8].copy_from_slice(&base_amount.to_le_bytes());
+    rd[8..].copy_from_slice(&quote_moved.to_le_bytes());
+    set_return_data(&rd);
     Ok(())
 }
 
