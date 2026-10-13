@@ -139,6 +139,31 @@ describe("max open tickets", () => {
   });
 });
 
+describe("on-chain attestation tracking", () => {
+  const attested = (t: Tape, sellSig: string, pda: string) =>
+    t.events.push({ kind: "ticket_attested", key: { slot: t.slot, txIndex: -1, phase: 4, ixKey: 0 }, signature: `att-${sellSig}`, blockTime: t.t, ref: { signature: sellSig, ixKey: 0 }, ticket: pda });
+  it("rebuy debits carry the attested ticket PDA (null before attestation)", () => {
+    const t = new Tape();
+    t.buy(A, 10n * SOL);
+    const s1 = t.wait(600).sell(A, SOL);
+    t.wait(5).buy(A, SOL / 4n);
+    t.wait(5);
+    attested(t, s1, "TicketPda1111111111111111111111111111111111");
+    t.wait(5).buy(A, SOL / 4n);
+    const o = t.run();
+    expect(o.rebuys.map((r) => r.ticketAddress)).toEqual([null, "TicketPda1111111111111111111111111111111111"]);
+  });
+  it("a ticket never attested within max_attest_age stops blocking the wallet (trackAttestations)", () => {
+    const t = new Tape();
+    t.buy(A, 10n * SOL);
+    t.wait(600);
+    for (let i = 0; i < 5; i++) t.wait(1).sell(A, SOL);
+    t.wait(86_400 + 10).sell(A, SOL);
+    expect(t.run().sells.at(-1)!.reason).toBe("too_many_open_tickets");
+    expect(t.run({ trackAttestations: true }).sells.at(-1)!.reason).toBe(null);
+  });
+});
+
 describe("rebuy rule (7 days, newest first, buys and transfers in)", () => {
   const twoTickets = () => {
     const t = new Tape();

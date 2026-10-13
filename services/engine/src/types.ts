@@ -10,8 +10,14 @@ export interface EngineParams {
   maxOpenTickets: number;
   /** Ticket voids when claim_amount(tokens) rounds to 0 (apply_rebuy). */
   claimBps: bigint;
-  /** SPEC §5.4: |block_time − publish_time| ≤ 60 s. */
+  /** SPEC §5.4: |block_time − publish_time| ≤ 60 s (Params.max_price_age_secs). */
   maxPythDeltaSecs: number;
+  /**
+   * Params.max_attest_age_secs. With `trackAttestations`, an engine ticket that has no TicketAttested
+   * within this age of its sell stops counting as open (it can never be attested any more).
+   */
+  maxAttestAgeSecs: number;
+  trackAttestations: boolean;
 }
 
 export const DEFAULT_ENGINE_PARAMS: EngineParams = {
@@ -21,6 +27,8 @@ export const DEFAULT_ENGINE_PARAMS: EngineParams = {
   maxOpenTickets: 5,
   claimBps: 1_000n,
   maxPythDeltaSecs: 60,
+  maxAttestAgeSecs: 86_400,
+  trackAttestations: false,
 };
 
 /** What the engine needs to know about one registered coin (all from finalized chain data). */
@@ -69,6 +77,8 @@ export interface SwapEvent {
   quoteGross: bigint;
   quoteMint: string;
   nextSqrtPrice: bigint;
+  /** The swap was CPI'd directly by the fumpad router (venue byte bit7 of the attestation). */
+  routed: boolean;
 }
 
 export interface TransferEvent {
@@ -113,7 +123,17 @@ export interface ParseIssueEvent {
   message: string;
 }
 
-export type EngineEvent = SwapEvent | TransferEvent | PoolInitEvent | TicketStatusEvent | ParseIssueEvent;
+/** The sell's ticket was attested on chain (TicketAttested); `ticket` = the ticket PDA. */
+export interface TicketAttestedEvent {
+  kind: "ticket_attested";
+  key: OrderKey;
+  signature: string;
+  blockTime: number;
+  ref: TicketRef;
+  ticket: string;
+}
+
+export type EngineEvent = SwapEvent | TransferEvent | PoolInitEvent | TicketStatusEvent | TicketAttestedEvent | ParseIssueEvent;
 
 /** A ticket is identified by the sell that created it. */
 export interface TicketRef {
@@ -154,6 +174,7 @@ export interface SellDecision {
   blockTime: number;
   venue: Venue;
   pool: string;
+  routed: boolean;
   trader: string | null;
   baseAmount: bigint;
   quoteGross: bigint;
@@ -172,6 +193,8 @@ export interface RebuyDebit {
   blockTime: number;
   wallet: string;
   ticket: TicketRef;
+  /** On-chain ticket PDA when its TicketAttested is in the history (else null: attest the sell first). */
+  ticketAddress: string | null;
   debit: bigint;
   remaining: bigint;
   voided: boolean;

@@ -25,6 +25,11 @@ export interface CrawlOptions {
   /** Shared caches (keep across runs for incremental crawling). */
   txCache?: Map<string, ConfirmedTx>;
   blockIndexCache?: Map<number, Map<string, number>>;
+  /**
+   * Extra addresses whose full finalized signature lists are part of the history (e.g. the fumpad Coin
+   * PDA — attest/claim/close txs reference it — and attested ticket PDAs, for guardian voids).
+   */
+  extraAddresses?: readonly string[];
   /** Hard cap on fetched transactions (safety for huge coins). */
   maxTxs?: number;
   onProgress?: (msg: string) => void;
@@ -63,7 +68,7 @@ export async function crawlMintHistory(rpc: MeteoraRpc, mint: string, opts: Craw
   const txs = opts.txCache ?? new Map<string, ConfirmedTx>();
   const sigs = new Map<string, SignatureInfo>();
   const crawled = new Set<string>();
-  const queue = [mint];
+  const queue = [mint, ...(opts.extraAddresses ?? [])];
   const accounts = new Set<string>();
   const scanned = new Set<string>();
   while (queue.length) {

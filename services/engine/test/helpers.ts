@@ -70,6 +70,7 @@ export class Tape {
       quoteGross: quote,
       quoteMint: o.quoteMint ?? WSOL_MINT,
       nextSqrtPrice: o.nextSqrtPrice ?? SQRT0,
+      routed: o.routed ?? false,
     };
     this.events.push(e);
     return signature;

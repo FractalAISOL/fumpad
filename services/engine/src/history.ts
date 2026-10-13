@@ -34,6 +34,8 @@ export interface HistoryOptions {
   protocolOwners?: ReadonlySet<string>;
   /** Owners whose outflow in a tx marks that tx's inflows as FUMPAD payouts (claims / escrow withdrawals). */
   payoutOwners?: ReadonlySet<string>;
+  /** fumpad program id: swaps whose immediate CPI parent is it are `routed`. */
+  routerProgramId?: string;
   /** Extra events from a tx (e.g. FUMPAD ticket lifecycle), given the tx's base order key. */
   extraEvents?: (tx: ConfirmedTx, base: { slot: number; txIndex: number; signature: string; blockTime: number }) => EngineEvent[];
 }
@@ -81,6 +83,7 @@ export function buildEvents(coin: CoinFacts, history: readonly HistoryTx[], opts
         quoteGross: t.quoteGross,
         quoteMint: t.quoteMint,
         nextSqrtPrice: t.nextSqrtPrice,
+        routed: !!opts.routerProgramId && t.outerPrograms[t.outerPrograms.length - 1] === opts.routerProgramId,
       });
       if (t.trader) attributed.set(t.trader, (attributed.get(t.trader) ?? 0n) + (t.side === "buy" ? t.baseAmount : -t.baseAmount));
     }

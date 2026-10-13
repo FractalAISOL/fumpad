@@ -53,6 +53,8 @@ interface EngineTicket {
   sellTs: bigint;
   tokens: bigint;
   active: boolean;
+  /** On-chain ticket PDA once attested. */
+  address: string | null;
 }
 
 interface Wallet {
@@ -122,7 +124,19 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
 
   const issue = (e: EngineEvent, kind: EngineIssue["kind"], detail: string) => issues.push({ signature: e.signature, slot: e.key.slot, kind, detail });
 
+  // An engine ticket never attested within max_attest_age can't be attested any more: release its slot.
+  const expireUnattested = (x: Wallet, now: bigint) => {
+    if (!params.trackAttestations) return;
+    for (const t of x.tickets) {
+      if (t.active && !t.address && t.sellTs + BigInt(params.maxAttestAgeSecs) < now) {
+        t.active = false;
+        x.hold.openCount -= 1;
+      }
+    }
+  };
+
   const rebuy = (w: string, x: Wallet, amount: bigint, e: EngineEvent, kind: RebuyDebit["kind"], ixKey: number) => {
+    expireUnattested(x, BigInt(e.blockTime));
     const live = x.tickets.filter((t) => t.active);
     if (!live.length || amount === 0n) return;
     const now = BigInt(e.blockTime);
@@ -141,7 +155,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         t.active = false;
         x.hold.openCount -= 1;
       }
-      rebuys.push({ signature: e.signature, ixKey, kind, slot: e.key.slot, blockTime: e.blockTime, wallet: w, ticket: t.ref, debit: d, remaining: t.tokens, voided });
+      rebuys.push({ signature: e.signature, ixKey, kind, slot: e.key.slot, blockTime: e.blockTime, wallet: w, ticket: t.ref, ticketAddress: t.address, debit: d, remaining: t.tokens, voided });
     });
   };
 
@@ -163,6 +177,15 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         }
         dammPool = e.pool;
         pools.set(e.pool, spotFromSqrtQ64(e.sqrtPrice) ?? 0n);
+        break;
+      }
+      case "ticket_attested": {
+        const t = tickets.get(refKey(e.ref));
+        if (!t) {
+          issue(e, "unknown_ticket_status", `attested ticket ${e.ticket} for unknown sell ${refKey(e.ref)}`);
+          break;
+        }
+        t.address = e.ticket;
         break;
       }
       case "ticket_status": {
@@ -222,6 +245,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
           blockTime: e.blockTime,
           venue: e.venue,
           pool: e.pool,
+          routed: e.routed,
           trader: w,
           baseAmount: e.baseAmount,
           quoteGross: e.quoteGross,
@@ -234,6 +258,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
           break;
         }
         const x = wallet(w);
+        expireUnattested(x, now);
         const balanceBefore = x.balance;
         x.balance -= e.baseAmount;
         if (x.balance < 0n) {
@@ -287,7 +312,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
           referenceQ64: reference.avgQ64,
           preSpotQ64: pre,
         };
-        const t: EngineTicket = { ref: { signature: e.signature, ixKey: e.key.ixKey }, owner: w, seq: x.nextSeq, sellTs: now, tokens, active: true };
+        const t: EngineTicket = { ref: { signature: e.signature, ixKey: e.key.ixKey }, owner: w, seq: x.nextSeq, sellTs: now, tokens, active: true, address: null };
         x.nextSeq += 1n;
         x.tickets.push(t);
         x.hold.openCount += 1;
