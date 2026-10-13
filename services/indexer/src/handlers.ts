@@ -55,6 +55,8 @@ const touchWallet = (ctx: TxCtx, w: string | undefined | null) => {
 };
 const b58 = (k: unknown) => (k instanceof PublicKey ? k.toBase58() : String(k));
 const big = (v: unknown) => (typeof v === "bigint" ? v : BigInt(v as string | number));
+/** `TicketAttested.effective_at` as a column value: 0 / absent (events from before INTERFACE §8.4) → NULL. */
+const effectiveAt = (v: unknown) => (v === undefined || v === null || big(v) <= 0n ? null : s(big(v)));
 
 /** JSON-safe copy of an event payload (bigint → string, PublicKey → base58). */
 export function jsonify(v: unknown): unknown {
@@ -394,12 +396,13 @@ export async function applyEvents(ctx: TxCtx, events: IndexedEvent[]): Promise<v
         const source = Number(d.source) === 1 ? "router" : "outside";
         const ins = await c.query(
           `INSERT INTO tickets (ticket, mint, owner, seq, tokens, original_tokens, sell_price_q64, exec_price_q64, sell_usd_cents, sell_lamports, sell_ts, created_sig, created_slot,
-             source, venue, sell_signature, sell_ix_key, attested_at, keepers, app)
-           VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (ticket) DO NOTHING`,
+             source, venue, sell_signature, sell_ix_key, attested_at, effective_at, keepers, app)
+           VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT (ticket) DO NOTHING`,
           [
             ticket, mint, owner, s(big(d.seq)), s(tokens), s(big(d.sellPriceQ64)), s(exec), s(big(d.sellUsdCents)), s(sellLamports), s(big(d.sellTs)), ctx.signature, ctx.slot,
-            // attested_at = the EFFECTIVE time (rate-cap deferral, INTERFACE §8.4): the challenge window runs from it
-            source, Number(d.venue) === 1 ? "damm_v2" : "dbc", sig, Number(d.ixKey), s(d.effectiveAt !== undefined ? big(d.effectiveAt) : ts), (d.keepers as unknown[]).map(b58), app.rows[0]?.app ?? null,
+            // attested_at = when the attestation landed; effective_at = when the ticket takes effect (rate-cap
+            // deferral, INTERFACE §8.4): the challenge window runs from it (NULL → readers fall back to attested_at)
+            source, Number(d.venue) === 1 ? "damm_v2" : "dbc", sig, Number(d.ixKey), s(ts), effectiveAt(d.effectiveAt), (d.keepers as unknown[]).map(b58), app.rows[0]?.app ?? null,
           ],
         );
         if (!ins.rowCount) break;

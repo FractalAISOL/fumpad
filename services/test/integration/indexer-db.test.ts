@@ -103,15 +103,17 @@ describe("indexer v0.7 → db → api", () => {
   });
 
   it("attested tickets, debits, voids, queue and claims", async () => {
-    const att = (ticket: PublicKey, owner: PublicKey, sig: number, tokens: bigint) =>
+    // effective_at (contracts §8.4): = ts, or later when the coin's attestation rate cap deferred the ticket
+    const att = (ticket: PublicKey, owner: PublicKey, sig: number, tokens: bigint, deferSecs = 0) =>
       ev("TicketAttested", {
         mint, owner, ticket, seq: bn(0n), pool: new PublicKey(F.coin.dbcPool), venue: 0, source: 1, signature: Array.from(new Uint8Array(64).fill(sig)), ix_key: 0,
         base_amount: bn(tokens), quote_gross: bn(1_000_000_000n), tokens: bn(tokens), sell_price_q64: bn(1n << 50n), sell_usd_cents: bn(15_000n),
         pyth_publish_time: bn(0n), slot: bn(1n), sell_ts: bn(BigInt(launchTs + 1_000)), keepers: [k(), k()], submitter: k(), ts: bn(BigInt(launchTs + 1_100)),
+        effective_at: bn(BigInt(launchTs + 1_100 + deferSecs)),
       });
-    await ing.ingest(tx(sigOf(2), [att(ticketA, trader, 9, 1_000_000_000n)]), "rpc", "finalized");
+    await ing.ingest(tx(sigOf(2), [att(ticketA, trader, 9, 1_000_000_000n, 300)]), "rpc", "finalized");
     const t = (await db.query("SELECT * FROM tickets WHERE ticket = $1", [ticketA.toBase58()])).rows[0];
-    expect(t).toMatchObject({ source: "router", venue: "dbc", sell_signature: sigOf(9), status: "open" });
+    expect(t).toMatchObject({ source: "router", venue: "dbc", sell_signature: sigOf(9), status: "open", attested_at: String(launchTs + 1_100), effective_at: String(launchTs + 1_400) });
     expect(t.keepers).toHaveLength(2);
     await ing.ingest(tx(sigOf(3), [ev("TicketDebited", { ticket: ticketA, mint, owner: trader, signature: Array(64).fill(4), ix_key: 0xffffffff, debited: bn(400_000_000n), remaining: bn(600_000_000n), voided: false, ts: bn(BigInt(launchTs + 1_200)) })]), "rpc", "finalized");
     await ing.ingest(tx(sigOf(4), [ev("ClaimQueued", { mint, ticket: ticketA, owner: trader, amount: bn(60_000_000n), queue_len: 1, ts: bn(BigInt(launchTs + 1_300)), triggered_by: trader })]), "rpc", "confirmed");
@@ -157,7 +159,9 @@ describe("indexer v0.7 → db → api", () => {
     const a = tickets.find((t) => t.id === ticketA.toBase58())!;
     expect(a.source).toBe("router");
     expect(a.sellSignature).toBe(sigOf(9));
-    expect(a.claimableFrom).toBe((launchTs + 1_100 + 21_600) * 1000);
+    expect(a.attestedAt).toBe((launchTs + 1_100) * 1000);
+    expect(a.effectiveAt).toBe((launchTs + 1_400) * 1000); // deferred by the rate cap: the window runs from here
+    expect(a.claimableFrom).toBe((launchTs + 1_400 + 21_600) * 1000);
     const p = await repo.getParams();
     expect(p.ticketChallengeSecs).toBe(21_600);
     expect(p.feeBps).toBe(125);

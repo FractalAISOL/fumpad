@@ -44,6 +44,25 @@ const ms = (secs: string | number | null | undefined) => (secs === null || secs 
 const nowSecs = () => Math.floor(Date.now() / 1000);
 const spotQ64 = (vsol: string, vtok: string) => (BigInt(vtok) === 0n ? 0n : (BigInt(vsol) << 64n) / BigInt(vtok));
 
+/**
+ * A ticket's attestation timing (unix secs in, ms out). The challenge window runs from `effective_at`
+ * (INTERFACE-v0.7 §8.4); 0/NULL there (rows or events from before §8.4) falls back to `attested_at`.
+ * 0/NULL `attested_at` = not attested.
+ */
+export function ticketTiming(attestedAt: string | number | null | undefined, effectiveAt: string | number | null | undefined, challengeSecs: number | bigint) {
+  const pos = (v: string | number | null | undefined) => (v === null || v === undefined || !(Number(v) > 0) ? undefined : Number(v));
+  const attested = pos(attestedAt);
+  const effective = pos(effectiveAt);
+  const start = effective ?? attested;
+  return {
+    attestedAt: attested !== undefined ? attested * 1000 : undefined,
+    effectiveAt: effective !== undefined ? effective * 1000 : undefined,
+    /** unix secs the challenge window ends (undefined = not attested) */
+    challengeEnd: start !== undefined ? start + Number(challengeSecs) : undefined,
+    claimableFrom: start !== undefined ? (start + Number(challengeSecs)) * 1000 : undefined,
+  };
+}
+
 /** Deterministic monogram style from the mint. */
 export function tileOf(mint: string): 0 | 1 | 2 {
   let h = 0;
@@ -788,7 +807,8 @@ export class Repo {
     const expired = t.status === "expired" || (t.status === "open" && Number(t.sell_ts) + Number(p.claimWindowSecs) < now);
     const meets = cur * 10_000n >= sell * BigInt(p.triggerMultipleBps);
     const chainStatus = expired && t.status === "open" ? "expired" : (t.status as Ticket["chainStatus"]);
-    const inChallenge = t.status === "open" && !!t.attested_at && Number(t.attested_at) + Number(p.ticketChallengeSecs) > now;
+    const timing = ticketTiming(t.attested_at, t.effective_at, p.ticketChallengeSecs);
+    const inChallenge = t.status === "open" && timing.challengeEnd !== undefined && timing.challengeEnd > now;
     let state: TicketState;
     if (t.status === "claimed" || t.status === "escrowed") state = "claimed";
     else if (t.status === "voided") state = "voided";
@@ -847,8 +867,9 @@ export class Repo {
       source: t.source,
       app: t.app ?? undefined,
       sellSignature: t.sell_signature ?? undefined,
-      attestedAt: ms(t.attested_at),
-      claimableFrom: t.attested_at ? (Number(t.attested_at) + Number(p.ticketChallengeSecs)) * 1000 : undefined,
+      attestedAt: timing.attestedAt,
+      effectiveAt: timing.effectiveAt,
+      claimableFrom: timing.claimableFrom,
       voidReason: t.status === "voided" ? (t.void_reason ?? "rebuy") : undefined,
     };
   }
@@ -1118,6 +1139,7 @@ interface TicketRow {
   app: string | null;
   sell_signature: string | null;
   attested_at: string | null;
+  effective_at: string | null;
   void_reason: "rebuy" | "guardian" | null;
 }
 const TICKET_SELECT = `
