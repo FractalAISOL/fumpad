@@ -174,14 +174,15 @@ async function main() {
   await waitFor("a …fmbL mint in the pool", async () => ((await data.getStatus()).vanityPool?.available ?? 0) > 0, 600_000, 3_000);
   const prepared = await prepareLaunchSigned(info.api, creator, launchArgs, true);
   const launchTx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
-  const launchPolicy: SilentPolicy = { action: "launch", mint: prepared.mint, coSigner: prepared.mint, maxSolInLamports: launchArgs.initialBuyLamports };
+  const launchPolicy: SilentPolicy = { action: "launch", mint: prepared.mint, coSigner: prepared.mint, maxSolInLamports: launchArgs.initialBuyLamports, launchSigner: await client.launchSigner() };
   pending = { name: "launch", note: "POST /v1/launch/prepare (first buy 0.05 SOL), mint-signed, as the creator's wallet gets it", policy: launchPolicy };
   const { signature: launchSig } = await signAndSendLaunch({ ...prepared }, launchArgs, { connection, client, signer: creator, instant: true });
   captured.find((c) => c.name === "launch")!.signature = launchSig;
   const mint = new PublicKey(prepared.mint);
   const M = prepared.mint;
   check("launch: prepared by the API, vetted + bound by the app, signed silently, landed", (await coinOnChain(mint)).status === "curve", M);
-  check("launch tx: API order is [CB] wrap → DBC init → ATA → swap2(+sysvar) → register_coin → close", launchTx.message.compiledInstructions.length === 9);
+  // the CU limit is only set with a priority price (services: the launch tx has little room under 1,232 bytes)
+  check("launch tx: API order is [CB] wrap → DBC init → ATA → swap2(+sysvar) → register_coin → close", [8, 9].includes(launchTx.message.compiledInstructions.length));
   await snapshot("dbcConfig", new PublicKey(info.dbcConfig));
   await snapshot("coinCurve", coinPda(mint));
   const creatorFirst = await tokens(creator.publicKey, mint);

@@ -10,6 +10,16 @@ const u64 = (d: Uint8Array, off: number) => dv(d).getBigUint64(off, true);
 const u128 = (d: Uint8Array, off: number) => u64(d, off) | (u64(d, off + 8) << 64n);
 
 /** DBC migration_progress values. */
+/** Anchor account discriminators (sha256("account:<Name>")[..8]) of the Meteora accounts decoded here. */
+export const METEORA_ACCOUNT_DISCRIMINATOR = {
+  dbcPoolConfig: Uint8Array.from([26, 108, 14, 123, 116, 230, 129, 43]),
+  dbcVirtualPool: Uint8Array.from([213, 224, 5, 209, 98, 69, 119, 92]),
+  dammPool: Uint8Array.from([241, 154, 109, 4, 17, 177, 109, 188]),
+} as const;
+/** True when `data` starts with that Meteora account discriminator. */
+export const hasMeteoraDiscriminator = (data: Uint8Array, kind: keyof typeof METEORA_ACCOUNT_DISCRIMINATOR): boolean =>
+  METEORA_ACCOUNT_DISCRIMINATOR[kind].every((b, i) => data[i] === b);
+
 export const DBC_MIGRATION_PROGRESS = { preBondingCurve: 0, postBondingCurve: 1, lockedVesting: 2, createdPool: 3 } as const;
 
 export interface DbcVirtualPool {

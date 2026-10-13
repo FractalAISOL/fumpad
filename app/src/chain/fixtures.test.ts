@@ -60,6 +60,7 @@ const policyOf = (p: Record<string, string>): SilentPolicy => ({
   ...(p.amountIn !== undefined ? { amountIn: BigInt(p.amountIn) } : {}),
   ...(p.minOut !== undefined ? { minOut: BigInt(p.minOut) } : {}),
   ...(p.ticket !== undefined ? { ticket: p.ticket } : {}),
+  ...(p.launchSigner !== undefined ? { launchSigner: p.launchSigner } : {}),
 });
 const txOf = (name: string) => {
   const t = F.txs.find((x) => x.name === name);
@@ -110,12 +111,16 @@ describe("captured v0.7 transactions (local stack)", () => {
   it("the API's launch: [CB] wrap → DBC init → ATA → swap2 (+sysvar) → register_coin → close, bound to what the user typed", async () => {
     const t = txOf("launch");
     const programs = ixsOf(t.vtx).map((ix) => ix.programId.toBase58().slice(0, 4));
-    assert.deepEqual(programs, ["Comp", "ATok", "1111", "Toke", "dbci", "ATok", "dbci", "5YMF", "Toke"]);
-    const shape = checkPreparedLaunch(t.vtx, t.wallet, F.mint, F.launch.suffix, BigInt(F.launch.initialBuyLamports));
+    // no CU limit without a priority price (services: the launch tx with the launch co-signer is near 1,232 bytes)
+    assert.deepEqual(programs, ["ATok", "1111", "Toke", "dbci", "ATok", "dbci", "5YMF", "Toke"]);
+    // Params.launch_signer is set on the capture stack: the API co-signed register_coin (positive L1 path)
+    assert.ok(t.policy.launchSigner);
+    const shape = checkPreparedLaunch(t.vtx, t.wallet, F.mint, F.launch.suffix, BigInt(F.launch.initialBuyLamports), t.policy.launchSigner);
+    assert.throws(() => checkPreparedLaunch(t.vtx, t.wallet, F.mint, F.launch.suffix, BigInt(F.launch.initialBuyLamports)), /unexpected signers/);
     assert.equal(shape.symbol, F.launch.symbol);
     assert.ok(shape.config.equals(new PublicKey(F.dbcConfig)));
     const cfg = readDbcConfig(Buffer.from(F.accounts.dbcConfig.data, "base64"));
-    const intent = { wallet: t.wallet, mint: F.mint, suffix: F.launch.suffix, name: F.launch.name, symbol: F.launch.symbol, uri: F.launch.uri, initialBuyLamports: BigInt(F.launch.initialBuyLamports) };
+    const intent = { wallet: t.wallet, mint: F.mint, suffix: F.launch.suffix, name: F.launch.name, symbol: F.launch.symbol, uri: F.launch.uri, initialBuyLamports: BigInt(F.launch.initialBuyLamports), launchSigner: t.policy.launchSigner };
     await checkLaunchBinding(t.vtx, intent, async () => cfg);
     // Another amount, other metadata: refused.
     await assert.rejects(checkLaunchBinding(t.vtx, { ...intent, initialBuyLamports: intent.initialBuyLamports * BigInt(2) }, async () => cfg), /different amount/);

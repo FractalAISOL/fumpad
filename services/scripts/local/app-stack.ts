@@ -13,7 +13,8 @@ import { startStack } from "./stack.js";
 
 const WALLETS: Record<string, number> = { "app-creator": 20, "app-trader": 20, "app-trader2": 20, "app-whale": 60 };
 
-const stack = await startStack({ poolTarget: 3 });
+const port = (v: string | undefined) => (v ? Number(v) : undefined);
+const stack = await startStack({ poolTarget: 3, rpcPort: port(process.env.FUMPAD_RPC_PORT), apiPort: port(process.env.FUMPAD_API_PORT) });
 const wallets: Record<string, { address: string; keypair: string }> = {};
 for (const [name, sol] of Object.entries(WALLETS)) {
   const k = keypair(name);
