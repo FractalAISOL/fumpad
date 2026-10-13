@@ -1,0 +1,1338 @@
+{
+  "item1": {
+    "DBC": {
+      "programId": "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN",
+      "devnet": {
+        "exists": true,
+        "executable": true,
+        "programData": "HUfnSSiJxgspQm6C1rkqv6L3XgVtn7AESApgCQpCXCYh",
+        "lastDeploySlot": 508712305,
+        "upgradeAuthority": "DHLXnJdACTY83yKwnUkeoDjqi4QBbsYGa1v8tJL76ViX",
+        "programDataLen": 1983613,
+        "elfLen": 1693313,
+        "elfSha256": "9f652df38b27f83565eb2d5271a6a4e8c9ccbc6a721ed1fadf299154b1753b0d",
+        "hints": [
+          "dynamic-bonding-curve/src/state/virtual_pool.rs",
+          "dynamic-bonding-curve/src/params/fee_parameters.rs",
+          "dynamic-bonding-curve/src/instructions/partner/ix_create_part",
+          "dynamic-bonding-curve/src/instructions/migration/dynamic_amm_",
+          "damm_v2_initialize_pool.rs"
+        ],
+        "deployTime": "2026-10-08T05:33:08.000Z"
+      },
+      "mainnet": {
+        "exists": true,
+        "executable": true,
+        "programData": "HUfnSSiJxgspQm6C1rkqv6L3XgVtn7AESApgCQpCXCYh",
+        "lastDeploySlot": 445503633,
+        "upgradeAuthority": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
+        "programDataLen": 2326622,
+        "elfLen": 1670513,
+        "elfSha256": "b3f7b765e1b9a2e87e45c4663165974819d248f00c1beefe678af60e9dfe6c44",
+        "hints": [
+          "dynamic-bonding-curve/src/state/virtual_pool.rs",
+          "dynamic-bonding-curve/src/params/fee_parameters.rs",
+          "dynamic-bonding-curve/src/instructions/partner/ix_create_part",
+          "dynamic-bonding-curve/src/instructions/migration/dynamic_amm_",
+          "damm_v2_initialize_pool.rs"
+        ],
+        "deployTime": "2026-09-09T03:02:14.000Z"
+      },
+      "identicalBytecode": false
+    },
+    "DAMM_V2": {
+      "programId": "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+      "devnet": {
+        "exists": true,
+        "executable": true,
+        "programData": "AUh8bm2XsMfex3KjYGcM3G4uBqUNSDw6HEhWaWMYnyPH",
+        "lastDeploySlot": 503166267,
+        "upgradeAuthority": "DHLXnJdACTY83yKwnUkeoDjqi4QBbsYGa1v8tJL76ViX",
+        "programDataLen": 1559493,
+        "elfLen": 1430785,
+        "elfSha256": "f838b2ae3ed237211319493045b0a172c0946fd72ba8152895b98bb4d8a29a9c",
+        "hints": [
+          "cp-amm/src/instructions/operator/ix_initialize",
+          "cp-amm/src/state/fee.rs",
+          "cp-amm/src/instructions/initialize_pool/ix_ini",
+          "cp-amm/src/math/fee_math.rs",
+          "cp-amm/src/event.rs"
+        ],
+        "deployTime": "2026-09-23T22:37:37.000Z"
+      },
+      "mainnet": {
+        "exists": true,
+        "executable": true,
+        "programData": "AUh8bm2XsMfex3KjYGcM3G4uBqUNSDw6HEhWaWMYnyPH",
+        "lastDeploySlot": 445230614,
+        "upgradeAuthority": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
+        "programDataLen": 2174397,
+        "elfLen": 1433913,
+        "elfSha256": "7c479dd7de729ada87d141e9d422a572d42df79f4cc8947a751b5f15719d94e0",
+        "hints": [
+          "cp-amm/src/instructions/operator/ix_initialize",
+          "cp-amm/src/state/fee.rs",
+          "cp-amm/src/instructions/initialize_pool/ix_ini",
+          "cp-amm/src/math/fee_math.rs",
+          "cp-amm/src/event.rs"
+        ],
+        "deployTime": "2026-09-08T03:00:21.000Z"
+      },
+      "identicalBytecode": false
+    }
+  },
+  "item1b": {
+    "DBC": {
+      "onlyDevnet": [
+        "CreateConfig2Instruction",
+        "MigrationDammV2Unable",
+        "MigrationFeeOptionInvalidInputNotEnoughLiquidityPoolIsCompletedPoolIsIncompletedInvalidMigrationOptionInvalidTokenDecimalsInvalidFeePercentageInvalidQuoteThresholdInvalidTokenSupplyInvalidCurveNotPermitToDoThisActionInvalidOwnerAccountInvalidConfigAccountSurplusHasBeenWithdrawLeftoverHasBeenWithdrawTotalBaseTokenExceedMaxSupplyUnsupportNativeMintToken2022InsufficientLiquidityForMigrationMissingPoolConfigInRemainingAccountInvalidVestingParametersInvalidLeftoverAddressInsufficientLiquidityInvalidFeeSchedulerInvalidCreatorTradingFeePercentageInvalidNewCreatorInvalidTokenAuthorityOptionInvalidAccountInvalidMigratorFeePercentageMigrationFeeHasBeenWithdrawInvalidBaseFeeModeInvalidFeeRateLimiterFailToValidateSingleSwapInstructionInvalidMigratedPoolFeeUndeterminedErrorRateLimiterNotSupportedAmountLeftIsNotZeroNextSqrtPriceIsSmallerThanStartSqrtPriceInvalidMinBaseFeeAccountInvariantViolationInvalidPoolCreationFeePoolCreationFeeHasBeenClaimedUnauthorizedZeroPoolCreationFeeInvalidMigrationLockedLiquidityInvalidFeeMarketCapSchedulerFirstSwapValidationFailedIncorrectATAInsufficientPoolLamportsInvalidPermissionInvalidWithdrawProtocolFeeZapAccountsMintRestrictedFromZapInvalidZapOutParametersCpiDisabledMissingZapOutInstructionInvalidZapAccountsInvalidCompoundingParametersInvalidClaimProtocolFeeAccountsInvalidInstructionsSysvarInvalidRemainingAccountsLengthMissingRemainingAccountForTransferHookNoTransferHookProgramDuplicatedRemainingAccountTypesInvalidTransferHookProgramInvalidPoolAccountDeprecatedBaseFeeModeCannotCreateTokenBadgeOnSupportedMintInvalidTokenBadgeQuoteMintHasNonZeroTransferFeeDeprecatedMigrationOptionFeeInverseIsIncorrectInvalidTransferFeeParametersExceededInputAmountInvalidFeeClaimerMath",
+        "Transfer"
+      ],
+      "onlyMainnet": [
+        "MigrationDammV2",
+        "MigrationFeeOptionInvalidInputNotEnoughLiquidityPoolIsCompletedPoolIsIncompletedInvalidMigrationOptionInvalidTokenDecimalsInvalidFeePercentageInvalidQuoteThresholdInvalidTokenSupplyInvalidCurveNotPermitToDoThisActionInvalidOwnerAccountInvalidConfigAccountSurplusHasBeenWithdrawLeftoverHasBeenWithdrawTotalBaseTokenExceedMaxSupplyUnsupportNativeMintToken2022InsufficientLiquidityForMigrationMissingPoolConfigInRemainingAccountInvalidVestingParametersInvalidLeftoverAddressInsufficientLiquidityInvalidFeeSchedulerInvalidCreatorTradingFeePercentageInvalidNewCreatorInvalidTokenAuthorityOptionInvalidAccountInvalidMigratorFeePercentageMigrationFeeHasBeenWithdrawInvalidBaseFeeModeInvalidFeeRateLimiterFailToValidateSingleSwapInstructionInvalidMigratedPoolFeeUndeterminedErrorRateLimiterNotSupportedAmountLeftIsNotZeroNextSqrtPriceIsSmallerThanStartSqrtPriceInvalidMinBaseFeeAccountInvariantViolationInvalidPoolCreationFeePoolCreationFeeHasBeenClaimedUnauthorizedZeroPoolCreationFeeInvalidMigrationLockedLiquidityInvalidFeeMarketCapSchedulerFirstSwapValidationFailedIncorrectATAInsufficientPoolLamportsInvalidPermissionInvalidWithdrawProtocolFeeZapAccountsMintRestrictedFromZapInvalidZapOutParametersCpiDisabledMissingZapOutInstructionInvalidZapAccountsInvalidCompoundingParametersInvalidClaimProtocolFeeAccountsInvalidInstructionsSysvarInvalidRemainingAccountsLengthMissingRemainingAccountForTransferHookNoTransferHookProgramDuplicatedRemainingAccountTypesInvalidTransferHookProgramInvalidPoolAccountDeprecatedBaseFeeModeCannotCreateTokenBadgeOnSupportedMintInvalidTokenBadgeQuoteMintHasNonZeroTransferFeeDeprecatedMigrationOptionMath",
+        "TransferFeeConfigTransferFeeAmountMintCloseAuthorityConfidentialTransferMintConfidentialTransferAccountDefaultAccountStateImmutableOwnerMemoTransferNonTransferableInterestBearingConfigPermanentDelegateNonTransferableAccountTransferHookTransferHookAccountConfidentialTransferFeeConfigConfidentialTransferFeeAmountMetadataPointerTokenMetadataGroupPointerTokenGroupGroupMemberPointer"
+      ],
+      "ixLogDev": 18,
+      "ixLogMain": 18
+    },
+    "DAMM_V2": {
+      "onlyDevnet": [],
+      "onlyMainnet": [],
+      "ixLogDev": 20,
+      "ixLogMain": 20
+    },
+    "mainnetUpgradeAuthority": {
+      "address": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
+      "owner": "11111111111111111111111111111111",
+      "dataLen": 0
+    },
+    "devnetUpgradeAuthority": {
+      "address": "DHLXnJdACTY83yKwnUkeoDjqi4QBbsYGa1v8tJL76ViX",
+      "owner": "11111111111111111111111111111111",
+      "dataLen": 0
+    }
+  },
+  "txs": [
+    {
+      "label": "create_config2 (DBC config, PDAs as fee_claimer + leftover_receiver)",
+      "sig": "29FUdAGmfQei86mHXyx2bhXD3NeHGZAC5G3jgRpeF8pW93JjLbDkt7qfCwHuquTCBmA7vqcQ42f2RJNWMGinR3bW",
+      "url": "https://solscan.io/tx/29FUdAGmfQei86mHXyx2bhXD3NeHGZAC5G3jgRpeF8pW93JjLbDkt7qfCwHuquTCBmA7vqcQ42f2RJNWMGinR3bW?cluster=devnet",
+      "cu": 36857,
+      "slot": 510458812
+    },
+    {
+      "label": "fund 67VGzQ",
+      "sig": "jJuwNZgckvu1ooX8MD9bRTBYFaWVmBnvGuhdazyCQ4nXdZPLgk9n93TvAvFjHAqQC86Fo9wsxSC2iPaT4sZxPBT",
+      "url": "https://solscan.io/tx/jJuwNZgckvu1ooX8MD9bRTBYFaWVmBnvGuhdazyCQ4nXdZPLgk9n93TvAvFjHAqQC86Fo9wsxSC2iPaT4sZxPBT?cluster=devnet",
+      "cu": 300,
+      "slot": 510462785
+    },
+    {
+      "label": "fund 3gK2gs",
+      "sig": "81jfsLoEjJ2Y4jKLP5HqTVvSvc3U99TohDEmH12596YxQzD2kcBKgBkH3kPoWr75qqKVabnQgqRPFNCP5RdTRwW",
+      "url": "https://solscan.io/tx/81jfsLoEjJ2Y4jKLP5HqTVvSvc3U99TohDEmH12596YxQzD2kcBKgBkH3kPoWr75qqKVabnQgqRPFNCP5RdTRwW?cluster=devnet",
+      "cu": 300,
+      "slot": 510462791
+    },
+    {
+      "label": "wrap WSOL creator+sniper",
+      "sig": "3D6bDVzEnq1VdERMzPrVW1eWhCj9yXs27H18RD6eQXA2a9a7yRHTPL16zYcakwSGqVyVdJpRYUk2VScXSszWQVcV",
+      "url": "https://solscan.io/tx/3D6bDVzEnq1VdERMzPrVW1eWhCj9yXs27H18RD6eQXA2a9a7yRHTPL16zYcakwSGqVyVdJpRYUk2VScXSszWQVcV?cluster=devnet",
+      "cu": 35372,
+      "slot": 510462797
+    },
+    {
+      "label": "launch: init pool (vanity mint) + creator first buy + sniper buy, same tx",
+      "sig": "4nd6oVwaF1rxpMq64Yi1XyYaqouWJckd54jwwrYhRf1zgferP3wt37xhRkdVMZHXoTLpQpc3iijBvZTwtD7Y4Cyi",
+      "url": "https://solscan.io/tx/4nd6oVwaF1rxpMq64Yi1XyYaqouWJckd54jwwrYhRf1zgferP3wt37xhRkdVMZHXoTLpQpc3iijBvZTwtD7Y4Cyi?cluster=devnet",
+      "cu": 188748,
+      "slot": 510462803
+    },
+    {
+      "label": "decay probe buy #1",
+      "sig": "5Rrf6WZKw98jibLueKhrRVt2SMdguJZPpYEP2WNvXvHK3MoYZTvcFuC1tSitdCXWR2MUyxJXTCkwDDrbTYTwEf2J",
+      "url": "https://solscan.io/tx/5Rrf6WZKw98jibLueKhrRVt2SMdguJZPpYEP2WNvXvHK3MoYZTvcFuC1tSitdCXWR2MUyxJXTCkwDDrbTYTwEf2J?cluster=devnet",
+      "cu": 37437,
+      "slot": 510462810
+    },
+    {
+      "label": "decay probe buy #2",
+      "sig": "4NnkhqWJ7KAqk7JGANGbkvXVfD3fcV8MvKBZS9CBhfQFGVmoicLqRTMcASz3wMvG7spHyQ4kd7fgVzW71xeEkZhM",
+      "url": "https://solscan.io/tx/4NnkhqWJ7KAqk7JGANGbkvXVfD3fcV8MvKBZS9CBhfQFGVmoicLqRTMcASz3wMvG7spHyQ4kd7fgVzW71xeEkZhM?cluster=devnet",
+      "cu": 37435,
+      "slot": 510462811
+    },
+    {
+      "label": "decay probe buy #3",
+      "sig": "2Dy1rF7GrB2zjmSBMzzhxmMnpKPug2Dte2q8Ra17qRkoZDJMj5WmDqUZJ4DxDqGyY9ER9tGD2RmNwRMirxNcXfZp",
+      "url": "https://solscan.io/tx/2Dy1rF7GrB2zjmSBMzzhxmMnpKPug2Dte2q8Ra17qRkoZDJMj5WmDqUZJ4DxDqGyY9ER9tGD2RmNwRMirxNcXfZp?cluster=devnet",
+      "cu": 37436,
+      "slot": 510462812
+    },
+    {
+      "label": "decay probe buy #4",
+      "sig": "4bo9ftmRvgRmrHuhwv6QwHp2qQGysdU1qKVnZdSQHxTNQWuSbLLXDyqHAh2cBZKoxdRAjkqY44QvYU4WxsxgJaJC",
+      "url": "https://solscan.io/tx/4bo9ftmRvgRmrHuhwv6QwHp2qQGysdU1qKVnZdSQHxTNQWuSbLLXDyqHAh2cBZKoxdRAjkqY44QvYU4WxsxgJaJC?cluster=devnet",
+      "cu": 37436,
+      "slot": 510462814
+    },
+    {
+      "label": "decay probe buy #5",
+      "sig": "3yB7HVKdy7sZRKEixU52FYULTVGD7rqjZcoMoWWE9Ue9zM2Xqo3tupb1vwoxPvKnvHyP8UvLzvt3mbKT4p71bUE2",
+      "url": "https://solscan.io/tx/3yB7HVKdy7sZRKEixU52FYULTVGD7rqjZcoMoWWE9Ue9zM2Xqo3tupb1vwoxPvKnvHyP8UvLzvt3mbKT4p71bUE2?cluster=devnet",
+      "cu": 37447,
+      "slot": 510462816
+    },
+    {
+      "label": "decay probe buy #6",
+      "sig": "3cwcwTS5sZJjbSmAamcuUpKC5TfNdt89hTSa5enu1UXQuac11nzLniH7FEzhjFPbuLAQgxYqtfAiPU47iQUF7Bje",
+      "url": "https://solscan.io/tx/3cwcwTS5sZJjbSmAamcuUpKC5TfNdt89hTSa5enu1UXQuac11nzLniH7FEzhjFPbuLAQgxYqtfAiPU47iQUF7Bje?cluster=devnet",
+      "cu": 37435,
+      "slot": 510462817
+    },
+    {
+      "label": "decay probe buy #7",
+      "sig": "3qp6X9KdQ4dCxcJG4dx53mKTE31wAw6QBVnwN17Mfjo6dczmJV1L9GcW1W4nBRoobNANwqGrfPayrrkJqVWLyepT",
+      "url": "https://solscan.io/tx/3qp6X9KdQ4dCxcJG4dx53mKTE31wAw6QBVnwN17Mfjo6dczmJV1L9GcW1W4nBRoobNANwqGrfPayrrkJqVWLyepT?cluster=devnet",
+      "cu": 37437,
+      "slot": 510462818
+    },
+    {
+      "label": "decay probe buy #8",
+      "sig": "2NebmXN7uXRF1pKMTJbKDdrsZF3QFGvZVdxHniTwxRURWq7ENvZswm8vxShg1TdRUptrGmXuFKv6YnjzzddYH4ms",
+      "url": "https://solscan.io/tx/2NebmXN7uXRF1pKMTJbKDdrsZF3QFGvZVdxHniTwxRURWq7ENvZswm8vxShg1TdRUptrGmXuFKv6YnjzzddYH4ms?cluster=devnet",
+      "cu": 37437,
+      "slot": 510462820
+    },
+    {
+      "label": "decay probe buy #9",
+      "sig": "4xyHfepDxPhNg28735rs6UUxP7qWftZfHQdjVg6jFLK1QWBSRQ2dqapMRkoogviETv2yBobo3zrRBnf6xhMLd81v",
+      "url": "https://solscan.io/tx/4xyHfepDxPhNg28735rs6UUxP7qWftZfHQdjVg6jFLK1QWBSRQ2dqapMRkoogviETv2yBobo3zrRBnf6xhMLd81v?cluster=devnet",
+      "cu": 37440,
+      "slot": 510462822
+    },
+    {
+      "label": "decay probe buy #10",
+      "sig": "2AQbsn9XFforG8sty996sayNhpokZQX3JTUTBNEvm3QtzqzcaiBEx44JNp2P5qTktrarRheL4rFQDitTbkCeZMnG",
+      "url": "https://solscan.io/tx/2AQbsn9XFforG8sty996sayNhpokZQX3JTUTBNEvm3QtzqzcaiBEx44JNp2P5qTktrarRheL4rFQDitTbkCeZMnG?cluster=devnet",
+      "cu": 37437,
+      "slot": 510462823
+    },
+    {
+      "label": "setup ATAs (user, fee_claimer, buyback, platform, reward_pool)",
+      "sig": "2g3TtTYtYy3QiCrpGXUxj9Agt3TDxrfHzKAZ8G9QyDvSDi6nCuHmoy5n2CaiDkXii6EYZD1Bg2Eui8hKFk2gtMsZ",
+      "url": "https://solscan.io/tx/2g3TtTYtYy3QiCrpGXUxj9Agt3TDxrfHzKAZ8G9QyDvSDi6nCuHmoy5n2CaiDkXii6EYZD1Bg2Eui8hKFk2gtMsZ?cluster=devnet",
+      "cu": 111778,
+      "slot": 510463063
+    },
+    {
+      "label": "FUMPAD routed_swap BUY on DBC (CPI)",
+      "sig": "5fTexSbKHcXpC7gwzxUzqRfRx7zVsxgUt8mQtaVna21VPizDCQRYaxuwAY1siUikwJBAfJ3bAVRBnGfnwTwWD3Hw",
+      "url": "https://solscan.io/tx/5fTexSbKHcXpC7gwzxUzqRfRx7zVsxgUt8mQtaVna21VPizDCQRYaxuwAY1siUikwJBAfJ3bAVRBnGfnwTwWD3Hw?cluster=devnet",
+      "cu": 67271,
+      "slot": 510463069
+    },
+    {
+      "label": "FUMPAD routed_swap SELL on DBC (CPI)",
+      "sig": "3HQ5t5Jv9hW31nM1xa5crZBs14PzqpeYQa9Fy7mzoB9xsSQcoeUNVbMTBN4m1h9uJGzc1gAz3K4RBzwqAYgASCsB",
+      "url": "https://solscan.io/tx/3HQ5t5Jv9hW31nM1xa5crZBs14PzqpeYQa9Fy7mzoB9xsSQcoeUNVbMTBN4m1h9uJGzc1gAz3K4RBzwqAYgASCsB?cluster=devnet",
+      "cu": 65473,
+      "slot": 510463084
+    },
+    {
+      "label": "third-party (Meteora SDK) BUY on DBC",
+      "sig": "2Hbkq8vcWHCQS1yVxaMGa4tS39i1njwPmEy8VRaKkbBAsDeKbDesKPavspSGSwQkm7mU3DbT86naVnjRRsGkXmt7",
+      "url": "https://solscan.io/tx/2Hbkq8vcWHCQS1yVxaMGa4tS39i1njwPmEy8VRaKkbBAsDeKbDesKPavspSGSwQkm7mU3DbT86naVnjRRsGkXmt7?cluster=devnet",
+      "cu": 37905,
+      "slot": 510463093
+    },
+    {
+      "label": "third-party (Meteora SDK) SELL on DBC",
+      "sig": "3cUt59nAhKxvUnmLCtajwhxNegD9P6X8YBowggAmu8jii9VkBdGfZdHFRZkeaAC8SvU7k4B1sG48MoKjr4YZyDzD",
+      "url": "https://solscan.io/tx/3cUt59nAhKxvUnmLCtajwhxNegD9P6X8YBowggAmu8jii9VkBdGfZdHFRZkeaAC8SvU7k4B1sG48MoKjr4YZyDzD?cluster=devnet",
+      "cu": 49168,
+      "slot": 510463101
+    },
+    {
+      "label": "claim_and_split: DBC claim_trading_fee via CPI (fee_claimer PDA) + 50/30/20",
+      "sig": "3pt9ujZ7iTWcHAXH882KpwBt9DiicFHL79QtiXF69Ku27UjEB1CWJQvPkrDUaaa4zyHYcFUKwpjRdxyLivqXGbB2",
+      "url": "https://solscan.io/tx/3pt9ujZ7iTWcHAXH882KpwBt9DiicFHL79QtiXF69Ku27UjEB1CWJQvPkrDUaaa4zyHYcFUKwpjRdxyLivqXGbB2?cluster=devnet",
+      "cu": 37130,
+      "slot": 510463109
+    },
+    {
+      "label": "buyback_swap on DBC (buyback PDA payer) -> reward pool",
+      "sig": "22wBp5kKzceqMYdpfZ81aSfYfxG5ydu9a76VdcCMtANymqRvuB2ePBd64VmHgWGaGJCTFSBw6SCMJNefLPSHcYRf",
+      "url": "https://solscan.io/tx/22wBp5kKzceqMYdpfZ81aSfYfxG5ydu9a76VdcCMtANymqRvuB2ePBd64VmHgWGaGJCTFSBw6SCMJNefLPSHcYRf?cluster=devnet",
+      "cu": 68809,
+      "slot": 510463116
+    },
+    {
+      "label": "read_price (DBC VirtualPool sqrt_price from bytes)",
+      "sig": "67pS7tYVMrJPdGHgBvoJNExbZ2s95VcxeNGnwg3v5MR5DUFCZyom9jhXeJxvFLiAkGuodzytwJh6X1Zjnn146xxd",
+      "url": "https://solscan.io/tx/67pS7tYVMrJPdGHgBvoJNExbZ2s95VcxeNGnwg3v5MR5DUFCZyom9jhXeJxvFLiAkGuodzytwJh6X1Zjnn146xxd?cluster=devnet",
+      "cu": 1928,
+      "slot": 510463122
+    },
+    {
+      "label": "PartialFill buy completes the curve",
+      "sig": "2BNBMLCHdaD3AUt2CcidYSQPxt9762mhguvoA3v7hUiCsE4yWTcnYeJpfskSVoC7yMBLGHiSgquqT2MuH7VQiYuB",
+      "url": "https://solscan.io/tx/2BNBMLCHdaD3AUt2CcidYSQPxt9762mhguvoA3v7hUiCsE4yWTcnYeJpfskSVoC7yMBLGHiSgquqT2MuH7VQiYuB?cluster=devnet",
+      "cu": 50592,
+      "slot": 510463308
+    },
+    {
+      "label": "migration_damm_v2 (permissionless, called by us)",
+      "sig": "64faFn5fGowfJ2FbwEsySV1Rm2oG8Lm39F8NibDabgp8mhtQHC3RTs3cexy17TH6PvCnBseQiNRmjU97LNPXzALm",
+      "url": "https://solscan.io/tx/64faFn5fGowfJ2FbwEsySV1Rm2oG8Lm39F8NibDabgp8mhtQHC3RTs3cexy17TH6PvCnBseQiNRmjU97LNPXzALm?cluster=devnet",
+      "cu": 156867,
+      "slot": 510463400
+    },
+    {
+      "label": "withdraw_leftover -> reward_pool PDA ATA (permissionless)",
+      "sig": "2yR8YRpnuYsAXDnagKR7aeiQ4WGBN3WnNo39pZJfr8g3woEAfknhFFP3eRKAMzmSJYa4S5CTW7cwJLakyvQffzqn",
+      "url": "https://solscan.io/tx/2yR8YRpnuYsAXDnagKR7aeiQ4WGBN3WnNo39pZJfr8g3woEAfknhFFP3eRKAMzmSJYa4S5CTW7cwJLakyvQffzqn?cluster=devnet",
+      "cu": 16893,
+      "slot": 510463408
+    },
+    {
+      "label": "wrap WSOL for DAMM swaps",
+      "sig": "41FSSeu76XQc56woYisYciz7fu4WaSPwiJviNTR3WmS1isWXPt7CGnDKm3qK31juboRz11KdCVHf8QV7tcvyqe36",
+      "url": "https://solscan.io/tx/41FSSeu76XQc56woYisYciz7fu4WaSPwiJviNTR3WmS1isWXPt7CGnDKm3qK31juboRz11KdCVHf8QV7tcvyqe36?cluster=devnet",
+      "cu": 10697,
+      "slot": 510463648
+    },
+    {
+      "label": "FUMPAD routed_swap BUY on DAMM v2 (CPI)",
+      "sig": "3RH1sfeFQjZbxTd8L1NuvcRkRsqS8V4ToqcQMqWrLQCBNrJRDUSjEHxdYJLN62Fn2PVGwP56QQMwztbsYbfp9Lo4",
+      "url": "https://solscan.io/tx/3RH1sfeFQjZbxTd8L1NuvcRkRsqS8V4ToqcQMqWrLQCBNrJRDUSjEHxdYJLN62Fn2PVGwP56QQMwztbsYbfp9Lo4?cluster=devnet",
+      "cu": 46892,
+      "slot": 510463653
+    },
+    {
+      "label": "FUMPAD routed_swap SELL on DAMM v2 (CPI)",
+      "sig": "2R1gCRM76adUhWENuBqUSpgHHSdpeus6pSaXuWvAQUc1MyYGjbq8mpaNNffSy6DYWZMpBsBLmdqE19zJjxciD9uF",
+      "url": "https://solscan.io/tx/2R1gCRM76adUhWENuBqUSpgHHSdpeus6pSaXuWvAQUc1MyYGjbq8mpaNNffSy6DYWZMpBsBLmdqE19zJjxciD9uF?cluster=devnet",
+      "cu": 46281,
+      "slot": 510463660
+    },
+    {
+      "label": "third-party (cp-amm-sdk) BUY on DAMM v2",
+      "sig": "Kb14shdELcHjSJuK5ahrTmsTM7WnXW7QvxQXVX6wJBT1c97eyfPPAeppHN7p6v5sjEJh5cGMcT3UGG3R2aTxP4j",
+      "url": "https://solscan.io/tx/Kb14shdELcHjSJuK5ahrTmsTM7WnXW7QvxQXVX6wJBT1c97eyfPPAeppHN7p6v5sjEJh5cGMcT3UGG3R2aTxP4j?cluster=devnet",
+      "cu": 35432,
+      "slot": 510463666
+    },
+    {
+      "label": "third-party (cp-amm-sdk) SELL on DAMM v2",
+      "sig": "58tiN2L4cNCucFgANbk9gTfr5xLXw1pXsDiCoZupG4DR9uHdFyJC7H1L44HbyGisHtQoRtcdVVZUk7qsraRttrdG",
+      "url": "https://solscan.io/tx/58tiN2L4cNCucFgANbk9gTfr5xLXw1pXsDiCoZupG4DR9uHdFyJC7H1L44HbyGisHtQoRtcdVVZUk7qsraRttrdG?cluster=devnet",
+      "cu": 34457,
+      "slot": 510463672
+    },
+    {
+      "label": "read_price (DAMM v2 Pool sqrt_price from bytes)",
+      "sig": "64YYob9eYsDE26T8gHUF5urLytHYBJMsNRrLtik9tmvoyvafCuTnWFvuRM8FZmQm4hivnREDqWhHRSjwChubMoUv",
+      "url": "https://solscan.io/tx/64YYob9eYsDE26T8gHUF5urLytHYBJMsNRrLtik9tmvoyvafCuTnWFvuRM8FZmQm4hivnREDqWhHRSjwChubMoUv?cluster=devnet",
+      "cu": 1934,
+      "slot": 510463679
+    },
+    {
+      "label": "claim_and_split: DAMM v2 claim_position_fee via CPI (fee_claimer PDA owns locked NFT) + 50/30/20",
+      "sig": "7HeNKf6RMtZsuoFfoL6gzwPT6XLrxH1y2wgy34KnHCpbKHzbyQ35X9xH5CvRhnPcXXis86QBuUktWUnCVhSfSoY",
+      "url": "https://solscan.io/tx/7HeNKf6RMtZsuoFfoL6gzwPT6XLrxH1y2wgy34KnHCpbKHzbyQ35X9xH5CvRhnPcXXis86QBuUktWUnCVhSfSoY?cluster=devnet",
+      "cu": 39875,
+      "slot": 510463687
+    },
+    {
+      "label": "buyback_swap on DAMM v2 (buyback PDA payer) -> reward pool",
+      "sig": "2pk4SRh1PopwV9oDvdtYavvpXYsTUpN8rFdQ3AMSavbtzLN21WJGyp7Ex4icE8aUtB1xcYouqQFz1G5CZtF2yTJw",
+      "url": "https://solscan.io/tx/2pk4SRh1PopwV9oDvdtYavvpXYsTUpN8rFdQ3AMSavbtzLN21WJGyp7Ex4icE8aUtB1xcYouqQFz1G5CZtF2yTJw?cluster=devnet",
+      "cu": 48417,
+      "slot": 510463695
+    },
+    {
+      "label": "pay_reward: reward pool PDA -> ticket owner (Token-2022 transfer_checked)",
+      "sig": "2pHFM59q5GsPuUSHKDP2unB398ovEx9pqREk1XeDTHheWJbKWWQbTGs1FQnucYGuiWeJgiKJ3PraAtWiLsiEWVK6",
+      "url": "https://solscan.io/tx/2pHFM59q5GsPuUSHKDP2unB398ovEx9pqREk1XeDTHheWJbKWWQbTGs1FQnucYGuiWeJgiKJ3PraAtWiLsiEWVK6?cluster=devnet",
+      "cu": 10271,
+      "slot": 510463700
+    },
+    {
+      "label": "cleanup: deployer sells all tokens on DAMM v2",
+      "sig": "5z7sNDEkpvcnbcYaJpCzna3enLeEtVL52Vz7ZgP86RgRG4V3Q9RMCvkhAXs5UvxMNvWJ8M4th4u3NNVE1YrabJSy",
+      "url": "https://solscan.io/tx/5z7sNDEkpvcnbcYaJpCzna3enLeEtVL52Vz7ZgP86RgRG4V3Q9RMCvkhAXs5UvxMNvWJ8M4th4u3NNVE1YrabJSy?cluster=devnet",
+      "cu": 26890,
+      "slot": 510464148
+    },
+    {
+      "label": "cleanup: creator sells all tokens on DAMM v2",
+      "sig": "62NcLgyjAFJDPemayotfXPtv2tAMKr1j9iqoBbB9RReZKsJfdcfmybhh66s2DqgFLM2kx6mTR23n1Tagi1kZdVh",
+      "url": "https://solscan.io/tx/62NcLgyjAFJDPemayotfXPtv2tAMKr1j9iqoBbB9RReZKsJfdcfmybhh66s2DqgFLM2kx6mTR23n1Tagi1kZdVh?cluster=devnet",
+      "cu": 37387,
+      "slot": 510464154
+    },
+    {
+      "label": "cleanup: sniper sells all tokens on DAMM v2",
+      "sig": "268mqcjsmdCjFJfmiJPYUjDFxefkcXcFSUYqh9DjAAZZRgvuVGVMCix6FwyGsQxraRk43pWRu7nHq3fqTeWsL4cq",
+      "url": "https://solscan.io/tx/268mqcjsmdCjFJfmiJPYUjDFxefkcXcFSUYqh9DjAAZZRgvuVGVMCix6FwyGsQxraRk43pWRu7nHq3fqTeWsL4cq?cluster=devnet",
+      "cu": 34459,
+      "slot": 510464161
+    },
+    {
+      "label": "cleanup: sweep creator -> deployer",
+      "sig": "25Va8faDLDxJYfyK6uZmBxWd4wMpySw3wQW2itbWkhWyqqpQRkqCBiF1A4DAUPRMSBwHN8RNdh6FLSCU7Xuai466",
+      "url": "https://solscan.io/tx/25Va8faDLDxJYfyK6uZmBxWd4wMpySw3wQW2itbWkhWyqqpQRkqCBiF1A4DAUPRMSBwHN8RNdh6FLSCU7Xuai466?cluster=devnet",
+      "cu": 300,
+      "slot": 510464167
+    },
+    {
+      "label": "cleanup: sweep sniper -> deployer",
+      "sig": "3H28thK8KrEtrCxQEBbqotMJVNpNuw3hQ8SJvti5NE2FBn9u1TC6rRdsGaxzFrG2D6LdsdXzgY6oSWb3E3pQi2H7",
+      "url": "https://solscan.io/tx/3H28thK8KrEtrCxQEBbqotMJVNpNuw3hQ8SJvti5NE2FBn9u1TC6rRdsGaxzFrG2D6LdsdXzgY6oSWb3E3pQi2H7?cluster=devnet",
+      "cu": 300,
+      "slot": 510464173
+    },
+    {
+      "label": "cleanup: unwrap platform WSOL",
+      "sig": "5w1SykM6To7HHjpMwPo9FqqDbJnWxzyc6mFXZpe9PjqcfDSLLt6gugduB6LrbCJACXARB7d91dpQsRXXgRKEMTb1",
+      "url": "https://solscan.io/tx/5w1SykM6To7HHjpMwPo9FqqDbJnWxzyc6mFXZpe9PjqcfDSLLt6gugduB6LrbCJACXARB7d91dpQsRXXgRKEMTb1?cluster=devnet",
+      "cu": 268,
+      "slot": 510464179
+    },
+    {
+      "label": "cleanup: sweep platform -> deployer",
+      "sig": "5acyYsrFQ3VG9XfizveDNxksEnK7nNfQ5xsY9ghXukmcAeGzUzH3693krrxmPr4JbQ9QEYhVAb4fmXay3pgciaS5",
+      "url": "https://solscan.io/tx/5acyYsrFQ3VG9XfizveDNxksEnK7nNfQ5xsY9ghXukmcAeGzUzH3693krrxmPr4JbQ9QEYhVAb4fmXay3pgciaS5?cluster=devnet",
+      "cu": 300,
+      "slot": 510464184
+    },
+    {
+      "label": "init pool with vanity ...fmbL mint keypair (caller-chosen)",
+      "sig": "5J5f6fTpzPyAyXCWJZaP5U8aAzwoZ5tqhHxcng6vqU6QQL5dNPFoXb1FWeGpwD6b8ZCqKwJKfc4kqL8jsEu63tLn",
+      "url": "https://solscan.io/tx/5J5f6fTpzPyAyXCWJZaP5U8aAzwoZ5tqhHxcng6vqU6QQL5dNPFoXb1FWeGpwD6b8ZCqKwJKfc4kqL8jsEu63tLn?cluster=devnet",
+      "cu": 72899,
+      "slot": 510464422
+    }
+  ],
+  "config": {
+    "config": "Fy6YvfaHVYmh7cr7fZYUaxAqTU7yPYLNuSABwQDe2UGt",
+    "configAccountBytes": 1048,
+    "configRentLamports": 5974080,
+    "feeClaimer": "62zbYVRGAHGgURnZcsZyZQnGRZW1YxiyP2pbRtauUYTz",
+    "leftoverReceiver": "BTSbBbkd3Wmuywc4aAJmaK6Z7X8wUrPN68YiHwZ3vUuy",
+    "quoteMint": "So11111111111111111111111111111111111111112",
+    "tokenType": 1,
+    "activationType": 0,
+    "collectFeeMode": 0,
+    "migrationOption": 1,
+    "migrationFeeOption": 6,
+    "partnerPermanentLockedLiquidityPercentage": 100,
+    "creatorTradingFeePercentage": 0,
+    "swapBaseAmount": "729655071047103",
+    "migrationBaseThreshold": "190344848558628",
+    "migrationQuoteThreshold": "850000000",
+    "migrationSqrtPrice": "38981508865643380",
+    "sqrtStartPrice": "10169090682030081",
+    "preMigrationTokenSupply": "1000000000000000",
+    "postMigrationTokenSupply": "1000000000000000",
+    "fixedTokenSupplyFlag": 1,
+    "migratedPoolFeeBps": 125,
+    "migratedCollectFeeMode": 0,
+    "expectedLeftoverRaw": "80000080394269",
+    "poolFees": {
+      "baseFee": {
+        "cliffFeeNumerator": "3b023380",
+        "secondFactor": "01",
+        "thirdFactor": "07486eec",
+        "firstFactor": 8,
+        "baseFeeMode": 0,
+        "padding0": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "dynamicFee": {
+        "initialized": 0,
+        "padding": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "maxVolatilityAccumulator": 0,
+        "variableFeeControl": 0,
+        "binStep": 0,
+        "filterPeriod": 0,
+        "decayPeriod": 0,
+        "reductionFactor": 0,
+        "padding2": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "binStepU128": "00"
+      }
+    },
+    "enableFirstSwapWithMinFee": 1,
+    "createCu": null,
+    "sdkDescribeDevnet": {
+      "sqrtStartPrice": "10169090682030081",
+      "startPriceSolPerToken": "3.0389586811407566186890275581253532289795115418207e-10",
+      "startMcSol": "0.30389586811407566186890275581253532289795115418207",
+      "curve": [
+        {
+          "sqrtPrice": "38981508865643380",
+          "liquidity": "10038727400093731746185461462445"
+        },
+        {
+          "sqrtPrice": "79226673521066979257578248091",
+          "liquidity": "3133889909771960702162990"
+        }
+      ],
+      "curvePointPricesSolPerToken": [
+        "4.4655797101449251056355128865145018288866452105456e-9",
+        "18446050713735950.759526560806235211152530356396422"
+      ],
+      "migrationQuoteThreshold": "850000000",
+      "tokenSupply": {
+        "pre": "1000000000000000",
+        "post": "1000000000000000"
+      },
+      "baseOnFirstSegment": "729655071047103",
+      "baseFee": {
+        "cliffFeeNumerator": "990000000",
+        "firstFactor": 8,
+        "secondFactor": "1",
+        "thirdFactor": "122187500",
+        "baseFeeMode": 0
+      }
+    },
+    "sdkDescribeMainnet": {
+      "sqrtStartPrice": "101690894105090057",
+      "startPriceSolPerToken": "3.0389579211711803250461286197185566639018093037965e-8",
+      "startMcSol": "30.389579211711803250461286197185566639018093037965",
+      "curve": [
+        {
+          "sqrtPrice": "389815088656433800",
+          "liquidity": "100387269570745858432498788150287"
+        },
+        {
+          "sqrtPrice": "79226673521066979257578248091",
+          "liquidity": "3132504935757344015459662"
+        }
+      ],
+      "curvePointPricesSolPerToken": [
+        "4.4655797101449251056355128865145018288866452105456e-7",
+        "18446050713735950.759526560806235211152530356396422"
+      ],
+      "migrationQuoteThreshold": "85000000000",
+      "tokenSupply": {
+        "pre": "1000000000000000",
+        "post": "1000000000000000"
+      },
+      "baseOnFirstSegment": "729655162281604",
+      "baseFee": {
+        "cliffFeeNumerator": "990000000",
+        "firstFactor": 8,
+        "secondFactor": "1",
+        "thirdFactor": "122187500",
+        "baseFeeMode": 0
+      }
+    }
+  },
+  "preflight": {
+    "fmblKeyfiles": [
+      {
+        "file": "SM5k4LWqXTrZZYtmbKCvVDiJrk44mEiaJdag9GnfmbL.json",
+        "pubkey": "SM5k4LWqXTrZZYtmbKCvVDiJrk44mEiaJdag9GnfmbL",
+        "existsOnDevnet": true
+      }
+    ],
+    "configSigs": [
+      "29FUdAGmfQei86mHXyx2bhXD3NeHGZAC5G3jgRpeF8pW93JjLbDkt7qfCwHuquTCBmA7vqcQ42f2RJNWMGinR3bW"
+    ],
+    "dbcPoolAuthority": {
+      "address": "FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM",
+      "lamports": 99226635387
+    },
+    "dammCustomizableConfig": {
+      "address": "A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck",
+      "owner": "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+      "len": 328,
+      "decoded": {
+        "poolCreatorAuthority": "FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM",
+        "protocolFeePercent": 0,
+        "referralFeePercent": 0,
+        "configType": 1,
+        "activationType": 0,
+        "collectFeeMode": 0
+      }
+    }
+  },
+  "launch": {
+    "mint": "CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z",
+    "vanity": false,
+    "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+    "creator": "67VGzQtkLw4JyM4sLrxUfRXPStn7Fxuu46qvdPZWfEii",
+    "sniper": "3gK2gsq5VbHdBotfNqiEZ8PVcUHzZE944Km9A3eDqTtF",
+    "launchSig": "4nd6oVwaF1rxpMq64Yi1XyYaqouWJckd54jwwrYhRf1zgferP3wt37xhRkdVMZHXoTLpQpc3iijBvZTwtD7Y4Cyi",
+    "launchSlot": 510462803,
+    "launchCu": 188748,
+    "activationPoint": 510462803,
+    "launchSwaps": [
+      {
+        "venue": "dbc",
+        "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+        "trader": "67VGzQtkLw4JyM4sLrxUfRXPStn7Fxuu46qvdPZWfEii",
+        "side": "buy",
+        "amountIn": "20000000",
+        "amountOut": "60975168803798",
+        "tradingFee": "200000",
+        "protocolFee": "50000",
+        "referralFee": "0",
+        "feeToken": "quote",
+        "nextSqrtPrice": "10838555692766978",
+        "topLevel": true,
+        "viaProgram": null,
+        "timestamp": "1791855678",
+        "feePct": 1.25
+      },
+      {
+        "venue": "dbc",
+        "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+        "trader": "3gK2gsq5VbHdBotfNqiEZ8PVcUHzZE944Km9A3eDqTtF",
+        "side": "buy",
+        "amountIn": "10000000",
+        "amountOut": "289574834002",
+        "tradingFee": "7920000",
+        "protocolFee": "1980000",
+        "referralFee": "0",
+        "feeToken": "quote",
+        "nextSqrtPrice": "10841945389023873",
+        "topLevel": true,
+        "viaProgram": null,
+        "timestamp": "1791855678",
+        "feePct": 99
+      }
+    ],
+    "decayProbes": [
+      {
+        "sig": "5Rrf6WZKw98jibLueKhrRVt2SMdguJZPpYEP2WNvXvHK3MoYZTvcFuC1tSitdCXWR2MUyxJXTCkwDDrbTYTwEf2J",
+        "slot": 510462810,
+        "slotOffset": 7,
+        "feePct": 13.4687,
+        "amountIn": "2000000",
+        "amountOut": "4982926346069"
+      },
+      {
+        "sig": "4NnkhqWJ7KAqk7JGANGbkvXVfD3fcV8MvKBZS9CBhfQFGVmoicLqRTMcASz3wMvG7spHyQ4kd7fgVzW71xeEkZhM",
+        "slot": 510462811,
+        "slotOffset": 8,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5621419504386"
+      },
+      {
+        "sig": "2Dy1rF7GrB2zjmSBMzzhxmMnpKPug2Dte2q8Ra17qRkoZDJMj5WmDqUZJ4DxDqGyY9ER9tGD2RmNwRMirxNcXfZp",
+        "slot": 510462812,
+        "slotOffset": 9,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5553209015139"
+      },
+      {
+        "sig": "4bo9ftmRvgRmrHuhwv6QwHp2qQGysdU1qKVnZdSQHxTNQWuSbLLXDyqHAh2cBZKoxdRAjkqY44QvYU4WxsxgJaJC",
+        "slot": 510462814,
+        "slotOffset": 11,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5486232541580"
+      },
+      {
+        "sig": "3yB7HVKdy7sZRKEixU52FYULTVGD7rqjZcoMoWWE9Ue9zM2Xqo3tupb1vwoxPvKnvHyP8UvLzvt3mbKT4p71bUE2",
+        "slot": 510462816,
+        "slotOffset": 13,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5420460495559"
+      },
+      {
+        "sig": "3cwcwTS5sZJjbSmAamcuUpKC5TfNdt89hTSa5enu1UXQuac11nzLniH7FEzhjFPbuLAQgxYqtfAiPU47iQUF7Bje",
+        "slot": 510462817,
+        "slotOffset": 14,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5355864170440"
+      },
+      {
+        "sig": "3qp6X9KdQ4dCxcJG4dx53mKTE31wAw6QBVnwN17Mfjo6dczmJV1L9GcW1W4nBRoobNANwqGrfPayrrkJqVWLyepT",
+        "slot": 510462818,
+        "slotOffset": 15,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5292415709772"
+      },
+      {
+        "sig": "2NebmXN7uXRF1pKMTJbKDdrsZF3QFGvZVdxHniTwxRURWq7ENvZswm8vxShg1TdRUptrGmXuFKv6YnjzzddYH4ms",
+        "slot": 510462820,
+        "slotOffset": 17,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5230088077255"
+      },
+      {
+        "sig": "4xyHfepDxPhNg28735rs6UUxP7qWftZfHQdjVg6jFLK1QWBSRQ2dqapMRkoogviETv2yBobo3zrRBnf6xhMLd81v",
+        "slot": 510462822,
+        "slotOffset": 19,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5168855027929"
+      },
+      {
+        "sig": "2AQbsn9XFforG8sty996sayNhpokZQX3JTUTBNEvm3QtzqzcaiBEx44JNp2P5qTktrarRheL4rFQDitTbkCeZMnG",
+        "slot": 510462823,
+        "slotOffset": 20,
+        "feePct": 1.25,
+        "amountIn": "2000000",
+        "amountOut": "5108691080542"
+      }
+    ]
+  },
+  "curveCpi": {
+    "routedBuy": {
+      "sig": "5fTexSbKHcXpC7gwzxUzqRfRx7zVsxgUt8mQtaVna21VPizDCQRYaxuwAY1siUikwJBAfJ3bAVRBnGfnwTwWD3Hw",
+      "cu": 67271,
+      "measured": {
+        "spent": "20000000",
+        "received": "47996279844197"
+      },
+      "programLog": [
+        "Program log: FUMPAD_SWAP venue=dbc trader=9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ in_mint=So11111111111111111111111111111111111111112 out_mint=CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z spent=20000000 received=47996279844197 slot=510463069"
+      ],
+      "venueEvent": [
+        {
+          "venue": "dbc",
+          "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+          "trader": "9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ",
+          "side": "buy",
+          "amountIn": "20000000",
+          "amountOut": "47996279844197",
+          "tradingFee": "200000",
+          "protocolFee": "50000",
+          "referralFee": "0",
+          "feeToken": "quote",
+          "nextSqrtPrice": "12172591840269871",
+          "topLevel": false,
+          "viaProgram": "8zt6gZTFwn6Dn5YRhu7jsywR5tQnZZCx1YmrbqLVTbeW",
+          "timestamp": "1791855740"
+        }
+      ]
+    },
+    "routedSell": {
+      "sig": "3HQ5t5Jv9hW31nM1xa5crZBs14PzqpeYQa9Fy7mzoB9xsSQcoeUNVbMTBN4m1h9uJGzc1gAz3K4RBzwqAYgASCsB",
+      "cu": 65473,
+      "measured": {
+        "spent": "23998139922098",
+        "received": "10027301"
+      },
+      "programLog": [
+        "Program log: FUMPAD_SWAP venue=dbc trader=9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ in_mint=CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z out_mint=So11111111111111111111111111111111111111112 spent=23998139922098 received=10027301 slot=510463084"
+      ],
+      "venueEvent": [
+        {
+          "venue": "dbc",
+          "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+          "trader": "9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ",
+          "side": "sell",
+          "amountIn": "23998139922098",
+          "amountOut": "10027301",
+          "tradingFee": "101543",
+          "protocolFee": "25385",
+          "referralFee": "0",
+          "feeToken": "quote",
+          "nextSqrtPrice": "11828394291688773",
+          "topLevel": false,
+          "viaProgram": "8zt6gZTFwn6Dn5YRhu7jsywR5tQnZZCx1YmrbqLVTbeW",
+          "timestamp": "1791855744"
+        }
+      ]
+    },
+    "thirdPartyDbc": {
+      "buy": {
+        "sig": "2Hbkq8vcWHCQS1yVxaMGa4tS39i1njwPmEy8VRaKkbBAsDeKbDesKPavspSGSwQkm7mU3DbT86naVnjRRsGkXmt7",
+        "cu": 37905,
+        "parsed": [
+          {
+            "venue": "dbc",
+            "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+            "trader": "3gK2gsq5VbHdBotfNqiEZ8PVcUHzZE944Km9A3eDqTtF",
+            "side": "buy",
+            "amountIn": "5000000",
+            "amountOut": "11841125189446",
+            "tradingFee": "50000",
+            "protocolFee": "12500",
+            "referralFee": "0",
+            "feeToken": "quote",
+            "nextSqrtPrice": "11995760544372997",
+            "topLevel": true,
+            "viaProgram": null,
+            "timestamp": "1791855746"
+          }
+        ]
+      },
+      "sell": {
+        "sig": "3cUt59nAhKxvUnmLCtajwhxNegD9P6X8YBowggAmu8jii9VkBdGfZdHFRZkeaAC8SvU7k4B1sG48MoKjr4YZyDzD",
+        "cu": 49168,
+        "parsed": [
+          {
+            "venue": "dbc",
+            "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+            "trader": "3gK2gsq5VbHdBotfNqiEZ8PVcUHzZE944Km9A3eDqTtF",
+            "side": "sell",
+            "amountIn": "16337715498029",
+            "amountOut": "6691871",
+            "tradingFee": "67767",
+            "protocolFee": "16941",
+            "referralFee": "0",
+            "feeToken": "quote",
+            "nextSqrtPrice": "11766055076725406",
+            "topLevel": true,
+            "viaProgram": null,
+            "timestamp": "1791855748"
+          }
+        ]
+      }
+    },
+    "claimDbc": {
+      "sig": "3pt9ujZ7iTWcHAXH882KpwBt9DiicFHL79QtiXF69Ku27UjEB1CWJQvPkrDUaaa4zyHYcFUKwpjRdxyLivqXGbB2",
+      "cu": 37130,
+      "partnerQuoteFeeBefore": "8934810",
+      "programLog": [
+        "Program log: FUMPAD_CLAIM venue=dbc quote_claimed=8934810 buyback=4467405 platform=2680443 creator=1786962 base_claimed=0"
+      ],
+      "deltas": {
+        "buyback": "4467405",
+        "platform": "2680443",
+        "creator": "1786962"
+      }
+    },
+    "buybackDbc": {
+      "sig": "22wBp5kKzceqMYdpfZ81aSfYfxG5ydu9a76VdcCMtANymqRvuB2ePBd64VmHgWGaGJCTFSBw6SCMJNefLPSHcYRf",
+      "cu": 68809,
+      "spentWsol": "4467405",
+      "rewardPoolDelta": "10707430684423",
+      "programLog": [
+        "Program log: FUMPAD_SWAP venue=dbc trader=EnkhUUNSew89N2kNrFGFF7KAkaPywC6vkMztoWr1LA49 in_mint=So11111111111111111111111111111111111111112 out_mint=CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z spent=4467405 received=10707430684423 slot=510463116"
+      ]
+    },
+    "priceDbc": {
+      "sig": "67pS7tYVMrJPdGHgBvoJNExbZ2s95VcxeNGnwg3v5MR5DUFCZyom9jhXeJxvFLiAkGuodzytwJh6X1Zjnn146xxd",
+      "cu": 1928,
+      "sqrtPriceOnchain": "11915593628710038",
+      "sqrtPriceSdk": "11915593628710038",
+      "match": true,
+      "activationPoint": "510462803"
+    }
+  },
+  "graduate": {
+    "beforeComplete": {
+      "quoteReserve": "850000002",
+      "threshold": "850000000",
+      "need": "-2",
+      "migrationProgress": 2
+    },
+    "afterComplete": {
+      "quoteReserve": "850000002",
+      "baseReserve": "270344928952906",
+      "migrationProgress": 2,
+      "finishCurveTimestamp": "1791855798"
+    },
+    "preMigration": {
+      "mintSupply": "1000000000000000",
+      "baseVault": "270344928952906"
+    },
+    "migrate": {
+      "sig": "64faFn5fGowfJ2FbwEsySV1Rm2oG8Lm39F8NibDabgp8mhtQHC3RTs3cexy17TH6PvCnBseQiNRmjU97LNPXzALm",
+      "cu": 156867,
+      "payerLamportsDelta": -16514840,
+      "firstPositionNftMint": "Cxdg3MZk6FosBPsjSs9r1jxiUUotT9M3hXNf258kNZwV",
+      "secondPositionNftMint": "ExBKPbBTD4hxD2WXTwT3g1uQgW98T8GZd6NGFLYzju7B"
+    },
+    "leftover": {
+      "sig": "2yR8YRpnuYsAXDnagKR7aeiQ4WGBN3WnNo39pZJfr8g3woEAfknhFFP3eRKAMzmSJYa4S5CTW7cwJLakyvQffzqn",
+      "cu": 16893,
+      "leftoverReceived": "80000080394278",
+      "rewardPoolTotal": "90707511078701",
+      "pctOfSupply": 8,
+      "mintSupplyAfter": "1000000000000000",
+      "expectedFromConfig": "80000080394269"
+    },
+    "damm": {
+      "pool": "G2A8QLXMs1Tsf39FYcvBqBDs7ftVGUvisVicjArjtVwW",
+      "liquidity": "7405089542818110235538564234081",
+      "permanentLockLiquidity": "7405089542818110235538564234081",
+      "sqrtPrice": "38981508865643380",
+      "collectFeeMode": 1,
+      "protocolFeePercent": 20,
+      "referralFeePercent": 20,
+      "cliffFeeNumerator": {
+        "baseFeeInfo": {
+          "data": [
+            32,
+            188,
+            190,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "padding1": "00"
+      },
+      "creator": "FhVo3mqL8PW5pH5U2CN4XE33DokiyZnUwuGpH2hmHLuM",
+      "tokenAAmount": "189964158861511",
+      "tokenBAmount": "848300000",
+      "positions": [
+        {
+          "nft": "Cxdg3MZk6FosBPsjSs9r1jxiUUotT9M3hXNf258kNZwV",
+          "nftAccount": "D48CPABktVcn8ZcvgtwCAjFbqt2kHRKqXmyeHG5KCYeC",
+          "nftOwner": "62zbYVRGAHGgURnZcsZyZQnGRZW1YxiyP2pbRtauUYTz",
+          "nftOwnerIsFeeClaimerPda": true,
+          "nftAmount": "1",
+          "position": "6pkWtp6eFMpd2ctPaZf1jPTv9ftyowxSRdmFzRds4VT1",
+          "unlockedLiquidity": "0",
+          "vestedLiquidity": "0",
+          "permanentLockedLiquidity": "7405089542818110235538564234081"
+        },
+        {
+          "nft": "ExBKPbBTD4hxD2WXTwT3g1uQgW98T8GZd6NGFLYzju7B",
+          "exists": false
+        }
+      ],
+      "dbcMigrationProgress": 3,
+      "isMigrated": 1,
+      "protocolMigrationBaseFee": "380689697117",
+      "protocolMigrationQuoteFee": "1700000"
+    }
+  },
+  "dammPool": "G2A8QLXMs1Tsf39FYcvBqBDs7ftVGUvisVicjArjtVwW",
+  "positionNft": "Cxdg3MZk6FosBPsjSs9r1jxiUUotT9M3hXNf258kNZwV",
+  "positionNft2": "ExBKPbBTD4hxD2WXTwT3g1uQgW98T8GZd6NGFLYzju7B",
+  "damm": {
+    "routedBuy": {
+      "sig": "3RH1sfeFQjZbxTd8L1NuvcRkRsqS8V4ToqcQMqWrLQCBNrJRDUSjEHxdYJLN62Fn2PVGwP56QQMwztbsYbfp9Lo4",
+      "cu": 46892,
+      "measured": {
+        "spent": "30000000",
+        "received": "6410214548088"
+      },
+      "programLog": [
+        "Program log: FUMPAD_SWAP venue=damm_v2 trader=9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ in_mint=So11111111111111111111111111111111111111112 out_mint=CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z spent=30000000 received=6410214548088 slot=510463653"
+      ],
+      "venueEvent": [
+        {
+          "venue": "damm_v2",
+          "pool": "G2A8QLXMs1Tsf39FYcvBqBDs7ftVGUvisVicjArjtVwW",
+          "trader": "9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ",
+          "side": "buy",
+          "amountIn": "30000000",
+          "amountOut": "6410214548088",
+          "tradingFee": "300000",
+          "protocolFee": "75000",
+          "referralFee": "0",
+          "feeToken": "quote",
+          "nextSqrtPrice": "40342851636955283",
+          "topLevel": false,
+          "viaProgram": "8zt6gZTFwn6Dn5YRhu7jsywR5tQnZZCx1YmrbqLVTbeW",
+          "timestamp": "1791855881"
+        }
+      ]
+    },
+    "routedSell": {
+      "sig": "2R1gCRM76adUhWENuBqUSpgHHSdpeus6pSaXuWvAQUc1MyYGjbq8mpaNNffSy6DYWZMpBsBLmdqE19zJjxciD9uF",
+      "cu": 46281,
+      "measured": {
+        "spent": "3205107274044",
+        "received": "14878374"
+      },
+      "programLog": [
+        "Program log: FUMPAD_SWAP venue=damm_v2 trader=9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ in_mint=CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z out_mint=So11111111111111111111111111111111111111112 spent=3205107274044 received=14878374 slot=510463660"
+      ],
+      "venueEvent": [
+        {
+          "venue": "damm_v2",
+          "pool": "G2A8QLXMs1Tsf39FYcvBqBDs7ftVGUvisVicjArjtVwW",
+          "trader": "9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ",
+          "side": "sell",
+          "amountIn": "3205107274044",
+          "amountOut": "14878374",
+          "tradingFee": "150668",
+          "protocolFee": "37666",
+          "referralFee": "0",
+          "feeToken": "quote",
+          "nextSqrtPrice": "39650498756930825",
+          "topLevel": false,
+          "viaProgram": "8zt6gZTFwn6Dn5YRhu7jsywR5tQnZZCx1YmrbqLVTbeW",
+          "timestamp": "1791855882"
+        }
+      ]
+    },
+    "thirdPartyDamm": {
+      "buy": {
+        "sig": "Kb14shdELcHjSJuK5ahrTmsTM7WnXW7QvxQXVX6wJBT1c97eyfPPAeppHN7p6v5sjEJh5cGMcT3UGG3R2aTxP4j",
+        "cu": 35432,
+        "parsed": [
+          {
+            "venue": "damm_v2",
+            "pool": "G2A8QLXMs1Tsf39FYcvBqBDs7ftVGUvisVicjArjtVwW",
+            "trader": "3gK2gsq5VbHdBotfNqiEZ8PVcUHzZE944Km9A3eDqTtF",
+            "side": "buy",
+            "amountIn": "4000000",
+            "amountOut": "851051127525",
+            "tradingFee": "40000",
+            "protocolFee": "10000",
+            "referralFee": "0",
+            "feeToken": "quote",
+            "nextSqrtPrice": "39832011126439078",
+            "topLevel": true,
+            "viaProgram": null,
+            "timestamp": "1791855884"
+          }
+        ]
+      },
+      "sell": {
+        "sig": "58tiN2L4cNCucFgANbk9gTfr5xLXw1pXsDiCoZupG4DR9uHdFyJC7H1L44HbyGisHtQoRtcdVVZUk7qsraRttrdG",
+        "cu": 34457,
+        "parsed": [
+          {
+            "venue": "damm_v2",
+            "pool": "G2A8QLXMs1Tsf39FYcvBqBDs7ftVGUvisVicjArjtVwW",
+            "trader": "3gK2gsq5VbHdBotfNqiEZ8PVcUHzZE944Km9A3eDqTtF",
+            "side": "sell",
+            "amountIn": "16621399207205",
+            "amountOut": "70248929",
+            "tradingFee": "711382",
+            "protocolFee": "177845",
+            "referralFee": "0",
+            "feeToken": "quote",
+            "nextSqrtPrice": "36563035070389125",
+            "topLevel": true,
+            "viaProgram": null,
+            "timestamp": "1791855885"
+          }
+        ]
+      }
+    },
+    "priceDamm": {
+      "sig": "64YYob9eYsDE26T8gHUF5urLytHYBJMsNRrLtik9tmvoyvafCuTnWFvuRM8FZmQm4hivnREDqWhHRSjwChubMoUv",
+      "cu": 1934,
+      "sqrtPriceOnchain": "36563035070389125",
+      "sqrtPriceSdk": "36563035070389125",
+      "match": true,
+      "priceLamportsPerRawToken": 0.000003928665318908845,
+      "priceSolPerToken": 3.928665318908845e-9,
+      "mcSol": 3.928665318908845
+    },
+    "claimDamm": {
+      "sig": "7HeNKf6RMtZsuoFfoL6gzwPT6XLrxH1y2wgy34KnHCpbKHzbyQ35X9xH5CvRhnPcXXis86QBuUktWUnCVhSfSoY",
+      "cu": 39875,
+      "programLog": [
+        "Program log: FUMPAD_CLAIM venue=damm_v2 quote_claimed=1202049 buyback=601024 platform=360614 creator=240411 base_claimed=0"
+      ],
+      "positionFeeBPendingBefore": "0",
+      "positionFeeAPendingBefore": "0",
+      "deltas": {
+        "buyback": "601024",
+        "platform": "360614",
+        "creator": "240411"
+      }
+    },
+    "buybackDamm": {
+      "sig": "2pk4SRh1PopwV9oDvdtYavvpXYsTUpN8rFdQ3AMSavbtzLN21WJGyp7Ex4icE8aUtB1xcYouqQFz1G5CZtF2yTJw",
+      "cu": 48417,
+      "spentWsol": "601024",
+      "rewardPoolDelta": "150959312295",
+      "programLog": [
+        "Program log: FUMPAD_SWAP venue=damm_v2 trader=EnkhUUNSew89N2kNrFGFF7KAkaPywC6vkMztoWr1LA49 in_mint=So11111111111111111111111111111111111111112 out_mint=CVs2xp3PVzkejERMXDYL1QHUa3yRLcGXMuog5y59VC2z spent=601024 received=150959312295 slot=510463695"
+      ]
+    },
+    "payReward": {
+      "sig": "2pHFM59q5GsPuUSHKDP2unB398ovEx9pqREk1XeDTHheWJbKWWQbTGs1FQnucYGuiWeJgiKJ3PraAtWiLsiEWVK6",
+      "cu": 10271,
+      "received": "1000000000"
+    }
+  },
+  "verify": {
+    "parserCrossCheck": [
+      {
+        "label": "launch: init pool (vanity mint) + creator first buy + sniper buy, same tx",
+        "n": 2,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #1",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #2",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #3",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #4",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #5",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #6",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #7",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #8",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #9",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "decay probe buy #10",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "FUMPAD routed_swap BUY on DBC (CPI)",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "FUMPAD routed_swap SELL on DBC (CPI)",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "third-party (Meteora SDK) BUY on DBC",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "third-party (Meteora SDK) SELL on DBC",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "buyback_swap on DBC (buyback PDA payer) -> reward pool",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": true
+      },
+      {
+        "label": "PartialFill buy completes the curve",
+        "n": 1,
+        "evtSwap2EqualsEvtSwap3": false
+      }
+    ],
+    "bytecodeMarkers": {
+      "EvtSwap": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "EvtSwap2": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "EvtSwap3": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "EvtCurveComplete": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "EvtCreateConfig3": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "DAMM_EvtSwap2": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "ix_create_config2": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "ix_create_config": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "ix_swap2": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "ix_claim_trading_fee": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "ix_withdraw_leftover": {
+        "devnet": false,
+        "mainnet": false
+      },
+      "ix_migration_damm_v2": {
+        "devnet": false,
+        "mainnet": false
+      }
+    },
+    "rent": {
+      "virtualPool": {
+        "bytes": 424,
+        "lamports": 2804160
+      },
+      "baseVault": {
+        "bytes": 165,
+        "lamports": 1488440
+      },
+      "quoteVault": {
+        "bytes": 165,
+        "lamports": 15585279
+      },
+      "mint": {
+        "bytes": 359,
+        "lamports": 2473960
+      },
+      "config": {
+        "bytes": 1048,
+        "lamports": 5974080
+      },
+      "dammPool": {
+        "bytes": 1112,
+        "lamports": 6299200
+      }
+    },
+    "recovery": {
+      "deployerBefore": 2.194419401,
+      "deployerAfter": 3.818793437
+    }
+  },
+  "eventCheck": {
+    "partialFill": {
+      "evtSwap3": [
+        {
+          "venue": "dbc",
+          "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+          "trader": "9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ",
+          "side": "buy",
+          "amountIn": "808583416",
+          "amountOut": "584961185142684",
+          "tradingFee": "8085835",
+          "protocolFee": "2021458",
+          "referralFee": "0",
+          "feeToken": "quote",
+          "nextSqrtPrice": "38981508865643380",
+          "topLevel": true,
+          "viaProgram": null,
+          "timestamp": "1791855798",
+          "curveComplete": true
+        }
+      ],
+      "evtSwap2": [
+        {
+          "venue": "dbc",
+          "pool": "AazodqeqJvkyMtFi9kNisQidxhf3ncWxY7DU41K4yWCb",
+          "trader": "9HXgtr92EMgXCYzDC1S3vh9pxvU1AbfygofkPdtMqHwJ",
+          "side": "buy",
+          "amountIn": "808583416",
+          "amountOut": "584961185142684",
+          "tradingFee": "8085835",
+          "protocolFee": "2021458",
+          "referralFee": "0",
+          "feeToken": "quote",
+          "nextSqrtPrice": "38981508865643380",
+          "topLevel": true,
+          "viaProgram": null,
+          "timestamp": "1791855798"
+        }
+      ]
+    },
+    "mainnetRecentDbcEvents": {
+      "inspectedTxs": 15,
+      "eventCounts": {
+        "EvtSwap": 15,
+        "EvtSwap2": 15
+      }
+    }
+  },
+  "vanity": {
+    "sig": "5J5f6fTpzPyAyXCWJZaP5U8aAzwoZ5tqhHxcng6vqU6QQL5dNPFoXb1FWeGpwD6b8ZCqKwJKfc4kqL8jsEu63tLn",
+    "cu": 72899,
+    "mint": "wEZG3B6gBgS2mrZPpBUZRVzWuxyF63uc9kWKDnsfmbL",
+    "pool": "2TvRL13HXaekswCAHmrouyKNuzZH3HYcXj3i6QhQFJq6",
+    "supply": "1000000000000000",
+    "decimals": 6,
+    "mintAuthority": null,
+    "freezeAuthority": null,
+    "metadata": {
+      "name": "Fumble Vanity",
+      "symbol": "FMBL",
+      "uri": "https://fumpad.fun/v.json",
+      "updateAuthority": null
+    },
+    "tlvLen": 194
+  }
+}

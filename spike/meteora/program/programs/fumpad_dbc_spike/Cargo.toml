@@ -1,0 +1,25 @@
+[package]
+name = "fumpad_dbc_spike"
+version = "0.1.0"
+description = "FUMPAD x Meteora DBC/DAMM v2 devnet CPI spike (not production)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "fumpad_dbc_spike"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = "1.2.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

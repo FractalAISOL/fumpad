@@ -1,0 +1,6 @@
+node_modules/
+.keys/
+program/target/
+program/.anchor/
+state.bak.json
+idls/
