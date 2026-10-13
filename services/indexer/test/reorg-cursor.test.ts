@@ -5,7 +5,7 @@ import type { ConfirmedSignatureInfo } from "@solana/web3.js";
 import { Keypair } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_PARAMS, FUMPAD_PROGRAM_ID, type TxLike } from "@fumpad/sdk/v06";
+import { DEFAULT_PARAMS, FUMPAD_PROGRAM_ID, type TxLike } from "@fumpad/sdk";
 
 import { Finalizer } from "../src/finality.js";
 import { cursorTarget, RpcSource } from "../src/sources/rpc.js";

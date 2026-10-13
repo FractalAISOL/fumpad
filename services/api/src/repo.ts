@@ -3,8 +3,13 @@
  * app/src/data/types.ts). Units follow app/src/data/chain.ts: SOL, whole tokens,
  * SOL-per-token prices, unix MILLISECONDS.
  */
-import { DEFAULT_PARAMS, type Params, poolNeededFor, q64ToSolPerToken } from "@fumpad/sdk/v06";
-import { fromStored, getMeta, type Queryable } from "@fumpad/indexer";
+import { poolNeededFor, q64ToSolPerToken } from "@fumpad/sdk";
+import { type ApiParams, apiParams, curveFromStored, fromStored, getMeta, type Queryable } from "@fumpad/indexer";
+import { DEFAULT_PARAMS } from "@fumpad/sdk";
+
+type Params = ApiParams;
+/** Typical sell → attestation latency (finality ≈ 13 s + derivation + 2-of-3 exchange + landing). Display only. */
+export const ATTEST_DELAY_SECS = 60;
 
 import type {
   Achievement,
@@ -55,7 +60,8 @@ export interface CoinRow {
   created_at: string;
   status: "curve" | "complete" | "graduated";
   graduated_at: string | null;
-  amm_pool: string | null;
+  dbc_pool: string | null;
+  damm_pool: string | null;
   raised_lamports: string;
   virtual_sol: string;
   virtual_tokens: string;
@@ -171,8 +177,8 @@ export class Repo {
 
   async params(): Promise<Params> {
     if (this.paramsCache && Date.now() - this.paramsCache.at < 30_000) return this.paramsCache.p;
-    const g = await getMeta<{ params: Parameters<typeof fromStored>[0] }>(this.db, "global");
-    const p = g ? fromStored(g.params) : DEFAULT_PARAMS;
+    const g = await getMeta<{ params: Parameters<typeof fromStored>[0]; curve?: Record<string, string | number> }>(this.db, "global");
+    const p = apiParams(g ? fromStored(g.params) : DEFAULT_PARAMS, curveFromStored(g?.curve));
     this.paramsCache = { at: Date.now(), p };
     return p;
   }
@@ -184,7 +190,7 @@ export class Repo {
 
   private async initialPriceQ64(): Promise<bigint> {
     const p = await this.params();
-    return (p.initialVirtualSol << 64n) / p.initialVirtualToken;
+    return (p.sqrtStartPrice * p.sqrtStartPrice) >> 64n;
   }
 
   private async summary(c: CoinRow, spark?: number[]): Promise<CoinSummary> {
@@ -217,7 +223,7 @@ export class Repo {
       closestMultiple: c.closest_multiple ?? undefined,
       creatorFlagged: !!c.creator_flagged,
       ...(c.snipe_tax_lamports && BigInt(c.snipe_tax_lamports) > 0n
-        ? { snipeTaxSol: lam(c.snipe_tax_lamports), snipeTaxedBuys: Number(c.snipe_taxed_buys ?? 0) }
+        ? { snipeTaxSol: lam(c.snipe_tax_lamports), snipeTaxedTrades: Number(c.snipe_taxed_buys ?? 0) }
         : {}),
     };
   }
@@ -387,7 +393,7 @@ export class Repo {
   /** The coin's own columns only (no derived subqueries), by exact mint (H-3: never by symbol). */
   private async coinBase(mint: string): Promise<CoinBase | null> {
     const r = await this.db.query<CoinBase>(
-      `SELECT mint, creator, created_at, status, amm_pool, amm_base, real_tokens, price_q64, median_q64, pool_tokens, queue_owed
+      `SELECT mint, creator, created_at, status, damm_pool, amm_base, real_tokens, price_q64, median_q64, pool_tokens, queue_owed
          FROM coins c WHERE c.mint = $1`,
       [mint],
     );
@@ -449,8 +455,7 @@ export class Repo {
       this.db.query<{ bought24: string; past10x: string; sol1h: string }>(
         `SELECT
            (SELECT COALESCE(sum(pool_tokens_bought),0) FROM trades WHERE mint = $1 AND ts > $2 - 86400)
-             + (SELECT COALESCE(sum(tokens_out),0) FROM buybacks WHERE mint = $1 AND ts > $2 - 86400)
-             + (SELECT COALESCE(sum(base_out),0) FROM lp_skims WHERE mint = $1 AND ts > $2 - 86400) AS bought24,
+             + (SELECT COALESCE(sum(tokens_out),0) FROM buybacks WHERE mint = $1 AND ts > $2 - 86400) AS bought24,
            (SELECT count(*) FROM tickets WHERE mint = $1 AND status IN ('open','queued') AND $3::numeric * 10000 >= sell_price_q64 * $4) AS past10x,
            (SELECT COALESCE(sum(CASE WHEN is_buy THEN sol_amount ELSE -sol_amount END),0) FROM trades WHERE mint = $1 AND NOT on_amm AND ts > $2 - 3600) AS sol1h`,
         [c.mint, now, this.currentQ64(c).toString(), p.triggerMultipleBps],
@@ -473,12 +478,13 @@ export class Repo {
       ticketsCreated: Number(c.tickets_created),
       ticketsPast10x: Number(e.past10x),
       referencePrice: px(c.reference_q64 ?? c.price_q64),
-      ammPool: c.amm_pool ?? undefined,
+      dbcPool: c.dbc_pool ?? undefined,
+      dammPool: c.damm_pool ?? undefined,
       virtualSol: lam(c.virtual_sol),
       virtualTokens: tok(c.virtual_tokens),
       curveTokensLeft: c.status === "graduated" ? 0 : tok(c.real_tokens),
-      ammSol: c.amm_quote ? lam(c.amm_quote) : undefined,
-      ammTokens: c.amm_base ? tok(c.amm_base) : undefined,
+      ammSol: c.status === "graduated" ? lam(c.virtual_sol) : undefined,
+      ammTokens: c.status === "graduated" ? tok(c.virtual_tokens) : undefined,
       curveSol1h: lam(e.sol1h),
       poolInflowSol: lam(c.pool_inflow_lamports ?? "0"),
     };
@@ -516,6 +522,16 @@ export class Repo {
     return r.rows.map((x) => ({ t: Number(x.ts), p: x.pq ? px(x.pq) : px(spotQ64(x.vs!, x.vt!)) }));
   }
 
+  /** Base units the wallet acquired on the coin's pools since `sinceTs` (buys + payouts). */
+  async recentAcquired(wallet: string, mint: string, sinceTs: number): Promise<bigint> {
+    const r = await this.db.query<{ v: string }>(
+      `SELECT (SELECT COALESCE(sum(token_amount),0) FROM trades WHERE wallet = $1 AND mint = $2 AND is_buy AND ts > $3)
+            + (SELECT COALESCE(sum(amount),0) FROM claims WHERE owner = $1 AND mint = $2 AND ts > $3) AS v`,
+      [wallet, mint, sinceTs],
+    );
+    return BigInt(r.rows[0]?.v ?? "0");
+  }
+
   /** Global.params in display units (getParams). */
   async getParams(): Promise<ProtocolParams> {
     const p = await this.params();
@@ -544,10 +560,13 @@ export class Repo {
       snipeWindowSlots: p.snipeWindowSlots ?? 0,
       snipeStartBps: p.snipeStartBps ?? 0,
       graduationFeeSol: lam(p.graduationFeeLamports),
+      venueFeeShareBps: p.venueFeeShareBps,
+      ticketChallengeSecs: Number(p.ticketChallengeSecs),
+      attestDelaySecs: ATTEST_DELAY_SECS,
     };
   }
 
-  private tradeRows(r: { signature: string; mint: string; wallet: string; is_buy: boolean; token_amount: string; sol_amount: string; virtual_sol: string; virtual_tokens: string; ts: string; snipe_tax: string; snipe_tax_bps: number }[]): TradeRow[] {
+  private tradeRows(r: { signature: string; mint: string; wallet: string; is_buy: boolean; token_amount: string; sol_amount: string; virtual_sol: string; virtual_tokens: string; ts: string; snipe_tax: string; snipe_tax_bps: number; venue: string | null; app: string | null; routed: boolean | null }[]): TradeRow[] {
     return r.map((x) => ({
       signature: x.signature,
       mint: x.mint,
@@ -558,13 +577,15 @@ export class Repo {
       price: px(spotQ64(x.virtual_sol, x.virtual_tokens)),
       ts: Number(x.ts) * 1000,
       ...(BigInt(x.snipe_tax) > 0n ? { snipeTaxSol: lam(x.snipe_tax), snipeTaxBps: Number(x.snipe_tax_bps) } : {}),
+      ...(x.venue ? { venue: x.venue === "damm_v2" ? ("damm" as const) : ("dbc" as const) } : {}),
+      ...(x.routed ? { app: "fumpad" } : x.app ? { app: x.app } : {}),
     }));
   }
 
   /** Latest FUMPAD trades on a coin, newest first (getRecentTrades). */
   async getRecentTrades(mint: string, limit = 30): Promise<TradeRow[]> {
     const r = await this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
-      `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
+      `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps, venue, app, routed FROM trades
        WHERE mint = $1 ORDER BY ts DESC, slot DESC, idx DESC LIMIT $2`,
       [mint, Math.min(Math.max(limit, 1), 100)],
     );
@@ -582,7 +603,7 @@ export class Repo {
       this.getCoinByMint(mint),
       sigs.length
         ? this.db.query<Parameters<Repo["tradeRows"]>[0][number]>(
-            `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps FROM trades
+            `SELECT signature, mint, wallet, is_buy, token_amount, sol_amount, virtual_sol, virtual_tokens, ts, snipe_tax, snipe_tax_bps, venue, app, routed FROM trades
               WHERE signature = ANY($1::text[]) AND mint = $2 ORDER BY slot, idx`,
             [sigs, mint],
           )
@@ -608,8 +629,8 @@ export class Repo {
       this.db.query<{ n: string }>("SELECT COALESCE((SELECT n FROM coin_holders WHERE mint = $1), 0) AS n", [c.mint]),
     ]);
     const top: Holder[] = [{ address: "reward-pool", label: "Reward pool", kind: "pool", share: (tok(c.pool_tokens) / supply) * 100 }];
-    if (c.status === "graduated" && c.amm_pool && c.amm_base) top.push({ address: c.amm_pool, label: "PumpSwap pool", kind: "amm", share: (tok(c.amm_base) / supply) * 100 });
-    else top.push({ address: "bonding-curve", label: "Bonding curve", kind: "amm", share: ((tok(c.real_tokens) + tok(p.lpSupply)) / supply) * 100 });
+    if (c.status === "graduated" && c.damm_pool && c.amm_base) top.push({ address: c.damm_pool, label: "Meteora DAMM v2 pool (LP locked)", kind: "amm", share: (tok(c.amm_base) / supply) * 100 });
+    else top.push({ address: "bonding-curve", label: "Bonding curve (Meteora DBC)", kind: "amm", share: ((tok(c.real_tokens) + tok(p.lpSupply)) / supply) * 100 });
     for (const h of r.rows) {
       top.push({
         address: h.wallet,
@@ -625,8 +646,8 @@ export class Repo {
     const c = await this.coinBase(mint);
     if (!c) return [];
     const cur = this.currentQ64(c);
-    const r = await this.db.query<{ ticket: string; owner: string; original_tokens: string; sell_lamports: string; sell_ts: string; sell_price_q64: string; name: string | null }>(
-      `SELECT t.ticket, t.owner, t.original_tokens, t.sell_lamports, t.sell_ts, t.sell_price_q64, u.name
+    const r = await this.db.query<{ ticket: string; owner: string; original_tokens: string; sell_lamports: string; sell_ts: string; sell_price_q64: string; source: "router" | "outside"; app: string | null; name: string | null }>(
+      `SELECT t.ticket, t.owner, t.original_tokens, t.sell_lamports, t.sell_ts, t.sell_price_q64, t.source, t.app, u.name
          FROM tickets t LEFT JOIN users u ON u.address = t.owner WHERE t.mint = $1 ORDER BY t.sell_ts DESC LIMIT 30`,
       [c.mint],
     );
@@ -639,6 +660,8 @@ export class Repo {
       ts: ms(t.sell_ts)!,
       multiple: mult(cur, BigInt(t.sell_price_q64)),
       isYou: viewer ? t.owner === viewer : undefined,
+      source: t.source,
+      app: t.app ?? undefined,
     }));
   }
 
@@ -653,8 +676,7 @@ export class Repo {
     const r = await this.db.query<{ mint: string; v: string }>(
       `SELECT m.mint,
               (SELECT COALESCE(sum(pool_tokens_bought),0) FROM trades WHERE mint = m.mint AND ts > $2 - 86400)
-            + (SELECT COALESCE(sum(tokens_out),0) FROM buybacks WHERE mint = m.mint AND ts > $2 - 86400)
-            + (SELECT COALESCE(sum(base_out),0) FROM lp_skims WHERE mint = m.mint AND ts > $2 - 86400) AS v
+            + (SELECT COALESCE(sum(tokens_out),0) FROM buybacks WHERE mint = m.mint AND ts > $2 - 86400) AS v
          FROM unnest($1::text[]) m(mint)`,
       [mints, nowSecs()],
     );
@@ -765,12 +787,14 @@ export class Repo {
     const multiple = mult(cur, sell);
     const expired = t.status === "expired" || (t.status === "open" && Number(t.sell_ts) + Number(p.claimWindowSecs) < now);
     const meets = cur * 10_000n >= sell * BigInt(p.triggerMultipleBps);
-    const chainStatus = t.status === "escrowed" ? "claimed" : expired && t.status === "open" ? "expired" : (t.status as Ticket["chainStatus"]);
+    const chainStatus = expired && t.status === "open" ? "expired" : (t.status as Ticket["chainStatus"]);
+    const inChallenge = t.status === "open" && !!t.attested_at && Number(t.attested_at) + Number(p.ticketChallengeSecs) > now;
     let state: TicketState;
     if (t.status === "claimed" || t.status === "escrowed") state = "claimed";
     else if (t.status === "voided") state = "voided";
     else if (expired) state = "expired";
     else if (t.status === "queued") state = "queued";
+    else if (inChallenge) state = "challenge";
     else if (t.coin_status !== "graduated") state = "awaiting-graduation";
     else state = meets && t.median_q64 ? "claimable" : "tracking";
     const claimAmount = t.status === "queued" || t.status === "claimed" || t.status === "escrowed" ? BigInt(t.claim_amount) : (BigInt(t.tokens) * BigInt(p.claimBps)) / 10_000n;
@@ -820,6 +844,12 @@ export class Repo {
       rebuyDebited: tok(t.debited),
       autoClaim: !t.auto_claim_opt_out,
       autoClaimed: t.auto_claimed || undefined,
+      source: t.source,
+      app: t.app ?? undefined,
+      sellSignature: t.sell_signature ?? undefined,
+      attestedAt: ms(t.attested_at),
+      claimableFrom: t.attested_at ? (Number(t.attested_at) + Number(p.ticketChallengeSecs)) * 1000 : undefined,
+      voidReason: t.status === "voided" ? (t.void_reason ?? "rebuy") : undefined,
     };
   }
 
@@ -1036,7 +1066,7 @@ export function levelOf(xp: number) {
 /** The coin's own columns (`coinBase`). */
 type CoinBase = Pick<
   CoinRow,
-  "mint" | "creator" | "created_at" | "status" | "amm_pool" | "amm_base" | "real_tokens" | "price_q64" | "median_q64" | "pool_tokens" | "queue_owed"
+  "mint" | "creator" | "created_at" | "status" | "damm_pool" | "amm_base" | "real_tokens" | "price_q64" | "median_q64" | "pool_tokens" | "queue_owed"
 >;
 
 interface UserStatsRow {
@@ -1084,6 +1114,11 @@ interface TicketRow {
   crossed_multiple: number | null;
   /** Median at payout: the ticket's own column, or the claim row (escrowed payouts don't set the column). */
   paid_median_q64: string | null;
+  source: "router" | "outside";
+  app: string | null;
+  sell_signature: string | null;
+  attested_at: string | null;
+  void_reason: "rebuy" | "guardian" | null;
 }
 const TICKET_SELECT = `
   SELECT t.*, c.symbol, c.name AS coin_name, c.status AS coin_status, c.median_q64, c.price_q64, c.pool_tokens, p.auto_claim_opt_out,

@@ -99,7 +99,7 @@ export async function buildServer(
   const conn = deps?.conn ?? new Connection(cfg.rpcUrl, "confirmed");
   const cache = deps?.cache ?? new TtlCache();
   const repo = deps?.repo ?? new Repo(db);
-  const chain = deps?.chain ?? new ChainReader(conn, cache, { solUsdFallback: cfg.solUsdFallback, pythAccount: cfg.pythAccount });
+  const chain = deps?.chain ?? new ChainReader(conn, cache, { solUsdFallback: cfg.solUsdFallback, pythAccount: cfg.pythAccount, recentAcquired: (w, m, since) => repo.recentAcquired(w, m, since) });
   const live =
     deps?.live ??
     new LiveHub(
@@ -330,7 +330,8 @@ export async function buildServer(
       if (!Number.isFinite(amount) || amount < 0 || amount > 1e15) throw bad("invalid amount");
       const wallet = optAddr(qs.wallet, "wallet");
       const row = await cached(`coin:${mint}`, 2_000, () => repo.getCoinByMint(mint));
-      return chain.quote({ mint, side, amount, wallet, symbol: row?.symbol });
+      const maturedTokens = side === "sell" && wallet ? (await chain.maturedBase(wallet, mint)).matured : undefined;
+      return chain.quote({ mint, side, amount, wallet, symbol: row?.symbol, maturedTokens });
     },
   );
   app.get("/v1/wallets/:wallet/balances/:mint", async (req) => {
@@ -407,7 +408,7 @@ export async function buildServer(
   });
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────
-  registerLaunchRoutes(app, cfg, { conn, client: chain.client, pool, db });
+  registerLaunchRoutes(app, cfg, { conn, chain, pool, db });
 
   // ── Pre-launch waitlist ─────────────────────────────────────────────────────
   registerWaitlistRoutes(app, cfg, db);

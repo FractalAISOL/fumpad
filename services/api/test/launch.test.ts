@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk/v06";
+import { FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
 
 import { parsePrepareBody, WindowLimiter } from "../src/launch/routes.js";
 import { keyFingerprint, MintVault, parsePoolKey } from "../src/launch/vault.js";
@@ -75,19 +75,14 @@ describe("POST /v1/launch/prepare body", () => {
   });
 });
 
-describe("app/src/chain/program.ts stays in sync with the IDL", () => {
-  it("program id, discriminators and suffix", () => {
+describe("app/src/chain stays in sync with the v0.7 program", () => {
+  it("program id (cluster.ts → v07/ids.ts), vanity suffix, IDL account lists the app relies on", () => {
     const chainDir = join(dirname(fileURLToPath(import.meta.url)), "../../../app/src/chain/");
-    const src = readFileSync(chainDir + "program.ts", "utf8");
-    // The program id lives in cluster.ts (one place per cluster); program.ts wraps it.
-    expect(src).toContain("new PublicKey(FUMPAD_PROGRAM_ADDRESS)");
     expect(readFileSync(chainDir + "cluster.ts", "utf8")).toContain(`FUMPAD_PROGRAM_ADDRESS = "${FUMPAD_PROGRAM_ID.toBase58()}"`);
-    expect(src).toContain(`VANITY_SUFFIX = "${FUMPAD_VANITY_SUFFIX}"`);
-    // Only the launch check's discriminators live in the app; every builder comes from @fumpad/sdk.
-    for (const [name, constName] of [["create_coin", "CREATE_COIN"], ["buy", "BUY"]]) {
-      expect(src).toContain(`const ${constName} = [${idlInstruction(FUMPAD_IDL, name).discriminator.join(", ")}];`);
-    }
+    expect(readFileSync(chainDir + "v07/ids.ts", "utf8")).toContain("new PublicKey(FUMPAD_PROGRAM_ADDRESS)");
+    expect(readFileSync(chainDir + "program.ts", "utf8")).toContain(`VANITY_SUFFIX = "${FUMPAD_VANITY_SUFFIX}"`);
     expect(idlInstruction(FUMPAD_IDL, "set_auto_claim").accounts.map((a) => a.name)).toEqual(["wallet", "position", "event_authority", "program"]);
+    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(13);
   });
 });
 

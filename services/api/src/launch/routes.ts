@@ -1,7 +1,8 @@
 /**
- * `POST /v1/launch/prepare` (D18): reserve a pooled `…fmbL` mint and return a server-built
- * launch transaction (compute budget + create_coin [+ the creator's first buy]) that is
- * already signed by the mint. The creator's wallet is fee payer and the only other signer;
+ * `POST /v1/launch/prepare` (D18, SPEC v0.7 §2): reserve a pooled `…fmbL` mint and return a server-built
+ * launch transaction — DBC `initialize_virtual_pool_with_token2022` on the FUMPAD config (the first
+ * config in `Global.configs`) → [the creator's top-level DBC swap2, which gets the min fee] →
+ * fumpad `register_coin` — already signed by the mint. The creator's wallet is fee payer and the only other signer;
  * it signs and sends. The mint secret never leaves the server: the response carries only
  * the public key and a signature over this exact message.
  *
@@ -11,10 +12,12 @@
  * riding on the mint signature), and the client needs no SDK. The message can't be
  * altered afterwards without invalidating the mint signature.
  */
-import { ComputeBudgetProgram, type Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { type Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { FastifyInstance } from "fastify";
 
-import { type FumpadClient, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk/v06";
+import { decodeDbcConfig, type DbcVirtualPool, isFumpadVanityMint, launchInstructions, launchMetadataError, quoteDbcBuy } from "@fumpad/sdk";
+
+import type { ChainReader } from "../chain.js";
 
 import type { Db } from "@fumpad/indexer";
 
@@ -95,7 +98,7 @@ export class WindowLimiter {
   }
 }
 
-export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; client: FumpadClient; pool: MintPool | null; db: Db }) {
+export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; chain: ChainReader; pool: MintPool | null; db: Db }) {
   const perWallet = new WindowLimiter(cfg.launchWalletLimitPerMin);
   const t = cfg.launchRpcTimeoutMs;
 
@@ -120,27 +123,35 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
       }
       const established = (await deps.db.query("SELECT 1 FROM users WHERE address = $1", [creator])).rowCount! > 0;
       let firstBuy: PrepareResponse["firstBuy"];
+      const g = await withTimeout(deps.chain.global(), t, "global lookup");
+      const dbcConfig = g.configs.find((k) => !k.equals(PublicKey.default));
+      if (!dbcConfig) throw new LaunchError(503, "no FUMPAD DBC config is allow-listed yet");
+      const cfgAcc = await withTimeout(deps.conn.getAccountInfo(dbcConfig, "confirmed"), t, "config lookup");
+      if (!cfgAcc) throw new LaunchError(503, "the FUMPAD DBC config is missing");
+      const config = decodeDbcConfig(new Uint8Array(cfgAcc.data));
       const prepared = await pool.prepare(creator, req.ip, async (mint) => {
         if (!isFumpadVanityMint(mint, pool.cfg.suffix)) throw new Error("pooled mint has the wrong suffix");
-        const built = await deps.client.buildLaunch({
+        let minTokensOut = 0n;
+        if (p.initialBuyLamports > 0n) {
+          // The pool's first swap in the creation tx pays the scheduler's minimum fee (1.25%), from the start price.
+          const fresh = { sqrtPrice: config.sqrtStartPrice, activationPoint: 0n, quoteReserve: 0n } as DbcVirtualPool;
+          const q = quoteDbcBuy(config, fresh, p.initialBuyLamports, 0n, { firstSwapMinFee: true });
+          minTokensOut = q.amountOut - (q.amountOut * BigInt(p.slippageBps)) / 10_000n;
+          firstBuy = { solIn: p.initialBuyLamports.toString(), tokensOut: q.amountOut.toString(), minTokensOut: minTokensOut.toString() };
+        }
+        const instructions = launchInstructions({
           creator: p.creator,
           mint,
+          dbcConfig,
           name: p.name,
           symbol: p.symbol,
           uri: p.uri,
-          initialBuyLamports: p.initialBuyLamports,
-          slippageBps: p.slippageBps,
+          buyLamports: p.initialBuyLamports,
+          minTokensOut,
+          priorityMicroLamports: p.priority > 0 ? p.priority : undefined,
         });
-        if (p.priority > 0) built.instructions.splice(1, 0, ComputeBudgetProgram.setComputeUnitPrice({ microLamports: p.priority }));
-        if (built.quote) {
-          firstBuy = {
-            solIn: built.quote.solIn.toString(),
-            tokensOut: built.quote.tokensOut.toString(),
-            minTokensOut: (built.quote.tokensOut - (built.quote.tokensOut * BigInt(p.slippageBps)) / 10_000n).toString(),
-          };
-        }
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
-        const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions: built.instructions }).compileToV0Message();
+        const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message();
         return { tx: new VersionedTransaction(msg), lastValidBlockHeight };
       }, { established });
       req.log.info({ creator, mint: prepared.mint, reused: prepared.reusedReservation }, "launch prepared");

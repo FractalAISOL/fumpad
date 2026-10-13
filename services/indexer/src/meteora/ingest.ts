@@ -14,8 +14,12 @@
  */
 import { parseMeteoraTrades, parsePoolFacts, type ConfirmedTx, type MeteoraTrade, type ParseResult, type PoolFacts } from "@fumpad/meteora";
 
+import { FUMPAD_PROGRAM_ID, type Params } from "@fumpad/sdk";
+
 import { type Db, withTx } from "../db.js";
-import type { Commit } from "../ingest.js";
+import type { IndexedEvent } from "../handlers.js";
+import { jsonify } from "../handlers.js";
+import { type Commit, storeAndApply } from "../ingest.js";
 import type { Logger } from "../log.js";
 import type { MeteoraIndexerConfig } from "./config.js";
 
@@ -45,7 +49,12 @@ export class MeteoraIngestor {
   readonly mints: Set<string>;
   stats = { applied: 0, duplicates: 0, trades: 0, issues: 0, poolsAdded: 0, lastSlot: 0 };
 
-  constructor(private db: Db, private cfg: Pick<MeteoraIndexerConfig, "dbcConfigs" | "mints">, private log: Logger) {
+  constructor(
+    private db: Db,
+    private cfg: Pick<MeteoraIndexerConfig, "dbcConfigs" | "mints">,
+    private log: Logger,
+    private bridge?: { params: () => Params; onTouched?: (mints: string[]) => void },
+  ) {
     this.configs = new Set(cfg.dbcConfigs);
     this.mints = new Set(cfg.mints);
   }
@@ -106,6 +115,13 @@ export class MeteoraIngestor {
     const watched = new Set([...this.pools.keys(), ...newPools.map((p) => p.pool)]);
     const trades = res.trades.filter((t) => watched.has(t.pool));
 
+    // Nothing of ours in this tx: don't record it (a pool registered later — e.g. by the coin's
+    // CoinRegistered — makes its cursor backfill fetch the tx again).
+    if (!trades.length && !newPools.length) {
+      this.stats.lastSlot = Math.max(this.stats.lastSlot, res.slot);
+      return { signature, status: "duplicate", trades: 0, newPools: [] };
+    }
+    const touched = new Set<string>();
     const status = await withTx(this.db, async (c) => {
       const ins = await c.query(
         `INSERT INTO meteora_transactions (signature, slot, block_time, commitment, source, status, version, trade_count, issue_count)
@@ -129,6 +145,27 @@ export class MeteoraIngestor {
         if (p.venue === "damm_v2") await c.query("INSERT INTO meteora_cursors (address, kind) VALUES ($1, 'pool') ON CONFLICT DO NOTHING", [p.pool]);
       }
       for (const t of trades) await insertTrade(c, t);
+      if (this.bridge && trades.length) {
+        // The coin's trade feed / charts / positions: one `Swap` event per record, through the main
+        // pipeline's tables and handlers (replayable like fumpad events).
+        await c.query(
+          `INSERT INTO transactions (signature, slot, block_time, commitment, source, kind, event_count)
+           VALUES ($1,$2,$3,$4,$5,'meteora',$6) ON CONFLICT (signature) DO NOTHING`,
+          [signature, res.slot, res.blockTime, commitment, source === "reconcile" ? "reconcile" : source, trades.length],
+        );
+        const events: IndexedEvent[] = [...trades]
+          .sort((a, b) => a.ixKey - b.ixKey)
+          .map((t, i) => {
+            const data = {
+              ...(jsonify(t) as Record<string, unknown>),
+              app: t.app.app,
+              routed: t.outerPrograms[t.outerPrograms.length - 1] === FUMPAD_PROGRAM_ID.toBase58(),
+              ts: t.blockTime ?? Number(t.eventTimestamp),
+            };
+            return { name: "Swap", program: "meteora" as const, index: 100_000 + i, data, raw: JSON.stringify(data) };
+          });
+        await storeAndApply(c, { signature, slot: res.slot, blockTime: res.blockTime, params: this.bridge.params(), touched, wallets: new Set() }, events);
+      }
       let n = 0;
       for (const i of res.issues) {
         await c.query("INSERT INTO meteora_parse_issues (signature, n, code, ix_key, pool, message) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING", [
@@ -144,6 +181,7 @@ export class MeteoraIngestor {
     });
 
     if (status === "applied") {
+      if (touched.size) this.bridge?.onTouched?.([...touched]);
       this.stats.applied++;
       this.stats.trades += trades.length;
       this.stats.issues += res.issues.length;

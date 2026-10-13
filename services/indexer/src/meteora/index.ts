@@ -25,10 +25,15 @@ export class MeteoraIndexer {
   readonly source: MeteoraSignatureSource;
   readonly finalizer: MeteoraFinalizer;
 
-  constructor(cfg: MeteoraIndexerConfig, db: Db, log: Logger, opts: { rpcUrl: string; commitment: Commit; dropMisses?: number; dropAfterSecs?: number; rpc?: MeteoraRpc }) {
+  constructor(
+    cfg: MeteoraIndexerConfig,
+    db: Db,
+    log: Logger,
+    opts: { rpcUrl: string; commitment: Commit; dropMisses?: number; dropAfterSecs?: number; rpc?: MeteoraRpc; bridge?: ConstructorParameters<typeof MeteoraIngestor>[3] },
+  ) {
     const l = log.child({ component: "meteora" });
     this.rpc = opts.rpc ?? new MeteoraRpc(cfg.rpcUrl ?? opts.rpcUrl);
-    this.ingestor = new MeteoraIngestor(db, cfg, l);
+    this.ingestor = new MeteoraIngestor(db, cfg, l, opts.bridge);
     this.source = new MeteoraSignatureSource(
       this.rpc,
       db,

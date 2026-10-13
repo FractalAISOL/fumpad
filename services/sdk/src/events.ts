@@ -101,6 +101,9 @@ export interface TxLike {
     preTokenBalances?: { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string } }[] | null;
     postTokenBalances?: { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string } }[] | null;
     logMessages?: string[] | null;
+    preBalances?: number[];
+    postBalances?: number[];
+    fee?: number;
   } | null;
 }
 

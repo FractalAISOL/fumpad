@@ -14,7 +14,9 @@
 import type { Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
 
-import { accountKeys, type TxLike } from "@fumpad/sdk/v06";
+import { accountKeys } from "@fumpad/sdk";
+
+import { getTx } from "./rawTx.js";
 
 import type { Db } from "./db.js";
 import type { Logger } from "./log.js";
@@ -123,7 +125,7 @@ export class Deriver {
           before = oldest.signature;
         }
         if (oldest) {
-          const tx = (await this.conn.getTransaction(oldest.signature, { maxSupportedTransactionVersion: 0, commitment: "confirmed" })) as unknown as TxLike | null;
+          const tx = await getTx(this.conn, oldest.signature, "confirmed");
           if (tx?.meta) {
             const keys = accountKeys(tx);
             const i = keys.indexOf(wallet);

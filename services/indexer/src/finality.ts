@@ -7,7 +7,9 @@
  */
 import type { Connection } from "@solana/web3.js";
 
-import type { Params } from "@fumpad/sdk/v06";
+import type { Params } from "@fumpad/sdk";
+
+import { getTx } from "./rawTx.js";
 
 import type { Db } from "./db.js";
 import type { Logger } from "./log.js";
@@ -74,7 +76,7 @@ export class Finalizer {
       const dropped: string[] = [];
       for (const sig of candidates) {
         // Cross-check with a different RPC method before deleting anything.
-        const tx = await this.conn.getTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }).catch(() => undefined);
+        const tx = await getTx(this.conn, sig, "confirmed").catch(() => undefined);
         if (tx === null) dropped.push(sig);
         else if (tx) {
           this.misses.delete(sig);

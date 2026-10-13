@@ -24,14 +24,15 @@ const DAMM_POOL = "ApxZdXkBjKWomGyWBA3LcCzUkjhq4UcoiT2kVaj7WDUk";
 const MINT = "BQqBiNLXNVB3Y3h6yqGMvTgEfrYjFzUa2KHPUsaUpump";
 
 describe("config", () => {
-  it("is off by default and leaves the indexer config otherwise unchanged", () => {
-    const c = loadIndexerConfig({ DATABASE_URL: "postgres://x" });
-    expect(c.meteora?.enabled).toBe(false);
+  it("is ON by default in v0.7 (METEORA_INDEXER_ENABLED=false turns it off)", () => {
+    expect(loadIndexerConfig({ DATABASE_URL: "postgres://x" }).meteora?.enabled).toBe(true);
+    expect(loadIndexerConfig({ DATABASE_URL: "postgres://x", METEORA_INDEXER_ENABLED: "false" }).meteora?.enabled).toBe(false);
   });
   it("parses lists and refuses bad input", () => {
     const c = loadMeteoraConfig({ METEORA_INDEXER_ENABLED: "true", METEORA_DBC_CONFIGS: ` ${CONFIG} ,`, METEORA_MINTS: MINT });
     expect(c).toMatchObject({ enabled: true, dbcConfigs: [CONFIG], mints: [MINT] });
-    expect(() => loadMeteoraConfig({ METEORA_INDEXER_ENABLED: "true" })).toThrow(/needs METEORA_DBC_CONFIGS/);
+    // pools join from CoinRegistered / Global.configs: no list is required
+    expect(loadMeteoraConfig({ METEORA_INDEXER_ENABLED: "true" })).toMatchObject({ enabled: true, dbcConfigs: [], mints: [] });
     expect(() => loadMeteoraConfig({ METEORA_MINTS: "not-a-key!" })).toThrow(/invalid address/);
   });
 });

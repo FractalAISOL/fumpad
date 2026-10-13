@@ -20,7 +20,9 @@
 import type { ConfirmedSignatureInfo, Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
 
-import { accountKeys, FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID, type TxLike } from "@fumpad/sdk/v06";
+import { accountKeys, FUMPAD_PROGRAM_ID, type TxLike } from "@fumpad/sdk";
+
+import { getTx } from "../rawTx.js";
 
 import type { Db } from "../db.js";
 import type { Commit, Ingestor, Source } from "../ingest.js";
@@ -67,11 +69,8 @@ export class RpcSource {
 
   async ensureCursors() {
     await this.db.query(
-      `INSERT INTO cursors (address, kind) VALUES ($1, 'program'), ($2, 'program') ON CONFLICT DO NOTHING`,
-      [FUMPAD_PROGRAM_ID.toBase58(), LP_LOCKER_PROGRAM_ID.toBase58()],
-    );
-    await this.db.query(
-      `INSERT INTO cursors (address, kind, mint) SELECT amm_pool, 'pool', mint FROM coins WHERE amm_pool IS NOT NULL ON CONFLICT DO NOTHING`,
+      `INSERT INTO cursors (address, kind) VALUES ($1, 'program') ON CONFLICT DO NOTHING`,
+      [FUMPAD_PROGRAM_ID.toBase58()],
     );
   }
 
@@ -257,16 +256,15 @@ export class RpcSource {
 
   private isWatched(tx: TxLike): boolean {
     const keys = new Set(accountKeys(tx));
-    if (keys.has(FUMPAD_PROGRAM_ID.toBase58()) || keys.has(LP_LOCKER_PROGRAM_ID.toBase58())) return true;
-    for (const pool of this.ingestor.watchedPools().keys()) if (keys.has(pool)) return true;
+    if (keys.has(FUMPAD_PROGRAM_ID.toBase58())) return true;
     return false;
   }
 
   async fetchTx(signature: string, attempts = this.opts.fetchAttempts ?? 4): Promise<TxLike | null> {
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
-        const tx = await this.conn.getTransaction(signature, { maxSupportedTransactionVersion: 0, commitment: this.opts.commitment });
-        if (tx) return tx as unknown as TxLike;
+        const tx = await getTx(this.conn, signature, this.opts.commitment);
+        if (tx) return tx;
       } catch (e) {
         this.log.debug({ signature, err: String(e) }, "getTransaction failed");
       }

@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 
 import { Connection } from "@solana/web3.js";
 
-import { DEFAULT_PARAMS, type Params } from "@fumpad/sdk/v06";
+import { DEFAULT_PARAMS, type Params } from "@fumpad/sdk";
 
 import { ChainSync } from "./chainSync.js";
 import type { IndexerConfig } from "./config.js";
@@ -52,7 +52,6 @@ export class Indexer {
     this.chainSync = new ChainSync(this.conn, this.db, this.log, { debounceMs: 500, fetchMetadata: cfg.fetchMetadata, metadataFetch: { ipfsGateway: cfg.ipfsGateway } });
     this.ingestor = new Ingestor({
       db: this.db,
-      conn: this.conn,
       log: this.log,
       params: () => this.params,
       onTouched: (m) => this.chainSync.enqueue(m),
@@ -67,12 +66,21 @@ export class Indexer {
         commitment: cfg.commitment,
         dropMisses: cfg.finalizeDropMisses,
         dropAfterSecs: cfg.finalizeDropAfterSecs,
+        bridge: { params: () => this.params, onTouched: (m) => this.chainSync.enqueue(m) },
       });
     }
   }
 
   async reloadParams() {
-    this.params = (await loadParams(this.conn, this.db)).params;
+    const g = await loadParams(this.conn, this.db);
+    this.params = g.params;
+    // Global.configs (the FUMPAD DBC config allow-list) are Meteora cursors + pool-set keys.
+    if (this.meteora && g.configs) {
+      for (const c of g.configs) {
+        this.meteora.ingestor.configs.add(c);
+        await this.db.query("INSERT INTO meteora_cursors (address, kind) VALUES ($1, 'dbc_config') ON CONFLICT DO NOTHING", [c]);
+      }
+    }
   }
 
   async start(): Promise<void> {

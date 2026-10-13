@@ -19,7 +19,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { type Connection, PublicKey } from "@solana/web3.js";
 
-import { FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID } from "@fumpad/sdk/v06";
+import { FUMPAD_PROGRAM_ID } from "@fumpad/sdk";
 
 import type { Logger } from "../log.js";
 
@@ -112,7 +112,7 @@ export function heliusWebhookHandler(onSignatures: (sigs: string[]) => void, log
 /** Subscribe to program logs; each notification pokes the poller. Returns an unsubscribe fn. */
 export function subscribeLogs(conn: Connection, poke: () => void, log: Logger): () => void {
   const ids: number[] = [];
-  for (const p of [FUMPAD_PROGRAM_ID, LP_LOCKER_PROGRAM_ID]) {
+  for (const p of [FUMPAD_PROGRAM_ID]) {
     try {
       ids.push(conn.onLogs(new PublicKey(p), () => poke(), "confirmed"));
     } catch (e) {

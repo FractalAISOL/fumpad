@@ -1,39 +1,31 @@
 /**
- * Rebuild one mint's derived state from the raw `events` table (re-decoding `raw`).
- * Used after a rollback (a confirmed transaction that never finalized) and by the
- * `replay` CLI. Global tables (users, user_stats, wallet_*) are recomputed by derive.ts.
+ * Rebuild one mint's derived state from the raw `events` table: fumpad events are re-decoded from
+ * their borsh `raw`, Meteora swaps and launch metadata from their JSON `raw`. Used after a rollback (a
+ * confirmed transaction that never finalized) and by the `replay` CLI.
  */
-import { decodeEventRaw, type FumpadEvent, type Params } from "@fumpad/sdk/v06";
+import { decodeEventRaw, type Params } from "@fumpad/sdk";
 
 import { type Db, withTx } from "./db.js";
-import { applyEvents } from "./handlers.js";
+import { applyEvents, type IndexedEvent } from "./handlers.js";
 
-const PER_MINT_TABLES = [
-  "trades",
-  "ticket_debits",
-  "claims",
-  "queue_entries",
-  "samples",
-  "buybacks",
-  "fee_withdrawals",
-  "lp_locks",
-  "lp_skims",
-  "lp_settlements",
-  "holdings_registered",
-  "positions",
-  "feed_events",
-  "tickets",
-];
+const PER_MINT_TABLES = ["trades", "ticket_debits", "claims", "queue_entries", "samples", "buybacks", "fee_withdrawals", "fee_claims", "positions", "feed_events", "tickets"];
+
+export function decodeStored(program: string, name: string, idx: number, raw: string): IndexedEvent | null {
+  if (program === "fumpad") {
+    const ev = decodeEventRaw(raw);
+    return ev ? { name: ev.name, program: "fumpad", index: idx, data: ev.data, raw } : null;
+  }
+  if (program === "meteora" || program === "meta") return { name, program, index: idx, data: JSON.parse(raw), raw };
+  return null;
+}
 
 export async function replayMint(db: Db, mint: string, params: Params): Promise<number> {
   return withTx(db, async (c) => {
-    // Keep off-chain metadata across the rebuild.
     const meta = await c.query<{ metadata: unknown }>("SELECT metadata FROM coins WHERE mint = $1", [mint]);
     for (const t of PER_MINT_TABLES) await c.query(`DELETE FROM ${t} WHERE mint = $1`, [mint]);
     await c.query("DELETE FROM coins WHERE mint = $1", [mint]);
-    // Ticket-keyed events (TicketDebited/TicketClosed) were stored with their mint at ingest.
-    const rows = await c.query<{ signature: string; idx: number; program: "fumpad" | "locker"; raw: string; slot: string; block_time: string | null }>(
-      `SELECT e.signature, e.idx, e.program, e.raw, t.slot, t.block_time
+    const rows = await c.query<{ signature: string; idx: number; program: string; name: string; raw: string; slot: string; block_time: string | null }>(
+      `SELECT e.signature, e.idx, e.program, e.name, e.raw, t.slot, t.block_time
          FROM events e JOIN transactions t USING (signature)
         WHERE e.mint = $1 ORDER BY t.slot, t.seq, e.idx`,
       [mint],
@@ -42,12 +34,13 @@ export async function replayMint(db: Db, mint: string, params: Params): Promise<
     let i = 0;
     while (i < rows.rows.length) {
       const sig = rows.rows[i].signature;
-      const group: FumpadEvent[] = [];
+      const group: IndexedEvent[] = [];
       for (; i < rows.rows.length && rows.rows[i].signature === sig; i++) {
         const r = rows.rows[i];
-        const ev = decodeEventRaw(r.program, r.raw);
-        if (ev) group.push({ ...ev, program: r.program, index: r.idx, topIx: 0, raw: r.raw } as FumpadEvent);
+        const ev = decodeStored(r.program, r.name, r.idx, r.raw);
+        if (ev) group.push(ev);
       }
+      // Within a tx: fumpad events and Meteora swaps in instruction order (swaps use idx = 100_000 + ixKey order).
       const head = rows.rows[i - 1];
       await applyEvents({ c, signature: sig, slot: Number(head.slot), blockTime: head.block_time === null ? null : Number(head.block_time), params, touched: new Set() }, group);
       n += group.length;

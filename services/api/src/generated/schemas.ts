@@ -125,7 +125,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "string"
       },
       "partialBasis": {
-        "description": "Sells exceeded what FUMPAD trades explain; P&L covers the explained part only.",
+        "description": "Sells exceeded what the wallet's trades explain; P&L covers the explained part only.",
         "type": "boolean"
       },
       "payoutTokens": {
@@ -188,12 +188,8 @@ export const SCHEMAS: Record<string, unknown> = {
   "CoinDetail": {
     "additionalProperties": false,
     "properties": {
-      "ammPool": {
-        "$ref": "#/components/schemas/Address",
-        "description": "PumpSwap pool address after graduation."
-      },
       "ammSol": {
-        "description": "Graduated-coin pool reserves (quote side incl. virtual), for quotes.",
+        "description": "DAMM v2 virtual reserves (full-range constant product), for post-graduation quotes.",
         "type": "number"
       },
       "ammTokens": {
@@ -224,8 +220,16 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "curveTokensLeft": {
-        "description": "Real tokens left on the curve.",
+        "description": "Tokens left before the curve completes (DBC `swap_base_amount` minus what has sold).",
         "type": "number"
+      },
+      "dammPool": {
+        "$ref": "#/components/schemas/Address",
+        "description": "Meteora DAMM v2 pool after graduation (LP 100% permanently locked to FUMPAD's fee claimer)."
+      },
+      "dbcPool": {
+        "$ref": "#/components/schemas/Address",
+        "description": "Meteora DBC virtual pool (the bonding curve), from launch."
       },
       "description": {
         "type": "string"
@@ -279,14 +283,14 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "poolInflowSol": {
-        "description": "SOL FUMPAD trades sent to the reward pool: the pool's fee share plus any snipe tax.",
+        "description": "SOL sent to the reward pool's buyback balance: half of FUMPAD's fee share plus its launch-window fees.",
         "type": "number"
       },
       "poolPaidOut": {
         "type": "number"
       },
       "poolSeeded": {
-        "description": "Tokens seeded to the pool at launch (8% of supply).",
+        "description": "D35: the DBC leftover (8% of supply) that lands in the reward pool at graduation; 0 before.",
         "type": "number"
       },
       "poolTokens": {
@@ -306,10 +310,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "snipeTaxSol": {
-        "description": "D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward pool as snipe tax, and how many buys paid it. Absent when none did.",
+        "description": "D33 snipe protection, early-launch stats: SOL of fees that trades (buys and sells, any app) paid in the launch window (the DBC fee scheduler, 99% → normal over ~3 s), and how many trades paid them. FUMPAD's whole share of these fees goes to the coin's reward pool. Absent when none did.",
         "type": "number"
       },
-      "snipeTaxedBuys": {
+      "snipeTaxedTrades": {
         "type": "number"
       },
       "socials": {
@@ -349,11 +353,11 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "trades24h": {
-        "description": "FUMPAD trades (curve + router) in the last 24 hours.",
+        "description": "Trades in the last 24 hours on the coin's own pools (DBC curve, then DAMM v2), from every app.",
         "type": "number"
       },
       "virtualSol": {
-        "description": "Virtual reserves, for curve quotes.",
+        "description": "The DBC curve as constant-product virtual reserves (one curve segment is exactly that), for quotes.",
         "type": "number"
       },
       "virtualTokens": {
@@ -481,10 +485,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "snipeTaxSol": {
-        "description": "D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward pool as snipe tax, and how many buys paid it. Absent when none did.",
+        "description": "D33 snipe protection, early-launch stats: SOL of fees that trades (buys and sells, any app) paid in the launch window (the DBC fee scheduler, 99% → normal over ~3 s), and how many trades paid them. FUMPAD's whole share of these fees goes to the coin's reward pool. Absent when none did.",
         "type": "number"
       },
-      "snipeTaxedBuys": {
+      "snipeTaxedTrades": {
         "type": "number"
       },
       "socials": {
@@ -517,7 +521,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "trades24h": {
-        "description": "FUMPAD trades (curve + router) in the last 24 hours.",
+        "description": "Trades in the last 24 hours on the coin's own pools (DBC curve, then DAMM v2), from every app.",
         "type": "number"
       },
       "volume24hSol": {
@@ -617,10 +621,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "snipeTaxSol": {
-        "description": "D19 snipe protection, early-launch stats: SOL that buys in the first ~2 s paid into the reward pool as snipe tax, and how many buys paid it. Absent when none did.",
+        "description": "D33 snipe protection, early-launch stats: SOL of fees that trades (buys and sells, any app) paid in the launch window (the DBC fee scheduler, 99% → normal over ~3 s), and how many trades paid them. FUMPAD's whole share of these fees goes to the coin's reward pool. Absent when none did.",
         "type": "number"
       },
-      "snipeTaxedBuys": {
+      "snipeTaxedTrades": {
         "type": "number"
       },
       "socials": {
@@ -653,7 +657,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "trades24h": {
-        "description": "FUMPAD trades (curve + router) in the last 24 hours.",
+        "description": "Trades in the last 24 hours on the coin's own pools (DBC curve, then DAMM v2), from every app.",
         "type": "number"
       },
       "volume24hSol": {
@@ -865,6 +869,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "actorName": {
         "type": "string"
       },
+      "app": {
+        "description": "App label of the sell (see `Ticket.app`).",
+        "type": "string"
+      },
       "coinName": {
         "type": "string"
       },
@@ -887,6 +895,9 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "sol": {
         "type": "number"
+      },
+      "source": {
+        "$ref": "#/components/schemas/TicketSource"
       },
       "symbol": {
         "type": "string"
@@ -1025,6 +1036,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "$ref": "#/components/schemas/Address"
       },
       "poolTokens": {
+        "description": "D35: tokens the reward pool receives at graduation (8% of supply).",
         "type": "number"
       },
       "replies": {
@@ -1035,7 +1047,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "snipeTaxSol": {
-        "description": "D19: snipe tax that launch-window buys have paid into the pool so far (SOL).",
+        "description": "D33: launch-window fees trades have paid so far (SOL); FUMPAD's share goes to the pool.",
         "type": "number"
       },
       "symbol": {
@@ -1071,6 +1083,10 @@ export const SCHEMAS: Record<string, unknown> = {
   "FumbleRow": {
     "additionalProperties": false,
     "properties": {
+      "app": {
+        "description": "App label of the sell (see `Ticket.app`).",
+        "type": "string"
+      },
       "isYou": {
         "type": "boolean"
       },
@@ -1086,6 +1102,9 @@ export const SCHEMAS: Record<string, unknown> = {
       "sol": {
         "type": "number"
       },
+      "source": {
+        "$ref": "#/components/schemas/TicketSource"
+      },
       "ticket": {
         "$ref": "#/components/schemas/Address"
       },
@@ -1094,6 +1113,10 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "ts": {
         "$ref": "#/components/schemas/Millis"
+      },
+      "verifying": {
+        "description": "Still being attested (no ticket yet).",
+        "type": "boolean"
       }
     },
     "required": [
@@ -1407,7 +1430,7 @@ export const SCHEMAS: Record<string, unknown> = {
   },
   "PortfolioCoin": {
     "additionalProperties": false,
-    "description": "Measured from FUMPAD trades (curve + router) with the average-cost method: a buy adds its tokens and the SOL it cost (fee included); a sell removes tokens at the running average cost and books what it paid out (after the fee) minus that cost as realized P&L. Fumble payouts (claims) arrive at zero cost. Balances come from the chain (the wallet's canonical Token-2022 account). Nothing here is a projection.",
+    "description": "Measured from the wallet's trades on the coin's own pools (DBC curve + DAMM v2, any app) with the average-cost method: a buy adds its tokens and the SOL it cost (fee included); a sell removes tokens at the running average cost and books what it paid out (after the fee) minus that cost as realized P&L. Fumble payouts (claims) arrive at zero cost. Balances come from the chain (the wallet's canonical Token-2022 account). Nothing here is a projection.",
     "properties": {
       "curveSol": {
         "description": "Real SOL raised on the curve (pre-graduation).",
@@ -1541,8 +1564,12 @@ export const SCHEMAS: Record<string, unknown> = {
   },
   "ProtocolParams": {
     "additionalProperties": false,
-    "description": "`Global.params` in display units (SOL, whole tokens, seconds, USD). Mainnet runs the program defaults; devnet runs a scaled-down curve and short windows (e.g. 30 s hold, 0.85 SOL graduation). Copy that quotes a rule reads it from here, never a literal.",
+    "description": "`Global.params` plus the coin's DBC config, in display units (SOL, whole tokens, seconds, USD). Mainnet runs the program defaults; devnet runs a scaled-down curve and short windows (e.g. 30 s hold, 0.85 SOL graduation). Copy that quotes a rule reads it from here, never a literal.",
     "properties": {
+      "attestDelaySecs": {
+        "description": "Typical time from a sell to its keeper attestation (finality + 2-of-3 signatures). Display only.",
+        "type": "number"
+      },
       "claimBps": {
         "type": "number"
       },
@@ -1550,9 +1577,11 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "curveSupply": {
+        "description": "DBC `swap_base_amount`: tokens the curve sells before it completes.",
         "type": "number"
       },
       "feeBps": {
+        "description": "D32: the pool fee on every trade, any app, curve and DAMM v2 (125 = 1.25%).",
         "type": "number"
       },
       "feeCreatorShareBps": {
@@ -1562,13 +1591,15 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "feePoolShareBps": {
+        "description": "FUMPAD's share, split: buyback → reward pool / platform / creator.",
         "type": "number"
       },
       "graduationFeeSol": {
-        "description": "D20: SOL taken at graduation to pay the pool's setup rent (remainder to FUMPAD).",
+        "description": "D34: DBC's migration fee to FUMPAD at graduation (≈0.75% of the raise), spent on the pool's setup rent.",
         "type": "number"
       },
       "graduationSol": {
+        "description": "DBC `migration_quote_threshold`: SOL the curve raises before it graduates.",
         "type": "number"
       },
       "initialVirtualSol": {
@@ -1578,6 +1609,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "lpSupply": {
+        "description": "DBC `migration_base_threshold`: tokens deposited into the DAMM v2 pool at graduation.",
         "type": "number"
       },
       "maxClaimPoolBps": {
@@ -1605,14 +1637,19 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "rewardPoolSupply": {
+        "description": "D35: the DBC leftover that lands in the reward pool at graduation (8%).",
         "type": "number"
       },
       "snipeStartBps": {
-        "description": "D19: snipe tax at the launch slot, bps (9,900 = 99%), decaying to 0 over the window.",
+        "description": "D33: the fee at the launch slot, bps (9,900 = 99%), falling linearly to `feeBps` over the window.",
         "type": "number"
       },
       "snipeWindowSlots": {
-        "description": "D19: curve buys within this many slots of launch pay the snipe tax (0 = off).",
+        "description": "D33: trades within this many slots of launch pay the DBC scheduler's higher fee (0 = off).",
+        "type": "number"
+      },
+      "ticketChallengeSecs": {
+        "description": "D31: the challenge window after an attestation, before the ticket can be claimed.",
         "type": "number"
       },
       "totalSupply": {
@@ -1620,6 +1657,10 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "triggerMultiple": {
         "description": "10 = 10×.",
+        "type": "number"
+      },
+      "venueFeeShareBps": {
+        "description": "Meteora's protocol share of that fee (2,000 = 20%); FUMPAD's share is the rest.",
         "type": "number"
       }
     },
@@ -1632,6 +1673,7 @@ export const SCHEMAS: Record<string, unknown> = {
       "initialVirtualTokens",
       "graduationSol",
       "feeBps",
+      "venueFeeShareBps",
       "feePoolShareBps",
       "feePlatformShareBps",
       "feeCreatorShareBps",
@@ -1647,7 +1689,9 @@ export const SCHEMAS: Record<string, unknown> = {
       "oracleMinSamples",
       "snipeWindowSlots",
       "snipeStartBps",
-      "graduationFeeSol"
+      "graduationFeeSol",
+      "ticketChallengeSecs",
+      "attestDelaySecs"
     ],
     "type": "object"
   },
@@ -1923,6 +1967,14 @@ export const SCHEMAS: Record<string, unknown> = {
   "Ticket": {
     "additionalProperties": false,
     "properties": {
+      "app": {
+        "description": "The indexer's best-effort app label for the sell (`@fumpad/meteora` `appLabel`: \"jupiter\", \"axiom\", \"okx\", \"dflow\", \"padre\", \"direct\", \"unknown_program\"…). Display only, never a security input; absent when unknown.",
+        "type": "string"
+      },
+      "attestedAt": {
+        "$ref": "#/components/schemas/Millis",
+        "description": "When the 2-of-3 keeper attestation landed (absent while verifying)."
+      },
       "autoClaim": {
         "description": "D17: the keeper may claim this coin's tickets for the owner (per coin; on unless opted out).",
         "type": "boolean"
@@ -1949,6 +2001,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "Claim value in SOL at the current median.",
         "type": "number"
       },
+      "claimableFrom": {
+        "$ref": "#/components/schemas/Millis",
+        "description": "attestedAt + the challenge window: the earliest time a claim can pay."
+      },
       "claimedAt": {
         "$ref": "#/components/schemas/Millis"
       },
@@ -1967,7 +2023,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "escrowed": {
-        "description": "D16: the payout went to the ticket's escrow (owner's token account refused it) and waits to be withdrawn.",
+        "description": "D16: the payout went to the ticket's escrow (the owner's token account refused it) and waits to be withdrawn (`chainStatus` \"escrowed\", shown as state \"claimed\"). False once withdrawn.",
         "type": "boolean"
       },
       "execPrice": {
@@ -2019,6 +2075,10 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "Ticket price, SOL per token: max(execution, D12 floor).",
         "type": "number"
       },
+      "sellSignature": {
+        "description": "The sell's transaction signature.",
+        "type": "string"
+      },
       "sellSol": {
         "type": "number"
       },
@@ -2030,6 +2090,10 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "seq": {
         "type": "number"
+      },
+      "source": {
+        "$ref": "#/components/schemas/TicketSource",
+        "description": "Router (FUMPAD app) or outside (any other app)."
       },
       "state": {
         "$ref": "#/components/schemas/TicketState"
@@ -2048,6 +2112,14 @@ export const SCHEMAS: Record<string, unknown> = {
       "tokens": {
         "description": "Tokens credited after rebuy debits.",
         "type": "number"
+      },
+      "voidReason": {
+        "description": "Why a voided ticket was voided: rebuys took it to zero, or the guardian voided a bad attestation.",
+        "enum": [
+          "rebuy",
+          "guardian"
+        ],
+        "type": "string"
       }
     },
     "required": [
@@ -2062,6 +2134,7 @@ export const SCHEMAS: Record<string, unknown> = {
       "tokens",
       "originalTokens",
       "sellPrice",
+      "source",
       "execPrice",
       "sellUsd",
       "sellSol",
@@ -2078,13 +2151,15 @@ export const SCHEMAS: Record<string, unknown> = {
     "type": "object"
   },
   "TicketChainStatus": {
-    "description": "Mirrors `TicketStatus`.",
+    "description": "Mirrors `TicketStatus`, plus `pending` for a qualifying sell the keepers haven't attested yet (no ticket account exists; SPEC v0.7 §5).",
     "enum": [
+      "pending",
       "open",
       "queued",
       "claimed",
       "expired",
-      "voided"
+      "voided",
+      "escrowed"
     ],
     "type": "string"
   },
@@ -2098,7 +2173,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "files": {
-        "description": "Whether this sell files a ticket, and why not when it doesn't.",
+        "description": "Whether this sell qualifies for a ticket (the keepers attest it after the sell), and why not when it doesn't.",
         "type": "boolean"
       },
       "floorApplied": {
@@ -2154,9 +2229,19 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
-  "TicketState": {
-    "description": "What the UI shows. Derived from chain status + coin status + oracle median:  - claimable:   open, graduated, median ≥ 10× with coverage, inside 90 days  - queued:      waiting in the claim queue (clock stopped, never expires)  - tracking:    open, graduated, below 10×  - awaiting-graduation: open, coin still on the curve (may already be ≥ 10×)  - claimed / expired / voided: closed `rebuyReduced` is orthogonal: tokens < originalTokens after a rebuy inside 7 days.",
+  "TicketSource": {
+    "description": "Mirrors `TicketSource`: sold through the FUMPAD router, or on any other app (attested the same way).",
     "enum": [
+      "router",
+      "outside"
+    ],
+    "type": "string"
+  },
+  "TicketState": {
+    "description": "What the UI shows. Derived from chain status + attestation + coin status + oracle median:  - verifying:   a sell over the minimum, on any app; the keepers attest it (~1 min after finality)  - challenge:   attested; inside the challenge window (`claimableFrom`), when the guardian can                 still void a bad attestation. It already counts toward 10×.  - claimable:   open, graduated, median ≥ 10× with coverage, past the challenge window, inside 90 days  - queued:      waiting in the claim queue (clock stopped, never expires)  - tracking:    open, graduated, below 10×  - awaiting-graduation: open, coin still on the curve (may already be ≥ 10×)  - claimed / expired / voided: closed (`escrowed` marks a payout that waits in escrow) `rebuyDebited` is orthogonal: tokens < originalTokens after a rebuy inside 7 days.",
+    "enum": [
+      "verifying",
+      "challenge",
       "claimable",
       "queued",
       "tracking",
@@ -2189,13 +2274,15 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "feePoolSol": {
+        "description": "FUMPAD's 80% of the fee, split 50 / 30 / 20 (pool buyback / platform / creator).",
         "type": "number"
       },
       "feeSol": {
+        "description": "The whole pool fee (1.25%, D32; more in the launch window), SOL.",
         "type": "number"
       },
       "partialFill": {
-        "description": "Curve buys that would fill the curve are partially filled.",
+        "description": "This buy completes the curve: DBC can't trade past the migration price, so the router sends it as PartialFill and only `usedSol` of `amountIn` is spent (the rest stays in the wallet).",
         "type": "boolean"
       },
       "priceImpact": {
@@ -2211,7 +2298,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "snipeTaxSol": {
-        "description": "D19: the buy lands in the coin's launch window, so part of it is snipe tax paid to the reward pool (SOL, included in amountIn) at `snipeTaxBps`. Absent outside the window.",
+        "description": "D33: the trade lands in the launch window, so the DBC fee scheduler charges `snipeTaxBps` instead of the normal fee. `snipeTaxSol` is the part above the normal fee (included in `feeSol`); FUMPAD's share of it goes to the reward pool. Absent outside the window.",
         "type": "number"
       },
       "spotBefore": {
@@ -2221,15 +2308,14 @@ export const SCHEMAS: Record<string, unknown> = {
       "ticket": {
         "$ref": "#/components/schemas/TicketPreview"
       },
+      "usedSol": {
+        "type": "number"
+      },
       "venue": {
-        "enum": [
-          "curve",
-          "pumpswap"
-        ],
-        "type": "string"
+        "$ref": "#/components/schemas/Venue"
       },
       "venueFeeSol": {
-        "description": "PumpSwap's own 0.25% (0.20% LP + 0.05% protocol) on graduated coins; 0 on the curve.",
+        "description": "Meteora's 20% of the fee (protocol share), SOL. Included in `feeSol`.",
         "type": "number"
       }
     },
@@ -2251,8 +2337,12 @@ export const SCHEMAS: Record<string, unknown> = {
   },
   "TradeRow": {
     "additionalProperties": false,
-    "description": "One FUMPAD trade on a coin (curve or PumpSwap via the router).",
+    "description": "One trade on a coin's own pools (DBC curve or DAMM v2), from any app.",
     "properties": {
+      "app": {
+        "description": "App label (`@fumpad/meteora` `appLabel`; \"fumpad\" for router trades). Display only.",
+        "type": "string"
+      },
       "mint": {
         "$ref": "#/components/schemas/Address"
       },
@@ -2270,7 +2360,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "snipeTaxSol": {
-        "description": "D19: snipe tax this buy paid to the reward pool (SOL, on top of `sol`) and its rate. Absent when none.",
+        "description": "D33: the launch-window fee above the normal fee this trade paid (SOL) and the rate it paid. Absent when none.",
         "type": "number"
       },
       "sol": {
@@ -2282,6 +2372,9 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "ts": {
         "$ref": "#/components/schemas/Millis"
+      },
+      "venue": {
+        "$ref": "#/components/schemas/Venue"
       },
       "wallet": {
         "$ref": "#/components/schemas/Address"
@@ -2298,6 +2391,14 @@ export const SCHEMAS: Record<string, unknown> = {
       "ts"
     ],
     "type": "object"
+  },
+  "Venue": {
+    "description": "Where a coin trades: its DBC bonding curve, then its DAMM v2 pool after graduation.",
+    "enum": [
+      "dbc",
+      "damm"
+    ],
+    "type": "string"
   },
   "WalletPosition": {
     "additionalProperties": false,
@@ -2352,7 +2453,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "partialBasis": {
-        "description": "The balance holds tokens acquired outside FUMPAD; the cost basis covers FUMPAD trades only.",
+        "description": "The balance holds tokens that arrived by transfer or another pool; the cost basis covers trades on the coin's pools only.",
         "type": "boolean"
       },
       "payoutTokens": {
@@ -2382,7 +2483,7 @@ export const SCHEMAS: Record<string, unknown> = {
         "type": "number"
       },
       "trackedTokens": {
-        "description": "Tokens FUMPAD trades and payouts account for: bought + payouts − sold.",
+        "description": "Tokens the wallet's trades and payouts account for: bought + payouts − sold.",
         "type": "number"
       },
       "unrealizedPct": {

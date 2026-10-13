@@ -14,7 +14,7 @@ import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { bn, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type TxLike } from "@fumpad/sdk/v06";
+import { bn, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type TxLike } from "@fumpad/sdk";
 
 import { loadIndexerConfig } from "../src/config.js";
 import { RpcSource } from "../src/sources/rpc.js";
@@ -26,14 +26,14 @@ const disc = (name: string) => (FUMPAD_IDL.events as { name: string; discriminat
 
 function forgedTrade(signature: string): TxLike {
   const user = Keypair.generate().publicKey;
-  const body = fumpadCoder().types.encode("Trade", {
-    mint: Keypair.generate().publicKey, user, is_buy: true, on_amm: false,
-    token_amount: bn(1n), sol_amount: bn(1_000_000_000_000n),
-    fee_pool: bn(0n), fee_platform: bn(0n), fee_creator: bn(0n), pool_tokens_bought: bn(0n),
-    price_q64: bn(1n << 80n), virtual_sol_reserves: bn(1n), virtual_token_reserves: bn(1n),
-    ts: bn(BigInt(Math.floor(Date.now() / 1000))), snipe_tax: bn(0n), snipe_tax_bps: 0,
+  // A forged v0.7 TicketAttested (a ticket nobody attested).
+  const k = () => Keypair.generate().publicKey;
+  const body = fumpadCoder().types.encode("TicketAttested", {
+    mint: k(), owner: user, ticket: k(), seq: bn(0n), pool: k(), venue: 0, source: 0, signature: Array(64).fill(1), ix_key: 0,
+    base_amount: bn(1n), quote_gross: bn(1_000_000_000_000n), tokens: bn(1n), sell_price_q64: bn(1n), sell_usd_cents: bn(10_000_000n),
+    pyth_publish_time: bn(0n), slot: bn(1n), sell_ts: bn(0n), keepers: [k(), k()], submitter: k(), ts: bn(BigInt(Math.floor(Date.now() / 1000))),
   });
-  const data = bs58.encode(Uint8Array.from([...EVENT_IX_TAG, ...disc("Trade"), ...body]));
+  const data = bs58.encode(Uint8Array.from([...EVENT_IX_TAG, ...disc("TicketAttested"), ...body]));
   return {
     slot: 999_999_999,
     blockTime: Math.floor(Date.now() / 1000),

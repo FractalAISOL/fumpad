@@ -28,15 +28,14 @@ const list = (v: string | undefined) => (v ?? "").split(",").map((s) => s.trim()
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
 
 export function loadMeteoraConfig(env: NodeJS.ProcessEnv = process.env): MeteoraIndexerConfig {
-  const enabled = env.METEORA_INDEXER_ENABLED === "true";
+  // v0.7: on by default (every FUMPAD trade happens on Meteora); METEORA_INDEXER_ENABLED=false turns it off.
+  const enabled = env.METEORA_INDEXER_ENABLED !== "false";
   const dbcConfigs = list(env.METEORA_DBC_CONFIGS);
   const mints = list(env.METEORA_MINTS);
   for (const a of [...dbcConfigs, ...mints]) {
     if (!a || !B58.test(a)) throw new Error(`indexer: invalid address in METEORA_* env: ${JSON.stringify(a)}`);
   }
-  if (enabled && !dbcConfigs.length && !mints.length) {
-    throw new Error("indexer: METEORA_INDEXER_ENABLED=true needs METEORA_DBC_CONFIGS and/or METEORA_MINTS");
-  }
+  // Pools join the set from CoinRegistered (and Global.configs at startup); these are optional extras.
   return {
     enabled,
     dbcConfigs,
