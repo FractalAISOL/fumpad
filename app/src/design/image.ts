@@ -1,4 +1,10 @@
 /**
+ * V7-L6 (security-review/REPORT-v0.7.md): the page never loads a creator's image host directly. Every coin
+ * image goes through our API's image proxy, `GET <API>/v1/img/<mint>` (fetched server-side with the SSRF-safe
+ * fetcher, PNG / JPEG / GIF / WebP only, re-served with strict headers), so the CSP's `img-src` lists only
+ * our own origin and the API (`src/security/headers.ts`) instead of every https host. `coinImageSrc` builds
+ * that URL; with no API configured (mock mode) coins show their monogram.
+ *
  * L-1 (security-review/REPORT.md): coin images are creator-supplied (`imageUrl` from the coin's
  * metadata JSON). Only https, IPFS and Arweave are rendered; IPFS/Arweave go through a public
  * HTTPS gateway. Anything else (http:, javascript:, data:, file:, relative paths, credentials in
@@ -27,4 +33,26 @@ export function safeImageSrc(url: string | null | undefined, opts: { allowBlob?:
   } catch {
     return undefined;
   }
+}
+
+const API = (process.env.NEXT_PUBLIC_FUMPAD_API || "").replace(/\/+$/, "");
+const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/** FNV-1a (32-bit) of the source URL, base36: the proxy URL changes when the coin's image does. */
+function urlVersion(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * The proxied URL of a coin's image: `<API>/v1/img/<mint>?v=<hash>`, or undefined (monogram) when the coin has
+ * no usable image (same rules as `safeImageSrc`), the mint isn't base58, or no API is configured.
+ */
+export function coinImageSrc(mint: string | null | undefined, imageUrl: string | null | undefined, api: string = API): string | undefined {
+  if (!api || !mint || !MINT.test(mint) || !safeImageSrc(imageUrl)) return undefined;
+  return `${api.replace(/\/+$/, "")}/v1/img/${mint}?v=${urlVersion(String(imageUrl).trim())}`;
 }

@@ -25,7 +25,7 @@ export function SymbolChooser({ symbol, coins, solUsd }: { symbol: string; coins
           {coins.map((c) => (
             <li key={c.mint}>
               <Link href={coinHref(c)} className={s.chooseRow} prefetch={false}>
-                <CoinTile symbol={c.symbol} variant={c.tile} imageUrl={c.imageUrl} size="md" />
+                <CoinTile symbol={c.symbol} variant={c.tile} mint={c.mint} imageUrl={c.imageUrl} size="md" />
                 <span className={s.chooseMain}>
                   <span className={s.chooseName}>
                     <span className="ticker">${c.symbol}</span> <span>{c.name}</span>

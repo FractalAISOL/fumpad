@@ -86,6 +86,8 @@ export interface SafeFetchOptions {
   maxBytes?: number;
   maxRedirects?: number;
   ipfsGateway?: string;
+  /** `Accept` header (default application/json: metadata). */
+  accept?: string;
   /** Tests only: permit http:// and any port. */
   allowHttp?: boolean;
   /** Tests only: override the address policy. */
@@ -136,7 +138,7 @@ function pinnedLookup(allowed: (ip: string) => boolean, host: string): Promise<{
 }
 
 /** One request to `u` connecting only to the pre-validated address. */
-function once(u: URL, address: { address: string; family: 4 | 6 }, deadline: number, maxBytes: number): Promise<{ status: number; location?: string; body: Buffer }> {
+function once(u: URL, address: { address: string; family: 4 | 6 }, deadline: number, maxBytes: number, accept: string): Promise<{ status: number; location?: string; contentType?: string; body: Buffer }> {
   return new Promise((resolve, reject) => {
     const lookup: LookupFunction = (_h, o, cb) => {
       if ((o as { all?: boolean }).all) (cb as unknown as (e: null, a: { address: string; family: number }[]) => void)(null, [address]);
@@ -144,7 +146,7 @@ function once(u: URL, address: { address: string; family: 4 | 6 }, deadline: num
     };
     const req = (u.protocol === "https:" ? httpsRequest : httpRequest)(
       u,
-      { method: "GET", lookup, headers: { accept: "application/json", "user-agent": "fumpad-indexer/1" }, timeout: Math.max(1, deadline - Date.now()) },
+      { method: "GET", lookup, headers: { accept, "user-agent": "fumpad-indexer/1" }, timeout: Math.max(1, deadline - Date.now()) },
       (res: IncomingMessage) => {
         const status = res.statusCode ?? 0;
         if (status >= 300 && status < 400) {
@@ -167,7 +169,7 @@ function once(u: URL, address: { address: string; family: 4 | 6 }, deadline: num
           }
           chunks.push(c);
         });
-        res.on("end", () => resolve({ status, body: Buffer.concat(chunks) }));
+        res.on("end", () => resolve({ status, contentType: res.headers["content-type"], body: Buffer.concat(chunks) }));
         res.on("error", (e) => reject(new SafeFetchError("network", e.message)));
       },
     );
@@ -180,7 +182,7 @@ function once(u: URL, address: { address: string; family: 4 | 6 }, deadline: num
 }
 
 /** GET a user-supplied URL under the SSRF policy; returns the body (≤ maxBytes). */
-export async function safeFetch(uri: string, opts: SafeFetchOptions = {}): Promise<{ status: number; body: Buffer; url: string }> {
+export async function safeFetch(uri: string, opts: SafeFetchOptions = {}): Promise<{ status: number; body: Buffer; url: string; contentType?: string }> {
   const deadline = Date.now() + (opts.timeoutMs ?? 5_000);
   const maxBytes = opts.maxBytes ?? 64 * 1024;
   const maxRedirects = opts.maxRedirects ?? 3;
@@ -189,7 +191,7 @@ export async function safeFetch(uri: string, opts: SafeFetchOptions = {}): Promi
   for (let hop = 0; ; hop++) {
     if (Date.now() >= deadline) throw new SafeFetchError("timeout", "timeout");
     const address = await pinnedLookup(allowed, u.hostname);
-    const r = await once(u, address, deadline, maxBytes);
+    const r = await once(u, address, deadline, maxBytes, opts.accept ?? "application/json");
     if (r.status >= 300 && r.status < 400) {
       if (!r.location) throw new SafeFetchError("http", `redirect without location`);
       if (hop >= maxRedirects) throw new SafeFetchError("redirects", "too many redirects");
@@ -203,6 +205,6 @@ export async function safeFetch(uri: string, opts: SafeFetchOptions = {}): Promi
       u = next;
       continue;
     }
-    return { status: r.status, body: r.body, url: u.toString() };
+    return { status: r.status, body: r.body, url: u.toString(), contentType: r.contentType };
   }
 }

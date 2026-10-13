@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { createPool, type Db, serviceInfo } from "@fumpad/indexer";
 
 import { TtlCache } from "./cache.js";
+import { IMAGE_CACHE, IMAGE_MISS_CACHE, IMAGE_SECURITY_HEADERS, ImageProxy } from "./img.js";
 import { ChainReader } from "./chain.js";
 import type { ApiConfig } from "./config.js";
 import type { Board, ChartRange, FeedKind, Side } from "./generated/app-types.js";
@@ -69,6 +70,8 @@ export interface ApiDeps {
   pool: MintPool | null;
   /** The waitlist DB (WAITLIST_DATABASE_URL, own pool); null = waitlist disabled (503). */
   waitlist: WaitlistStore | null;
+  /** Coin image proxy (V7-L6). */
+  images: ImageProxy;
 }
 
 export async function buildServer(
@@ -131,7 +134,9 @@ export async function buildServer(
           })
         : null;
   const waitlist = openWaitlistStore(cfg, db, deps?.waitlist);
-  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool, waitlist };
+  // The image URL of a coin rarely changes (metadata is set at launch): a short TTL bounds DB lookups.
+  const images = deps?.images ?? new ImageProxy((mint) => cache.get(`img:${mint}`, 60_000, () => repo.coinImageUrl(mint)), { maxBytes: cfg.imgMaxBytes, cacheBytes: cfg.imgCacheBytes, ipfsGateway: cfg.ipfsGateway });
+  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool, waitlist, images };
 
   await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "POST", "OPTIONS"] });
   // SSR requests (shared secret header, H-2) are exempt; everyone else is limited per real IP.
@@ -343,6 +348,29 @@ export async function buildServer(
     addr(mint, "mint");
     return cached(`bal:${wallet}:${mint}`, 2_000, () => chain.balances(wallet, mint));
   });
+
+  // ── Coin images (V7-L6): the app's only image source besides itself ──────────
+  // `?v=` is the app's cache-buster (a hash of the source URL); the server ignores it.
+  app.get(
+    "/v1/img/:mint",
+    {
+      config: { rateLimit: { max: cfg.imgRateLimitPerMin, timeWindow: "1 minute" } },
+      schema: { params: mintParam, querystring: { type: "object", properties: { v: { type: "string", maxLength: 32 } } } },
+    },
+    async (req, reply) => {
+      const { mint } = req.params as { mint: string };
+      reply.headers(IMAGE_SECURITY_HEADERS);
+      const r = await images.get(mint);
+      if (!r.ok) {
+        reply.header("cache-control", r.reason === "busy" ? "no-store" : IMAGE_MISS_CACHE);
+        if (r.reason === "busy") reply.header("retry-after", "2");
+        return reply.code(r.reason === "no_image" ? 404 : r.reason === "busy" ? 503 : 502).type("text/plain; charset=utf-8").send(r.reason);
+      }
+      reply.header("cache-control", IMAGE_CACHE).header("etag", r.etag);
+      if (req.headers["if-none-match"] === r.etag) return reply.code(304).send();
+      return reply.type(r.type).send(r.body);
+    },
+  );
 
   // ── WebSocket feed ──────────────────────────────────────────────────────────
   // M-6: global cap + per-IP cap (on the H-2 client IP). Backpressure: messages are

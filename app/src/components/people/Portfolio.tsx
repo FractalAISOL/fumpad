@@ -273,10 +273,10 @@ function PartialTag() {
   );
 }
 
-function CoinCell({ symbol, name, tile, imageUrl, status, children }: { symbol: string; name: string; tile: 0 | 1 | 2; imageUrl?: string; status: ReactNode; children?: ReactNode }) {
+function CoinCell({ symbol, name, tile, mint, imageUrl, status, children }: { symbol: string; name: string; tile: 0 | 1 | 2; mint: string; imageUrl?: string; status: ReactNode; children?: ReactNode }) {
   return (
     <span className={s.coin}>
-      <CoinTile symbol={symbol} variant={tile} imageUrl={imageUrl} size="sm" />
+      <CoinTile symbol={symbol} variant={tile} mint={mint} imageUrl={imageUrl} size="sm" />
       <span className={s.coinText}>
         <span className={s.coinTop}>
           <span className="ticker">${symbol}</span>
@@ -326,7 +326,7 @@ function Positions({ rows, own }: { rows: WalletPosition[]; own: boolean }) {
       key: "coin",
       header: "Coin",
       render: (p) => (
-        <CoinCell symbol={p.symbol} name={p.name} tile={p.tile} imageUrl={p.imageUrl} status={statusText(p)}>
+        <CoinCell symbol={p.symbol} name={p.name} tile={p.tile} mint={p.mint} imageUrl={p.imageUrl} status={statusText(p)}>
           <TicketTag p={p} />
         </CoinCell>
       ),
@@ -436,7 +436,7 @@ function Closed({ rows, own }: { rows: ClosedPosition[]; own: boolean }) {
       key: "coin",
       header: "Coin",
       render: (p) => (
-        <CoinCell symbol={p.symbol} name={p.name} tile={p.tile} imageUrl={p.imageUrl} status={statusText(p)}>
+        <CoinCell symbol={p.symbol} name={p.name} tile={p.tile} mint={p.mint} imageUrl={p.imageUrl} status={statusText(p)}>
           {p.ticketsEarned > 0 && (
             <span className={s.earned}>
               {p.ticketsEarned} {p.ticketsEarned === 1 ? "ticket" : "tickets"}
@@ -534,7 +534,7 @@ function Created({ rows, own, creator, onWithdrawn }: { rows: CreatedCoin[]; own
       key: "coin",
       header: "Coin",
       render: (c) => (
-        <CoinCell symbol={c.symbol} name={c.name} tile={c.tile} imageUrl={c.imageUrl} status={statusText(c)}>
+        <CoinCell symbol={c.symbol} name={c.name} tile={c.tile} mint={c.mint} imageUrl={c.imageUrl} status={statusText(c)}>
           <span className={s.earned}>launched {f.ago(c.createdAt, now)}</span>
         </CoinCell>
       ),

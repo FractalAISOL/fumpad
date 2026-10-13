@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { cx } from "../cx";
-import { safeImageSrc } from "../image";
+import { coinImageSrc, safeImageSrc } from "../image";
 import { shortAddr } from "../format";
 import { IconCheck, IconCopy } from "./Icons";
 import s from "./Identity.module.css";
@@ -18,6 +18,7 @@ export function CoinTile({
   symbol,
   variant = 0,
   size = "md",
+  mint,
   imageUrl,
   localPreview,
   className,
@@ -25,18 +26,20 @@ export function CoinTile({
   symbol: string;
   variant?: 0 | 1 | 2;
   size?: "sm" | "md" | "lg" | "xl";
-  /** Creator-supplied (coin metadata): only https / ipfs:// / ar:// render (L-1, `../image.ts`). */
+  /** The coin's mint: its image is loaded through our API's image proxy by mint (V7-L6, `../image.ts`). */
+  mint?: string;
+  /** Creator-supplied (coin metadata): only https / ipfs:// / ar:// render (L-1), and only via the proxy. */
   imageUrl?: string;
   /** The launch form's own `blob:` preview of the file being uploaded. */
   localPreview?: boolean;
   className?: string;
 }) {
-  const src = safeImageSrc(imageUrl, { allowBlob: localPreview });
+  const src = localPreview ? safeImageSrc(imageUrl, { allowBlob: true }) : coinImageSrc(mint, imageUrl);
   const [failed, setFailed] = useState<string | null>(null);
   return (
     <span className={cx(s.tile, s[`t${variant}`], s[size], className)} aria-hidden="true">
       {src && failed !== src ? (
-        // eslint-disable-next-line @next/next/no-img-element -- third-party URL, no optimizer proxy; no referrer leaves the page
+        // eslint-disable-next-line @next/next/no-img-element -- our API's image proxy (or the launch form's blob: preview); a failure shows the monogram
         <img src={src} alt="" className={s.tileImg} referrerPolicy="no-referrer" loading="lazy" decoding="async" onError={() => setFailed(src)} />
       ) : (
         symbol.slice(0, 2)

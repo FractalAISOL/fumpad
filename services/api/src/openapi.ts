@@ -26,6 +26,14 @@ export const OPENAPI = {
         responses: ok(ref("SystemStatus")),
       },
     },
+    "/v1/img/{mint}": {
+      get: {
+        summary:
+          "Coin image proxy (V7-L6): the coin's metadata image fetched server-side (SSRF-safe), PNG / JPEG / GIF / WebP only (SVG refused), served with CSP default-src 'none' + nosniff. 404 = no image, 502 = unusable source, 503 = busy.",
+        parameters: [{ name: "mint", in: "path", required: true, schema: { type: "string" } }, { name: "v", in: "query", required: false, schema: { type: "string" } }],
+        responses: { "200": { description: "image bytes", content: { "image/png": {}, "image/jpeg": {}, "image/gif": {}, "image/webp": {} } } },
+      },
+    },
     "/v1/params": { get: { summary: "Global.params in display units (getParams)", responses: ok(ref("ProtocolParams")) } },
     "/v1/sol-usd": { get: { summary: "SOL/USD from Pyth (getSolUsd)", responses: ok({ type: "object", properties: { solUsd: { type: "number" } }, required: ["solUsd"] }) } },
     "/v1/coins": {

@@ -118,7 +118,7 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
   const so = c.socials;
   return (
     <article className={cx(s.row, arrival && s.arrived)} data-mint={c.mint}>
-      <CoinTile symbol={c.symbol} variant={c.tile} imageUrl={c.imageUrl} size="md" className={s.tile} />
+      <CoinTile symbol={c.symbol} variant={c.tile} mint={c.mint} imageUrl={c.imageUrl} size="md" className={s.tile} />
       <div className={s.top}>
         <Link href={href} className={s.name} prefetch={false}>
           <span className={cx("ticker", s.tk)}>${c.symbol}</span>

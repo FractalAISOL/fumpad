@@ -63,6 +63,16 @@ describe("security headers", () => {
     assert.ok(contentSecurityPolicy({ NODE_ENV: "development" }).includes("'unsafe-eval'"));
   });
 
+  it("V7-L6: images only from our origin, data:/blob:, our API (image proxy) and the wallet registry — no https: wildcard", () => {
+    const img = directive(contentSecurityPolicy(prod), "img-src");
+    assert.deepEqual(img, ["'self'", "data:", "blob:", "https://api-production-66441.up.railway.app", "https://explorer-api.walletconnect.com"]);
+    assert.ok(!img.includes("https:") && !img.includes("*") && !img.some((s) => s.startsWith("wss:")));
+    // Mock mode (no API): nothing remote but the registry.
+    assert.deepEqual(directive(contentSecurityPolicy({ NODE_ENV: "production" }), "img-src"), ["'self'", "data:", "blob:", "https://explorer-api.walletconnect.com"]);
+    // The RPC origin (and its key) never become an image source.
+    assert.ok(!img.some((s) => s.includes("helius")));
+  });
+
   it("falls back to the public mainnet RPC like chain/cluster.ts, and takes a separate WS URL", () => {
     const csp = contentSecurityPolicy({ NODE_ENV: "production", NEXT_PUBLIC_FUMPAD_WS: "wss://live.fumpad.app/v1/ws" });
     const connect = directive(csp, "connect-src");

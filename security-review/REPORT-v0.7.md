@@ -21,7 +21,7 @@ PoCs for fixed findings were flipped: each now asserts the attack FAILS (header:
 | L3 | Low | Voids missed after restart | **Fixed** — `void_ticket` now lists coin + mint (contracts `c9be557`); services rely on it (`824cf86`), regression test in `keeper/test/derive.test.ts`. |
 | L4 | Low | "landed" at confirmed | **Fixed** `e01899c` — consumed marker at finalized (see V7-M1). |
 | L5 | Low | Pre-grad buyback guard on one sample | **Partly fixed** `e01899c` (off-chain part) — randomized buyback timing; spot and the on-chain sample must agree with the keeper's TWAP of its last 8 observations; samples only anchored at such a spot. On-chain guard unchanged (single sample). |
-| L6 | Low | CSP / same-context scripts | Open here — app side (other agent). |
+| L6 | Low | CSP / same-context scripts | **Fixed** (image part) — coin images through the API's proxy `GET /v1/img/:mint` (SSRF-safe fetch, raster-only, strict headers); app CSP `img-src` without `https:`. `'unsafe-inline'` / same-context assumption stated in `app/LAUNCH.md`. |
 | L7 | Low | Watcher alert gaps | **Fixed** `e01899c` — alerts for unattested sells, engine issues; 30 min re-alert; voided tickets not re-alerted (`824cf86`). |
 | L8 | Low | Incomplete RPC history | **Fixed** `e01899c` — `getFirstAvailableBlock` floor vs coin launch (startup + hourly), pool creation must precede `Coin.launch_slot`. |
 

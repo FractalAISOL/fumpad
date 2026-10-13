@@ -294,6 +294,7 @@ local validator.
 | `LAUNCH_RESERVATION_MINUTES` (10), `LAUNCH_SWEEP_SECS` (15), `LAUNCH_RATE_LIMIT_PER_MIN` (10/IP), `LAUNCH_WALLET_LIMIT_PER_MIN` (6), `LAUNCH_MAX_ACTIVE_PER_IP` (3), `LAUNCH_MAX_INITIAL_BUY_LAMPORTS` (100 SOL), `LAUNCH_MAX_PRIORITY_MICROLAMPORTS` | api | D18 prepare |
 | `LAUNCH_REQUIRE_SIGNATURE` (true), `LAUNCH_SIGNATURE_MAX_AGE_SECS` (600), `LAUNCH_MIN_BALANCE_LAMPORTS` (0.01 SOL), `LAUNCH_POOL_RESERVE` (5), `LAUNCH_RPC_TIMEOUT_MS` (5000) | api | M-2 drain guards |
 | `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20), `WAITLIST_IP_SALT` | api | pre-launch waitlist |
+| `IMG_RATE_LIMIT_PER_MIN` (600), `IMG_MAX_BYTES` (2 MiB), `IMG_CACHE_MB` (64), `IPFS_GATEWAY` (`https://ipfs.io/ipfs/`) | api | coin image proxy `GET /v1/img/:mint` (V7-L6): SSRF-safe fetch of the coin's metadata image, PNG/JPEG/GIF/WebP only, bounded in-memory LRU |
 | `KEEPER_KEYPAIR` (path) or `KEEPER_SECRET_KEY` (JSON array / base58) | keeper | **required**, sealed; must be a registered keeper (`set_keepers`) |
 | `KEEPER_DAILY_BUDGET_SOL` (2) | keeper | over budget: alert, essential jobs only |
 | `PRIORITY_MIN_MICROLAMPORTS` (1000), `PRIORITY_MAX_MICROLAMPORTS` (1,000,000), `PRIORITY_MAX_LAMPORTS_PER_TX` (200,000), `PRIORITY_PERCENTILE` (75) | keeper | priority fee clamps |
