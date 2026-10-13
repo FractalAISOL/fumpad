@@ -121,6 +121,8 @@ export interface ParseIssueEvent {
   blockTime: number;
   code: string;
   message: string;
+  /** The coin's pool the issue concerns; null = unknown (the tx touches one of the coin's pools). */
+  pool?: string | null;
 }
 
 /** The sell's ticket was attested on chain (TicketAttested); `ticket` = the ticket PDA. */
@@ -131,6 +133,8 @@ export interface TicketAttestedEvent {
   blockTime: number;
   ref: TicketRef;
   ticket: string;
+  /** Ticket owner (TicketAttested.owner), for scoping an unmappable attestation to its wallet. */
+  owner?: string;
 }
 
 export type EngineEvent = SwapEvent | TransferEvent | PoolInitEvent | TicketStatusEvent | TicketAttestedEvent | ParseIssueEvent;
@@ -143,8 +147,11 @@ export interface TicketRef {
 export const refKey = (r: TicketRef) => `${r.signature}:${r.ixKey}`;
 
 export type NoTicketReason =
+  /** The trader's own history is inconsistent (negative balance / unmappable attestation): V7-H2, per wallet. */
   | "history_inconsistent"
   | "parse_issue_in_tx"
+  /** A swap of the coin's pools couldn't be parsed exactly within the D10 window before this sell (V7-H2). */
+  | "price_unverified"
   | "trader_unverified"
   | "same_tx_inflow"
   | "quote_not_wsol"
@@ -203,10 +210,24 @@ export interface RebuyDebit {
 /** ixKey used for transfer-derived events (no single instruction; u32::MAX never collides with a swap key). */
 export const TRANSFER_IX_KEY = 0xffff_ffff;
 
+/**
+ * What an issue blocks (V7-H2: failures are scoped, an issue never freezes a whole coin):
+ *  - "tx": sells in that transaction (parse issues; the D10 price is also unverified for one window);
+ *  - "wallet": that wallet's sells until its history is consistent again (negative balance,
+ *    unmappable attestation);
+ *  - "coin": everything from that slot on — only engine invariant violations (unreachable from chain data).
+ */
+export type IssueScope = "tx" | "wallet" | "coin";
+
 export interface EngineIssue {
   signature: string;
   slot: number;
-  kind: "negative_balance" | "parse_issue" | "unknown_ticket_status" | "out_of_order";
+  kind: "negative_balance" | "parse_issue" | "unknown_ticket_status" | "out_of_order" | "second_damm_pool";
+  scope: IssueScope;
+  /** scope "wallet": the wallet. */
+  wallet?: string;
+  /** parse issues: the pool concerned (null = unknown). */
+  pool?: string | null;
   detail: string;
 }
 

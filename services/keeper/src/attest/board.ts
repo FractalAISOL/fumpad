@@ -11,8 +11,14 @@
  * submit something it didn't derive, and never forge a peer's signature. The program re-verifies
  * everything (Ed25519 precompile + 2 distinct active keepers) anyway.
  *
- * Row-level hygiene (operator setup, optional): one DB role per keeper with INSERT/UPDATE only on its own
- * rows (`keeper = current_user`-style policy), SELECT on all.
+ * Status rows are HINTS only (V7-M1): one row per (message, keeper). A keeper decides "landed" from the
+ * chain (consumed marker at finalized) and "dropped" only from its own simulation; a peer's fresh
+ * "landed" hint merely defers its own submission once, for a bounded time (attestor.ts).
+ *
+ * Per-keeper DB roles are the documented default (ATTEST_BOARD_RLS, services/README.md "Keeper board"):
+ * each keeper connects as its own role, every row records `db_role = current_user`, and row-level
+ * security lets a role write/delete only its own rows (SELECT on all). Then one compromised keeper or a
+ * leaked keeper DATABASE_URL can't delete or overwrite the other keepers' signatures or hints.
  */
 import { PublicKey } from "@solana/web3.js";
 import pg from "pg";
@@ -26,12 +32,20 @@ export interface BoardRow {
   signature: Uint8Array;
 }
 
+export interface BoardHint {
+  keeper: string;
+  status: string;
+  detail: string | null;
+  updatedAt: Date;
+}
+
 export interface SignatureBoard {
   publish(id: string, kind: AttestKind, mint: string, message: Uint8Array, keeper: string, signature: Uint8Array): Promise<void>;
   signatures(id: string): Promise<BoardRow[]>;
-  /** Shared outcome notes (landed tx / permanent failure), so peers stop retrying. */
-  setStatus(id: string, status: string, detail?: string): Promise<void>;
-  status(id: string): Promise<{ status: string; detail: string | null; updatedAt: Date } | null>;
+  /** This keeper's outcome note (landed tx / its own permanent failure): a hint for peers, never authoritative. */
+  setStatus(id: string, keeper: string, status: string, detail?: string): Promise<void>;
+  /** Every keeper's hint for a message. */
+  hints(id: string): Promise<BoardHint[]>;
   firstSeen(id: string): Promise<Date | null>;
 }
 
@@ -62,17 +76,49 @@ CREATE TABLE IF NOT EXISTS attest_signatures (
   PRIMARY KEY (message_id, keeper)
 );
 CREATE INDEX IF NOT EXISTS attest_signatures_created ON attest_signatures (created_at);
-CREATE TABLE IF NOT EXISTS attest_status (
-  message_id text PRIMARY KEY,
+ALTER TABLE attest_signatures ADD COLUMN IF NOT EXISTS db_role text NOT NULL DEFAULT current_user;
+CREATE TABLE IF NOT EXISTS attest_hints (
+  message_id text NOT NULL,
+  keeper text NOT NULL,
   status text NOT NULL,
   detail text,
-  updated_at timestamptz NOT NULL DEFAULT now()
+  db_role text NOT NULL DEFAULT current_user,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, keeper)
 );`;
+
+/**
+ * Per-keeper roles (V7-M1), run once by the database OWNER after the tables exist, then per keeper:
+ *   CREATE ROLE keeper_a LOGIN PASSWORD '…';
+ *   GRANT SELECT, INSERT, UPDATE, DELETE ON attest_signatures, attest_hints TO keeper_a;
+ *   GRANT SELECT ON attest_keeper_roles TO keeper_a;
+ *   INSERT INTO attest_keeper_roles VALUES ('keeper_a', '<keeper A pubkey>');
+ * (the watcher role gets SELECT only). A role can only write rows filed under ITS keeper key, so a
+ * compromised keeper can neither delete peers' rows nor squat a (message, peer) primary key.
+ */
+export const ATTEST_BOARD_RLS = `
+CREATE TABLE IF NOT EXISTS attest_keeper_roles (db_role text PRIMARY KEY, keeper text NOT NULL UNIQUE);
+ALTER TABLE attest_signatures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attest_hints ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS board_read ON attest_signatures;
+DROP POLICY IF EXISTS board_own ON attest_signatures;
+DROP POLICY IF EXISTS hints_read ON attest_hints;
+DROP POLICY IF EXISTS hints_own ON attest_hints;
+CREATE POLICY board_read ON attest_signatures FOR SELECT USING (true);
+CREATE POLICY board_own ON attest_signatures FOR ALL USING (db_role = current_user)
+  WITH CHECK (db_role = current_user AND keeper = (SELECT r.keeper FROM attest_keeper_roles r WHERE r.db_role = current_user));
+CREATE POLICY hints_read ON attest_hints FOR SELECT USING (true);
+CREATE POLICY hints_own ON attest_hints FOR ALL USING (db_role = current_user)
+  WITH CHECK (db_role = current_user AND keeper = (SELECT r.keeper FROM attest_keeper_roles r WHERE r.db_role = current_user));`;
 
 export class PgBoard implements SignatureBoard {
   constructor(private pool: pg.Pool) {}
 
-  /** Idempotent; serialised with an advisory lock because concurrent `CREATE TABLE IF NOT EXISTS` races in Postgres. */
+  /**
+   * Idempotent; serialised with an advisory lock because concurrent `CREATE TABLE IF NOT EXISTS` races in
+   * Postgres. With per-keeper roles the tables already exist (created by the owner): DDL errors from a
+   * role without CREATE/ALTER rights are then ignored.
+   */
   async init(): Promise<void> {
     const c = await this.pool.connect();
     try {
@@ -82,10 +128,19 @@ export class PgBoard implements SignatureBoard {
       await c.query("COMMIT");
     } catch (e) {
       await c.query("ROLLBACK").catch(() => {});
-      throw e;
+      const exists = await c.query<{ n: number }>("SELECT count(*)::int AS n FROM pg_class WHERE relname IN ('attest_signatures','attest_hints')").catch(() => ({ rows: [{ n: 0 }] }));
+      if ((exists.rows[0]?.n ?? 0) < 2) throw e;
     } finally {
       c.release();
     }
+  }
+
+  /** True when both board tables enforce row-level security (per-keeper roles, ATTEST_BOARD_RLS). */
+  async rowSecurity(): Promise<boolean> {
+    const r = await this.pool.query<{ relname: string; relrowsecurity: boolean }>(
+      "SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('attest_signatures','attest_hints')",
+    );
+    return r.rows.length === 2 && r.rows.every((x) => x.relrowsecurity);
   }
 
   async publish(id: string, kind: AttestKind, mint: string, message: Uint8Array, keeper: string, signature: Uint8Array): Promise<void> {
@@ -101,18 +156,20 @@ export class PgBoard implements SignatureBoard {
     return r.rows.map((x) => ({ keeper: x.keeper, signature: Uint8Array.from(x.signature) }));
   }
 
-  async setStatus(id: string, status: string, detail?: string): Promise<void> {
+  async setStatus(id: string, keeper: string, status: string, detail?: string): Promise<void> {
     await this.pool.query(
-      `INSERT INTO attest_status (message_id, status, detail, updated_at) VALUES ($1,$2,$3,now())
-       ON CONFLICT (message_id) DO UPDATE SET status = EXCLUDED.status, detail = EXCLUDED.detail, updated_at = now()`,
-      [id, status, detail ?? null],
+      `INSERT INTO attest_hints (message_id, keeper, status, detail, updated_at) VALUES ($1,$2,$3,$4,now())
+       ON CONFLICT (message_id, keeper) DO UPDATE SET status = EXCLUDED.status, detail = EXCLUDED.detail, updated_at = now()`,
+      [id, keeper, status, detail ?? null],
     );
   }
 
-  async status(id: string) {
-    const r = await this.pool.query<{ status: string; detail: string | null; updated_at: Date }>("SELECT status, detail, updated_at FROM attest_status WHERE message_id = $1", [id]);
-    const x = r.rows[0];
-    return x ? { status: x.status, detail: x.detail, updatedAt: x.updated_at } : null;
+  async hints(id: string): Promise<BoardHint[]> {
+    const r = await this.pool.query<{ keeper: string; status: string; detail: string | null; updated_at: Date }>(
+      "SELECT keeper, status, detail, updated_at FROM attest_hints WHERE message_id = $1",
+      [id],
+    );
+    return r.rows.map((x) => ({ keeper: x.keeper, status: x.status, detail: x.detail, updatedAt: x.updated_at }));
   }
 
   async firstSeen(id: string): Promise<Date | null> {
@@ -125,7 +182,8 @@ export class PgBoard implements SignatureBoard {
 export class MemoryBoard implements SignatureBoard {
   constructor(private clockMs: () => number = () => Date.now()) {}
   rows = new Map<string, Map<string, { signature: Uint8Array; at: Date; message: Uint8Array }>>();
-  st = new Map<string, { status: string; detail: string | null; updatedAt: Date }>();
+  /** message id → keeper → hint */
+  st = new Map<string, Map<string, BoardHint>>();
   async publish(id: string, _k: AttestKind, _m: string, message: Uint8Array, keeper: string, signature: Uint8Array) {
     const m = this.rows.get(id) ?? new Map();
     if (!m.has(keeper)) m.set(keeper, { signature, at: new Date(this.clockMs()), message });
@@ -134,11 +192,13 @@ export class MemoryBoard implements SignatureBoard {
   async signatures(id: string) {
     return [...(this.rows.get(id) ?? new Map()).entries()].map(([keeper, v]) => ({ keeper, signature: v.signature }));
   }
-  async setStatus(id: string, status: string, detail?: string) {
-    this.st.set(id, { status, detail: detail ?? null, updatedAt: new Date(this.clockMs()) });
+  async setStatus(id: string, keeper: string, status: string, detail?: string) {
+    const m = this.st.get(id) ?? new Map<string, BoardHint>();
+    m.set(keeper, { keeper, status, detail: detail ?? null, updatedAt: new Date(this.clockMs()) });
+    this.st.set(id, m);
   }
-  async status(id: string) {
-    return this.st.get(id) ?? null;
+  async hints(id: string) {
+    return [...(this.st.get(id)?.values() ?? [])];
   }
   async firstSeen(id: string) {
     const v = [...(this.rows.get(id) ?? new Map()).values()].map((x) => x.at.getTime());

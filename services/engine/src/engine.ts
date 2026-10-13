@@ -19,7 +19,7 @@ import { WSOL_MINT } from "@fumpad/meteora";
 
 import { type HoldState, newHold, observeBuy, planRebuy, planSell, capTracked, settle, claimAmount } from "./rules/position.js";
 import { priceQ64, spotFromSqrtQ64 } from "./rules/price.js";
-import { newReference, type ReferencePrice, ticketPriceQ64, touch } from "./rules/reference.js";
+import { newReference, REFERENCE_WINDOW_SECS, type ReferencePrice, ticketPriceQ64, touch } from "./rules/reference.js";
 import { lamportsToUsdCents, validateAt } from "./rules/usd.js";
 import {
   type CoinFacts,
@@ -63,6 +63,12 @@ interface Wallet {
   /** Engine tickets of this wallet, creation order. */
   tickets: EngineTicket[];
   nextSeq: bigint;
+  /**
+   * V7-H2: this wallet's history is inconsistent (negative balance = an inflow we never saw, or an
+   * attestation we can't map): its sells get no ticket until it is consistent again, i.e. until an
+   * outflow leaves it at exactly 0 without going negative (a full exit; its hold state restarts empty).
+   */
+  inconsistent: boolean;
 }
 
 export function compareKeys(a: OrderKey, b: OrderKey): number {
@@ -104,7 +110,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
   const wallet = (w: string): Wallet => {
     let x = wallets.get(w);
     if (!x) {
-      x = { hold: newHold(), balance: 0n, tickets: [], nextSeq: 0n };
+      x = { hold: newHold(), balance: 0n, tickets: [], nextSeq: 0n, inconsistent: false };
       wallets.set(w, x);
     }
     return x;
@@ -117,12 +123,31 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
 
   const sells: SellDecision[] = [];
   const rebuys: RebuyDebit[] = [];
+  /** The engine ticket each rebuy debits: its on-chain address is resolved after the replay (V7-H1). */
+  const rebuyTickets: EngineTicket[] = [];
   const issues: EngineIssue[] = [];
   const missing = new Set<number>();
-  let inconsistent = false;
+  /** Engine invariant broken (never from chain data): nothing from here on is signed. */
+  let coinInconsistent = false;
+  /**
+   * V7-H2 price scoping: a swap of the coin's pools we couldn't parse exactly may be missing from the D10
+   * reference / pre-trade spot. Sells get `price_unverified` until one full reference window has passed
+   * since the issue AND the affected pool has had a verified swap again (re-anchoring its spot).
+   */
+  let priceTaintUntil = Number.NEGATIVE_INFINITY;
+  const stalePools = new Set<string>();
   let lastKey: OrderKey | null = null;
 
-  const issue = (e: EngineEvent, kind: EngineIssue["kind"], detail: string) => issues.push({ signature: e.signature, slot: e.key.slot, kind, detail });
+  const issue = (e: EngineEvent, kind: EngineIssue["kind"], scope: EngineIssue["scope"], detail: string, extra: Partial<EngineIssue> = {}) =>
+    issues.push({ signature: e.signature, slot: e.key.slot, kind, scope, detail, ...extra });
+  /** Flag a wallet inconsistent: no tickets until a full exit; it keeps no hold credit meanwhile. */
+  const markInconsistent = (x: Wallet) => {
+    x.inconsistent = true;
+    x.balance = 0n;
+    x.hold.matured = 0n;
+    x.hold.pending = 0n;
+    x.hold.lastBalance = 0n;
+  };
 
   // An engine ticket never attested within max_attest_age can't be attested any more: release its slot.
   const expireUnattested = (x: Wallet, now: bigint) => {
@@ -155,24 +180,34 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         t.active = false;
         x.hold.openCount -= 1;
       }
-      rebuys.push({ signature: e.signature, ixKey, kind, slot: e.key.slot, blockTime: e.blockTime, wallet: w, ticket: t.ref, ticketAddress: t.address, debit: d, remaining: t.tokens, voided });
+      rebuys.push({ signature: e.signature, ixKey, kind, slot: e.key.slot, blockTime: e.blockTime, wallet: w, ticket: t.ref, ticketAddress: null, debit: d, remaining: t.tokens, voided });
+      rebuyTickets.push(t);
     });
   };
 
   for (const e of sorted) {
-    if (lastKey && compareKeys(lastKey, e.key) > 0) issue(e, "out_of_order", "events not in total order");
+    if (lastKey && compareKeys(lastKey, e.key) > 0) {
+      coinInconsistent = true;
+      issue(e, "out_of_order", "coin", "events not in total order");
+    }
     lastKey = e.key;
     const now = BigInt(e.blockTime);
     switch (e.kind) {
       case "parse_issue": {
-        inconsistent = true;
-        issue(e, "parse_issue", `${e.code}: ${e.message}`);
+        // Scoped (V7-H2): this tx's sells get parse_issue_in_tx; the price is unverified for one D10 window.
+        issue(e, "parse_issue", "tx", `${e.code}: ${e.message}`, { pool: e.pool ?? null });
+        priceTaintUntil = Math.max(priceTaintUntil, e.blockTime + Number(REFERENCE_WINDOW_SECS));
+        if (e.pool) stalePools.add(e.pool);
+        else {
+          stalePools.add(coin.dbcPool);
+          if (dammPool) stalePools.add(dammPool);
+        }
         break;
       }
       case "pool_init": {
         if (dammPool && dammPool !== e.pool) {
-          inconsistent = true;
-          issue(e, "parse_issue", `second DAMM v2 pool ${e.pool} (known ${dammPool})`);
+          // Impossible on chain (a DBC pool migrates once); keep the first pool, the other stays third-party.
+          issue(e, "second_damm_pool", "tx", `second DAMM v2 pool ${e.pool} (known ${dammPool})`, { pool: e.pool });
           break;
         }
         dammPool = e.pool;
@@ -182,7 +217,10 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
       case "ticket_attested": {
         const t = tickets.get(refKey(e.ref));
         if (!t) {
-          issue(e, "unknown_ticket_status", `attested ticket ${e.ticket} for unknown sell ${refKey(e.ref)}`);
+          // The chain holds a ticket this engine didn't derive (the watcher flags the mismatch): that
+          // wallet's open-ticket count is unknown, so only that wallet stops getting tickets (V7-H2).
+          if (e.owner && !protocol.has(e.owner)) markInconsistent(wallet(e.owner));
+          issue(e, "unknown_ticket_status", e.owner ? "wallet" : "tx", `attested ticket ${e.ticket} for unknown sell ${refKey(e.ref)}`, e.owner ? { wallet: e.owner } : {});
           break;
         }
         t.address = e.ticket;
@@ -191,7 +229,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
       case "ticket_status": {
         const t = tickets.get(refKey(e.ticket));
         if (!t) {
-          issue(e, "unknown_ticket_status", `${e.status} for unknown ticket ${refKey(e.ticket)}`);
+          issue(e, "unknown_ticket_status", "tx", `${e.status} for unknown ticket ${refKey(e.ticket)}`);
           break;
         }
         if (t.active) {
@@ -210,18 +248,22 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         } else {
           x.balance += e.delta;
           if (x.balance < 0n) {
-            inconsistent = true;
-            issue(e, "negative_balance", `${e.owner} balance ${x.balance}`);
-            x.balance = 0n;
+            issue(e, "negative_balance", "wallet", `${e.owner} balance ${x.balance}`, { wallet: e.owner });
+            markInconsistent(x);
+            break;
           }
           settle(x.hold, now, params.minHoldSecs);
           capTracked(x.hold, x.balance);
           x.hold.lastBalance = x.balance;
+          if (x.balance === 0n) x.inconsistent = false; // full exit: consistent again
         }
         break;
       }
       case "swap": {
         if (e.pool !== coin.dbcPool && e.pool !== dammPool) break; // third-party pools: balances come via transfers
+        // The first verified swap after an unparsed one has a stale pre-trade spot: its own sell is tainted.
+        const staleSpot = stalePools.delete(e.pool);
+        const priceUnverified = staleSpot || e.blockTime <= priceTaintUntil;
         const pre = pools.get(e.pool) ?? 0n;
         const post = spotFromSqrtQ64(e.nextSqrtPrice) ?? 0n;
         reference = touch(reference, now, pre, post, "curve");
@@ -262,12 +304,20 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         const balanceBefore = x.balance;
         x.balance -= e.baseAmount;
         if (x.balance < 0n) {
-          inconsistent = true;
-          issue(e, "negative_balance", `${w} sells ${e.baseAmount} holding ${balanceBefore}`);
-          x.balance = 0n;
+          issue(e, "negative_balance", "wallet", `${w} sells ${e.baseAmount} holding ${balanceBefore}`, { wallet: w });
+          markInconsistent(x);
+          d.reason = "history_inconsistent";
+          break;
         }
+        const wasInconsistent = x.inconsistent;
         const plan = planSell(x.hold, holdParams, w === coin.creator, e.baseAmount, balanceBefore, now);
-        const reason = decideSell(e, plan, { inconsistent, parseIssue: parseIssueTxs.has(e.signature), sameTxInflow: inflows.get(e.signature)?.has(w) ?? false });
+        if (x.balance === 0n) x.inconsistent = false; // full exit: consistent again (from the next event)
+        const reason = decideSell(e, plan, {
+          inconsistent: coinInconsistent || wasInconsistent,
+          parseIssue: parseIssueTxs.has(e.signature),
+          sameTxInflow: inflows.get(e.signature)?.has(w) ?? false,
+          priceUnverified,
+        });
         if (reason) {
           d.reason = reason;
           break;
@@ -323,6 +373,9 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
   }
 
   if (missing.size) return { done: false, missingPrices: [...missing].sort((a, b) => a - b) };
+  // V7-H1: a debit's ticket may be attested AFTER the acquisition (sell → buy back → attestation lands):
+  // the debit carries the ticket's final on-chain address, so it is signed once the ticket exists.
+  rebuys.forEach((r, i) => (r.ticketAddress = rebuyTickets[i].address));
   return { done: true, output: { mint: coin.mint, sells, rebuys, issues, reference: { ...reference }, lastKey } };
 }
 
@@ -333,7 +386,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
 function decideSell(
   e: SwapEvent,
   plan: ReturnType<typeof planSell>,
-  ctx: { inconsistent: boolean; parseIssue: boolean; sameTxInflow: boolean },
+  ctx: { inconsistent: boolean; parseIssue: boolean; sameTxInflow: boolean; priceUnverified: boolean },
 ): NoTicketReason | null {
   if (ctx.inconsistent) return "history_inconsistent";
   if (ctx.parseIssue) return "parse_issue_in_tx";
@@ -341,6 +394,7 @@ function decideSell(
   if (ctx.sameTxInflow) return "same_tx_inflow";
   if (e.quoteMint !== WSOL_MINT) return "quote_not_wsol";
   if (!plan.ok) return plan.reason;
+  if (ctx.priceUnverified) return "price_unverified";
   return null;
 }
 
@@ -353,10 +407,17 @@ export async function runEngineWithPrices(
   opts: EngineOptions & { cache?: Map<number, import("./rules/usd.js").PythPrice | null>; maxPasses?: number } = {},
 ): Promise<EngineOutput> {
   const cache = opts.cache ?? new Map();
+  // V7-M5: "no price" is never kept in the long-lived cache (the source decides when to ask again).
+  const misses = new Map<number, null>();
+  const lookup = (t: number) => (cache.has(t) ? cache.get(t) : misses.get(t));
   for (let pass = 0; pass < (opts.maxPasses ?? 50); pass++) {
-    const r = runEngine(coin, events, params, (t) => cache.get(t), opts);
+    const r = runEngine(coin, events, params, lookup, opts);
     if (r.done) return r.output;
-    for (const t of r.missingPrices) cache.set(t, await fetchPrice(t));
+    for (const t of r.missingPrices) {
+      const p = await fetchPrice(t);
+      if (p) cache.set(t, p);
+      else misses.set(t, null);
+    }
   }
   throw new Error("engine: price fetching did not converge");
 }

@@ -1,6 +1,9 @@
 /**
  * Engine output → exact attestation messages (INTERFACE §4). A keeper signs only what it derived itself,
- * only finalized data, only while the chain would accept it (age), and never past an engine issue.
+ * only finalized data, only while the chain would accept it (age). Engine issues are scoped (V7-H2): the
+ * engine already refuses the affected sells (that tx, that wallet until it is consistent again, the D10
+ * window after an unparsed swap); only a "coin"-scope issue (an engine invariant, never chain data) stops
+ * everything from its slot on.
  */
 import { PublicKey } from "@solana/web3.js";
 
@@ -25,6 +28,8 @@ export interface Candidate {
   /** tx signature (base58) + ixKey of the trade / acquisition */
   signature: string;
   ixKey: number;
+  /** sell: venue of the trade (DAMM v2 sells wait for `graduate`, V7-M2) */
+  venue?: SellDecision["venue"];
 }
 
 export interface CandidateOptions {
@@ -36,9 +41,10 @@ export interface CandidateOptions {
   ageMarginSecs?: number;
 }
 
-/** Earliest engine issue (signature/slot) — nothing at or after it is signed. */
-function issueCutoff(o: EngineOutput): number {
-  return o.issues.length ? Math.min(...o.issues.map((i) => i.slot)) : Number.POSITIVE_INFINITY;
+/** Earliest coin-scope engine issue — nothing at or after it is signed. tx / wallet issues are handled by the engine. */
+export function issueCutoff(o: EngineOutput): number {
+  const coin = o.issues.filter((i) => i.scope === "coin");
+  return coin.length ? Math.min(...coin.map((i) => i.slot)) : Number.POSITIVE_INFINITY;
 }
 
 export function sellCandidate(mint: string, s: SellDecision, o: CandidateOptions): Candidate | null {
@@ -63,7 +69,7 @@ export function sellCandidate(mint: string, s: SellDecision, o: CandidateOptions
     programId: o.programId ?? FUMPAD_PROGRAM_ID,
   });
   const message = encodeSellMessage(rec);
-  return { kind: "sell", id: messageId(message), message, mint, slot: s.slot, blockTime: s.blockTime, wallet: s.trader, sell: rec, signature: s.signature, ixKey: s.ixKey };
+  return { kind: "sell", id: messageId(message), message, mint, slot: s.slot, blockTime: s.blockTime, wallet: s.trader, sell: rec, signature: s.signature, ixKey: s.ixKey, venue: s.venue };
 }
 
 export function rebuyCandidate(mint: string, r: RebuyDebit, o: CandidateOptions): Candidate | null {

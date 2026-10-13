@@ -16,6 +16,11 @@ export interface KeeperConfig {
   nearTriggerRatio: number;
   buybackMinLamports: bigint;
   buybackIntervalSecs: number;
+  /** L5: each next buyback waits interval × (1 + U[0, jitter)) — unpredictable timing. */
+  buybackJitter: number;
+  /** L5: pre-grad guard = TWAP of the keeper's last N spot observations (spaced ≥ spacing), not one sample. */
+  pregradTwapSamples: number;
+  pregradTwapSpacingSecs: number;
   /** claim_fees once the DBC pool's unclaimed partner fee reaches this (after the launch-window claim). */
   feesMinLamports: bigint;
   feesIntervalSecs: number;
@@ -98,6 +103,9 @@ export function loadKeeperConfig(env = process.env): KeeperConfig {
     nearTriggerRatio: n(env.NEAR_TRIGGER_RATIO, 0.5),
     buybackMinLamports: BigInt(env.BUYBACK_MIN_LAMPORTS ?? 50_000_000),
     buybackIntervalSecs: n(env.BUYBACK_INTERVAL_SECS, 60),
+    buybackJitter: n(env.BUYBACK_JITTER, 1),
+    pregradTwapSamples: n(env.PREGRAD_TWAP_SAMPLES, 8),
+    pregradTwapSpacingSecs: n(env.PREGRAD_TWAP_SPACING_SECS, 15),
     feesMinLamports: BigInt(env.FEES_MIN_LAMPORTS ?? 50_000_000),
     feesIntervalSecs: n(env.FEES_INTERVAL_SECS, 600),
     lpFeesIntervalSecs: n(env.LP_FEES_INTERVAL_SECS, 1_800),

@@ -10,3 +10,4 @@ export * from "./pools.js";
 export * from "./routers.js";
 export * from "./rpc.js";
 export * from "./tx.js";
+export * from "./vaultflow.js";

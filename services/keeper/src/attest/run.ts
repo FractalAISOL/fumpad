@@ -5,6 +5,11 @@
  * signature board; required in production), ATTEST_LOOP_MS (15 s), PYTH_SOURCE=hermes|constant
  * (HERMES_URL, HERMES_API_KEY, HERMES_API_KEY_HEADER; PYTH_CONSTANT_USD for local chains only),
  * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, PORT / HEALTH_PORT, DRY_RUN.
+ * Liveness (V7-M6): ATTEST_COIN_CONCURRENCY (4), ATTEST_TICK_BUDGET_MS (60 s), ATTEST_COIN_RPC_BUDGET
+ * (5,000 calls per coin per tick), ATTEST_TX_CACHE (200k txs), ATTEST_BLOCK_CACHE (50k slots).
+ * Board (V7-M1): ATTEST_BOARD_REQUIRE_RLS=1 refuses to start unless per-keeper roles + row-level security
+ * are set up (services/README.md "Keeper board"); otherwise a missing RLS setup is logged and alerted.
+ * History (L8): RPC_HISTORY_CHECK=off disables the first-available-block check.
  */
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -13,7 +18,7 @@ import { Connection, type Keypair } from "@solana/web3.js";
 import pg from "pg";
 import pino from "pino";
 
-import { constantPythSource, HermesPythSource, type PythSource } from "@fumpad/engine";
+import { constantPythSource, HermesPythSource, LruMap, type PythSource } from "@fumpad/engine";
 import { MeteoraRpc } from "@fumpad/meteora";
 
 import { Alerter } from "../alerts.js";
@@ -21,7 +26,8 @@ import { loadKeypair } from "../config.js";
 import { Attestor } from "./attestor.js";
 import { MemoryBoard, PgBoard, type SignatureBoard } from "./board.js";
 import { RpcChainView, RpcSubmitter } from "./chain.js";
-import { deriveCoin, newCaches } from "./derive.js";
+import { type DeriveCaches, deriveCoin, newCaches } from "./derive.js";
+import { guardHistory } from "./history-check.js";
 
 export function pythSourceFromEnv(env = process.env): PythSource {
   const kind = env.PYTH_SOURCE ?? (env.NODE_ENV === "production" ? "hermes" : "constant");
@@ -37,6 +43,15 @@ export function pythSourceFromEnv(env = process.env): PythSource {
 /** Session advisory lock id per keeper key: one process per attestor key, several keys per database. */
 export const lockIdFor = (mode: string, keeper: string) => createHash("sha256").update(`${mode}:${keeper}`).digest().readInt32LE(0);
 
+/** Bounded derive caches + per-coin crawl budget from env (V7-M6). */
+export function deriveLimitsFromEnv(env = process.env): { caches: DeriveCaches; maxRpcCalls: number; priceCache: Map<number, import("@fumpad/engine").PythPrice | null> } {
+  return {
+    caches: newCaches({ txs: Number(env.ATTEST_TX_CACHE ?? 200_000), blocks: Number(env.ATTEST_BLOCK_CACHE ?? 50_000) }),
+    maxRpcCalls: Number(env.ATTEST_COIN_RPC_BUDGET ?? 5_000),
+    priceCache: new LruMap(Number(env.ATTEST_PRICE_CACHE ?? 100_000)),
+  };
+}
+
 export interface Running {
   stop(): Promise<void>;
 }
@@ -51,9 +66,16 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
   const pool = env.DATABASE_URL ? new pg.Pool({ connectionString: env.DATABASE_URL, max: 3, application_name: "fumpad-attestor" }) : undefined;
   let board: SignatureBoard;
   let lockClient: pg.Client | undefined;
+  const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: `[fumpad-attestor ${keeper.publicKey.toBase58().slice(0, 6)}]` });
   if (pool) {
     const b = new PgBoard(pool);
     await b.init();
+    if (!(await b.rowSecurity())) {
+      const msg = "attest board has no row-level security: any keeper/DB writer can delete or squat peers' signatures (set up per-keeper roles, services/README.md 'Keeper board')";
+      if (env.ATTEST_BOARD_REQUIRE_RLS === "1") throw new Error(msg);
+      log.error(msg);
+      if (prod) await alerts.alert("board-rls", msg);
+    }
     board = b;
     lockClient = new pg.Client({ connectionString: env.DATABASE_URL });
     await lockClient.connect();
@@ -69,14 +91,16 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
     board = new MemoryBoard();
   }
   const pyth = pythSourceFromEnv(env);
-  const caches = newCaches();
-  const priceCache = new Map();
-  const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: `[fumpad-attestor ${keeper.publicKey.toBase58().slice(0, 6)}]` });
+  const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
   const chain = new RpcChainView(conn);
+  const derive = (coin: Parameters<typeof deriveCoin>[1], g: Parameters<typeof deriveCoin>[2]) =>
+    deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache, maxRpcCalls }, coin, g);
   const attestor = new Attestor({
     keeper,
     chain,
-    derive: (coin, g) => deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache }, coin, g),
+    derive: env.RPC_HISTORY_CHECK === "off" ? derive : guardHistory(rpc, derive, { onFloor: (slot) => log.info({ firstAvailableSlot: slot }, "attestor: RPC history floor") }),
+    coinConcurrency: Number(env.ATTEST_COIN_CONCURRENCY ?? 4),
+    tickBudgetMs: Number(env.ATTEST_TICK_BUDGET_MS ?? 60_000),
     board,
     submitter: new RpcSubmitter(conn, keeper, log, { dryRun: env.DRY_RUN === "true" || env.DRY_RUN === "1" }),
     log,

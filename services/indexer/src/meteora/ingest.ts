@@ -6,15 +6,16 @@
  * applied once; a later delivery at `finalized` only upgrades the commitment.
  *
  * The FUMPAD pool set grows only from verified chain facts:
- *   - DBC pools whose `config` (from the pool-init event or the swap event) is a FUMPAD config key,
- *     or whose base mint is a configured FUMPAD mint;
+ *   - DBC pools of REGISTERED coins (L2): the base mint has a `CoinRegistered` (in the `coins` table, or
+ *     in this same tx — the launch tx registers the coin) or is a configured FUMPAD mint. A pool on a
+ *     FUMPAD config that was never registered (someone else used our config) is not ours;
  *   - the DAMM v2 pool such a curve migrated into (DBC `migration_damm_v2` + DAMM v2
  *     `EvtInitializePool` in the same successful tx, both agreeing; see @fumpad/meteora pools.ts).
  * A DAMM v2 pool someone else creates for a FUMPAD mint is NOT in the set (policy: ATTESTATION.md).
  */
 import { parseMeteoraTrades, parsePoolFacts, type ConfirmedTx, type MeteoraTrade, type ParseResult, type PoolFacts } from "@fumpad/meteora";
 
-import { FUMPAD_PROGRAM_ID, type Params } from "@fumpad/sdk";
+import { decodeFumpadEvents, FUMPAD_PROGRAM_ID, type Params, type TxLike } from "@fumpad/sdk";
 
 import { type Db, withTx } from "../db.js";
 import type { IndexedEvent } from "../handlers.js";
@@ -44,6 +45,8 @@ export interface MeteoraIngestResult {
 
 export class MeteoraIngestor {
   private pools = new Map<string, PoolRow>();
+  /** Mints with a CoinRegistered (coins table). */
+  private registered = new Set<string>();
   private loadedAt = 0;
   readonly configs: Set<string>;
   readonly mints: Set<string>;
@@ -65,6 +68,8 @@ export class MeteoraIngestor {
       "SELECT pool, venue, base_mint, quote_mint, config, dbc_pool, source FROM meteora_pools",
     );
     this.pools = new Map(r.rows.map((x) => [x.pool, { pool: x.pool, venue: x.venue, baseMint: x.base_mint, quoteMint: x.quote_mint, config: x.config, dbcPool: x.dbc_pool, source: x.source }]));
+    const coins = await this.db.query<{ mint: string }>("SELECT mint FROM coins");
+    this.registered = new Set(coins.rows.map((x) => x.mint));
     this.loadedAt = Date.now();
   }
 
@@ -79,10 +84,18 @@ export class MeteoraIngestor {
     return s;
   }
 
-  /** Which pools this tx adds to the FUMPAD set (pure; exported for tests). */
-  newPoolsFrom(res: ParseResult, facts: PoolFacts | null): PoolRow[] {
+  /** Mark mints as registered (tests / the CoinRegistered bridge). */
+  markRegistered(...mints: string[]) {
+    for (const m of mints) this.registered.add(m);
+  }
+
+  /**
+   * Which pools this tx adds to the FUMPAD set (pure; exported for tests). `registeredInTx` = mints whose
+   * CoinRegistered is in this tx. L2: a DBC pool counts only for a registered (or configured) mint.
+   */
+  newPoolsFrom(res: ParseResult, facts: PoolFacts | null, registeredInTx: ReadonlySet<string> = new Set()): PoolRow[] {
     const out = new Map<string, PoolRow>();
-    const isFumpadDbc = (config: string | null, mint: string) => (config !== null && this.configs.has(config)) || this.mints.has(mint);
+    const isFumpadDbc = (_config: string | null, mint: string) => this.mints.has(mint) || this.registered.has(mint) || registeredInTx.has(mint);
     for (const p of facts?.dbcPools ?? []) {
       if (!this.pools.has(p.pool) && isFumpadDbc(p.config, p.baseMint))
         out.set(p.pool, { pool: p.pool, venue: "dbc", baseMint: p.baseMint, quoteMint: null, config: p.config, dbcPool: null, source: "pool_init" });
@@ -111,7 +124,14 @@ export class MeteoraIngestor {
       }
     }
     const signature = res.signature;
-    const newPools = this.newPoolsFrom(res, facts);
+    const registeredInTx = new Set<string>();
+    try {
+      for (const e of decodeFumpadEvents(tx as unknown as TxLike))
+        if (e.name === "CoinRegistered") registeredInTx.add(String((e.data as { mint: { toBase58(): string } }).mint.toBase58()));
+    } catch {
+      /* not decodable: nothing registered in this tx */
+    }
+    const newPools = this.newPoolsFrom(res, facts, registeredInTx);
     const watched = new Set([...this.pools.keys(), ...newPools.map((p) => p.pool)]);
     const trades = res.trades.filter((t) => watched.has(t.pool));
 

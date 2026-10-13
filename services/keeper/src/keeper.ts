@@ -25,6 +25,7 @@
  * Budget (M-7): per-tx priority cap, daily spend budget (essential jobs only once exceeded), low-balance
  * alarm. Single instance per key (L-10): Postgres advisory lock when DATABASE_URL is set.
  */
+import { randomInt } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
 import { ComputeBudgetProgram, Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -117,6 +118,10 @@ interface CoinState {
   lastFeesAt: number;
   lastLpFeesAt: number;
   lastBuybackAt: number;
+  /** L5: randomized next buyback time (ms). */
+  nextBuybackAt?: number;
+  /** L5: this keeper's own pre-graduation spot observations (chain time, Q64), oldest first. */
+  pregradObs?: SpotObservation[];
   lastQueueAt: number;
   lastAutoClaimAt: number;
   queueSkip?: number;
@@ -170,6 +175,45 @@ export function pregradBuybackSlice(a: { buybackLamports: bigint; quoteReserve: 
   if (cap < s) s = cap;
   if (room < s) s = room;
   return s > 0n ? s : 0n;
+}
+
+export interface SpotObservation {
+  ts: bigint;
+  q64: bigint;
+}
+
+/** Append an observation if it is ≥ `spacingSecs` after the last one; keep the newest `keep`. */
+export function observeSpot(obs: SpotObservation[], o: SpotObservation, spacingSecs: number, keep: number): SpotObservation[] {
+  const last = obs[obs.length - 1];
+  if (last && o.ts - last.ts < BigInt(spacingSecs)) return obs;
+  const out = [...obs, o];
+  return out.length > keep ? out.slice(out.length - keep) : out;
+}
+
+/**
+ * L5: time-weighted average of the last observations (each weighted by how long it stood, the newest up to
+ * `now`); null until `minSamples` exist or if the oldest is older than `maxAgeSecs` × samples (stale ring).
+ * The pre-graduation buyback goes only when the live spot AND the on-chain sample are inside the band of
+ * this TWAP, so pushing the spot inside the ±3% band right before one sample no longer moves the guard.
+ */
+export function spotTwapQ64(obs: readonly SpotObservation[], now: bigint, minSamples: number, maxGapSecs: number): bigint | null {
+  if (obs.length < minSamples) return null;
+  let num = 0n;
+  let den = 0n;
+  for (let i = 0; i < obs.length; i++) {
+    const end = i + 1 < obs.length ? obs[i + 1].ts : now;
+    const w = end - obs[i].ts;
+    if (w > BigInt(maxGapSecs)) return null; // a gap: the ring doesn't describe the recent price
+    const ww = w > 0n ? w : 1n;
+    num += obs[i].q64 * ww;
+    den += ww;
+  }
+  return den > 0n ? num / den : null;
+}
+
+/** L5: next buyback time — interval × (1 + U[0, jitter)), from a CSPRNG (not guessable by a sandwicher). */
+export function nextBuybackDelayMs(intervalSecs: number, jitter: number, rand: () => number = () => randomInt(0, 1_000_000) / 1_000_000): number {
+  return Math.round(intervalSecs * 1000 * (1 + Math.max(0, jitter) * rand()));
 }
 
 /** |spot − guard| ≤ band (bps) — the program's PriceDeviation check. */
@@ -548,7 +592,11 @@ export class Keeper {
         const since = now - last;
         if (since >= g.params.oracleMinSpacingSecs && since >= BigInt(this.sampleInterval(c))) due.push({ c, pool: k.dammPool });
       } else if (k.status === "curve" && c.dbc && k.buybackLamports >= this.cfg.buybackMinLamports && k.launchFeesSettled && !this.paused(PAUSE.trade)) {
-        // pre-grad buyback guard: keep a keeper sample ≤ 60 s old
+        // pre-grad buyback guard: keep a keeper sample ≤ 60 s old — but only anchor it at a spot that agrees
+        // with this keeper's own TWAP (L5), so a pushed spot never becomes the on-chain guard
+        const spot = this.observePregrad(c);
+        const twap = this.pregradTwap(c);
+        if (spot === null || twap === null || !withinBand(spot, twap, g.params.buybackMaxDeviationBps)) continue;
         const since = now - k.pregradSampleTs;
         if (since >= g.params.oracleMinSpacingSecs && since >= 40n) due.push({ c, pool: k.dbcPool });
       }
@@ -568,6 +616,19 @@ export class Keeper {
     return sent;
   }
 
+  /** Record this keeper's view of a curve coin's spot (L5); returns it. */
+  private observePregrad(c: CoinState): bigint | null {
+    const spot = this.spotQ64(c);
+    if (spot === null) return null;
+    c.pregradObs = observeSpot(c.pregradObs ?? [], { ts: this.chainNow, q64: spot }, this.cfg.pregradTwapSpacingSecs, this.cfg.pregradTwapSamples);
+    return spot;
+  }
+
+  private pregradTwap(c: CoinState): bigint | null {
+    const n = this.cfg.pregradTwapSamples;
+    return spotTwapQ64(c.pregradObs ?? [], this.chainNow, Math.max(2, n), this.cfg.pregradTwapSpacingSecs * 4);
+  }
+
   // ── buybacks ─────────────────────────────────────────────────────────────
   async runBuybacks(): Promise<number> {
     if (this.paused(PAUSE.trade)) return 0;
@@ -576,7 +637,7 @@ export class Keeper {
     let n = 0;
     for (const c of this.coins.values()) {
       const k = c.coin;
-      if (k.buybackLamports < this.cfg.buybackMinLamports || Date.now() - c.lastBuybackAt < this.cfg.buybackIntervalSecs * 1000) continue;
+      if (k.buybackLamports < this.cfg.buybackMinLamports || Date.now() < (c.nextBuybackAt ?? c.lastBuybackAt + this.cfg.buybackIntervalSecs * 1000)) continue;
       let maxIn: bigint;
       let venue: "dbc" | "damm_v2";
       const spot = this.spotQ64(c);
@@ -584,6 +645,10 @@ export class Keeper {
       if (k.status === "curve") {
         if (!c.dbc || this.slot < k.launchSlot + k.launchWindowSlots) continue;
         if (this.chainNow - k.pregradSampleTs > 60n || !withinBand(spot, k.pregradSamplePriceQ64, p.buybackMaxDeviationBps)) continue;
+        // L5: the live spot and the on-chain sample must both agree with the TWAP of our last N observations
+        this.observePregrad(c);
+        const twap = this.pregradTwap(c);
+        if (twap === null || !withinBand(spot, twap, p.buybackMaxDeviationBps) || !withinBand(k.pregradSamplePriceQ64, twap, p.buybackMaxDeviationBps)) continue;
         const cfg = await this.dbcThreshold(c);
         maxIn = pregradBuybackSlice({ buybackLamports: k.buybackLamports, quoteReserve: c.dbc.quoteReserve, threshold: cfg, maxPoolBps: p.buybackMaxPoolBps });
         venue = "dbc";
@@ -598,6 +663,7 @@ export class Keeper {
       if (maxIn <= 0n) continue;
       n += await this.guard(`buyback:${k.mint.toBase58()}`, async () => {
         c.lastBuybackAt = Date.now();
+        c.nextBuybackAt = c.lastBuybackAt + nextBuybackDelayMs(this.cfg.buybackIntervalSecs, this.cfg.buybackJitter);
         const r = await this.sender.send("execute_buyback", { instructions: [cu(250_000), executeBuybackIx({ cranker: this.keeperKey, coin: this.refs(c), venue, maxIn })] });
         if (!r.ok) {
           if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;

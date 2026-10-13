@@ -65,6 +65,8 @@ export interface FlatIx {
   accounts: string[];
   /** Raw data, or null for an RPC-`parsed` instruction (system/token/…: never a Meteora instruction). */
   data: Uint8Array | null;
+  /** The RPC's `parsed` body (jsonParsed encoding only), else undefined. */
+  parsed?: unknown;
   /** Ordinal of the invoking instruction (null for top level). */
   parent: number | null;
 }
@@ -72,7 +74,11 @@ export interface FlatIx {
 export interface TokenBalanceEntry {
   account: string;
   mint: string;
+  /** First owner seen (pre, else post). Use preOwner / postOwner for balance attribution. */
   owner: string | null;
+  /** Owner before / after the tx (they differ after SetAuthority(AccountOwner) or close + re-init). */
+  preOwner: string | null;
+  postOwner: string | null;
   pre: bigint | null;
   post: bigint | null;
 }
@@ -89,7 +95,10 @@ export interface NormalizedTx {
   flat: FlatIx[];
   /** false when inner instructions lack `stackHeight` (very old RPC data): CPI parents unknown. */
   hasStackHeights: boolean;
-  /** Token accounts with a pre and/or post balance, by address. */
+  /**
+   * Token accounts with a pre and/or post balance, by address. (An address closed and re-initialised for
+   * another mint in the same tx has a second entry under `${address}#${mint}`.)
+   */
   tokenBalances: Map<string, TokenBalanceEntry>;
   /** Lamport balance change per account key (post − pre). */
   lamportDeltas: Map<string, bigint>;
@@ -131,7 +140,7 @@ export function normalizeTx(tx: ConfirmedTx): NormalizedTx {
     const r = raw as RawIx;
     const programId = r.programId !== undefined ? b58(r.programId) : accountKeys[r.programIdIndex ?? -1];
     if (!programId) throw new TxShapeError("instruction program id unresolvable");
-    if (r.parsed !== undefined) return { programId, accounts: [], data: null, stackHeight: r.stackHeight ?? 0 };
+    if (r.parsed !== undefined) return { programId, accounts: [], data: null, parsed: r.parsed, stackHeight: r.stackHeight ?? 0 };
     const accts = (r.accountKeyIndexes ?? r.accounts ?? []).map((a) => {
       if (typeof a === "number") {
         const k = accountKeys[a];
@@ -178,11 +187,16 @@ export function normalizeTx(tx: ConfirmedTx): NormalizedTx {
     for (const b of list ?? []) {
       const account = accountKeys[b.accountIndex];
       if (!account) throw new TxShapeError(`token balance index ${b.accountIndex} out of range`);
-      const e = tokenBalances.get(account) ?? { account, mint: b.mint, owner: b.owner ?? null, pre: null, post: null };
-      if (e.mint !== b.mint) throw new TxShapeError(`token account ${account} changed mint`);
+      // Close + re-init of the same address for ANOTHER mint inside one tx: the post side is a different
+      // token account for balance purposes; keep it under a separate key (the entry's `account` stays real).
+      const first = tokenBalances.get(account);
+      const key = first && first.mint !== b.mint ? `${account}#${b.mint}` : account;
+      const e = tokenBalances.get(key) ?? { account, mint: b.mint, owner: b.owner ?? null, preOwner: null, postOwner: null, pre: null, post: null };
       e[which] = BigInt(b.uiTokenAmount.amount);
+      if (which === "pre") e.preOwner = b.owner ?? null;
+      else e.postOwner = b.owner ?? null;
       if (!e.owner && b.owner) e.owner = b.owner;
-      tokenBalances.set(account, e);
+      tokenBalances.set(key, e);
     }
   };
   addBal(tx.meta.preTokenBalances, "pre");
@@ -231,12 +245,26 @@ export function tokenDelta(tx: NormalizedTx, account: string): bigint {
   return (e.post ?? 0n) - (e.pre ?? 0n);
 }
 
-/** Net token change of `mint` per owner across the whole transaction (zero entries dropped). */
+/**
+ * Net token change of `mint` per owner across the whole transaction (zero entries dropped). Attributed
+ * per token account: the pre balance leaves the PRE owner and the post balance arrives at the POST
+ * owner, so an owner change (Token-2022 SetAuthority(AccountOwner) on a non-ATA account, or close +
+ * re-init) moves the balance between the two wallets like a transfer.
+ */
 export function ownerDeltas(tx: NormalizedTx, mint: string): Map<string, bigint> {
   const out = new Map<string, bigint>();
+  const add = (o: string | null, d: bigint) => {
+    if (o && d !== 0n) out.set(o, (out.get(o) ?? 0n) + d);
+  };
   for (const e of tx.tokenBalances.values()) {
-    if (e.mint !== mint || !e.owner) continue;
-    out.set(e.owner, (out.get(e.owner) ?? 0n) + (e.post ?? 0n) - (e.pre ?? 0n));
+    if (e.mint !== mint) continue;
+    const preOwner = e.preOwner ?? e.owner;
+    const postOwner = e.postOwner ?? e.owner;
+    if (preOwner === postOwner) add(preOwner, (e.post ?? 0n) - (e.pre ?? 0n));
+    else {
+      add(preOwner, -(e.pre ?? 0n));
+      add(postOwner, e.post ?? 0n);
+    }
   }
   for (const [k, v] of out) if (v === 0n) out.delete(k);
   return out;

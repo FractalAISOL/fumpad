@@ -7,6 +7,7 @@ export * from "./canonical.js";
 export * from "./engine.js";
 export * from "./fetch.js";
 export * from "./history.js";
+export * from "./lru.js";
 export * from "./pyth.js";
 export * from "./rules/position.js";
 export * from "./rules/price.js";

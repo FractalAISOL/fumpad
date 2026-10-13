@@ -8,10 +8,20 @@
  * bytes. One designated submitter per message (lowest key among the valid signers); the others take over
  * after `fallbackSubmitSecs`. Respects PAUSE_ATTEST, the per-coin hourly cap (checked locally before
  * sending; `AttestRateLimited` backs the coin off), consumed markers and the attestation age limit.
+ *
+ * Trust (V7-M1, L4): "landed" is decided ONLY from the chain — the consumed marker at `finalized`. A
+ * message is "dropped" only by this keeper's own simulation, and only locally. Board hints from peers are
+ * advisory: a fresh "landed" hint defers this keeper's own submission once, for `landedHintSecs`, nothing
+ * more; "dropped" hints are ignored. So a database writer can delay an attestation by at most that long.
+ *
+ * Liveness (V7-M6): coins are derived `coinConcurrency` at a time, coins with recent sells first, then the
+ * least recently derived; a tick stops starting coins after `tickBudgetMs` (the rest go first next tick).
  */
 import { type PublicKey, type TransactionInstruction, ComputeBudgetProgram } from "@solana/web3.js";
+import { PublicKey as Pk } from "@solana/web3.js";
 import type { Logger } from "pino";
 
+import { CrawlBudgetExceeded } from "@fumpad/engine";
 import {
   activeKeepers,
   attestRateAllows,
@@ -39,6 +49,7 @@ import { type Candidate, candidates } from "./records.js";
 export interface ChainView {
   global(): Promise<GlobalAccount>;
   coins(): Promise<CoinAccount[]>;
+  /** Existence of fumpad-owned accounts at `finalized` (consumed markers: the only "landed" truth). */
   accountsExist(keys: PublicKey[]): Promise<boolean[]>;
   position(mint: PublicKey, wallet: PublicKey): Promise<PositionAccount | null>;
   ticket(address: PublicKey): Promise<TicketAccount | null>;
@@ -61,52 +72,77 @@ export interface AttestorOptions {
   board: SignatureBoard;
   submitter: Submitter;
   log: Logger;
-  alerts?: Alerter;
+  alerts?: Pick<Alerter, "alert">;
   /** Unix seconds (injectable for tests). */
   now?: () => number;
   /** A non-designated signer submits after this long (s). */
   fallbackSubmitSecs?: number;
   /** Back-off after AttestRateLimited (s). */
   rateLimitBackoffSecs?: number;
+  /** After a landing at `confirmed` (own or a peer's hint), wait this long for the consumed marker to finalize (s). */
+  landedHintSecs?: number;
   computeUnits?: number;
   /** Only derive coins whose mint is in this set (tests / ops). */
   onlyMints?: Set<string>;
+  /** Coins derived in parallel per tick. */
+  coinConcurrency?: number;
+  /** Stop starting new coin derivations after this long in one tick (ms). */
+  tickBudgetMs?: number;
+  /** Coins whose newest sell is younger than this are derived first (s). */
+  recentActivitySecs?: number;
+  /** Wall clock for the tick budget (ms; tests). */
+  clockMs?: () => number;
 }
 
-/** Program errors that mean "the program disagrees with the engine": never retried, always alerted. */
+/** Program errors that mean "the program disagrees with the engine": never retried by THIS keeper, always alerted. */
 const PERMANENT = new Set([
   "AttestationExpired",
   "WrongCluster",
-  "PoolNotOfCoin",
   "CreatorSell",
   "BelowMinimumUsd",
   "InvalidTicketAmount",
   "StalePythPrice",
   "RebuyOutOfWindow",
-  "TicketNotOpen",
   "InvalidAttestation",
   "ZeroAmount",
 ]);
 
+/**
+ * V7-M2: errors that depend on chain state that catches up (Coin.damm_pool recorded by `graduate`, a rebuy
+ * debit freeing a ticket slot, a ticket status): retried with back-off after a re-check, never dropped.
+ */
+export const RETRY_AFTER_RECHECK = new Set(["PoolNotOfCoin", "TooManyOpenTickets", "TicketNotOpen"]);
+
 export interface AttestorStats {
   ticks: number;
   coins: number;
+  coinsDerived: number;
   candidates: number;
   signed: number;
   submitted: number;
   landed: number;
   dropped: number;
+  deferred: number;
   errors: number;
   state: "idle" | "not_active_keeper" | "paused" | "running";
   lastTickAt: number;
 }
 
 export class Attestor {
-  stats: AttestorStats = { ticks: 0, coins: 0, candidates: 0, signed: 0, submitted: 0, landed: 0, dropped: 0, errors: 0, state: "idle", lastTickAt: 0 };
+  stats: AttestorStats = { ticks: 0, coins: 0, coinsDerived: 0, candidates: 0, signed: 0, submitted: 0, landed: 0, dropped: 0, deferred: 0, errors: 0, state: "idle", lastTickAt: 0 };
   private signedIds = new Set<string>();
   private coinBackoff = new Map<string, number>();
   private msgBackoff = new Map<string, { until: number; tries: number }>();
+  /** Own permanent rejections (local only, V7-M1). */
+  private dropped = new Map<string, string>();
+  /** Own landings at confirmed: id → time; wait for the consumed marker to finalize. */
+  private landedAt = new Map<string, number>();
+  /** First time a peer's "landed" hint deferred us (each message is deferred at most once). */
+  private hintSeen = new Map<string, number>();
   private lastSummary = new Map<string, string>();
+  /** Newest sell block time per mint (priority) and last tick each mint was derived (fairness). */
+  private lastActivity = new Map<string, number>();
+  private lastDerivedTick = new Map<string, number>();
   private readonly me: string;
 
   constructor(private o: AttestorOptions) {
@@ -121,6 +157,8 @@ export class Attestor {
     const log = this.o.log;
     this.stats.ticks++;
     this.stats.lastTickAt = this.now();
+    const clock = this.o.clockMs ?? Date.now;
+    const started = clock();
     const g = await this.o.chain.global();
     const now = this.now();
     const active = activeKeepers(g, now);
@@ -136,26 +174,58 @@ export class Attestor {
     this.stats.state = "running";
     const coins = (await this.o.chain.coins()).filter((c) => !this.o.onlyMints || this.o.onlyMints.has(c.mint.toBase58()));
     this.stats.coins = coins.length;
-    for (const coin of coins) {
-      const mint = coin.mint.toBase58();
-      if ((this.coinBackoff.get(mint) ?? 0) > now) continue;
-      try {
-        await this.coin(coin, g, active, now);
-      } catch (e) {
-        this.stats.errors++;
-        log.warn({ mint, err: String(e).slice(0, 300) }, "attestor: coin derivation failed");
-        await this.o.alerts?.alert(`derive:${mint}`, `attestor ${this.me.slice(0, 6)}: derivation failed for ${mint}: ${String(e).slice(0, 200)}`);
+    const recent = this.o.recentActivitySecs ?? 86_400;
+    const order = coins
+      .filter((c) => (this.coinBackoff.get(c.mint.toBase58()) ?? 0) <= now)
+      .map((c) => {
+        const m = c.mint.toBase58();
+        const act = this.lastActivity.get(m);
+        return { c, m, hot: act !== undefined && now - act <= recent ? act : -1, last: this.lastDerivedTick.get(m) ?? -1 };
+      })
+      .sort((a, b) => b.hot - a.hot || a.last - b.last || (a.m < b.m ? -1 : 1));
+    const budgetMs = this.o.tickBudgetMs ?? 60_000;
+    let next = 0;
+    const worker = async () => {
+      while (next < order.length) {
+        if (clock() - started > budgetMs) return; // the rest go first next tick (least recently derived)
+        const { c, m } = order[next++];
+        this.lastDerivedTick.set(m, this.stats.ticks);
+        try {
+          await this.coin(c, g, active, now);
+          this.stats.coinsDerived++;
+        } catch (e) {
+          if (e instanceof CrawlBudgetExceeded) {
+            log.info({ mint: m }, "attestor: crawl budget reached; continuing next tick");
+            continue;
+          }
+          this.stats.errors++;
+          log.warn({ mint: m, err: String(e).slice(0, 300) }, "attestor: coin derivation failed");
+          await this.o.alerts?.alert(`derive:${m}`, `attestor ${this.me.slice(0, 6)}: derivation failed for ${m}: ${String(e).slice(0, 200)}`);
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, this.o.coinConcurrency ?? 4) }, worker));
   }
 
   private async coin(coin: CoinAccount, g: GlobalAccount, active: PublicKey[], now: number): Promise<void> {
     const mint = coin.mint.toBase58();
     const der = await this.o.derive(coin, g);
+    const newest = der.output.sells.reduce((m, s) => Math.max(m, s.blockTime), -1);
+    if (newest >= 0) this.lastActivity.set(mint, newest);
     if (der.output.issues.length) {
-      await this.o.alerts?.alert(`issues:${mint}`, `attestor ${this.me.slice(0, 6)}: engine issues on ${mint}: ${der.output.issues.map((i) => `${i.kind}@${i.slot}`).join(", ").slice(0, 300)}`);
+      // V7-H2: issues are scoped (tx / wallet); alert per coin with the scopes so the runbook can be followed
+      await this.o.alerts?.alert(
+        `issues:${mint}`,
+        `attestor ${this.me.slice(0, 6)}: engine issues on ${mint}: ${der.output.issues
+          .map((i) => `${i.kind}/${i.scope}${i.wallet ? `:${i.wallet.slice(0, 6)}` : ""}@${i.slot}`)
+          .join(", ")
+          .slice(0, 300)}`,
+      );
     }
-    const cands = candidates(mint, der.output, { clusterTag: g.clusterTag, now, maxAttestAgeSecs: Number(g.params.maxAttestAgeSecs) });
+    const all = candidates(mint, der.output, { clusterTag: g.clusterTag, now, maxAttestAgeSecs: Number(g.params.maxAttestAgeSecs) });
+    // V7-M2: a DAMM v2 sell is only valid on chain once `graduate` recorded Coin.damm_pool (finalized view).
+    const graduated = !!coin.dammPool && !coin.dammPool.equals(Pk.default);
+    const cands = all.filter((c) => c.kind !== "sell" || c.venue !== "damm_v2" || graduated);
     this.stats.candidates += cands.length;
     const sellReasons = der.output.sells.map((s) => (s.ticket ? "ticket" : s.reason));
     const key = JSON.stringify([sellReasons, der.output.rebuys.length, der.output.issues.length, cands.length]);
@@ -167,8 +237,9 @@ export class Attestor {
           maxSlot: der.maxSlot,
           sells: der.output.sells.slice(-8).map((s) => ({ slot: s.slot, base: String(s.baseAmount), quote: String(s.quoteGross), result: s.ticket ? "ticket" : s.reason })),
           rebuys: der.output.rebuys.length,
-          issues: der.output.issues.map((i) => `${i.kind}@${i.slot}`).slice(0, 5),
+          issues: der.output.issues.map((i) => `${i.kind}/${i.scope}@${i.slot}`).slice(0, 5),
           candidates: cands.length,
+          waitingForGraduate: all.length - cands.length,
         },
         "attestor: derivation changed",
       );
@@ -178,19 +249,30 @@ export class Attestor {
       cands.map((c) => (c.kind === "sell" ? consumedSellPda(c.sell!.signature, c.ixKey) : consumedRebuyPda(c.rebuy!.signature, c.ixKey, c.rebuy!.ticket))),
     );
     let cap = { start: coin.attestBucketStart, cur: coin.attestBucketTokens, prev: coin.attestPrevBucketTokens };
+    const grace = this.o.landedHintSecs ?? 90;
     for (let i = 0; i < cands.length; i++) {
-      if (consumed[i]) continue;
       const c = cands[i];
-      const st = await this.o.board.status(c.id);
-      if (st && (st.status === "landed" || st.status === "dropped")) continue;
+      if (consumed[i]) {
+        this.landedAt.delete(c.id);
+        continue;
+      }
+      if (this.dropped.has(c.id)) continue;
       const bo = this.msgBackoff.get(c.id);
       if (bo && bo.until > now) continue;
-      // sign + publish (idempotent)
+      // sign + publish (idempotent) — even while deferring, so peers can reach 2-of-3
       if (!this.signedIds.has(c.id)) {
         const sig = signAttestation(c.message, this.o.keeper.secretKey);
         await this.o.board.publish(c.id, c.kind, mint, c.message, this.me, sig);
         this.signedIds.add(c.id);
         this.stats.signed++;
+      }
+      // own landing at confirmed, not finalized yet: wait (bounded) instead of re-sending
+      const mine = this.landedAt.get(c.id);
+      if (mine !== undefined && now - mine < grace) continue;
+      // a peer's "landed" hint defers us once, for at most `grace` (V7-M1: hints are never authoritative)
+      if (await this.deferredByHint(c.id, active, now, grace)) {
+        this.stats.deferred++;
+        continue;
       }
       const valid = validSignatures(c.message, await this.o.board.signatures(c.id), active);
       if (valid.length < 2) continue;
@@ -230,6 +312,18 @@ export class Attestor {
     }
   }
 
+  private async deferredByHint(id: string, active: PublicKey[], now: number, grace: number): Promise<boolean> {
+    const seen = this.hintSeen.get(id);
+    if (seen !== undefined) return now - seen < grace;
+    const keys = new Set(active.map((k) => k.toBase58()));
+    const fresh = (await this.o.board.hints(id)).some(
+      (h) => h.status === "landed" && h.keeper !== this.me && keys.has(h.keeper) && now - Math.floor(h.updatedAt.getTime() / 1000) < grace,
+    );
+    if (!fresh) return false;
+    this.hintSeen.set(id, now);
+    return true;
+  }
+
   private async submit(c: Candidate, sigs: KeeperSignature[]): Promise<"landed" | "dropped" | "retry" | "rate_limited"> {
     const keeper = this.o.keeper.publicKey;
     let attestIx: TransactionInstruction;
@@ -238,9 +332,11 @@ export class Attestor {
       attestIx = attestSellIx({ keeper, mint: c.sell!.mint, trader: c.sell!.trader, seq: pos?.nextTicketSeq ?? 0n, signature: c.sell!.signature, ixKey: c.ixKey });
     } else {
       const t = await this.o.chain.ticket(c.rebuy!.ticket);
-      if (!t) return "retry";
+      if (!t) return this.retry(c, "ticket not found yet");
       if (t.status !== "open" && t.status !== "queued") {
-        await this.o.board.setStatus(c.id, "dropped", `ticket ${t.status}`);
+        // terminal ticket: nothing to debit any more (decided from this keeper's own chain read)
+        this.dropped.set(c.id, `ticket ${t.status}`);
+        await this.o.board.setStatus(c.id, this.me, "dropped", `ticket ${t.status}`);
         return "dropped";
       }
       attestIx = attestRebuyIx({ keeper, mint: c.rebuy!.mint, owner: c.rebuy!.owner, ticket: c.rebuy!.ticket, signature: c.rebuy!.signature, ixKey: c.ixKey, queued: t.status === "queued" });
@@ -248,29 +344,36 @@ export class Attestor {
     const ixs = [ComputeBudgetProgram.setComputeUnitLimit({ units: this.o.computeUnits ?? 250_000 }), ed25519Instruction(c.message, sigs), attestIx];
     this.stats.submitted++;
     const r = await this.o.submitter.submit(`attest_${c.kind}`, ixs);
-    const now = this.now();
     if (r.ok) {
       this.stats.landed++;
-      await this.o.board.setStatus(c.id, "landed", r.signature);
+      this.landedAt.set(c.id, this.now()); // confirmed; the consumed marker at finalized is the truth
+      await this.o.board.setStatus(c.id, this.me, "landed", r.signature);
       this.o.log.info({ kind: c.kind, mint: c.mint, wallet: c.wallet, tx: r.signature }, "attested");
       return "landed";
     }
     const name = r.code !== undefined && r.code !== null ? errorName(r.code) : undefined;
     if (name === "AlreadyConsumed") {
-      await this.o.board.setStatus(c.id, "landed", "already consumed");
+      this.landedAt.set(c.id, this.now());
       return "landed";
     }
     if (name === "AttestRateLimited") return "rate_limited";
     if (name && PERMANENT.has(name)) {
       this.stats.dropped++;
-      await this.o.board.setStatus(c.id, "dropped", name);
+      this.dropped.set(c.id, name);
+      await this.o.board.setStatus(c.id, this.me, "dropped", name);
       await this.o.alerts?.alert(`drop:${c.id}`, `attestor: program rejected a derived ${c.kind} (${name}) for ${c.wallet} on ${c.mint} — engine/program mismatch, check`);
       return "dropped";
     }
+    if (name && RETRY_AFTER_RECHECK.has(name)) this.o.log.info({ kind: c.kind, mint: c.mint, name }, "attestation waits for chain state (graduate / open tickets); will re-check");
+    return this.retry(c, name ?? r.error ?? "unknown", r.code);
+  }
+
+  private retry(c: Candidate, why: string, code?: number | null): "retry" {
+    const now = this.now();
     const prev = this.msgBackoff.get(c.id)?.tries ?? 0;
     this.msgBackoff.set(c.id, { tries: prev + 1, until: now + Math.min(3_600, 15 * 2 ** prev) });
     this.stats.errors++;
-    this.o.log.warn({ kind: c.kind, mint: c.mint, code: r.code, name, err: r.error?.slice(0, 200) }, "attestation not landed; will retry");
+    this.o.log.warn({ kind: c.kind, mint: c.mint, code, err: why.slice(0, 200) }, "attestation not landed; will retry");
     return "retry";
   }
 }

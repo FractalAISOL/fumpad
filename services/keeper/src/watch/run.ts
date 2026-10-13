@@ -19,8 +19,9 @@ import type { CoinAccount, GlobalAccount } from "@fumpad/sdk";
 
 import { Alerter } from "../alerts.js";
 import { RpcChainView } from "../attest/chain.js";
-import { deriveCoin, type Derivation, newCaches } from "../attest/derive.js";
-import { pythSourceFromEnv, type Running } from "../attest/run.js";
+import { deriveCoin, type Derivation } from "../attest/derive.js";
+import { guardHistory } from "../attest/history-check.js";
+import { deriveLimitsFromEnv, pythSourceFromEnv, type Running } from "../attest/run.js";
 import { type CoinVerification, verifyCoin } from "./verify.js";
 
 export interface WatcherDeps {
@@ -34,7 +35,7 @@ export interface WatcherDeps {
 
 export class Watcher {
   results = new Map<string, CoinVerification & { checkedAt: number; error?: string }>();
-  stats = { ticks: 0, coins: 0, matches: 0, mismatches: 0, missing: 0, errors: 0, lastTickAt: 0 };
+  stats = { ticks: 0, coins: 0, matches: 0, mismatches: 0, missing: 0, issues: 0, errors: 0, lastTickAt: 0 };
   constructor(private d: WatcherDeps) {}
 
   private now() {
@@ -49,6 +50,7 @@ export class Watcher {
     let matches = 0;
     let mismatches = 0;
     let missing = 0;
+    let issues = 0;
     for (const coin of coins) {
       const mint = coin.mint.toBase58();
       try {
@@ -69,18 +71,36 @@ export class Watcher {
               .join("; ")}. Challenge window ends ${new Date(challengeEnds * 1000).toISOString()} — guardian void_ticket if confirmed.`,
           );
         }
+        const maxAge = Number(g.params.maxAttestAgeSecs);
         for (const m of v.missing) {
           missing++;
           if (m.kind === "rebuy")
             await this.d.alerts?.alert(`missing:${m.ticket}:${m.signature}`, `rebuy debit not attested: ticket ${m.ticket} owner ${m.owner} mint ${mint} buy ${m.signature} (${m.ageSecs}s old)`);
+          // L7: an honest sell that should have a ticket but none landed (keepers down / disagreeing /
+          // suppressed). Actionable until max_attest_age; reported once more just after it expires.
+          else if (m.ageSecs <= maxAge + 3_600)
+            await this.d.alerts?.alert(
+              `missing-sell:${m.signature}:${m.ixKey}`,
+              `sell not attested: ${m.owner} on ${mint} tx ${m.signature} (${m.ageSecs}s old; ${m.ageSecs > maxAge ? "EXPIRED — can no longer be attested" : `expires in ${maxAge - m.ageSecs}s`})`,
+            );
         }
+        // L7: engine issues (scoped per tx / wallet, V7-H2) — follow the runbook in services/README.md
+        issues += der.output.issues.length;
+        if (der.output.issues.length)
+          await this.d.alerts?.alert(
+            `issues:${mint}:${der.output.issues.length}`,
+            `engine issues on ${mint}: ${der.output.issues
+              .map((i) => `${i.kind}/${i.scope}${i.wallet ? `:${i.wallet}` : ""} tx ${i.signature} slot ${i.slot}`)
+              .join("; ")
+              .slice(0, 600)}`,
+          );
       } catch (e) {
         this.stats.errors++;
         this.results.set(mint, { mint, verdicts: [], missing: [], checkedAt: this.now(), error: String(e).slice(0, 300) });
         await this.d.alerts?.alert(`watch:${mint}`, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)}`);
       }
     }
-    Object.assign(this.stats, { matches, mismatches, missing, lastTickAt: this.now() });
+    Object.assign(this.stats, { matches, mismatches, missing, issues, lastTickAt: this.now() });
   }
 
   feed(mint?: string) {
@@ -104,13 +124,14 @@ export async function runWatcher(env = process.env): Promise<Running> {
   const rpc = new MeteoraRpc(url, { minGapMs: Number(env.RPC_MIN_GAP_MS ?? 0) });
   const chain = new RpcChainView(conn, "finalized");
   const pyth = pythSourceFromEnv(env);
-  const caches = newCaches();
-  const priceCache = new Map();
-  const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: "[fumpad-watcher]", cooldownMs: 6 * 3_600_000 });
+  const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
+  // L7: re-alert an unresolved item every 30 min (the challenge window is 6 h: one alert per window was too few)
+  const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: "[fumpad-watcher]", cooldownMs: Number(env.WATCH_ALERT_COOLDOWN_MS ?? 30 * 60_000) });
+  const derive = (coin: CoinAccount, g: GlobalAccount) => deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache, maxRpcCalls }, coin, g);
   const w = new Watcher({
     coins: () => chain.coins(),
     global: () => chain.global(),
-    derive: (coin, g) => deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache }, coin, g),
+    derive: env.RPC_HISTORY_CHECK === "off" ? derive : guardHistory(rpc, derive),
     alerts,
     graceSecs: Number(env.WATCH_GRACE_SECS ?? 900),
   });

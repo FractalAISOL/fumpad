@@ -27,6 +27,7 @@ import {
 } from "./constants.js";
 import { decodeEventPayload, EventDecodeError, eventPayload, instructionName, type Venue, venueOf } from "./decode.js";
 import { appLabel, type AppLabel } from "./routers.js";
+import { foreignVaultFlows } from "./vaultflow.js";
 import { ancestors, type ConfirmedTx, type FlatIx, type NormalizedTx, normalizeTx, ownerDeltas, tokenDelta, TxShapeError } from "./tx.js";
 
 export type Side = "buy" | "sell";
@@ -268,32 +269,47 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
     else issues.push(...r.issues);
   }
 
-  // Vault cross-check: per vault, the sum of the deltas the events imply must equal the observed
-  // token-balance delta. Several swaps on one pool in a tx are summed; anything else that moved the
-  // vault in this tx (e.g. a migration) makes it disagree → those swaps are rejected.
-  const expected = new Map<string, { delta: bigint; keys: number[]; mint: string }>();
+  // Vault cross-check: per vault, the sum of the deltas the events imply PLUS every movement of that
+  // vault not made by one of these swaps (vaultflow.ts — donations, the pool program's fee claims /
+  // migration / leftover withdrawal, launch mints; V7-H2) must equal the observed token-balance delta.
+  // Several swaps on one pool in a tx are summed. Anything still unexplained rejects those swaps with an
+  // issue that names the pool (the engine scopes it to this tx).
+  const expected = new Map<string, { delta: bigint; keys: number[]; mint: string; pool: string }>();
+  const swapOrdinals = new Set<number>();
   for (const t of trades) {
+    swapOrdinals.add((t as MeteoraTrade & { _vaults: VaultInfo })._vaults.swapOrdinal);
     for (const [vault, mint, d] of vaultDeltas(t)) {
       // A launch tx (pool init + first swaps): the base vault was created and minted the whole supply in
       // this tx, so its delta is supply − swaps. Its base leg can't be cross-checked; the quote vault (also
       // created here, starting at 0) still is.
       if (t.venue === "dbc" && mint === t.baseMint && initializedPools.has(t.pool) && tx.tokenBalances.get(vault)?.pre === null) continue;
-      const e = expected.get(vault) ?? { delta: 0n, keys: [], mint };
+      const e = expected.get(vault) ?? { delta: 0n, keys: [], mint, pool: t.pool };
       e.delta += d;
       e.keys.push(t.ixKey);
       expected.set(vault, e);
     }
   }
+  const foreign = foreignVaultFlows(tx, new Set(expected.keys()), swapOrdinals);
   const rejected = new Set<number>();
   for (const [vault, e] of expected) {
     const bal = tx.tokenBalances.get(vault);
     const observed = tokenDelta(tx, vault);
+    const f = foreign.get(vault) ?? { delta: 0n, synced: false, unknown: false };
+    const explained = e.delta + f.delta;
+    // SyncNative only ever raises a WSOL account's amount (lamports sent by plain system transfers,
+    // possibly in earlier txs), so with one on the vault the observed delta may exceed what we can read.
+    const ok = !f.unknown && (f.synced ? observed >= explained : observed === explained);
     if (bal && bal.mint !== e.mint) {
       for (const k of e.keys) rejected.add(k);
-      issues.push({ code: "vault_mint_mismatch", ixKey: e.keys[0], message: `vault ${vault} holds ${bal.mint}, swap expects ${e.mint}` });
-    } else if (observed !== e.delta) {
+      issues.push({ code: "vault_mint_mismatch", ixKey: e.keys[0], pool: e.pool, message: `vault ${vault} holds ${bal.mint}, swap expects ${e.mint}` });
+    } else if (!ok) {
       for (const k of e.keys) rejected.add(k);
-      issues.push({ code: "vault_mismatch", ixKey: e.keys[0], message: `vault ${vault}: events imply ${e.delta}, token balances show ${observed}` });
+      issues.push({
+        code: "vault_mismatch",
+        ixKey: e.keys[0],
+        pool: e.pool,
+        message: `vault ${vault}: events imply ${e.delta}, other movements ${f.delta}${f.unknown ? " + an unreadable token instruction" : ""}, token balances show ${observed}`,
+      });
     }
   }
   return { ...base, status: "ok", trades: trades.filter((t) => !rejected.has(t.ixKey)).map(publicTrade), issues };
@@ -316,6 +332,8 @@ function vaultDeltas(t: MeteoraTrade & { _vaults?: VaultInfo }): [string, string
 }
 
 interface VaultInfo {
+  /** `flat` ordinal of the swap instruction (its own token CPIs are not "other movements"). */
+  swapOrdinal: number;
   inVault: string;
   outVault: string;
   /** What the input vault's balance grows by before referral (transfer-fee excluded). */
@@ -455,7 +473,7 @@ function buildDbc(tx: NormalizedTx, p: Pending): Built {
     eventRaw: p.primary.raw,
     eventName: "EvtSwap2",
     baseIsTokenA: null,
-    _vaults: { inVault: side === "sell" ? baseVault : quoteVault, outVault: side === "sell" ? quoteVault : baseVault, inVaultReceived: amountIn },
+    _vaults: { swapOrdinal: p.swapIx.ordinal, inVault: side === "sell" ? baseVault : quoteVault, outVault: side === "sell" ? quoteVault : baseVault, inVaultReceived: amountIn },
   };
   return { trade };
 }
@@ -550,7 +568,7 @@ function buildDamm(tx: NormalizedTx, p: Pending, opts: ParseOptions): Built {
     eventRaw: p.primary.raw,
     eventName: "EvtSwap2",
     baseIsTokenA: baseIsA,
-    _vaults: { inVault: dir === 0 ? aVault : bVault, outVault: dir === 0 ? bVault : aVault, inVaultReceived: amountIn },
+    _vaults: { swapOrdinal: p.swapIx.ordinal, inVault: dir === 0 ? aVault : bVault, outVault: dir === 0 ? bVault : aVault, inVaultReceived: amountIn },
   };
   return { trade };
 }

@@ -38,14 +38,28 @@ describe("config", () => {
 });
 
 describe("FUMPAD pool set", () => {
-  const ing = (configs: string[] = [CONFIG], mints: string[] = []) => new MeteoraIngestor({} as never, { dbcConfigs: configs, mints }, log);
+  /** `registered`: mints with a CoinRegistered (L2: only those make a pool ours). */
+  const ing = (configs: string[] = [CONFIG], mints: string[] = [], registered: string[] = [MINT]) => {
+    const i = new MeteoraIngestor({} as never, { dbcConfigs: configs, mints }, log);
+    i.markRegistered(...registered);
+    return i;
+  };
   const facts = (name: string) => parsePoolFacts(fx(name));
 
   it("a pool init under a FUMPAD config registers the DBC pool; another config doesn't", () => {
     expect(ing().newPoolsFrom(parseMeteoraTrades(fx("dbc_pool_init")), facts("dbc_pool_init"))).toEqual([
       { pool: DBC_POOL, venue: "dbc", baseMint: MINT, quoteMint: null, config: CONFIG, dbcPool: null, source: "pool_init" },
     ]);
-    expect(ing(["11111111111111111111111111111111"]).newPoolsFrom(parseMeteoraTrades(fx("dbc_pool_init")), facts("dbc_pool_init"))).toEqual([]);
+    expect(ing(["11111111111111111111111111111111"], [], []).newPoolsFrom(parseMeteoraTrades(fx("dbc_pool_init")), facts("dbc_pool_init"))).toEqual([]);
+  });
+
+  it("L2: a pool on a FUMPAD config whose mint was never registered (CoinRegistered) is not ours", () => {
+    const unregistered = ing([CONFIG], [], []);
+    expect(unregistered.newPoolsFrom(parseMeteoraTrades(fx("dbc_pool_init")), facts("dbc_pool_init"))).toEqual([]);
+    expect(unregistered.newPoolsFrom(parseMeteoraTrades(fx("dbc_curve_complete")), facts("dbc_curve_complete"))).toEqual([]);
+    expect(unregistered.newPoolsFrom(parseMeteoraTrades(fx("dbc_migration_damm_v2")), facts("dbc_migration_damm_v2"))).toEqual([]);
+    // registered in the same tx (the launch tx carries register_coin)
+    expect(unregistered.newPoolsFrom(parseMeteoraTrades(fx("dbc_pool_init")), facts("dbc_pool_init"), new Set([MINT])).map((p) => p.pool)).toEqual([DBC_POOL]);
   });
 
   it("a swap seen under a FUMPAD config registers its pool (pool created before indexing started)", () => {
@@ -56,8 +70,8 @@ describe("FUMPAD pool set", () => {
   it("the verified migration registers the DAMM v2 pool; by config or by mint", () => {
     const want = [{ pool: DAMM_POOL, venue: "damm_v2", baseMint: MINT, quoteMint: "So11111111111111111111111111111111111111112", config: CONFIG, dbcPool: DBC_POOL, source: "migration" }];
     expect(ing().newPoolsFrom(parseMeteoraTrades(fx("dbc_migration_damm_v2")), facts("dbc_migration_damm_v2"))).toEqual(want);
-    expect(ing([], [MINT]).newPoolsFrom(parseMeteoraTrades(fx("dbc_migration_damm_v2")), facts("dbc_migration_damm_v2"))).toEqual(want);
-    expect(ing([], ["11111111111111111111111111111111"]).newPoolsFrom(parseMeteoraTrades(fx("dbc_migration_damm_v2")), facts("dbc_migration_damm_v2"))).toEqual([]);
+    expect(ing([], [MINT], []).newPoolsFrom(parseMeteoraTrades(fx("dbc_migration_damm_v2")), facts("dbc_migration_damm_v2"))).toEqual(want);
+    expect(ing([], ["11111111111111111111111111111111"], []).newPoolsFrom(parseMeteoraTrades(fx("dbc_migration_damm_v2")), facts("dbc_migration_damm_v2"))).toEqual([]);
   });
 
   it("a DAMM v2 trade alone never registers a pool (only migrations do)", () => {

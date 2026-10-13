@@ -44,7 +44,8 @@ export class RpcChainView implements ChainView {
   async accountsExist(keys: PublicKey[]): Promise<boolean[]> {
     const out: boolean[] = [];
     for (let i = 0; i < keys.length; i += 100) {
-      const r = await this.conn.getMultipleAccountsInfo(keys.slice(i, i + 100), this.commitment);
+      // consumed markers: only a FINALIZED marker means "landed" (V7-M1 / L4)
+      const r = await this.conn.getMultipleAccountsInfo(keys.slice(i, i + 100), "finalized");
       out.push(...r.map((x) => !!x && x.owner.equals(FUMPAD_PROGRAM_ID)));
     }
     return out;

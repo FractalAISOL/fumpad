@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import type { EngineOutput } from "@fumpad/engine";
 import { type CoinAccount, DEFAULT_PARAMS, ED25519_PROGRAM_ID, FUMPAD_ERROR, type GlobalAccount, parseEd25519InstructionData, PAUSE, verifyAttestation } from "@fumpad/sdk";
 
+import { PublicKey as Pk } from "@solana/web3.js";
+
 import { Attestor, type ChainView, type SubmitResult } from "../src/attest/attestor.js";
+
+const PublicKeyDefault = Pk.default;
 import { MemoryBoard } from "../src/attest/board.js";
 import type { Derivation } from "../src/attest/derive.js";
 
@@ -193,7 +197,7 @@ describe("attestor 2-of-3", () => {
     expect(board.rows.size).toBe(0);
   });
 
-  it("program rejections: rate limit backs the coin off; a permanent error drops the message for everyone", async () => {
+  it("program rejections: rate limit backs the coin off; a permanent error drops the message for that keeper (hint on the board)", async () => {
     const { atts, sub, board } = setup();
     sub.next = { ok: false, code: FUMPAD_ERROR.AttestRateLimited, error: "rate" };
     for (const a of atts) await a.tick();
@@ -207,8 +211,145 @@ describe("attestor 2-of-3", () => {
     s2.next = { ok: false, code: FUMPAD_ERROR.BelowMinimumUsd, error: "x" };
     for (const a of b) await a.tick();
     for (const a of b) await a.tick();
-    const st = [...bd2.st.values()];
+    const st = [...bd2.st.values()].flatMap((m) => [...m.values()]);
     expect(st.some((x) => x.status === "dropped" && x.detail === "BelowMinimumUsd")).toBe(true);
     void board;
+  });
+});
+
+describe("board status is only a hint (V7-M1, L4)", () => {
+  it("a DB writer marking every message 'dropped' changes nothing: the honest pair still submits", async () => {
+    const { sub, atts, board } = setup();
+    await atts[0].tick();
+    for (const id of board.rows.keys()) for (const k of keepers) await board.setStatus(id, k.publicKey.toBase58(), "dropped", "evil");
+    for (let i = 0; i < 2; i++) for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(1);
+  });
+
+  it("a forged fresh 'landed' hint defers submission once, for a bounded time only", async () => {
+    let now = NOW;
+    const board = new MemoryBoard(() => now * 1000);
+    const chain = new StubChain(global());
+    const sub = new RecordingSubmitter();
+    const atts = keepers.map((k) => new Attestor({ keeper: k, chain, derive: async () => derivation(output(100n)), board, submitter: sub, log, now: () => now, fallbackSubmitSecs: 0, landedHintSecs: 90 }));
+    await atts[0].tick();
+    const id = [...board.rows.keys()][0];
+    const forge = async () => {
+      for (const k of keepers) await board.setStatus(id, k.publicKey.toBase58(), "landed", "fake"); // keeps re-stamping it
+    };
+    await forge();
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(0); // deferred
+    now += 91;
+    await forge();
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBeGreaterThanOrEqual(1); // the hint can't hold it back again
+  });
+
+  it("own landing at confirmed: no resend while it finalizes; resent if the marker never finalizes; skipped once consumed", async () => {
+    let now = NOW;
+    const board = new MemoryBoard(() => now * 1000);
+    const chain = new StubChain(global());
+    const sub = new RecordingSubmitter();
+    const atts = keepers.map((k) => new Attestor({ keeper: k, chain, derive: async () => derivation(output(100n)), board, submitter: sub, log, now: () => now, fallbackSubmitSecs: 0, landedHintSecs: 90 }));
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(1);
+    now += 30;
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(1);
+    now += 200; // never finalized (dropped by a fork): sent again (a duplicate only fails simulation)
+    for (const a of atts) await a.tick();
+    const resent = sub.calls.length;
+    expect(resent).toBeGreaterThanOrEqual(2);
+    chain.consumed = true;
+    now += 200;
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(resent);
+  });
+});
+
+describe("DAMM v2 sells wait for graduate (V7-M2)", () => {
+  const damm = () => {
+    const o = output(100n);
+    o.sells[0].venue = "damm_v2";
+    return o;
+  };
+  it("not signed while Coin.damm_pool is unset; signed and submitted once graduate recorded it", async () => {
+    const board = new MemoryBoard(() => NOW * 1000);
+    const chain = new StubChain(global());
+    const ungraduated = { ...coin, dammPool: PublicKeyDefault } as CoinAccount;
+    let current = ungraduated;
+    chain.coins = async () => [current];
+    const sub = new RecordingSubmitter();
+    const atts = keepers.map((k) => new Attestor({ keeper: k, chain, derive: async () => derivation(damm()), board, submitter: sub, log, now: () => NOW, fallbackSubmitSecs: 0 }));
+    for (const a of atts) await a.tick();
+    expect(board.rows.size).toBe(0);
+    current = { ...coin, dammPool: Keypair.generate().publicKey } as CoinAccount;
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBe(1);
+  });
+
+  it("PoolNotOfCoin / TooManyOpenTickets are retried after a back-off, never dropped", async () => {
+    let now = NOW;
+    const board = new MemoryBoard(() => now * 1000);
+    const chain = new StubChain(global());
+    const sub = new RecordingSubmitter();
+    const atts = keepers.map((k) => new Attestor({ keeper: k, chain, derive: async () => derivation(output(100n)), board, submitter: sub, log, now: () => now, fallbackSubmitSecs: 0 }));
+    sub.next = { ok: false, code: FUMPAD_ERROR.PoolNotOfCoin, error: "PoolNotOfCoin" };
+    for (const a of atts) await a.tick();
+    const n = sub.calls.length;
+    expect(n).toBeGreaterThanOrEqual(1);
+    sub.next = { ok: false, code: FUMPAD_ERROR.TooManyOpenTickets, error: "TooManyOpenTickets" };
+    now += 3_601;
+    for (const a of atts) await a.tick();
+    expect(sub.calls.length).toBeGreaterThan(n);
+    sub.next = { ok: true, signature: "tx" };
+    now += 3_601;
+    for (const a of atts) await a.tick();
+    expect([...board.st.values()].flatMap((m) => [...m.values()]).some((h) => h.status === "landed")).toBe(true);
+  });
+});
+
+describe("coin scheduling (V7-M6)", () => {
+  it("coins with recent sells are derived first; a tick budget leaves the rest for the next tick", async () => {
+    const mints = Array.from({ length: 6 }, () => Keypair.generate().publicKey);
+    const coins = mints.map((m) => ({ ...coin, mint: m }) as CoinAccount);
+    const chain = new StubChain(global());
+    chain.coins = async () => coins;
+    const order: string[] = [];
+    const hot = mints[4].toBase58();
+    let budgetHit = false;
+    let ms = 0;
+    const att = new Attestor({
+      keeper: keepers[0],
+      chain,
+      derive: async (c) => {
+        order.push(c.mint.toBase58());
+        const o = output(100n, c.mint.toBase58() === hot ? NOW - 50 : NOW - 80_000);
+        o.sells[0].ticket = null;
+        if (budgetHit) ms += 30;
+        return derivation(o);
+      },
+      board: new MemoryBoard(() => NOW * 1000),
+      submitter: new RecordingSubmitter(),
+      log,
+      now: () => NOW,
+      coinConcurrency: 1,
+      tickBudgetMs: 45,
+      recentActivitySecs: 3_600,
+      clockMs: () => ms,
+    });
+    await att.tick(); // learns activity
+    expect(order).toHaveLength(6);
+    order.length = 0;
+    budgetHit = true;
+    await att.tick();
+    expect(order[0]).toBe(hot);
+    expect(order.length).toBeLessThan(6); // budget: stopped starting coins
+    const first = [...order];
+    order.length = 0;
+    await att.tick();
+    expect(order[0]).toBe(hot);
+    expect(order[1]).not.toBe(first[1]); // the least recently derived go next
   });
 });

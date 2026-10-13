@@ -135,6 +135,26 @@ describe("watcher verification", () => {
   });
 });
 
+describe("watcher liveness alerts (L7)", () => {
+  it("alerts on a sell that was never attested (with time left) and on engine issues", async () => {
+    const alerts: string[] = [];
+    const out = derived();
+    out.sells[0].blockTime = NOW - 2_000;
+    out.issues.push({ signature: "bad", slot: 5, kind: "negative_balance", scope: "wallet", wallet: owner.toBase58(), detail: "x" });
+    const w = new Watcher({
+      coins: async () => [{ mint } as never],
+      global: async () => ({ params: { ticketChallengeSecs: 21_600n, maxAttestAgeSecs: 86_400n } }) as never,
+      derive: async () => ({ coin: {} as never, output: out, maxSlot: 1, txCount: 0, history: [] }),
+      alerts: { alert: async (k: string, text: string) => void alerts.push(`${k} ${text}`) },
+      now: () => NOW,
+    });
+    await w.tick();
+    expect(alerts.some((a) => a.startsWith("missing-sell:") && a.includes("expires in"))).toBe(true);
+    expect(alerts.some((a) => a.startsWith("issues:") && a.includes("negative_balance/wallet"))).toBe(true);
+    expect(w.stats.issues).toBe(1);
+  });
+});
+
 describe("ticket lifecycle → engine events", () => {
   it("maps TicketAttested to the sell and later claims / voids to status events", () => {
     const paid = eventIx("ClaimPaid", { mint, ticket, owner, amount: 1n, fromQueue: false, medianPriceQ64: 1n, ts: 1n, triggeredBy: owner });

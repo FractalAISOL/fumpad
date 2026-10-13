@@ -8,7 +8,9 @@
  *    owner's our-pool swaps explain. Pool vault owners (DBC / DAMM v2 pool authorities) and protocol
  *    owners are not wallets and produce no transfers. Third-party pools' trades therefore arrive as
  *    transfers (an acquisition there = a rebuy; a sale there never makes a ticket).
- *  - parser issues on our pools (fail closed: the engine marks the coin inconsistent from there on).
+ *  - parser issues on our pools (fail closed for that tx's sells and the D10 window after it — V7-H2:
+ *    never for the whole coin). Balances stay exact: an unparsed swap's base movement still shows up
+ *    as the trader's transfer.
  */
 import {
   DAMM_V2_POOL_AUTHORITY,
@@ -57,6 +59,15 @@ export function buildEvents(coin: CoinFacts, history: readonly HistoryTx[], opts
     if (blockTime === null) throw new Error(`tx ${signature} has no blockTime`);
     const k = (phase: OrderKey["phase"], ixKey: number): OrderKey => ({ slot: tx.slot, txIndex, phase, ixKey });
 
+    let norm: ReturnType<typeof normalizeTx>;
+    try {
+      norm = normalizeTx(tx);
+    } catch (e) {
+      // Unreadable tx shape: scope the failure to this tx (pool unknown) instead of failing the whole crawl.
+      out.push({ kind: "parse_issue", key: k(2, 0), signature, blockTime, code: "tx_shape", message: String(e).slice(0, 200), pool: null });
+      continue;
+    }
+
     const facts = parsePoolFacts(tx);
     for (const m of facts.migrations) {
       if (m.dbcPool !== coin.dbcPool || m.baseMint !== coin.mint) continue;
@@ -87,10 +98,10 @@ export function buildEvents(coin: CoinFacts, history: readonly HistoryTx[], opts
       });
       if (t.trader) attributed.set(t.trader, (attributed.get(t.trader) ?? 0n) + (t.side === "buy" ? t.baseAmount : -t.baseAmount));
     }
-    const norm = normalizeTx(tx);
     const touchesOurs = norm.accountKeys.some((a) => ours(a));
     for (const is of parsed.issues) {
-      if (ours(is.pool) || (!is.pool && touchesOurs)) out.push({ kind: "parse_issue", key: k(2, is.ixKey ?? 0), signature, blockTime, code: is.code, message: is.message });
+      if (ours(is.pool) || (!is.pool && touchesOurs))
+        out.push({ kind: "parse_issue", key: k(2, is.ixKey ?? 0), signature, blockTime, code: is.code, message: is.message, pool: is.pool ?? null });
     }
 
     const deltas = ownerDeltas(norm, coin.mint);

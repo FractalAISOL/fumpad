@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { canonicalJson, constantPythSource, DEFAULT_ENGINE_PARAMS, runEngine, runEngineWithPrices, StaticPythSource, ticketPriceQ64 } from "../src/index.js";
-import { A, B, coin, CREATOR, DAMM, SOL, SPOT0, SQRT0, Tape, usd150 } from "./helpers.js";
+import { A, B, coin, CREATOR, DAMM, DBC, SOL, SPOT0, SQRT0, Tape, usd150 } from "./helpers.js";
 
 const one = (o: ReturnType<Tape["run"]>) => {
   expect(o.sells.length).toBeGreaterThan(0);
@@ -142,7 +142,7 @@ describe("max open tickets", () => {
 describe("on-chain attestation tracking", () => {
   const attested = (t: Tape, sellSig: string, pda: string) =>
     t.events.push({ kind: "ticket_attested", key: { slot: t.slot, txIndex: -1, phase: 4, ixKey: 0 }, signature: `att-${sellSig}`, blockTime: t.t, ref: { signature: sellSig, ixKey: 0 }, ticket: pda });
-  it("rebuy debits carry the attested ticket PDA (null before attestation)", () => {
+  it("rebuy debits carry the attested ticket PDA, also for buys BEFORE the attestation landed (V7-H1)", () => {
     const t = new Tape();
     t.buy(A, 10n * SOL);
     const s1 = t.wait(600).sell(A, SOL);
@@ -151,7 +151,14 @@ describe("on-chain attestation tracking", () => {
     attested(t, s1, "TicketPda1111111111111111111111111111111111");
     t.wait(5).buy(A, SOL / 4n);
     const o = t.run();
-    expect(o.rebuys.map((r) => r.ticketAddress)).toEqual([null, "TicketPda1111111111111111111111111111111111"]);
+    expect(o.rebuys.map((r) => r.ticketAddress)).toEqual(["TicketPda1111111111111111111111111111111111", "TicketPda1111111111111111111111111111111111"]);
+  });
+  it("a debit whose ticket is never attested keeps a null address (nothing to sign)", () => {
+    const t = new Tape();
+    t.buy(A, 10n * SOL);
+    t.wait(600).sell(A, SOL);
+    t.wait(5).buy(A, SOL / 4n);
+    expect(t.run().rebuys.map((r) => r.ticketAddress)).toEqual([null]);
   });
   it("a ticket never attested within max_attest_age stops blocking the wallet (trackAttestations)", () => {
     const t = new Tape();
@@ -214,6 +221,27 @@ describe("rebuy rule (7 days, newest first, buys and transfers in)", () => {
   });
 });
 
+describe("fresh tokens can't ride on matured credit (V7-M4)", () => {
+  it("receive X, sell X right away: no ticket; the matured stock is untouched", () => {
+    const t = new Tape();
+    t.buy(A, 10n * SOL);
+    t.wait(700);
+    t.transfer(A, 2n * 1024n * SOL);
+    t.wait(1).sell(A, 2n * SOL); // drawn from the pending lot
+    t.wait(1).sell(A, 10n * SOL); // the matured stock still makes a full ticket
+    const o = t.run();
+    expect(o.sells[0].reason).toBe("not_matured");
+    expect(o.sells[1].ticket!.ticketTokens).toBe(10n * 1024n * SOL);
+  });
+  it("selling more than the pending lot: only the matured remainder counts", () => {
+    const t = new Tape();
+    t.buy(A, 10n * SOL);
+    t.wait(700).buy(A, 2n * SOL);
+    t.wait(1).sell(A, 5n * SOL);
+    expect(one(t.run()).ticket!.ticketTokens).toBe(3n * 1024n * SOL);
+  });
+});
+
 describe("transfers out", () => {
   it("remove matured credit first", () => {
     const t = new Tape();
@@ -231,22 +259,65 @@ describe("transfers out", () => {
     const o = t.run();
     expect(o.sells.map((s) => s.reason)).toEqual(["not_matured", null]);
   });
-  it("negative balance (missing history) fails closed", () => {
+  it("negative balance (missing history) fails closed for THAT wallet only (V7-H2)", () => {
     const t = new Tape();
     t.buy(A, SOL);
+    t.buy(B, SOL);
     t.wait(600).transfer(A, -2048n * SOL);
-    t.wait(1).sell(A, SOL);
+    t.wait(1).buy(A, SOL);
+    t.wait(1).sell(A, SOL / 2n);
+    t.wait(1).sell(B, SOL);
     const o = t.run();
-    expect(o.issues[0].kind).toBe("negative_balance");
-    expect(one(o).reason).toBe("history_inconsistent");
+    expect(o.issues[0]).toMatchObject({ kind: "negative_balance", scope: "wallet", wallet: A });
+    expect(o.sells.map((s) => [s.trader, s.reason])).toEqual([
+      [A, "history_inconsistent"],
+      [B, null],
+    ]);
   });
-  it("parser issue on our pool fails closed for the rest of the history", () => {
+  it("an inconsistent wallet is consistent again after a full exit, and starts with no hold credit", () => {
+    const t = new Tape();
+    t.buy(A, SOL);
+    t.wait(600).transfer(A, -2048n * SOL); // negative: flagged, balance clamped to 0
+    t.wait(1).buy(A, SOL);
+    t.wait(700).sell(A, SOL); // full exit while flagged: no ticket
+    t.wait(1).buy(A, SOL);
+    t.wait(700).sell(A, SOL); // consistent again, matured
+    const o = t.run();
+    expect(o.sells.map((s) => s.reason)).toEqual(["history_inconsistent", null]);
+  });
+  it("parser issue on our pool: that tx's sells and one D10 window are unverified, not the rest of the coin (V7-H2)", () => {
+    const t = new Tape();
+    t.buy(A, SOL);
+    t.buy(B, SOL);
+    t.wait(600);
+    t.events.push({ kind: "parse_issue", key: { slot: t.slot, txIndex: -1, phase: 2, ixKey: 0 }, signature: "bad", blockTime: t.t, code: "vault_mismatch", message: "x", pool: DBC });
+    t.wait(1).sell(A, SOL / 2n); // inside the window
+    t.wait(600).sell(A, SOL / 2n); // window over
+    t.wait(1).sell(B, SOL);
+    const o = t.run();
+    expect(o.sells.map((s) => s.reason)).toEqual(["price_unverified", null, null]);
+    expect(o.issues).toMatchObject([{ kind: "parse_issue", scope: "tx", pool: DBC }]);
+  });
+  it("after a parser issue the first verified swap of that pool has a stale pre-trade spot: unverified even after the window", () => {
     const t = new Tape();
     t.buy(A, SOL);
     t.wait(600);
-    t.events.push({ kind: "parse_issue", key: { slot: t.slot, txIndex: -1, phase: 2, ixKey: 0 }, signature: "bad", blockTime: t.t, code: "vault_mismatch", message: "x" });
-    t.wait(1).sell(A, SOL);
-    expect(one(t.run()).reason).toBe("history_inconsistent");
+    t.events.push({ kind: "parse_issue", key: { slot: t.slot, txIndex: -1, phase: 2, ixKey: 0 }, signature: "bad", blockTime: t.t, code: "vault_mismatch", message: "x", pool: DBC });
+    t.wait(700).sell(A, SOL / 2n);
+    t.wait(1).sell(A, SOL / 2n);
+    expect(t.run().sells.map((s) => s.reason)).toEqual(["price_unverified", null]);
+  });
+  it("an attested ticket the engine can't map blocks only its owner (V7-H2)", () => {
+    const t = new Tape();
+    t.buy(A, SOL);
+    t.buy(B, SOL);
+    t.wait(600);
+    t.events.push({ kind: "ticket_attested", key: { slot: t.slot, txIndex: -1, phase: 4, ixKey: 0 }, signature: "att", blockTime: t.t, ref: { signature: "nope", ixKey: 0 }, ticket: "T", owner: A });
+    t.wait(1).sell(A, SOL / 2n);
+    t.wait(1).sell(B, SOL);
+    const o = t.run();
+    expect(o.sells.map((s) => s.reason)).toEqual(["history_inconsistent", null]);
+    expect(o.issues[0]).toMatchObject({ kind: "unknown_ticket_status", scope: "wallet", wallet: A });
   });
 });
 

@@ -4,6 +4,11 @@
 //   observe_buy, plan_rebuy, claim_amount)
 // u64 saturating arithmetic is reproduced with explicit clamps (values never exceed u64 in practice;
 // `sat` keeps the Rust semantics if they ever did).
+//
+// One deliberate v0.7 change (V7-M4, SPEC-v0.7 Clarifications 15): a sell draws on the wallet's PENDING
+// (not yet matured) tokens first and only the remainder on matured ones, so fresh tokens can't ride on
+// matured credit. v0.6 got the same effect from "unseen arrivals are sold first"; in v0.7 every arrival is
+// seen (and pending), so debit_sold itself takes pending first.
 import { U64_MAX } from "./price.js";
 
 const satAdd = (a: bigint, b: bigint) => (a + b > U64_MAX ? U64_MAX : a + b);
@@ -54,12 +59,11 @@ export function capTracked(p: HoldState, balance: bigint): void {
   p.pending = satSub(p.pending, excess);
 }
 
-/** logic::debit_sold */
+/** logic::debit_sold, v0.7 order (V7-M4): newest (pending) tokens first, then matured. */
 export function debitSold(p: HoldState, sold: bigint): void {
-  const m = min(sold, p.matured);
-  p.matured -= m;
-  const rest = sold - m;
-  p.pending = satSub(p.pending, rest);
+  const fromPending = min(sold, p.pending);
+  p.pending -= fromPending;
+  p.matured = satSub(p.matured, sold - fromPending);
 }
 
 /** logic::NoTicket (subset decided by plan_sell). */
@@ -86,7 +90,8 @@ export function planSell(
   const unseen = satSub(balanceBefore, observedBalance(p));
   capTracked(p, balanceBefore);
   const trackedSold = tokensSold - min(tokensSold, unseen);
-  const ticketTokens = min(trackedSold, p.matured);
+  // V7-M4: only what is left after the pending tokens can come from matured ones and count for the ticket.
+  const ticketTokens = min(satSub(trackedSold, p.pending), p.matured);
   debitSold(p, trackedSold);
   p.lastBalance = satSub(balanceBefore, tokensSold);
   if (isCreator) return { ok: false, reason: "creator" };

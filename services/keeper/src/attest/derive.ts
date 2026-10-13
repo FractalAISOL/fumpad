@@ -10,11 +10,14 @@ import {
   buildEvents,
   type CoinFacts,
   crawlMintHistory,
+  type CrawlResult,
   DEFAULT_ENGINE_PARAMS,
   type EngineEvent,
   type EngineOutput,
   type EngineParams,
   type HistoryTx,
+  LruMap,
+  type MintCrawlState,
   type PythPrice,
   runEngineWithPrices,
 } from "@fumpad/engine";
@@ -77,7 +80,8 @@ export function lifecycleEvents(mint: string, history: readonly HistoryTx[]): En
       if (ev.name === "TicketAttested" && ticket) {
         const ref = { signature: eventSignature(d.signature as number[]), ixKey: Number(d.ixKey) };
         refOf.set(ticket, ref);
-        out.push({ kind: "ticket_attested", key, signature, blockTime, ref, ticket });
+        const owner = (d.owner as PublicKey | undefined)?.toBase58();
+        out.push({ kind: "ticket_attested", key, signature, blockTime, ref, ticket, ...(owner ? { owner } : {}) });
         continue;
       }
       if (!ticket || !refOf.has(ticket)) continue;
@@ -102,8 +106,24 @@ export interface DeriveCaches {
   blockIndexCache: Map<number, Map<string, number>>;
   /** Ticket PDAs known per mint (crawled for guardian voids). */
   tickets: Map<string, Set<string>>;
+  /** Incremental crawl state per mint (cursors, closed accounts; V7-M6). */
+  crawl: Map<string, MintCrawlState>;
 }
-export const newCaches = (): DeriveCaches => ({ txCache: new Map(), blockIndexCache: new Map(), tickets: new Map() });
+
+export interface CacheLimits {
+  /** Raw finalized txs kept (evicted ones are re-fetched). */
+  txs?: number;
+  /** Slots whose tx-index map is kept. */
+  blocks?: number;
+}
+
+/** Bounded caches (V7-M6). Defaults: 200k txs, 50k slots. */
+export const newCaches = (l: CacheLimits = {}): DeriveCaches => ({
+  txCache: new LruMap(l.txs ?? 200_000),
+  blockIndexCache: new LruMap(l.blocks ?? 50_000),
+  tickets: new Map(),
+  crawl: new Map(),
+});
 
 export interface Derivation {
   coin: CoinFacts;
@@ -120,19 +140,39 @@ export interface DeriveDeps {
   fetchPrice: (blockTime: number, maxDeltaSecs: number) => Promise<PythPrice | null>;
   caches: DeriveCaches;
   priceCache?: Map<number, PythPrice | null>;
+  /** Per-coin RPC budget per derivation (V7-M6); exceeded → CrawlBudgetExceeded, progress kept for next tick. */
+  maxRpcCalls?: number;
 }
 
 /** Derive one registered coin. Throws on any inconsistency between the Coin account and the chain history. */
 export async function deriveCoin(d: DeriveDeps, coin: CoinAccount, global: GlobalAccount, maxSlot?: number): Promise<Derivation> {
   const mint = coin.mint.toBase58();
   const known = d.caches.tickets.get(mint) ?? new Set<string>();
-  const crawl = await crawlMintHistory(d.rpc, mint, {
-    maxSlot,
-    protocolOwners: PROTOCOL_OWNERS(),
-    txCache: d.caches.txCache,
-    blockIndexCache: d.caches.blockIndexCache,
-    extraAddresses: [coinPda(coin.mint).toBase58(), ...known],
-  });
+  let budget = d.maxRpcCalls ?? Number.POSITIVE_INFINITY;
+  const crawlOnce = async (snapshot: number | undefined): Promise<CrawlResult> => {
+    const r = await crawlMintHistory(d.rpc, mint, {
+      maxSlot: snapshot,
+      protocolOwners: PROTOCOL_OWNERS(),
+      txCache: d.caches.txCache,
+      blockIndexCache: d.caches.blockIndexCache,
+      state: d.caches.crawl,
+      extraAddresses: [coinPda(coin.mint).toBase58(), ...known],
+      maxRpcCalls: budget,
+    });
+    budget -= r.rpcCalls;
+    return r;
+  };
+  let crawl = await crawlOnce(maxSlot);
+  // L3: `void_ticket` lists the ticket PDA but neither the mint nor the Coin, so a void is only found by
+  // crawling the ticket's own address. Tickets first seen in THIS crawl (e.g. after a restart) are
+  // crawled in a second pass at the same snapshot, until no new ticket appears.
+  for (let pass = 0; pass < 5; pass++) {
+    const fresh = lifecycleEvents(mint, crawl.history).filter((e) => e.kind === "ticket_attested" && !known.has(e.ticket));
+    if (!fresh.length) break;
+    for (const e of fresh) if (e.kind === "ticket_attested") known.add(e.ticket);
+    d.caches.tickets.set(mint, known);
+    crawl = await crawlOnce(crawl.maxSlot);
+  }
   // Pool creation tx: the DBC EvtInitializePool for this mint must match the Coin account.
   let launch: HistoryTx | undefined;
   for (const h of crawl.history) {
@@ -145,7 +185,12 @@ export async function deriveCoin(d: DeriveDeps, coin: CoinAccount, global: Globa
       break;
     }
   }
-  if (!launch) throw new Error(`coin ${mint}: no DBC pool creation in its finalized history`);
+  if (!launch) throw new Error(`coin ${mint}: no DBC pool creation in its finalized history (RPC history incomplete?)`);
+  // L8: the pool can't have been created after the activation slot the program recorded at register_coin;
+  // a later "creation" means this RPC's history of the mint is incomplete.
+  if (coin.launchSlot !== 0n && BigInt(launch.tx.slot) > coin.launchSlot) {
+    throw new Error(`coin ${mint}: pool creation found at slot ${launch.tx.slot}, after Coin.launch_slot ${coin.launchSlot} (RPC history incomplete?)`);
+  }
   const cfg = await d.rpc.call<{ value: { data: [string, string]; owner: string } | null }>("getAccountInfo", [coin.dbcConfig.toBase58(), { encoding: "base64", commitment: "finalized" }]);
   if (!cfg.value) throw new Error(`coin ${mint}: DBC config missing`);
   const config = decodeDbcConfig(Uint8Array.from(Buffer.from(cfg.value.data[0], "base64")));
