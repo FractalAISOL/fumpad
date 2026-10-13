@@ -35,7 +35,7 @@ const mint = Keypair.generate().publicKey;
 const trader = Keypair.generate().publicKey;
 const POOL = Keypair.generate().publicKey.toBase58();
 const g = { keepers: keepers.map((k) => k.publicKey), keeperAddedAt: [0n, 0n, 0n], paused: 0, pauseExpiresAt: 0n, clusterTag: 2, params: DEFAULT_PARAMS } as unknown as GlobalAccount;
-const baseCoin = { mint, dammPool: PublicKey.default, attestBucketStart: 0n, attestBucketTokens: 0n, attestPrevBucketTokens: 0n, totalSupply: 1_000_000_000_000_000n } as unknown as CoinAccount;
+const baseCoin = { mint, dammPool: PublicKey.default, attestCursor: 0n, totalSupply: 1_000_000_000_000_000n } as unknown as CoinAccount;
 
 const out = (venue: "dbc" | "damm_v2"): EngineOutput => ({
   mint: mint.toBase58(),

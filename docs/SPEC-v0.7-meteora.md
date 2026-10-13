@@ -176,3 +176,15 @@ decision; each pins down something the spec left open or that the mainnet binari
    bind program id and `cluster_tag`. `record_samples` skips `Complete` coins instead of failing the batch; the
    router refuses a DAMM v2 pool disabled by its operator (`PoolDisabled`, D38). `void_ticket` references the coin
    and mint (indexers crawling by mint see voids; `TicketVoided.coin`).
+21. **Fresh tokens can't ride on matured credit (off-chain review V7-M4; restores v0.6 §5.2).** A sell draws on the
+   wallet's most recently acquired tokens FIRST — its `pending` bucket (bought or received less than `min_hold_secs`
+   ago) — and only the remainder on `matured` tokens; only that remainder counts for the ticket. So "receive or buy X,
+   sell X a second later" gets no ticket however many matured tokens the wallet holds, and the matured stock keeps its
+   full credit for a later sell. (v0.6 got this from "unseen arrivals are sold first"; in v0.7 every arrival is seen
+   and pending, so the engine's `plan_sell` / `debit_sold` take pending first. Transfers out still remove matured
+   first — conservative.)
+22. **Engine failures are scoped (off-chain review V7-H2).** No chain data can stop a coin's attestations: a swap
+   the parser can't verify blocks that transaction's sells and the D10 window after it (`price_unverified`); a
+   negative balance or an attested ticket the engine can't map blocks only that wallet, until it fully exits
+   (`history_inconsistent`). Non-swap vault movements in a swap tx (donations, pool-program transfers, SyncNative)
+   are accounted, and token-account owner changes move the balance between wallets like a transfer.

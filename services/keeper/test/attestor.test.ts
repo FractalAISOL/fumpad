@@ -36,7 +36,7 @@ function global(over: Partial<GlobalAccount> = {}): GlobalAccount {
   } as GlobalAccount;
 }
 
-const coin = { mint, attestBucketStart: 0n, attestBucketTokens: 0n, attestPrevBucketTokens: 0n, totalSupply: 1_000_000_000_000_000n } as CoinAccount;
+const coin = { mint, attestCursor: 0n, totalSupply: 1_000_000_000_000_000n } as CoinAccount;
 
 function output(ticketTokens: bigint, blockTime = NOW - 100): EngineOutput {
   return {
@@ -197,9 +197,9 @@ describe("attestor 2-of-3", () => {
     expect(board.rows.size).toBe(0);
   });
 
-  it("program rejections: rate limit backs the coin off; a permanent error drops the message for that keeper (hint on the board)", async () => {
+  it("program rejections: a transient error backs the message off; a permanent error drops it for that keeper (hint on the board)", async () => {
     const { atts, sub, board } = setup();
-    sub.next = { ok: false, code: FUMPAD_ERROR.AttestRateLimited, error: "rate" };
+    sub.next = { ok: false, code: null, error: "blockhash expired" }; // the rate cap never rejects any more (M-1)
     for (const a of atts) await a.tick();
     for (const a of atts) await a.tick(); // whoever was designated has tried once and backed off
     const n = sub.calls.length;
@@ -265,6 +265,32 @@ describe("board status is only a hint (V7-M1, L4)", () => {
     now += 200;
     for (const a of atts) await a.tick();
     expect(sub.calls.length).toBe(resent);
+  });
+});
+
+describe("reopened replay markers (guardian void with reopen, INTERFACE §8.2)", () => {
+  it("a corrected message is attested again; the voided message itself never is", async () => {
+    const { createHash } = await import("node:crypto");
+    const board = new MemoryBoard(() => NOW * 1000);
+    const chain = new StubChain(global());
+    const sub = new RecordingSubmitter();
+    let voidedHash = new Uint8Array(16);
+    (chain as ChainView).consumedMarkers = async (keys) => keys.map(() => ({ kind: 2, messageHash: voidedHash }));
+    const mk = (tokens: bigint) => keepers.map((k) => new Attestor({ keeper: k, chain, derive: async () => derivation(output(tokens)), board, submitter: sub, log, now: () => NOW, fallbackSubmitSecs: 0 }));
+    // the voided message (same derivation as before the void): skipped
+    const first = mk(100n);
+    await first[0].tick();
+    const id = [...board.rows.keys()][0];
+    const msg = [...board.rows.get(id)!.values()][0].message;
+    voidedHash = Uint8Array.from(createHash("sha256").update(msg).digest().subarray(0, 16));
+    const again = mk(100n);
+    for (const a of again) await a.tick();
+    expect(sub.calls.length).toBe(0);
+    // a corrected derivation (different bytes): attested
+    const fixed = mk(90n);
+    for (const a of fixed) await a.tick();
+    for (const a of fixed) await a.tick();
+    expect(sub.calls.length).toBe(1);
   });
 });
 

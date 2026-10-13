@@ -20,8 +20,11 @@ DBC `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`, DAMM v2 `cpamdpZCGKUy5JxQXB4d
   parent (resolved by `stackHeight`) is a `swap`/`swap2` instruction **of the same program**. Logs are
   never used (truncatable, spoofable via `Program data:` from other programs).
 - Amounts are then cross-checked against **pool-vault token-balance deltas** (summed over all swaps on that
-  vault in the tx). Any mismatch, unknown layout, missing `stackHeight`, pool/config mismatch between event
-  and instruction, or referral inconsistency → the swap is an `issue`, never a record.
+  vault in the tx, plus every vault movement NOT made by those swaps — token `Transfer`/`TransferChecked`/`MintTo`/
+  `Burn` instructions outside the swap's CPI subtree, e.g. a 1-unit donation or a fee claim in the same tx; a
+  `SyncNative` on a WSOL vault may only raise it; `src/vaultflow.ts`). Any mismatch, unknown layout, missing
+  `stackHeight`, pool/config mismatch between event and instruction, or referral inconsistency → the swap is an
+  `issue` (carrying the pool), never a record. The engine scopes an issue to its tx (SPEC-v0.7 Clarification 22).
 
 ## 2. What a keeper verifies before signing an outside-SELL attestation
 

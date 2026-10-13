@@ -110,7 +110,7 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
     pending_config: PublicKey.default,
     pending_config_add: 0,
     pending_config_eta: bn(0n),
-    reserved: new Array(128).fill(0),
+    reserved: new Array(64).fill(0),
   }, buf);
   const data = Buffer.concat([Buffer.from(accountDiscriminator("Global")), buf.subarray(0, len)]);
   mkdirSync(LOCAL, { recursive: true });

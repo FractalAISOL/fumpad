@@ -61,6 +61,8 @@ export interface LaunchParams {
   minTokensOut?: bigint;
   computeUnits?: number;
   priorityMicroLamports?: number;
+  /** The API's launch key, when `Global.params.launch_signer` is set (it co-signs `register_coin`; off-chain review L1). */
+  launchSigner?: PublicKey;
 }
 
 /** The launch instructions in order (see module doc). */
@@ -74,12 +76,12 @@ export function launchInstructions(p: LaunchParams): TransactionInstruction[] {
     ixs.push(createAtaIdempotentIx(p.creator, p.creator, p.mint, TOKEN_2022_PROGRAM_ID));
     ixs.push(dbcBuyIx({ config: p.dbcConfig, mint: p.mint, owner: p.creator, lamportsIn: buy, minOut: p.minTokensOut ?? 0n, mode: SWAP_MODE.exactIn, ixSysvar: true }));
   }
-  ixs.push(registerCoinIx({ creator: p.creator, mint: p.mint, dbcConfig: p.dbcConfig }));
+  ixs.push(registerCoinIx({ creator: p.creator, mint: p.mint, dbcConfig: p.dbcConfig, launchSigner: p.launchSigner }));
   if (buy > 0n) ixs.push(closeTokenAccountIx(wsolAta(p.creator), p.creator, p.creator));
   return ixs;
 }
 
-/** v0 launch transaction (creator = fee payer). The caller signs with the mint keypair; the creator signs last. */
+/** v0 launch transaction (creator = fee payer). The caller signs with the mint keypair (+ the launch signer); the creator signs last. */
 export function buildLaunchTx(p: LaunchParams, recentBlockhash: string): VersionedTransaction {
   const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash, instructions: launchInstructions(p) }).compileToV0Message();
   return new VersionedTransaction(msg);

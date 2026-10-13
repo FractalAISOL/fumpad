@@ -85,17 +85,19 @@ function world() {
     eventIx("TicketAttested", {
       mint: MINT, owner, ticket, seq: 0n, pool: new PublicKey(facts.pool), venue: 0, source: 0,
       signature: Array.from(new Uint8Array(64).fill(3)), ixKey: 0, baseAmount: 1n, quoteGross: 1n, tokens: 1n, sellPriceQ64: 1n,
-      sellUsdCents: 6_000n, pythPublishTime: 1n, slot: 1n, sellTs: 1n, keepers: [owner, owner], submitter: owner, ts: 1n,
+      sellUsdCents: 6_000n, pythPublishTime: 1n, slot: 1n, sellTs: 1n, keepers: [owner, owner], submitter: owner, ts: 1n, effectiveAt: 1n,
     }),
   ]);
-  // guardian void: lists the ticket PDA only (no mint, no Coin PDA)
-  const voided = fumpadTx(launchTx.slot + 200, [ticket.toBase58()], [eventIx("TicketVoided", { ticket, mint: MINT, owner, reason: 1, authority: owner, ts: 2n })]);
+  // guardian void: since the contracts fix it lists the Coin PDA + mint (INTERFACE §8.2)
+  const voided = fumpadTx(launchTx.slot + 200, [coinPda(MINT).toBase58(), MINT.toBase58(), ticket.toBase58()], [
+    eventIx("TicketVoided", { ticket, mint: MINT, owner, reason: 1, authority: owner, ts: 2n, coin: coinPda(MINT), reopened: false }),
+  ]);
   rpc.txs.push(attest, voided);
   return { rpc, voided };
 }
 
 describe("deriveCoin", () => {
-  it("L3: a void that references only the ticket PDA is in the very first derivation (fresh caches)", async () => {
+  it("L3: a guardian void is in the very first derivation after a restart (fresh caches)", async () => {
     const { rpc, voided } = world();
     const d = await deriveCoin(deps(rpc), coin, g);
     expect(d.history.map((h) => h.tx.transaction.signatures[0])).toContain(voided.transaction.signatures[0]);

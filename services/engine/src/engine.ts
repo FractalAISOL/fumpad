@@ -55,6 +55,8 @@ interface EngineTicket {
   active: boolean;
   /** On-chain ticket PDA once attested. */
   address: string | null;
+  /** Voided on chain by the guardian (TicketVoided): a reopened trade may be attested once more. */
+  guardianVoided?: boolean;
 }
 
 interface Wallet {
@@ -223,6 +225,13 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
           issue(e, "unknown_ticket_status", e.owner ? "wallet" : "tx", `attested ticket ${e.ticket} for unknown sell ${refKey(e.ref)}`, e.owner ? { wallet: e.owner } : {});
           break;
         }
+        // A trade the guardian voided with `reopen` gets ONE corrected attestation (INTERFACE §8.2): a new ticket
+        // PDA for the same sell → the engine ticket is live again under its new address.
+        if (t.address && t.address !== e.ticket && t.guardianVoided && !t.active && t.tokens > 0n) {
+          t.active = true;
+          t.guardianVoided = false;
+          wallet(t.owner).hold.openCount += 1;
+        }
         t.address = e.ticket;
         break;
       }
@@ -236,6 +245,7 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
           t.active = false;
           wallet(t.owner).hold.openCount -= 1;
         }
+        if (e.status === "voided" && e.guardian) t.guardianVoided = true;
         break;
       }
       case "transfer": {

@@ -3,7 +3,16 @@
  * field with this process's own independent derivation. Pure: (derivation, on-chain events, now) → verdicts.
  */
 import { type EngineOutput, type HistoryTx, refKey } from "@fumpad/engine";
-import { decodeFumpadEvents, eventSignature, type TicketAttestedEvent, type TicketDebitedEvent, type TxLike, VENUE_DAMM_BIT, VENUE_ROUTED_BIT } from "@fumpad/sdk";
+import {
+  decodeFumpadEvents,
+  eventSignature,
+  type TicketAttestedEvent,
+  type TicketDebitedEvent,
+  type TicketVoidedEvent,
+  type TxLike,
+  VENUE_DAMM_BIT,
+  VENUE_ROUTED_BIT,
+} from "@fumpad/sdk";
 
 export type Verdict = "match" | "mismatch";
 
@@ -19,6 +28,10 @@ export interface AttestationVerdict {
   /** attestation tx */
   attestedIn: string;
   attestedAt: number;
+  /** sells: effective attestation time (TicketAttested.effective_at; the challenge window runs from it) */
+  effectiveAt?: number;
+  /** the guardian already voided this ticket (no alert needed) */
+  voided?: boolean;
   /** field → [on-chain, derived] */
   diffs: Record<string, [string, string]>;
   /** sells: derived no-ticket reason when the engine made none */
@@ -49,6 +62,7 @@ const s = (v: unknown) => (typeof v === "bigint" ? v.toString() : String(v));
 export function onchainAttestations(mint: string, history: readonly HistoryTx[]) {
   const sells: { ev: TicketAttestedEvent; tx: string; ts: number }[] = [];
   const debits: { ev: TicketDebitedEvent; tx: string; ts: number }[] = [];
+  const voided = new Set<string>();
   for (const { tx } of history) {
     if (!tx.meta || tx.meta.err) continue;
     for (const e of decodeFumpadEvents(tx as unknown as TxLike)) {
@@ -56,13 +70,14 @@ export function onchainAttestations(mint: string, history: readonly HistoryTx[])
       if (d.mint?.toBase58() !== mint) continue;
       if (e.name === "TicketAttested") sells.push({ ev: e.data as unknown as TicketAttestedEvent, tx: tx.transaction.signatures[0], ts: tx.blockTime ?? 0 });
       if (e.name === "TicketDebited") debits.push({ ev: e.data as unknown as TicketDebitedEvent, tx: tx.transaction.signatures[0], ts: tx.blockTime ?? 0 });
+      if (e.name === "TicketVoided") voided.add((e.data as unknown as TicketVoidedEvent).ticket.toBase58());
     }
   }
-  return { sells, debits };
+  return { sells, debits, voided };
 }
 
 export function verifyCoin(mint: string, output: EngineOutput, history: readonly HistoryTx[], now: number, graceSecs = 900): CoinVerification {
-  const { sells, debits } = onchainAttestations(mint, history);
+  const { sells, debits, voided } = onchainAttestations(mint, history);
   const derivedSells = new Map(output.sells.map((x) => [refKey({ signature: x.signature, ixKey: x.ixKey }), x]));
   const verdicts: AttestationVerdict[] = [];
   const attestedRefs = new Set<string>();
@@ -103,6 +118,8 @@ export function verifyCoin(mint: string, output: EngineOutput, history: readonly
       ixKey: Number(ev.ixKey),
       attestedIn: tx,
       attestedAt: ts,
+      effectiveAt: ev.effectiveAt !== undefined ? Number(ev.effectiveAt) : ts,
+      voided: voided.has(ev.ticket.toBase58()),
       diffs,
       reason: d?.reason ?? null,
       keepers: ev.keepers.map((k) => k.toBase58()),

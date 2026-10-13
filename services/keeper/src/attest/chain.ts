@@ -9,6 +9,7 @@ import {
   coinPda,
   customErrorCode,
   decodeCoin,
+  decodeConsumed,
   decodeGlobal,
   decodePosition,
   decodeTicket,
@@ -47,6 +48,21 @@ export class RpcChainView implements ChainView {
       // consumed markers: only a FINALIZED marker means "landed" (V7-M1 / L4)
       const r = await this.conn.getMultipleAccountsInfo(keys.slice(i, i + 100), "finalized");
       out.push(...r.map((x) => !!x && x.owner.equals(FUMPAD_PROGRAM_ID)));
+    }
+    return out;
+  }
+
+  async consumedMarkers(keys: PublicKey[]): Promise<({ kind: number; messageHash: Uint8Array } | null)[]> {
+    const out: ({ kind: number; messageHash: Uint8Array } | null)[] = [];
+    for (let i = 0; i < keys.length; i += 100) {
+      const r = await this.conn.getMultipleAccountsInfo(keys.slice(i, i + 100), "finalized");
+      out.push(
+        ...r.map((x) => {
+          if (!x || !x.owner.equals(FUMPAD_PROGRAM_ID)) return null;
+          const c = decodeConsumed(x.data);
+          return { kind: c.kind, messageHash: Uint8Array.from(c.messageHash) };
+        }),
+      );
     }
     return out;
   }

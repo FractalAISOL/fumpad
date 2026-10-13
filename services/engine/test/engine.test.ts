@@ -153,6 +153,25 @@ describe("on-chain attestation tracking", () => {
     const o = t.run();
     expect(o.rebuys.map((r) => r.ticketAddress)).toEqual(["TicketPda1111111111111111111111111111111111", "TicketPda1111111111111111111111111111111111"]);
   });
+  it("a guardian void + reopen: the corrected re-attestation makes the engine ticket live again under its new PDA", () => {
+    const t = new Tape();
+    t.buy(A, 10n * SOL);
+    for (let i = 0; i < 4; i++) t.wait(i ? 1 : 600).sell(A, SOL);
+    const s5 = t.wait(1).sell(A, SOL);
+    t.wait(5);
+    attested(t, s5, "Old11111111111111111111111111111111111111111");
+    t.wait(5);
+    t.events.push({ kind: "ticket_status", key: { slot: t.slot, txIndex: -1, phase: 4, ixKey: 0 }, signature: "void", blockTime: t.t, ticket: { signature: s5, ixKey: 0 }, status: "voided", guardian: true });
+    t.wait(5);
+    const s6 = t.sell(A, SOL); // a slot is free while the ticket is voided
+    t.wait(5);
+    attested(t, s5, "New11111111111111111111111111111111111111111");
+    t.wait(5);
+    const s7 = t.sell(A, SOL); // the re-attested ticket counts as open again: no free slot
+    const o = t.run({ trackAttestations: true });
+    expect(o.sells.find((x) => x.signature === s6)!.reason).toBe(null);
+    expect(o.sells.find((x) => x.signature === s7)!.reason).toBe("too_many_open_tickets");
+  });
   it("a debit whose ticket is never attested keeps a null address (nothing to sign)", () => {
     const t = new Tape();
     t.buy(A, 10n * SOL);

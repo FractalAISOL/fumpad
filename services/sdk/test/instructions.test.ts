@@ -91,7 +91,7 @@ const built: Record<string, { keys: unknown[] }> = {
   set_auto_claim: setAutoClaimIx(k(), mint, false),
   set_keepers: setKeepersIx(k(), [k(), k()]),
   set_pause: setPauseIx(k(), 16),
-  void_ticket: voidTicketIx(k(), k(), mint, k(), 1),
+  void_ticket: voidTicketIx({ authority: k(), ticket: k(), mint, owner: k(), consumed: k(), reason: 1, reopen: false }),
   withdraw_creator_fees: withdrawCreatorFeesIx(k(), mint),
   withdraw_escrow: withdrawEscrowIx({ owner: k(), mint, ticket: k(), destination: k(), escrowPayer: k() }),
   withdraw_platform_fees: withdrawPlatformFeesIx(k(), mint, k()),

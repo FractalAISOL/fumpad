@@ -135,6 +135,23 @@ describe("watcher verification", () => {
   });
 });
 
+describe("guardian voids (INTERFACE §8.2)", () => {
+  it("a mismatching ticket the guardian already voided is reported but not re-alerted", async () => {
+    const alerts: string[] = [];
+    const voidEv = eventIx("TicketVoided", { ticket, mint, owner, reason: 1, authority: owner, ts: 400n, coin: Keypair.generate().publicKey, reopened: true });
+    const w = new Watcher({
+      coins: async () => [{ mint } as never],
+      global: async () => ({ params: { ticketChallengeSecs: 21_600n, maxAttestAgeSecs: 86_400n } }) as never,
+      derive: async () => ({ coin: {} as never, output: derived(), maxSlot: 1, txCount: 2, history: [tx("att", 11, [attested(901n)]), tx("void", 12, [voidEv])] }),
+      alerts: { alert: async (k: string) => void alerts.push(k) },
+      now: () => NOW,
+    });
+    await w.tick();
+    expect(w.feed(mint.toBase58()).coins[0].verdicts[0]).toMatchObject({ verdict: "mismatch", voided: true });
+    expect(alerts.some((k) => k.startsWith("mismatch:"))).toBe(false);
+  });
+});
+
 describe("watcher liveness alerts (L7)", () => {
   it("alerts on a sell that was never attested (with time left) and on engine issues", async () => {
     const alerts: string[] = [];

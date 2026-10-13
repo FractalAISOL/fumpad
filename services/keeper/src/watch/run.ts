@@ -63,7 +63,8 @@ export class Watcher {
             continue;
           }
           mismatches++;
-          const challengeEnds = x.attestedAt + Number(g.params.ticketChallengeSecs);
+          if (x.voided) continue; // the guardian already acted on it
+          const challengeEnds = (x.effectiveAt ?? x.attestedAt) + Number(g.params.ticketChallengeSecs);
           await this.d.alerts?.alert(
             `mismatch:${x.kind}:${x.ticket}:${x.signature}`,
             `ATTESTATION MISMATCH (${x.kind}) ticket ${x.ticket} owner ${x.owner} mint ${mint} tx ${x.attestedIn}: ${Object.entries(x.diffs)

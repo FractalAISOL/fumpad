@@ -5,7 +5,7 @@
 // u64 saturating arithmetic is reproduced with explicit clamps (values never exceed u64 in practice;
 // `sat` keeps the Rust semantics if they ever did).
 //
-// One deliberate v0.7 change (V7-M4, SPEC-v0.7 Clarifications 15): a sell draws on the wallet's PENDING
+// One deliberate v0.7 change (V7-M4, SPEC-v0.7 Clarifications 21): a sell draws on the wallet's PENDING
 // (not yet matured) tokens first and only the remainder on matured ones, so fresh tokens can't ride on
 // matured credit. v0.6 got the same effect from "unseen arrivals are sold first"; in v0.7 every arrival is
 // seen (and pending), so debit_sold itself takes pending first.

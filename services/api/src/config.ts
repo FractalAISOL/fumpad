@@ -39,6 +39,8 @@ export interface ApiConfig {
   // ── D18 vanity launches (POST /v1/launch/prepare) ─────────────────────────
   /** AES-256-GCM key for pooled mint secrets (same as the grinder's). Unset = launches disabled. */
   mintPoolKey?: string;
+  /** Launch binding key (L1): co-signs register_coin when Global.params.launch_signer is set. Separate from MINT_POOL_KEY. */
+  launchSignerKey?: string;
   vanitySuffix: string;
   /** A reservation returns to the pool after this long if its launch never landed. */
   launchReservationMs: number;
@@ -99,6 +101,7 @@ export function loadApiConfig(env = process.env): ApiConfig {
     pythAccount: env.PYTH_SOL_USD_ACCOUNT || undefined,
     logLevel: env.LOG_LEVEL ?? "info",
     mintPoolKey: env.MINT_POOL_KEY || undefined,
+    launchSignerKey: env.LAUNCH_SIGNER_KEY || undefined,
     vanitySuffix: env.VANITY_SUFFIX || "fmbL",
     launchReservationMs: Math.round(Number(env.LAUNCH_RESERVATION_MINUTES ?? 10) * 60_000),
     launchSweepMs: Number(env.LAUNCH_SWEEP_SECS ?? 15) * 1000,

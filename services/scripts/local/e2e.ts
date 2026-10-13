@@ -17,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
+import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 
 import {
   SNIPE_PERIODS,
@@ -29,9 +29,12 @@ import {
   decodeTicket,
   decodeTokenAccount,
   coinPda,
+  customErrorCode,
   DBC_POOL_AUTHORITY,
+  FUMPAD_ERROR,
   FUMPAD_PROGRAM_ID,
   inspectLaunchTx,
+  launchInstructions,
   isFumpadVanityMint,
   positionPda,
   rewardVault,
@@ -96,7 +99,10 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     const treasury = Keypair.generate();
     const keepers = [keypair("keeper"), keypair("keeper2"), keypair("keeper3")];
     const config = Keypair.generate();
-    v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), params: LOCAL_PARAMS, configs: [config.publicKey] } });
+    // Launch binding (off-chain review L1): only API-built launches (co-signed by its launch key) register.
+    const launchKey = Keypair.generate();
+    const params = { ...LOCAL_PARAMS, launchSigner: launchKey.publicKey };
+    v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), params, configs: [config.publicKey] } });
     const conn = new Connection(v.rpcUrl, "confirmed");
     const [creator, alice, bob, dave, eve, whale] = Array.from({ length: 6 }, () => Keypair.generate());
     for (const k of [auth, admin, ...keepers, creator, alice, bob, dave, eve]) await airdrop(conn, k.publicKey, 20);
@@ -123,7 +129,7 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
       }),
     );
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${indexerPort}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SWEEP_SECS: "5" }));
+    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: "150", API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5" }));
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
@@ -198,7 +204,10 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number };
     const launchTx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
     const info = inspectLaunchTx(launchTx);
-    check("prepare: DBC init → creator top-level swap2 → register_coin, creator pays, only the mint signed", info.feePayer === creator.publicKey.toBase58() && info.signed.join() === prepared.mint && info.buyLamports === SOL / 20n && info.dbcConfig === config.publicKey.toBase58());
+    check(
+      "prepare: DBC init → creator top-level swap2 → register_coin, creator pays, only the mint + the API launch key signed",
+      info.feePayer === creator.publicKey.toBase58() && [...info.signed].sort().join() === [prepared.mint, launchKey.publicKey.toBase58()].sort().join() && info.buyLamports === SOL / 20n && info.dbcConfig === config.publicKey.toBase58(),
+    );
     launchTx.sign([creator]);
     const raw = launchTx.serialize();
     const launchSig = await conn.sendRawTransaction(raw, { maxRetries: 0 });
@@ -206,7 +215,18 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     M = prepared.mint;
     const mint = new PublicKey(M);
     const coinAcc = decodeCoin(new Uint8Array((await conn.getAccountInfo(coinPda(mint)))!.data));
-    check("launch → registered coin with a …fmbL mint (D18) on the FUMPAD config", isFumpadVanityMint(mint) && coinAcc.dbcConfig.equals(config.publicKey) && coinAcc.status === "curve", M);
+    // A self-built launch on our config without the API's co-signature must not register (L1).
+    const selfMint = Keypair.generate();
+    const selfIxs = launchInstructions({ creator: bob.publicKey, mint: selfMint.publicKey, dbcConfig: config.publicKey, name: "Self", symbol: "SELF", uri: "https://fumpad.fun/m/self.json" });
+    const selfTx = new VersionedTransaction(new TransactionMessage({ payerKey: bob.publicKey, recentBlockhash: (await conn.getLatestBlockhash()).blockhash, instructions: selfIxs }).compileToV0Message());
+    selfTx.sign([bob, selfMint]);
+    const selfSim = await conn.simulateTransaction(selfTx, { sigVerify: true });
+    const selfRefused = customErrorCode(selfSim.value.err) === FUMPAD_ERROR.Unauthorized;
+    check(
+      "launch → registered coin with a …fmbL mint (D18) on the FUMPAD config; an unsigned self-launch is refused (L1)",
+      isFumpadVanityMint(mint) && coinAcc.dbcConfig.equals(config.publicKey) && coinAcc.status === "curve" && selfRefused,
+      `${M}${selfRefused ? "" : ` self-launch: ${JSON.stringify(selfSim.value.err)}`}`,
+    );
     const coin: CoinRefs = { mint, dbcConfig: config.publicKey, dbcPool: coinAcc.dbcPool };
     const launchTxRaw = (await conn.getTransaction(launchSig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" })) as unknown as TxLike;
     check("launch tx emitted CoinRegistered", decodeFumpadEvents(launchTxRaw).some((e) => e.name === "CoinRegistered"));

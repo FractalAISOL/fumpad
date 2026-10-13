@@ -82,7 +82,8 @@ describe("app/src/chain stays in sync with the v0.7 program", () => {
     expect(readFileSync(chainDir + "v07/ids.ts", "utf8")).toContain("new PublicKey(FUMPAD_PROGRAM_ADDRESS)");
     expect(readFileSync(chainDir + "program.ts", "utf8")).toContain(`VANITY_SUFFIX = "${FUMPAD_VANITY_SUFFIX}"`);
     expect(idlInstruction(FUMPAD_IDL, "set_auto_claim").accounts.map((a) => a.name)).toEqual(["wallet", "position", "event_authority", "program"]);
-    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(13);
+    // 14 since INTERFACE §8.1 (optional launch_signer): app/src/chain/v07/ix.ts registerCoinIx + allowlist must follow
+    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(14);
   });
 });
 

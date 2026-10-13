@@ -398,7 +398,8 @@ export async function applyEvents(ctx: TxCtx, events: IndexedEvent[]): Promise<v
            VALUES ($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (ticket) DO NOTHING`,
           [
             ticket, mint, owner, s(big(d.seq)), s(tokens), s(big(d.sellPriceQ64)), s(exec), s(big(d.sellUsdCents)), s(sellLamports), s(big(d.sellTs)), ctx.signature, ctx.slot,
-            source, Number(d.venue) === 1 ? "damm_v2" : "dbc", sig, Number(d.ixKey), s(ts), (d.keepers as unknown[]).map(b58), app.rows[0]?.app ?? null,
+            // attested_at = the EFFECTIVE time (rate-cap deferral, INTERFACE §8.4): the challenge window runs from it
+            source, Number(d.venue) === 1 ? "damm_v2" : "dbc", sig, Number(d.ixKey), s(d.effectiveAt !== undefined ? big(d.effectiveAt) : ts), (d.keepers as unknown[]).map(b58), app.rows[0]?.app ?? null,
           ],
         );
         if (!ins.rowCount) break;

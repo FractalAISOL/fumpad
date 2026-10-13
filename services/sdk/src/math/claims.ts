@@ -19,21 +19,17 @@ export function splitFees(claimed: bigint, split: { buybackBps: number; platform
   return { buyback: claimed - platform - creator, platform, creator };
 }
 
-/** Port of Coin::roll_attest_buckets + attest_fits (sliding-hour attestation cap, INTERFACE §5.3). bucketStart = unix ts of the bucket. */
-export function attestRateAllows(a: { now: bigint; bucketStart: bigint; curTokens: bigint; prevTokens: bigint; totalSupply: bigint; bps: number; ticketTokens: bigint }): boolean {
+/**
+ * Port of the v0.7 rate cap (INTERFACE §5.3, REVIEW-v0.7 M-1: a leaky bucket that DEFERS, never rejects):
+ * `cap = max(1, supply × bps / 10,000)` tokens per hour; `cursor = max(attest_cursor, now) + ⌈tokens × 3600 /
+ * cap⌉`; the ticket is effective (claimable / voidable window start) at `max(now, cursor − 3600)`.
+ */
+export function attestEffectiveAt(a: { now: bigint; attestCursor: bigint; totalSupply: bigint; bps: number; ticketTokens: bigint }): { effectiveAt: bigint; cursor: bigint } {
   const H = 3_600n;
-  const bucket = (a.now >= 0n ? a.now / H : (a.now - H + 1n) / H) * H;
-  let cur = a.curTokens;
-  let prev = a.prevTokens;
-  let start = a.bucketStart;
-  if (bucket !== start) {
-    prev = bucket === start + H ? cur : 0n;
-    cur = 0n;
-    start = bucket;
-  }
-  let into = a.now - start;
-  if (into < 0n) into = 0n;
-  if (into > H) into = H;
-  const weighted = (prev * (H - into)) / H;
-  return weighted + cur + a.ticketTokens <= (a.totalSupply * BigInt(a.bps)) / BPS_DENOM;
+  let cap = (a.totalSupply * BigInt(a.bps)) / BPS_DENOM;
+  if (cap < 1n) cap = 1n;
+  const start = a.attestCursor > a.now ? a.attestCursor : a.now;
+  const cursor = start + (a.ticketTokens * H + cap - 1n) / cap;
+  const eff = cursor - H;
+  return { effectiveAt: eff > a.now ? eff : a.now, cursor };
 }

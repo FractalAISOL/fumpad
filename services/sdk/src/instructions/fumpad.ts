@@ -85,8 +85,12 @@ export const cancelConfigIx = (authority: PublicKey) => ix("cancel_config", { au
 export const migrateGlobalIx = (admin: PublicKey) => ix("migrate_global", { admin, global: globalPda() });
 
 // ── launch ──────────────────────────────────────────────────────────────────
-/** `register_coin` — 3rd instruction of the launch tx (after DBC init + the creator's top-level swap2). */
-export function registerCoinIx(a: { creator: PublicKey; mint: PublicKey; dbcConfig: PublicKey }): TransactionInstruction {
+/**
+ * `register_coin` — 3rd instruction of the launch tx (after DBC init + the creator's top-level swap2).
+ * `launchSigner`: the API's launch key, required (as a signer) iff `Global.params.launch_signer` is set
+ * (off-chain review L1); omitted → the optional account is passed as the fumpad program id.
+ */
+export function registerCoinIx(a: { creator: PublicKey; mint: PublicKey; dbcConfig: PublicKey; launchSigner?: PublicKey | null }): TransactionInstruction {
   return ix("register_coin", {
     creator: a.creator,
     global: globalPda(),
@@ -96,6 +100,7 @@ export function registerCoinIx(a: { creator: PublicKey; mint: PublicKey; dbcConf
     coin: coinPda(a.mint),
     rewardPool: rewardPoolPda(),
     rewardVault: rewardVault(a.mint),
+    launchSigner: a.launchSigner ?? null,
   });
 }
 
@@ -277,8 +282,17 @@ export function attestRebuyIx(a: { keeper: PublicKey; mint: PublicKey; owner: Pu
     claimQueue: a.queued ? claimQueuePda(a.mint) : null,
   });
 }
-export const voidTicketIx = (authority: PublicKey, ticket: PublicKey, mint: PublicKey, owner: PublicKey, reason: number) =>
-  ix("void_ticket", { authority, global: globalPda(), ticket, position: positionPda(mint, owner) }, { reason });
+/**
+ * `void_ticket(reason, reopen)` — guardian/admin inside the challenge window. `consumed` = the ticket's sell
+ * marker (`Ticket.consumed`). `reopen`: the attestation was wrong but the trade may be honest → one corrected
+ * attestation of the same trade may follow; false (fraud) keeps the trade consumed.
+ */
+export const voidTicketIx = (a: { authority: PublicKey; ticket: PublicKey; mint: PublicKey; owner: PublicKey; consumed: PublicKey; reason: number; reopen: boolean }) =>
+  ix(
+    "void_ticket",
+    { authority: a.authority, global: globalPda(), coin: coinPda(a.mint), mint: a.mint, ticket: a.ticket, position: positionPda(a.mint, a.owner), consumed: a.consumed },
+    { reason: a.reason, reopen: a.reopen },
+  );
 export const closeConsumedIx = (caller: PublicKey, consumed: PublicKey, rentPayer: PublicKey, ticket: PublicKey) =>
   ix("close_consumed", { caller, global: globalPda(), consumed, rentPayer, ticket });
 

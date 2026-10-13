@@ -5,7 +5,7 @@
  * v0.6 SPEC §5.2: "fresh tokens can't ride on matured credit ('buy elsewhere / receive -> dump' gets no
  * ticket)". In v0.7 every arrival is seen (pending) and plan_sell/debit_sold drew `matured` FIRST, so a
  * holder with M matured tokens could receive or buy X and dump X a second later for a full X ticket.
- * Fix (SPEC-v0.7 Clarifications 15): a sell draws on the wallet's most recently acquired (pending) tokens
+ * Fix (SPEC-v0.7 Clarifications 21): a sell draws on the wallet's most recently acquired (pending) tokens
  * first; only the remainder can come from matured tokens and count for the ticket
  * (engine/src/rules/position.ts planSell / debitSold).
  *

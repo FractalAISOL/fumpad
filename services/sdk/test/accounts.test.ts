@@ -17,7 +17,7 @@ describe("account decoders", () => {
         bump: 1, admin: k(), platform_treasury: k(), guardian: k(), keepers: [k(), k(), k()], keeper_added_at: [bn(0n), bn(0n), bn(5n)], cluster_tag: 2, paused: 0,
         pause_expires_at: bn(0n), params: paramsToIdl(DEFAULT_PARAMS), pending_params: paramsToIdl(DEFAULT_PARAMS), pending_eta: bn(0n), pending_admin: PublicKey.default,
         pending_treasury: PublicKey.default, pending_guardian: PublicKey.default, pending_admin_eta: bn(0n), configs: [cfg, ...Array(7).fill(PublicKey.default)],
-        pending_config: PublicKey.default, pending_config_add: 0, pending_config_eta: bn(0n), reserved: Array(128).fill(0),
+        pending_config: PublicKey.default, pending_config_add: 0, pending_config_eta: bn(0n), reserved: Array(64).fill(0),
       },
       buf,
     );

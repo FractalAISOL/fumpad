@@ -29,9 +29,11 @@ export interface TicketAttestedEvent {
   mint: PK; owner: PK; ticket: PK; seq: bigint; pool: PK; venue: number; source: number; signature: number[]; ixKey: number;
   baseAmount: bigint; quoteGross: bigint; tokens: bigint; sellPriceQ64: bigint; sellUsdCents: bigint; pythPublishTime: bigint; slot: bigint;
   sellTs: bigint; keepers: PK[]; submitter: PK; ts: bigint;
+  /** Effective attestation time (= Ticket.attested_at; later than `ts` when the rate cap deferred the ticket). */
+  effectiveAt: bigint;
 }
 export interface TicketDebitedEvent { ticket: PK; mint: PK; owner: PK; signature: number[]; ixKey: number; debited: bigint; remaining: bigint; voided: boolean; ts: bigint }
-export interface TicketVoidedEvent { ticket: PK; mint: PK; owner: PK; reason: number; authority: PK; ts: bigint }
+export interface TicketVoidedEvent { ticket: PK; mint: PK; owner: PK; reason: number; authority: PK; ts: bigint; coin: PK; reopened: boolean }
 export interface ConsumedClosedEvent { consumed: PK; ticket: PK; rentPayer: PK; ts: bigint }
 export interface ClaimQueuedEvent { mint: PK; ticket: PK; owner: PK; amount: bigint; queueLen: number; ts: bigint; triggeredBy: PK }
 export interface ClaimPaidEvent { mint: PK; ticket: PK; owner: PK; amount: bigint; fromQueue: boolean; medianPriceQ64: bigint; ts: bigint; triggeredBy: PK }

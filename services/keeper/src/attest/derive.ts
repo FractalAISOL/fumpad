@@ -87,15 +87,19 @@ export function lifecycleEvents(mint: string, history: readonly HistoryTx[]): En
       if (!ticket || !refOf.has(ticket)) continue;
       const ref = refOf.get(ticket)!;
       let status: "claimed" | "escrowed" | "expired" | "voided" | "closed" | null = null;
+      let guardian = false;
       if (ev.name === "ClaimPaid") status = "claimed";
       else if (ev.name === "ClaimEscrowed") status = "escrowed";
-      else if (ev.name === "TicketVoided") status = "voided";
+      else if (ev.name === "TicketVoided") {
+        status = "voided";
+        guardian = true;
+      }
       else if (ev.name === "TicketDebited" && d.voided) status = "voided";
       else if (ev.name === "TicketClosed") {
         const s = TICKET_STATUS_NAMES[Number(d.finalStatus)];
         status = s === "expired" ? "expired" : "closed";
       }
-      if (status) out.push({ kind: "ticket_status", key, signature, blockTime, ticket: ref, status });
+      if (status) out.push({ kind: "ticket_status", key, signature, blockTime, ticket: ref, status, ...(guardian ? { guardian } : {}) });
     }
   }
   return out;
@@ -162,17 +166,10 @@ export async function deriveCoin(d: DeriveDeps, coin: CoinAccount, global: Globa
     budget -= r.rpcCalls;
     return r;
   };
-  let crawl = await crawlOnce(maxSlot);
-  // L3: `void_ticket` lists the ticket PDA but neither the mint nor the Coin, so a void is only found by
-  // crawling the ticket's own address. Tickets first seen in THIS crawl (e.g. after a restart) are
-  // crawled in a second pass at the same snapshot, until no new ticket appears.
-  for (let pass = 0; pass < 5; pass++) {
-    const fresh = lifecycleEvents(mint, crawl.history).filter((e) => e.kind === "ticket_attested" && !known.has(e.ticket));
-    if (!fresh.length) break;
-    for (const e of fresh) if (e.kind === "ticket_attested") known.add(e.ticket);
-    d.caches.tickets.set(mint, known);
-    crawl = await crawlOnce(crawl.maxSlot);
-  }
+  // L3: `void_ticket` lists the Coin PDA and the mint (contracts, INTERFACE §8.2), so the first crawl
+  // after a restart already sees every guardian void; attested ticket PDAs are still crawled (cheap with
+  // cursors) for anything else that lists only the ticket.
+  const crawl = await crawlOnce(maxSlot);
   // Pool creation tx: the DBC EvtInitializePool for this mint must match the Coin account.
   let launch: HistoryTx | undefined;
   for (const h of crawl.history) {

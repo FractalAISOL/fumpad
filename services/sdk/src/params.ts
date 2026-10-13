@@ -1,4 +1,6 @@
 /** `Params` (INTERFACE §5.1) with the contract defaults and bounds (constants.rs). */
+import { PublicKey } from "@solana/web3.js";
+
 import { bytesToHex, hexToBytes, toIdl } from "./borsh.js";
 import { PYTH_SOL_USD_FEED_ID } from "./constants.js";
 
@@ -28,6 +30,8 @@ export interface Params {
   maxAttestTokensPerHourBps: number;
   ticketChallengeSecs: bigint;
   attestThreshold: number;
+  /** Launch binding (off-chain review L1): when set, `register_coin` must be co-signed by this key. Default = unset. */
+  launchSigner: PublicKey;
 }
 
 export const DEFAULT_PARAMS: Params = {
@@ -54,6 +58,7 @@ export const DEFAULT_PARAMS: Params = {
   maxAttestTokensPerHourBps: 2_000,
   ticketChallengeSecs: 21_600n,
   attestThreshold: 2,
+  launchSigner: PublicKey.default,
 };
 
 /** Inclusive bounds from constants.rs (`Params::is_valid`). */
@@ -100,5 +105,6 @@ export function paramsFromIdl(raw: Record<string, unknown>): Params {
     maxAttestTokensPerHourBps: n("maxAttestTokensPerHourBps"),
     attestThreshold: n("attestThreshold"),
     solUsdFeedId: bytesToHex(feed),
+    launchSigner: raw.launchSigner instanceof PublicKey ? raw.launchSigner : new PublicKey(raw.launchSigner as string),
   };
 }

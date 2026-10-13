@@ -225,6 +225,45 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
   `FULL_SCAN_INTERVAL_SECS` (600); curve coins are not re-read every loop.
 - **Single instance (L-10)**: with `DATABASE_URL` (required in production) the keeper takes a Postgres advisory lock
   (`7271002`) before its first send; a second instance waits; losing the lock connection exits the process.
+- **Pre-graduation buybacks (v0.7 L5)**: run at randomized times (`BUYBACK_INTERVAL_SECS` × (1 + U[0, `BUYBACK_JITTER`)))
+  and only when the live spot AND the on-chain pre-grad sample sit inside the ±band of the keeper's own TWAP of its last
+  `PREGRAD_TWAP_SAMPLES` (8) spot observations spaced ≥ `PREGRAD_TWAP_SPACING_SECS` (15); the pre-grad sample itself is
+  only recorded at a spot that agrees with that TWAP.
+
+### Attestors + watcher (v0.7, `--mode attestor|watcher`)
+- **Trust**: an attestor signs only what it derived from its own RPC at `finalized`. "Landed" = the consumed marker
+  exists at finalized; "dropped" = this keeper's own simulation rejected it (kept locally). Board status rows
+  (`attest_hints`, one per keeper) are hints: a peer's fresh "landed" defers a submission once, for ≤ 90 s.
+  `PoolNotOfCoin` / `TooManyOpenTickets` / `TicketNotOpen` are retried with back-off; DAMM v2 sells wait until the
+  finalized Coin has `damm_pool`. A marker reopened by `void_ticket(.., reopen = true)` is re-attested only with a
+  message different from the voided one. The rate cap defers on chain (never rejects), so there is no cap logic here.
+- **Engine issues are scoped** (V7-H2): a parse issue blocks that tx's sells and the D10 window after it; a negative
+  balance or an attested ticket the engine can't map blocks only that wallet until it fully exits; nothing freezes a
+  coin. Vault donations / pool-program transfers / SyncNative in swap txs are accounted, owner changes follow the token
+  account. Issues are alerted (attestor and watcher); see the runbook below.
+- **Liveness** (V7-M6): incremental crawl (per-address cursors, closed token accounts never re-asked), per-coin RPC
+  budget per tick (resumes next tick), `ATTEST_COIN_CONCURRENCY` coins in parallel, coins with recent sells first,
+  `ATTEST_TICK_BUDGET_MS` per tick, bounded caches. Hermes 404s for recent seconds are re-asked (V7-M5).
+- **History (L8)**: coins launched before the RPC's `getFirstAvailableBlock` are refused (use an archive RPC);
+  `RPC_HISTORY_CHECK=off` disables it.
+- **Watcher alerts** (L7): attestation mismatches (until the guardian voids), sells with a derived ticket that never
+  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues; re-alerted every
+  `WATCH_ALERT_COOLDOWN_MS` (30 min).
+
+### Keeper board (per-keeper roles — the documented default, V7-M1)
+The three attestors share one Postgres for the signature board. Give each its own role so one compromised keeper
+(or a leaked `DATABASE_URL`) can neither delete nor squat the others' signatures and hints. As the DB owner, after
+the attestors created the tables once:
+```sql
+-- then run ATTEST_BOARD_RLS (keeper/src/attest/board.ts): attest_keeper_roles + row-level security policies
+CREATE ROLE keeper_a LOGIN PASSWORD '…';   -- same for keeper_b, keeper_c
+GRANT SELECT, INSERT, UPDATE, DELETE ON attest_signatures, attest_hints TO keeper_a;
+GRANT SELECT ON attest_keeper_roles TO keeper_a;
+INSERT INTO attest_keeper_roles VALUES ('keeper_a', '<keeper A pubkey>');
+CREATE ROLE watcher LOGIN PASSWORD '…'; GRANT SELECT ON attest_signatures, attest_hints TO watcher;
+```
+Each attestor's `DATABASE_URL` uses its own role. Attestors log and alert at startup when the board has no row-level
+security; `ATTEST_BOARD_REQUIRE_RLS=1` (set it for mainnet) refuses to start instead.
 
 ## Environment
 
@@ -264,6 +303,12 @@ local validator.
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | keeper | alerts (set them for mainnet) |
 | `FULL_RATE_SECS` (15), `HEARTBEAT_SECS` (480), `BUYBACK_MIN_LAMPORTS`, `SKIM_INTERVAL_SECS`, `PLATFORM_FEES_MIN_LAMPORTS`, `USE_LOOKUP_TABLE`, `JOB_*` (=false to disable), `MIN_KEEPER_LAMPORTS` | keeper | policy |
 | `JOB_AUTOCLAIM`, `AUTOCLAIM_INTERVAL_SECS` (15), `AUTOCLAIM_MAX_PER_RUN` (20) | keeper | D17 |
+| `BUYBACK_JITTER` (1), `PREGRAD_TWAP_SAMPLES` (8), `PREGRAD_TWAP_SPACING_SECS` (15) | keeper | L5 pre-grad buyback guard |
+| `ATTEST_COIN_CONCURRENCY` (4), `ATTEST_TICK_BUDGET_MS` (60000), `ATTEST_COIN_RPC_BUDGET` (5000), `ATTEST_TX_CACHE` (200k), `ATTEST_BLOCK_CACHE` (50k), `ATTEST_PRICE_CACHE` (100k) | attestor, watcher | V7-M6 liveness |
+| `ATTEST_BOARD_REQUIRE_RLS` | attestor | `1` = refuse to start without per-keeper roles (mainnet) |
+| `RPC_HISTORY_CHECK` (on) | attestor, watcher | `off` disables the L8 first-available-block check |
+| `WATCH_ALERT_COOLDOWN_MS` (30 min) | watcher | re-alert interval per item |
+| `LAUNCH_SIGNER_KEY` | api | **sealed**; 64-byte secret (base58 or JSON array) whose pubkey is `Params.launch_signer`; co-signs `register_coin` (L1). Separate from `MINT_POOL_KEY` |
 | `POOL_TARGET` (200), `GRINDER_THREADS` (cores), `POOL_POLL_SECS` (30) | grinder | |
 | `DATABASE_SSL` (`prefer`), `DATABASE_SSL_ROOT_CERT` | grinder | `disable` / `prefer` / `require` (TLS, cert unverified: Railway's self-signed Postgres) / `verify-full` (+ CA bundle) |
 | `PORT` | indexer, api, keeper | health (indexer/keeper; indexer also serves `/helius` when enabled) / HTTP (api) |
@@ -364,6 +409,15 @@ graduation (new pool) or a Helius outage: update the Helius webhook's account li
 `fumpad, locker` + `SELECT amm_pool FROM coins WHERE amm_pool IS NOT NULL`; check the indexer's `rpc.hints*` stats on
 `/health`. Rotating `HELIUS_WEBHOOK_SECRET`: set the new value on Helius and the indexer at the same time (401s in
 between are harmless: the poller catches up).
+
+**Engine issue on a coin (attestor / watcher alert `issues:<mint>`).** Issues are scoped, nothing is frozen:
+`parse_issue/tx` → `SELECT * FROM meteora_parse_issues WHERE signature = …`; usually a new Meteora layout or an
+unaccounted vault movement: fix the parser, the tx's sells and one D10 window stay without tickets meanwhile.
+`negative_balance/wallet` → that wallet's history is incomplete on this RPC (or an unparsed movement): compare with a
+second provider (`crawlMintHistory` on both); it gets tickets again after a full exit. `unknown_ticket_status/wallet`
+→ a ticket on chain the engine didn't derive: check the watcher's mismatch for it and void within the challenge window
+(`void_ticket(reason, reopen)`: `reopen = true` if the trade itself may be honest). `out_of_order/coin` is an engine bug
+(stops that coin's attestations): page the developers.
 
 **Re-backfill.** Rebuild one coin from stored events: `npm run migrate -w @fumpad/indexer -- replay <mint>`. Full
 rebuild: stop indexer, `UPDATE cursors SET last_signature = NULL, backfill_done = false`, set `BACKFILL_FROM_SLOT`

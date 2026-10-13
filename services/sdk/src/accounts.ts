@@ -78,9 +78,10 @@ export interface CoinAccount {
   tokensPaidOut: bigint;
   rewards: RewardTerms;
   feeSplit: FeeSplitBps;
-  attestBucketStart: bigint;
-  attestBucketTokens: bigint;
-  attestPrevBucketTokens: bigint;
+  /** Rate-cap leaky bucket (INTERFACE §5.3): time at which the coin's attested backlog drains. */
+  attestCursor: bigint;
+  attestTokensTotal: bigint;
+  attestReleasedTokens: bigint;
   pregradSamplePriceQ64: bigint;
   pregradSampleTs: bigint;
   migrator: PublicKey;
@@ -119,6 +120,7 @@ export interface TicketAccount {
   source: TicketSource;
   /** 0 DBC, 1 DAMM v2 */
   venue: number;
+  /** EFFECTIVE attestation time (may be in the future when the rate cap deferred it); challenge window runs from it. */
   attestedAt: bigint;
   rentPayer: PublicKey;
   consumed: PublicKey;
@@ -126,11 +128,13 @@ export interface TicketAccount {
 
 export interface ConsumedAccount {
   bump: number;
-  /** 0 sell, 1 rebuy */
+  /** 0 sell, 1 rebuy, 2 sell reopened by the guardian (one corrected attestation allowed) */
   kind: number;
   ticket: PublicKey;
   rentPayer: PublicKey;
   blockTime: bigint;
+  /** sell markers: sha256(message)[..16] of the attestation that created / last re-used it */
+  messageHash: number[];
 }
 
 const decode = <T>(name: string, data: Uint8Array): T => normalize(fumpadCoder().accounts.decode(name, Buffer.from(data))) as T;

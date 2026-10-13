@@ -24,6 +24,7 @@ import type { Db } from "@fumpad/indexer";
 import type { ApiConfig } from "../config.js";
 import { launchAuthError } from "./auth.js";
 import { LaunchError, type MintPool, withTimeout } from "./pool.js";
+import { launchSignerFor, parseLaunchSignerKey } from "./signer.js";
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
@@ -100,6 +101,7 @@ export class WindowLimiter {
 
 export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; chain: ChainReader; pool: MintPool | null; db: Db }) {
   const perWallet = new WindowLimiter(cfg.launchWalletLimitPerMin);
+  const launchKey = parseLaunchSignerKey(cfg.launchSignerKey);
   const t = cfg.launchRpcTimeoutMs;
 
   app.post(
@@ -124,6 +126,8 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
       const established = (await deps.db.query("SELECT 1 FROM users WHERE address = $1", [creator])).rowCount! > 0;
       let firstBuy: PrepareResponse["firstBuy"];
       const g = await withTimeout(deps.chain.global(), t, "global lookup");
+      // L1: when the program requires the launch co-signature, this API's key signs register_coin
+      const launchSigner = launchSignerFor(g.params.launchSigner, launchKey);
       const dbcConfig = g.configs.find((k) => !k.equals(PublicKey.default));
       if (!dbcConfig) throw new LaunchError(503, "no FUMPAD DBC config is allow-listed yet");
       const cfgAcc = await withTimeout(deps.conn.getAccountInfo(dbcConfig, "confirmed"), t, "config lookup");
@@ -149,10 +153,13 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
           buyLamports: p.initialBuyLamports,
           minTokensOut,
           priorityMicroLamports: p.priority > 0 ? p.priority : undefined,
+          launchSigner: launchSigner?.publicKey,
         });
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
         const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message();
-        return { tx: new VersionedTransaction(msg), lastValidBlockHeight };
+        const tx = new VersionedTransaction(msg);
+        if (launchSigner) tx.sign([launchSigner]); // the mint signs next (pool.prepare), the creator last
+        return { tx, lastValidBlockHeight };
       }, { established });
       req.log.info({ creator, mint: prepared.mint, reused: prepared.reusedReservation }, "launch prepared");
       reply.header("cache-control", "no-store");

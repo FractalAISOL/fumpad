@@ -6,8 +6,9 @@
  * is already consumed on chain, sign the rest, publish the signature on the shared board (board.ts) and
  * submit `[Ed25519(2 sigs), attest_sell | attest_rebuy]` once two distinct ACTIVE keepers signed the same
  * bytes. One designated submitter per message (lowest key among the valid signers); the others take over
- * after `fallbackSubmitSecs`. Respects PAUSE_ATTEST, the per-coin hourly cap (checked locally before
- * sending; `AttestRateLimited` backs the coin off), consumed markers and the attestation age limit.
+ * after `fallbackSubmitSecs`. Respects PAUSE_ATTEST, consumed markers (a marker REOPENED by a guardian void
+ * allows one corrected attestation with a different message) and the attestation age limit. The per-coin
+ * rate cap no longer rejects (REVIEW-v0.7 M-1): over the cap a ticket is created with a later effective time.
  *
  * Trust (V7-M1, L4): "landed" is decided ONLY from the chain — the consumed marker at `finalized`. A
  * message is "dropped" only by this keeper's own simulation, and only locally. Board hints from peers are
@@ -22,9 +23,10 @@ import { PublicKey as Pk } from "@solana/web3.js";
 import type { Logger } from "pino";
 
 import { CrawlBudgetExceeded } from "@fumpad/engine";
+import { createHash } from "node:crypto";
+
 import {
   activeKeepers,
-  attestRateAllows,
   attestRebuyIx,
   attestSellIx,
   type CoinAccount,
@@ -51,6 +53,11 @@ export interface ChainView {
   coins(): Promise<CoinAccount[]>;
   /** Existence of fumpad-owned accounts at `finalized` (consumed markers: the only "landed" truth). */
   accountsExist(keys: PublicKey[]): Promise<boolean[]>;
+  /**
+   * Consumed markers at `finalized` with their kind (0 sell, 1 rebuy, 2 sell reopened by a guardian void) and
+   * message hash. Optional: without it every existing marker counts as consumed.
+   */
+  consumedMarkers?(keys: PublicKey[]): Promise<({ kind: number; messageHash: Uint8Array } | null)[]>;
   position(mint: PublicKey, wallet: PublicKey): Promise<PositionAccount | null>;
   ticket(address: PublicKey): Promise<TicketAccount | null>;
 }
@@ -77,8 +84,6 @@ export interface AttestorOptions {
   now?: () => number;
   /** A non-designated signer submits after this long (s). */
   fallbackSubmitSecs?: number;
-  /** Back-off after AttestRateLimited (s). */
-  rateLimitBackoffSecs?: number;
   /** After a landing at `confirmed` (own or a peer's hint), wait this long for the consumed marker to finalize (s). */
   landedHintSecs?: number;
   computeUnits?: number;
@@ -131,7 +136,6 @@ export interface AttestorStats {
 export class Attestor {
   stats: AttestorStats = { ticks: 0, coins: 0, coinsDerived: 0, candidates: 0, signed: 0, submitted: 0, landed: 0, dropped: 0, deferred: 0, errors: 0, state: "idle", lastTickAt: 0 };
   private signedIds = new Set<string>();
-  private coinBackoff = new Map<string, number>();
   private msgBackoff = new Map<string, { until: number; tries: number }>();
   /** Own permanent rejections (local only, V7-M1). */
   private dropped = new Map<string, string>();
@@ -176,7 +180,6 @@ export class Attestor {
     this.stats.coins = coins.length;
     const recent = this.o.recentActivitySecs ?? 86_400;
     const order = coins
-      .filter((c) => (this.coinBackoff.get(c.mint.toBase58()) ?? 0) <= now)
       .map((c) => {
         const m = c.mint.toBase58();
         const act = this.lastActivity.get(m);
@@ -245,10 +248,7 @@ export class Attestor {
       );
     }
     if (!cands.length) return;
-    const consumed = await this.o.chain.accountsExist(
-      cands.map((c) => (c.kind === "sell" ? consumedSellPda(c.sell!.signature, c.ixKey) : consumedRebuyPda(c.rebuy!.signature, c.ixKey, c.rebuy!.ticket))),
-    );
-    let cap = { start: coin.attestBucketStart, cur: coin.attestBucketTokens, prev: coin.attestPrevBucketTokens };
+    const consumed = await this.consumed(cands);
     const grace = this.o.landedHintSecs ?? 90;
     for (let i = 0; i < cands.length; i++) {
       const c = cands[i];
@@ -281,35 +281,24 @@ export class Attestor {
         const first = await this.o.board.firstSeen(c.id);
         if (!first || now - Math.floor(first.getTime() / 1000) < (this.o.fallbackSubmitSecs ?? 60)) continue;
       }
-      if (c.kind === "sell") {
-        const nextCap = attestRateAllows({
-          now: BigInt(now),
-          bucketStart: cap.start,
-          curTokens: cap.cur,
-          prevTokens: cap.prev,
-          totalSupply: coin.totalSupply,
-          bps: g.params.maxAttestTokensPerHourBps,
-          ticketTokens: c.sell!.ticketTokens,
-        });
-        if (!nextCap) {
-          this.coinBackoff.set(mint, now + (this.o.rateLimitBackoffSecs ?? 300));
-          this.o.log.info({ mint }, "attestor: hourly attestation cap reached; retrying later");
-          return;
-        }
-      }
-      const two = pickTwo(valid, this.me);
-      const res = await this.submit(c, two);
-      if (res === "rate_limited") {
-        this.coinBackoff.set(mint, now + (this.o.rateLimitBackoffSecs ?? 300));
-        return;
-      }
-      if (res === "landed" && c.kind === "sell") {
-        // keep the local cap estimate in step (the program rolled its buckets the same way)
-        const bucket = (BigInt(now) / 3_600n) * 3_600n;
-        if (bucket !== cap.start) cap = { start: bucket, prev: bucket === cap.start + 3_600n ? cap.cur : 0n, cur: 0n };
-        cap.cur += c.sell!.ticketTokens;
-      }
+      await this.submit(c, pickTwo(valid, this.me));
     }
+  }
+
+  /**
+   * Per candidate: already consumed on chain (finalized)? A sell marker REOPENED by a guardian void
+   * (kind 2) is not consumed for a corrected message, but still is for the exact message that was voided.
+   */
+  private async consumed(cands: Candidate[]): Promise<boolean[]> {
+    const keys = cands.map((c) => (c.kind === "sell" ? consumedSellPda(c.sell!.signature, c.ixKey) : consumedRebuyPda(c.rebuy!.signature, c.ixKey, c.rebuy!.ticket)));
+    if (!this.o.chain.consumedMarkers) return this.o.chain.accountsExist(keys);
+    const markers = await this.o.chain.consumedMarkers(keys);
+    return markers.map((m, i) => {
+      if (!m) return false;
+      if (m.kind !== 2 || cands[i].kind !== "sell") return true;
+      const h = createHash("sha256").update(cands[i].message).digest().subarray(0, 16);
+      return Buffer.compare(h, Buffer.from(m.messageHash)) === 0; // the voided message itself stays consumed
+    });
   }
 
   private async deferredByHint(id: string, active: PublicKey[], now: number, grace: number): Promise<boolean> {
@@ -324,7 +313,7 @@ export class Attestor {
     return true;
   }
 
-  private async submit(c: Candidate, sigs: KeeperSignature[]): Promise<"landed" | "dropped" | "retry" | "rate_limited"> {
+  private async submit(c: Candidate, sigs: KeeperSignature[]): Promise<"landed" | "dropped" | "retry"> {
     const keeper = this.o.keeper.publicKey;
     let attestIx: TransactionInstruction;
     if (c.kind === "sell") {
@@ -356,7 +345,6 @@ export class Attestor {
       this.landedAt.set(c.id, this.now());
       return "landed";
     }
-    if (name === "AttestRateLimited") return "rate_limited";
     if (name && PERMANENT.has(name)) {
       this.stats.dropped++;
       this.dropped.set(c.id, name);

@@ -111,6 +111,8 @@ export interface TicketStatusEvent {
   blockTime: number;
   ticket: TicketRef;
   status: "claimed" | "escrowed" | "expired" | "voided" | "closed";
+  /** voided by the guardian (TicketVoided), not by a rebuy debit */
+  guardian?: boolean;
 }
 
 /** A tx that touched our pools but whose swaps could not be derived exactly (parser issue). */
