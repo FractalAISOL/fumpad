@@ -1,12 +1,13 @@
 /**
  * PoC V7-M4: fresh tokens ride on matured credit.
+ * STATUS: FIXED in e01899c (design decision restored from v0.6) — this file now asserts the attack FAILS.
  *
- * v0.6 SPEC §5.2 (L155): tokens that arrived unseen "are untracked and a sell draws on them first, so fresh
- * tokens can't ride on matured credit ('buy elsewhere / receive -> dump' gets no ticket)". In v0.7 every
- * arrival is seen (buys on any app + transfers in -> observe_buy -> `pending`), and plan_sell/debit_sold
- * draw `matured` FIRST. So a holder with M matured tokens can receive (or buy) X fresh tokens and dump them
- * at once for a full X-token ticket while keeping the M position, every 10 minutes, up to 5 open tickets
- * per wallet, across any number of wallets. The rebuy rule only looks at acquisitions AFTER a sell.
+ * v0.6 SPEC §5.2: "fresh tokens can't ride on matured credit ('buy elsewhere / receive -> dump' gets no
+ * ticket)". In v0.7 every arrival is seen (pending) and plan_sell/debit_sold drew `matured` FIRST, so a
+ * holder with M matured tokens could receive or buy X and dump X a second later for a full X ticket.
+ * Fix (SPEC-v0.7 Clarifications 15): a sell draws on the wallet's most recently acquired (pending) tokens
+ * first; only the remainder can come from matured tokens and count for the ticket
+ * (engine/src/rules/position.ts planSell / debitSold).
  *
  * Run (from services/):  node --import tsx --test ../security-review/v07-poc/fresh-tokens-ride-matured.test.ts
  */
@@ -15,7 +16,7 @@ import { it } from "node:test";
 
 import { A, B, SOL, Tape } from "../../services/engine/test/helpers.ts";
 
-it("receive X from a sybil, sell X in the next slot: ticket for X, matured stock untouched in size", () => {
+it("receive X from a sybil, sell X in the next slot: no ticket; the matured stock keeps its full credit", () => {
   const t = new Tape();
   t.buy(A, 10n * SOL); // A: 10 SOL worth, will mature
   t.buy(B, 2n * SOL); // B: the sybil
@@ -24,13 +25,16 @@ it("receive X from a sybil, sell X in the next slot: ticket for X, matured stock
   t.transfer(A, 2n * 1024n * SOL); // A receives fresh tokens (separate tx)
   t.wait(1);
   const s = t.sell(A, 2n * SOL); // A dumps exactly the fresh tokens, 1 s later
+  t.wait(1);
+  const rest = t.sell(A, 10n * SOL); // the honest matured stock
   const o = t.run();
   const d = o.sells.find((x) => x.signature === s)!;
-  assert.ok(d.ticket, "ticket created");
-  assert.equal(d.ticket!.ticketTokens, 2n * 1024n * SOL, "full size, charged against A's matured stock");
+  assert.equal(d.ticket, null, "no ticket for the fresh tokens");
+  assert.equal(d.reason, "not_matured");
+  assert.equal(o.sells.find((x) => x.signature === rest)!.ticket?.ticketTokens, 10n * 1024n * SOL, "matured tokens still count in full");
 });
 
-it("buy X, sell X 1 s later (separate txs): full ticket", () => {
+it("buy X, sell X 1 s later (separate txs): no ticket", () => {
   const t = new Tape();
   t.buy(A, 10n * SOL);
   t.wait(700);
@@ -38,5 +42,6 @@ it("buy X, sell X 1 s later (separate txs): full ticket", () => {
   t.wait(1);
   const s = t.sell(A, 2n * SOL);
   const d = t.run().sells.find((x) => x.signature === s)!;
-  assert.equal(d.ticket?.ticketTokens, 2n * 1024n * SOL);
+  assert.equal(d.ticket, null);
+  assert.equal(d.reason, "not_matured");
 });

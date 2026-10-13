@@ -1,10 +1,13 @@
 /**
- * PoC V7-M5: a transient Hermes 404 (e.g. the historical endpoint asked for a second it hasn't indexed yet)
- * is cached as "no price" forever (pyth.ts:58-61, and again in derive's long-lived priceCache), so the sell
- * gets `oracle_unavailable` from this keeper for the rest of the process's life. Keepers attest within
- * seconds of finalization, i.e. exactly when such gaps are likeliest; if 2 of 3 cache a null, the honest
- * sell is never attested. (Separately: which of the several updates sharing one publish_time second Hermes
- * returns is UNVERIFIED — a cross-keeper determinism risk, see report.)
+ * PoC V7-M5: a transient Hermes 404 was cached as "no price" forever (in HermesPythSource and again in
+ * derive's long-lived priceCache), so an honest sell could stay `oracle_unavailable` for the process's life.
+ * STATUS: FIXED in e01899c — this file now asserts the attack FAILS.
+ *
+ * Fix (engine/src/pyth.ts, engine.ts runEngineWithPrices):
+ *  - only successful responses are cached; a 404 for a recent second is asked again after 60 s (final
+ *    only once the second is > 1 h old); runEngineWithPrices never puts a missing price in the shared cache;
+ *  - pinned selection among Hermes updates: greatest publish_time ≤ block time, then the earliest Pythnet
+ *    slot, then lowest price, then lowest conf — identical whatever order Hermes returns them in.
  *
  * Run (from services/):  node --import tsx --test ../security-review/v07-poc/hermes-null-cache.test.ts
  */
@@ -13,8 +16,9 @@ import { it } from "node:test";
 
 import { HermesPythSource, PYTH_SOL_USD_FEED_ID } from "../../services/engine/src/index.ts";
 
-it("first answer 404, later 200: the source still says null", async () => {
+it("first answer 404, later 200: the source returns the price once Hermes has it", async () => {
   let calls = 0;
+  let now = 1_800_000_010;
   const available = new Set<number>();
   const fetchImpl = (async (url: string) => {
     calls++;
@@ -22,11 +26,13 @@ it("first answer 404, later 200: the source still says null", async () => {
     if (!available.has(t)) return new Response("not found", { status: 404 });
     return Response.json({ parsed: [{ id: PYTH_SOL_USD_FEED_ID, price: { price: "15000000000", conf: "1000000", expo: -8, publish_time: t } }] });
   }) as typeof fetch;
-  const src = new HermesPythSource({ fetchImpl });
+  const src = new HermesPythSource({ fetchImpl, now: () => now });
   const blockTime = 1_800_000_000;
   assert.equal(await src.priceAt(blockTime, 60), null); // Hermes not caught up yet
   for (let t = blockTime - 60; t <= blockTime; t++) available.add(t); // now it has the data
+  now += 61;
   const before = calls;
-  assert.equal(await src.priceAt(blockTime, 60), null, "still null: 404s were cached");
-  assert.equal(calls, before, "and Hermes is never asked again");
+  const p = await src.priceAt(blockTime, 60);
+  assert.equal(p?.publishTime, blockTime, "the price is found");
+  assert.ok(calls > before, "Hermes was asked again");
 });

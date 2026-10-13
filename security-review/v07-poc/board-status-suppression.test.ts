@@ -1,23 +1,24 @@
 /**
- * PoC V7-M1 + V7-M2: the shared board's `attest_status` is trusted without any signature.
+ * PoC V7-M1 + V7-M2: the shared board's status was trusted without any signature.
+ * STATUS: FIXED in e01899c — this file now asserts both attacks FAIL.
  *
- * (a) attestor.ts:180-181 skips every message whose board status is "landed" or "dropped", BEFORE checking
- *     the chain. Anyone with write access to the shared Postgres (one compromised keeper — all three share
- *     the board and the README's per-keeper RLS is "optional" and doesn't cover attest_status — or a leaked
- *     DATABASE_URL) can mark every message as soon as the first honest keeper publishes it: no honest sell
- *     is ever attested again. The board header claims "whoever controls the database can only withhold or
- *     spam signatures"; the status table breaks that — a single keeper can halt 2-of-3 liveness.
- * (b) attestor.ts:263-268: a "permanent" program error marks the message "dropped" for ALL keepers forever.
- *     `PoolNotOfCoin` is not permanent: a DAMM v2 sell between DBC migration (Meteora's keepers) and our
- *     `graduate` (Coin.damm_pool still default) — the engine learns the DAMM pool from the migration tx
- *     (history.ts:81-85) — is rejected once and then never retried after graduate records the pool.
+ * (a) Was: attestors skipped every message whose board status was "landed" or "dropped" BEFORE checking the
+ *     chain, so one DB writer could mark every honest message and halt 2-of-3 liveness.
+ *     Fix: board rows are per-keeper HINTS (attest_hints); "landed" is decided only from the consumed marker
+ *     at finalized, "dropped" only from the keeper's own simulation; a fresh "landed" hint defers a keeper's
+ *     own submission once, for a bounded time. Per-keeper DB roles + RLS are the documented default
+ *     (ATTEST_BOARD_RLS, services/README.md "Keeper board").
+ * (b) Was: `PoolNotOfCoin` (a DAMM v2 sell between Meteora's migration and our `graduate`) dropped the
+ *     message for all keepers forever.
+ *     Fix: DAMM v2 sells aren't signed until the finalized Coin has `damm_pool`; PoolNotOfCoin /
+ *     TooManyOpenTickets / TicketNotOpen are retried with back-off after a re-check, never dropped.
  *
  * Run (from services/):  node --import tsx --test ../security-review/v07-poc/board-status-suppression.test.ts
  */
 import assert from "node:assert/strict";
 import { it } from "node:test";
 
-import { Keypair, type PublicKey, type TransactionInstruction } from "@solana/web3.js";
+import { Keypair, PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import bs58 from "bs58";
 import pino from "pino";
 
@@ -34,7 +35,7 @@ const mint = Keypair.generate().publicKey;
 const trader = Keypair.generate().publicKey;
 const POOL = Keypair.generate().publicKey.toBase58();
 const g = { keepers: keepers.map((k) => k.publicKey), keeperAddedAt: [0n, 0n, 0n], paused: 0, pauseExpiresAt: 0n, clusterTag: 2, params: DEFAULT_PARAMS } as unknown as GlobalAccount;
-const coin = { mint, attestBucketStart: 0n, attestBucketTokens: 0n, attestPrevBucketTokens: 0n, totalSupply: 1_000_000_000_000_000n } as CoinAccount;
+const baseCoin = { mint, dammPool: PublicKey.default, attestBucketStart: 0n, attestBucketTokens: 0n, attestPrevBucketTokens: 0n, totalSupply: 1_000_000_000_000_000n } as unknown as CoinAccount;
 
 const out = (venue: "dbc" | "damm_v2"): EngineOutput => ({
   mint: mint.toBase58(),
@@ -63,11 +64,12 @@ const out = (venue: "dbc" | "damm_v2"): EngineOutput => ({
 const der = (o: EngineOutput): Derivation => ({ coin: { mint: mint.toBase58() } as never, output: o, maxSlot: 1_000, txCount: 1, history: [] });
 
 class Chain implements ChainView {
+  coin = baseCoin;
   async global() {
     return g;
   }
   async coins() {
-    return [coin];
+    return [this.coin];
   }
   async accountsExist(keys: PublicKey[]) {
     return keys.map(() => false); // never consumed
@@ -89,28 +91,46 @@ class Sub {
 }
 
 function setup(venue: "dbc" | "damm_v2") {
-  const board = new MemoryBoard(() => NOW * 1000);
+  let now = NOW;
+  const board = new MemoryBoard(() => now * 1000);
   const sub = new Sub();
-  const atts = keepers.map((k) => new Attestor({ keeper: k, chain: new Chain(), derive: async () => der(out(venue)), board, submitter: sub, log, now: () => NOW }));
-  return { board, sub, atts };
+  const chain = new Chain();
+  const atts = keepers.map((k) => new Attestor({ keeper: k, chain, derive: async () => der(out(venue)), board, submitter: sub, log, now: () => now }));
+  return { board, sub, atts, chain, advance: (s: number) => (now += s) };
 }
 
-it("(a) one DB writer marks the honest message 'dropped': no keeper ever submits it", async () => {
-  const { board, sub, atts } = setup("dbc");
+it("(a) one DB writer marks the honest message 'dropped' (and keeps re-stamping 'landed'): it is still submitted", async () => {
+  const { board, sub, atts, advance } = setup("dbc");
   await atts[0].tick(); // first honest keeper publishes its signature
-  for (const id of board.rows.keys()) await board.setStatus(id, "dropped", "evil"); // attacker: one UPDATE
+  const forge = async (status: string) => {
+    for (const id of board.rows.keys()) for (const k of keepers) await board.setStatus(id, k.publicKey.toBase58(), status, "evil");
+  };
+  await forge("dropped");
   for (let i = 0; i < 3; i++) for (const a of atts) await a.tick();
-  assert.equal(sub.calls.length, 0, "2 honest keepers agree, but nothing is ever submitted");
+  assert.ok(sub.calls.length >= 1, "'dropped' hints are ignored: submitted");
+  // a fresh forged 'landed' hint can delay a NEW message at most once, for a bounded time
+  const n = sub.calls.length;
+  advance(3_600 * 2); // our own landing was never finalized (consumed stays false): it must be re-sent
+  await forge("landed");
+  for (const a of atts) await a.tick();
+  advance(91);
+  await forge("landed");
+  for (const a of atts) await a.tick();
+  assert.ok(sub.calls.length > n, "a forged 'landed' hint can't hold a message back");
 });
 
-it("(b) PoolNotOfCoin before `graduate` drops a valid DAMM sell for good", async () => {
-  const { sub, atts } = setup("damm_v2");
-  sub.next = { ok: false, code: FUMPAD_ERROR.PoolNotOfCoin ?? 6035, error: "PoolNotOfCoin" };
+it("(b) PoolNotOfCoin before `graduate`: not signed until Coin.damm_pool is set, then retried until it lands", async () => {
+  const { sub, atts, chain, board, advance } = setup("damm_v2");
+  for (const a of atts) await a.tick();
+  assert.equal(board.rows.size, 0, "a DAMM sell isn't even signed before graduate");
+  chain.coin = { ...baseCoin, dammPool: Keypair.generate().publicKey } as CoinAccount; // graduate recorded the pool
+  sub.next = { ok: false, code: FUMPAD_ERROR.PoolNotOfCoin ?? 6035, error: "PoolNotOfCoin" }; // e.g. a lagging RPC
   for (const a of atts) await a.tick();
   for (const a of atts) await a.tick();
   const before = sub.calls.length;
-  assert.ok(before >= 1, "submitted once, rejected (Coin.damm_pool not recorded yet)");
-  sub.next = { ok: true, signature: "tx" }; // graduate has now recorded the DAMM pool
+  assert.ok(before >= 1, "submitted, rejected once");
+  sub.next = { ok: true, signature: "tx" };
+  advance(3_601);
   for (let i = 0; i < 3; i++) for (const a of atts) await a.tick();
-  assert.equal(sub.calls.length, before, "never retried: the honest sell never gets its ticket");
+  assert.ok(sub.calls.length > before, "retried after the back-off: the honest sell gets its ticket");
 });

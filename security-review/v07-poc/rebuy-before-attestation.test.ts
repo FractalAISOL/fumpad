@@ -1,13 +1,13 @@
 /**
  * PoC V7-H1: a rebuy that happens BEFORE the sell's TicketAttested lands is never attested.
+ * STATUS: FIXED in e01899c — this file now asserts the attack FAILS.
  *
- * engine.ts:158 copies `t.address` (null until the ticket_attested event is replayed) into the
- * RebuyDebit. Events are replayed in chain order, so a buy between the sell and its attestation
- * (normal latency: finalization ~13 s + attestor tick 15 s + 2 signatures + submit; minutes or hours
- * when the hourly cap defers it) is recorded with ticketAddress = null forever. records.ts:70 then
- * drops it ("the sell isn't attested yet") on every later tick, and the watcher (verify.ts:111/130)
- * also ignores debits with a null address. Result: sell -> instant buy-back keeps the full ticket;
- * the 7-day rebuy rule is defeated.
+ * Was: engine.ts copied `t.address` (null until the ticket_attested event is replayed) into the
+ * RebuyDebit, so a buy between the sell and its attestation was recorded with ticketAddress = null
+ * forever; records.ts dropped it and the watcher ignored it ("sell, buy back next slot" kept a full ticket).
+ * Fix: the engine resolves every debit's ticket address from the ticket's FINAL state after the replay
+ * (engine.ts, "V7-H1"), so the debit is signed as soon as the ticket exists on chain, and the watcher
+ * reports it as missing if it never lands.
  *
  * Run (from services/):  node --import tsx --test ../security-review/v07-poc/rebuy-before-attestation.test.ts
  */
@@ -27,7 +27,7 @@ const MINT = pk();
 const PDA = pk();
 const A = pk();
 
-it("sell, buy back before attestation: ticket keeps its full size, no rebuy is ever signed", () => {
+it("sell, buy back before attestation: the debit IS signed against the attested ticket", () => {
   const t = new Tape();
   t.buy(A, 10n * SOL, { signature: txSig() });
   t.wait(700); // matured
@@ -43,12 +43,14 @@ it("sell, buy back before attestation: ticket keeps its full size, no rebuy is e
   assert.ok(sell.ticket, "sell made a ticket");
   assert.equal(out.rebuys.length, 1, "engine did see the rebuy");
   assert.equal(out.rebuys[0].voided, true, "engine voided the ticket internally");
-  assert.equal(out.rebuys[0].ticketAddress, null, "but recorded it with no ticket address");
+  assert.equal(out.rebuys[0].ticketAddress, PDA, "the debit carries the attested ticket's address");
 
-  const now = t.t + 3600; // an hour later: the attested ticket is on chain, full size
+  const now = t.t + 3600; // an hour later: the attested ticket is on chain
   const c = candidates(MINT, out, { clusterTag: 2, now, maxAttestAgeSecs: 86_400 });
-  assert.equal(c.filter((x) => x.kind === "rebuy").length, 0, "no rebuy debit will ever be signed");
+  const rebuys = c.filter((x) => x.kind === "rebuy");
+  assert.equal(rebuys.length, 1, "the rebuy debit is signed");
+  assert.equal(rebuys[0].rebuy!.debitTokens, 2n * 1024n * SOL, "for the full bought-back amount (voids the ticket)");
 
   const v = verifyCoin(MINT, out, [], now, 900);
-  assert.equal(v.missing.filter((m) => m.kind === "rebuy").length, 0, "watcher does not flag it either");
+  assert.equal(v.missing.filter((m) => m.kind === "rebuy").length, 1, "and the watcher flags it until it lands");
 });
