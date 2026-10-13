@@ -150,6 +150,10 @@ export async function startValidator(opts: { rpcPort?: number; upgradeAuthority:
     "--ledger", ledger,
     "--rpc-port", String(rpcPort),
     "--faucet-port", String(rpcPort + 1001),
+    // FUMPAD_GOSSIP_PORT: run a second local stack next to another one (gossip + dynamic ports otherwise collide)
+    ...(process.env.FUMPAD_GOSSIP_PORT
+      ? ["--gossip-port", process.env.FUMPAD_GOSSIP_PORT, "--dynamic-port-range", `${Number(process.env.FUMPAD_GOSSIP_PORT) + 1}-${Number(process.env.FUMPAD_GOSSIP_PORT) + 40}`]
+      : []),
     "--upgradeable-program", FUMPAD_PROGRAM_ID.toBase58(), so, authPath,
     "--bpf-program", DBC_PROGRAM_ID.toBase58(), join(FIXTURES, "dbc_mainnet.so"),
     "--bpf-program", DAMM_V2_PROGRAM_ID.toBase58(), join(FIXTURES, "damm_v2_mainnet.so"),
@@ -197,7 +201,7 @@ export interface Postgres {
  * DATABASE_URL if set; otherwise a throwaway cluster in .local/pg via initdb/pg_ctl
  * (no docker needed). `docker compose up -d postgres` + DATABASE_URL also works.
  */
-export async function startPostgres(port = 54329): Promise<Postgres> {
+export async function startPostgres(port = Number(process.env.FUMPAD_PG_PORT ?? 54329)): Promise<Postgres> {
   if (process.env.DATABASE_URL) return { url: process.env.DATABASE_URL, stop: async () => {} };
   const dir = join(LOCAL, `pg-${port}`);
   rmSync(dir, { recursive: true, force: true });

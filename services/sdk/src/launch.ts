@@ -67,7 +67,11 @@ export interface LaunchParams {
 
 /** The launch instructions in order (see module doc). */
 export function launchInstructions(p: LaunchParams): TransactionInstruction[] {
-  const ixs: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: p.computeUnits ?? 400_000 })];
+  // The launch tx has no lookup table and (with the launch co-signer) little room left under 1,232 bytes: the CU
+  // limit is only set when it matters (a priority price, or an explicit limit); the default per-instruction
+  // budget covers a launch.
+  const ixs: TransactionInstruction[] = [];
+  if (p.computeUnits || p.priorityMicroLamports) ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: p.computeUnits ?? 400_000 }));
   if (p.priorityMicroLamports) ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: p.priorityMicroLamports }));
   const buy = p.buyLamports ?? 0n;
   if (buy > 0n) ixs.push(...wrapSolIxs(p.creator, buy));

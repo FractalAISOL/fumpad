@@ -158,6 +158,8 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
         const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message();
         const tx = new VersionedTransaction(msg);
+        // 1,232-byte packet limit (no lookup tables in a launch tx): refuse before reserving a signature on it
+        if (tx.serialize().length > 1_232) throw new LaunchError(400, "name, symbol and uri are too long to fit in one launch transaction; shorten the uri");
         if (launchSigner) tx.sign([launchSigner]); // the mint signs next (pool.prepare), the creator last
         return { tx, lastValidBlockHeight };
       }, { established });

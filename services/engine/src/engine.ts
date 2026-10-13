@@ -221,7 +221,8 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         if (!t) {
           // The chain holds a ticket this engine didn't derive (the watcher flags the mismatch): that
           // wallet's open-ticket count is unknown, so only that wallet stops getting tickets (V7-H2).
-          if (e.owner && !protocol.has(e.owner)) markInconsistent(wallet(e.owner));
+          // (its balance is still exact: only the ticket bookkeeping is unknown, so no reset of the hold state)
+          if (e.owner && !protocol.has(e.owner)) wallet(e.owner).inconsistent = true;
           issue(e, "unknown_ticket_status", e.owner ? "wallet" : "tx", `attested ticket ${e.ticket} for unknown sell ${refKey(e.ref)}`, e.owner ? { wallet: e.owner } : {});
           break;
         }

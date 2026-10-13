@@ -6,7 +6,8 @@
  */
 import { runE2E } from "./local/e2e.js";
 
-const r = await runE2E();
+// FUMPAD_RPC_PORT / FUMPAD_API_PORT (+ FUMPAD_GOSSIP_PORT, FUMPAD_PG_PORT): a second stack on other ports.
+const r = await runE2E({ rpcPort: process.env.FUMPAD_RPC_PORT ? Number(process.env.FUMPAD_RPC_PORT) : undefined, apiPort: process.env.FUMPAD_API_PORT ? Number(process.env.FUMPAD_API_PORT) : undefined });
 console.log("\n── row counts ──");
 for (const [k, n] of Object.entries(r.counts)) console.log(`  ${k.padEnd(18)} ${n}`);
 console.log(`\nWS feed events received live: ${r.wsEvents.join(", ")}`);

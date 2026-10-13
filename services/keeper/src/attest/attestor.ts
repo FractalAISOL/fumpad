@@ -22,7 +22,7 @@ import { type PublicKey, type TransactionInstruction, ComputeBudgetProgram } fro
 import { PublicKey as Pk } from "@solana/web3.js";
 import type { Logger } from "pino";
 
-import { CrawlBudgetExceeded } from "@fumpad/engine";
+import { CrawlBudgetExceeded, LruMap } from "@fumpad/engine";
 import { createHash } from "node:crypto";
 
 import {
@@ -135,14 +135,15 @@ export interface AttestorStats {
 
 export class Attestor {
   stats: AttestorStats = { ticks: 0, coins: 0, coinsDerived: 0, candidates: 0, signed: 0, submitted: 0, landed: 0, dropped: 0, deferred: 0, errors: 0, state: "idle", lastTickAt: 0 };
-  private signedIds = new Set<string>();
-  private msgBackoff = new Map<string, { until: number; tries: number }>();
+  // per-message state is bounded (V7-M6): an evicted entry only costs a re-sign / re-check
+  private signedIds = new LruMap<string, true>(200_000);
+  private msgBackoff = new LruMap<string, { until: number; tries: number }>(200_000);
   /** Own permanent rejections (local only, V7-M1). */
-  private dropped = new Map<string, string>();
+  private dropped = new LruMap<string, string>(200_000);
   /** Own landings at confirmed: id → time; wait for the consumed marker to finalize. */
-  private landedAt = new Map<string, number>();
+  private landedAt = new LruMap<string, number>(200_000);
   /** First time a peer's "landed" hint deferred us (each message is deferred at most once). */
-  private hintSeen = new Map<string, number>();
+  private hintSeen = new LruMap<string, number>(200_000);
   private lastSummary = new Map<string, string>();
   /** Newest sell block time per mint (priority) and last tick each mint was derived (fairness). */
   private lastActivity = new Map<string, number>();
@@ -263,7 +264,7 @@ export class Attestor {
       if (!this.signedIds.has(c.id)) {
         const sig = signAttestation(c.message, this.o.keeper.secretKey);
         await this.o.board.publish(c.id, c.kind, mint, c.message, this.me, sig);
-        this.signedIds.add(c.id);
+        this.signedIds.set(c.id, true);
         this.stats.signed++;
       }
       // own landing at confirmed, not finalized yet: wait (bounded) instead of re-sending

@@ -1,6 +1,29 @@
 # FUMPAD v0.7 off-chain pre-audit security review
 
-Scope: services/ (meteora parser, engine, keeper attestor/watcher/jobs, sdk attestation encoding, indexer, api launch) and app/ (allow-list, signer, launch binding, CSP, prelaunch gate, data layer). Reviewed at 95c59e9 (2026-10-13) against SPEC-v0.7 (+Clarifications), ATTESTATION.md, INTERFACE-v0.7.md and REPORT.md. On-chain program not reviewed here (see contracts/REVIEW-v0.7.md). PoCs: `security-review/v07-poc/` — each passes while the bug exists. Run from `services/` (or `app/` for `app-*`): `node --import tsx --test ../security-review/v07-poc/<name>.test.ts`; needs a `security-review/node_modules -> ../services/node_modules` symlink (not committed).
+Scope: services/ (meteora parser, engine, keeper attestor/watcher/jobs, sdk attestation encoding, indexer, api launch) and app/ (allow-list, signer, launch binding, CSP, prelaunch gate, data layer). Reviewed at 95c59e9 (2026-10-13) against SPEC-v0.7 (+Clarifications), ATTESTATION.md, INTERFACE-v0.7.md and REPORT.md. On-chain program not reviewed here (see contracts/REVIEW-v0.7.md). PoCs: `security-review/v07-poc/` — written to pass while the bug existed; fixed ones are now flipped (see Status). Run from `services/` (or `app/` for `app-*`): `node --import tsx --test ../security-review/v07-poc/<name>.test.ts`; needs a `security-review/node_modules -> ../services/node_modules` symlink (not committed).
+
+## Status (2026-10-13, branch fixes: `e01899c` services fixes, `824cf86` follow-up to contracts INTERFACE §8)
+
+PoCs for fixed findings were flipped: each now asserts the attack FAILS (header: "fixed in e01899c").
+
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| V7-H2 | High | Engine issue freezes a coin | **Fixed** `e01899c` — vault cross-check accounts non-swap movements (`meteora/src/vaultflow.ts`), issues carry the pool; failures scoped per tx (+ one D10 window, `price_unverified`) / per wallet (negative balance, unmappable attestation; recovers after a full exit) / coin only for engine invariants; `ownerDeltas` per token account (owner changes); `records.ts` cuts off only coin-scope issues; alerts + runbook (services/README.md). PoCs `vault-donation-freeze`, `owner-change-negative-balance`; golden replays now also inject a donation and reverse the input order. |
+| V7-H1 | High | Rebuy before attestation lost | **Fixed** `e01899c` — debits carry the ticket's final on-chain address (resolved after the replay); watcher reports missing debits. PoC `rebuy-before-attestation`. |
+| V7-M1 | Medium | Board status suppresses attestations | **Fixed** `e01899c` — per-keeper hints (`attest_hints`); landed = consumed marker at finalized, dropped = own simulation only; a fresh "landed" hint defers once (≤ 90 s). Per-keeper DB roles + RLS are the documented default (`ATTEST_BOARD_RLS`, README "Keeper board"; startup alert, `ATTEST_BOARD_REQUIRE_RLS=1` for mainnet). PoC `board-status-suppression` (a). |
+| V7-M2 | Medium | PoolNotOfCoin drops a DAMM sell | **Fixed** `e01899c` — DAMM sells not signed until the finalized Coin has `damm_pool`; PoolNotOfCoin / TooManyOpenTickets / TicketNotOpen retried with back-off. PoC (b). |
+| V7-M3 | Medium | App allow-list doesn't bound `min_out` | Open here — app side (other agent). |
+| V7-M4 | Medium | Fresh tokens ride on matured credit | **Fixed** `e01899c` (decision) — a sell draws pending tokens first; SPEC-v0.7 Clarifications 21. PoC `fresh-tokens-ride-matured`. |
+| V7-M5 | Medium | Pyth null cache / determinism | **Fixed** `e01899c` — only successes cached; recent 404s re-asked after 60 s (final after 1 h); pinned selection (max publish_time ≤ block time, earliest slot, price, conf) with a cross-keeper order test. PoC `hermes-null-cache`. |
+| V7-M6 | Medium | Keeper liveness DoS | **Fixed** `e01899c` — incremental crawl (cursors, closed accounts skipped), per-coin RPC budget, parallel prioritised coins + tick budget, LRU caches. API co-signature on `register_coin` = contracts `Params.launch_signer` (see L1). PoC `crawl-amplification`. Residual: accounts kept OPEN cost one call each per tick (and the attacker their rent). |
+| L1 | Low | Launch binding off-chain only | **Fixed** — contracts (`c9be557`: `Params.launch_signer`, verified one min-fee swap per launch tx) + API co-signs with `LAUNCH_SIGNER_KEY` (`824cf86`); e2e proves an unsigned self-launch is refused. Note: `app/src/chain/v07/ix.ts` `registerCoinIx` (13 accounts) + allow-list must add the optional `launch_signer` (app agent). |
+| L2 | Low | Unregistered pools on our config | **Fixed** `e01899c` — pools count only for mints with a `CoinRegistered` (table or same tx). |
+| L3 | Low | Voids missed after restart | **Fixed** — `void_ticket` now lists coin + mint (contracts `c9be557`); services rely on it (`824cf86`), regression test in `keeper/test/derive.test.ts`. |
+| L4 | Low | "landed" at confirmed | **Fixed** `e01899c` — consumed marker at finalized (see V7-M1). |
+| L5 | Low | Pre-grad buyback guard on one sample | **Partly fixed** `e01899c` (off-chain part) — randomized buyback timing; spot and the on-chain sample must agree with the keeper's TWAP of its last 8 observations; samples only anchored at such a spot. On-chain guard unchanged (single sample). |
+| L6 | Low | CSP / same-context scripts | Open here — app side (other agent). |
+| L7 | Low | Watcher alert gaps | **Fixed** `e01899c` — alerts for unattested sells, engine issues; 30 min re-alert; voided tickets not re-alerted (`824cf86`). |
+| L8 | Low | Incomplete RPC history | **Fixed** `e01899c` — `getFirstAvailableBlock` floor vs coin launch (startup + hourly), pool creation must precede `Coin.launch_slot`. |
 
 ## High
 
@@ -70,7 +93,7 @@ Scope: services/ (meteora parser, engine, keeper attestor/watcher/jobs, sdk atte
   - Consider an API co-signature in `register_coin`.
 
 ## Low
-- **L1:** the launch binding is off-chain only. `register_coin` accepts self-launched pools on allow-listed configs. UNVERIFIED whether several sybil swaps in the init tx can all get DBC's min fee.
+- **L1:** the launch binding is off-chain only. `register_coin` accepts self-launched pools on allow-listed configs. UNVERIFIED whether several sybil swaps in the init tx can all get DBC's min fee. *Needs a contracts change (services can't bind it): done in contracts `c9be557` (`Params.launch_signer`; the min fee goes to one swap per launch tx, verified on the mainnet binary).*
 - **L2:** the indexer treats unregistered pools on our config as ours. Gate on `CoinRegistered`.
 - **L3:** `void_ticket` references no mint or Coin, so the first pass after a restart misses voids. Use a two-pass crawl.
 - **L4:** "landed" is set at confirmed, not finalized. Use the consumed PDA at finalized.
