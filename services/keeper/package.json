@@ -14,14 +14,18 @@
   "scripts": {
     "build": "tsc -b",
     "start": "node dist/main.js",
-    "dev": "tsx src/main.ts"
+    "dev": "tsx src/main.ts",
+    "attestor": "node dist/main.js --mode attestor",
+    "watcher": "node dist/main.js --mode watcher"
   },
   "dependencies": {
     "@fumpad/sdk": "0.7.0",
     "@solana/web3.js": "^1.98.0",
     "bs58": "^6.0.0",
     "pg": "^8.13.0",
-    "pino": "^9.5.0"
+    "pino": "^9.5.0",
+    "@fumpad/engine": "0.1.0",
+    "@fumpad/meteora": "0.1.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.10"
