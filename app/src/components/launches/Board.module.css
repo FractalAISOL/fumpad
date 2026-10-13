@@ -1,6 +1,6 @@
 /*
  * Launches board. Three lanes on one track: the ruler above them is the bonding curve,
- * 0% → 50% across New, 50% → graduation across Final stretch, then PumpSwap. Each row's
+ * 0% → 50% across New, 50% → graduation across Final stretch, then the Meteora pool. Each row's
  * curve bar carries the same 50% mark, so a coin's bar and its column agree.
  * Breakpoints repeated literally: 769 (lanes vs tabs), 900 (header tools beside the title).
  */

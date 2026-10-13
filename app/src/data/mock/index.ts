@@ -1,4 +1,5 @@
-import { PARAMS, cpOut, curvePriceAt } from "../chain";
+import { PARAMS, curvePriceAt } from "../chain";
+import { curveReservesAt, feeBpsAtSlot, quoteBuy, quoteSell, splitFee } from "../meteora";
 import type { CoinSort, FumpadData, Unsubscribe } from "../interface";
 import type {
   Achievement,
@@ -72,7 +73,15 @@ export { DEMO_WALLET, DEMO_NAME, EPOCH };
 
 const SUPPLY = PARAMS.totalSupply;
 const FEE = PARAMS.feeBps / 10_000;
-const VENUE_FEE = 0.0025;
+/** Share of every trade's SOL that buys the coin back into its reward pool (half of FUMPAD's 80%). */
+const POOL_SHARE = FEE * (1 - PARAMS.venueFeeShareBps / 10_000) * (PARAMS.feePoolShareBps / 10_000);
+
+/**
+ * App labels the mock spreads trades and sells across (`@fumpad/meteora` `appLabel` ids). FUMPAD
+ * coins trade on every app from launch; "fumpad" marks router trades.
+ */
+const APPS = ["fumpad", "axiom", "jupiter", "fumpad", "direct", "okx", "axiom", "dflow", "padre", "unknown_program"] as const;
+const appFor = (r: () => number): string => APPS[Math.floor(r() * APPS.length)];
 
 /* ── Coins ─────────────────────────────────────────────────────────────────── */
 
@@ -123,57 +132,66 @@ function liveMedian(c: CoinSpec): number {
   return medianOf(c) * (sim.drift.get(c.symbol) ?? 1);
 }
 
-/* ── D19 snipe protection (mock) ─────────────────────────────────────────── */
+/* ── D33 snipe protection (mock) ─────────────────────────────────────────── */
 
 /**
- * The mock's snipe window. On chain a slot is ~0.4 s and the window 4 slots (~1.6 s); here a
- * "slot" is stretched to 5 s so simulated launches visibly pass through 99 → 75 → 50 → 25 %.
- * LMBO is frozen at slot 1 of its window for quotes, so mock mode always shows the taxed state.
+ * The mock's launch window. On chain a slot is ~0.4 s and the DBC fee scheduler runs 99% → 1.25%
+ * over 8 slots (~3 s); here a "slot" is stretched to 5 s so simulated launches visibly pass
+ * through it. LMBO is frozen at slot 1 for quotes, so mock mode always shows the window.
  */
 const MOCK_SLOT_MS = 5_000;
 const SNIPE_DEMO = "LMBO";
-/** Session snipe tax on top of the authored stats (simulated taxed buys). */
-const sessionSnipe = new Map<string, { sol: number; buys: number }>();
+/** Session launch-window fees on top of the authored stats (simulated trades). */
+const sessionSnipe = new Map<string, { sol: number; trades: number }>();
 
-/** D19 schedule (SDK `snipeTaxBps`): min(start, ⌈10,000·(W − d)/W⌉) at slot offset d < W. */
-function snipeBpsAtSlot(d: number): number {
-  const w = PARAMS.snipeWindowSlots;
-  if (d < 0 || d >= w) return 0;
-  return Math.min(PARAMS.snipeStartBps, Math.ceil((10_000 * (w - d)) / w));
+/** The fee a trade pays at slot offset `d` (bps): the scheduler in the window, the normal fee after. */
+function feeAtSlot(d: number): number {
+  return feeBpsAtSlot(PARAMS, d);
 }
-function mockSnipeBps(c: CoinSpec, ts: number, opts: { quote?: boolean } = {}): number {
-  if (c.status !== "curve") return 0;
-  if (opts.quote && c.symbol === SNIPE_DEMO) return snipeBpsAtSlot(1);
-  return snipeBpsAtSlot(Math.floor((ts - c.createdAt) / MOCK_SLOT_MS));
+/** Fee rate for a trade on `c` at `ts` (bps). Graduated coins always pay the normal fee. */
+function mockFeeBps(c: CoinSpec, ts: number, opts: { quote?: boolean } = {}): number {
+  if (c.status !== "curve") return PARAMS.feeBps;
+  if (opts.quote && c.symbol === SNIPE_DEMO) return feeAtSlot(1);
+  return feeAtSlot(Math.floor((ts - c.createdAt) / MOCK_SLOT_MS));
 }
 
-/** LMBO's launch: the creator's exempt bundled buy, then three snipers at 99 / 75 / 50 %. */
+/** LMBO's launch: the creator's first buy at the normal fee, then three snipers at slot offsets 0, 1, 2. */
 const DEMO_SNIPES = [
-  { bps: 9_900, budget: 1.0 },
-  { bps: 7_500, budget: 0.4 },
-  { bps: 5_000, budget: 0.18 },
-];
+  { slot: 0, budget: 1.0 },
+  { slot: 1, budget: 0.4 },
+  { slot: 2, budget: 0.18 },
+].map((x) => ({ ...x, bps: feeAtSlot(x.slot) }));
 
-/** Early-launch stats: authored (deterministic) + simulated this session. */
-function snipeStats(c: CoinSpec): Pick<CoinSummary, "snipeTaxSol" | "snipeTaxedBuys"> {
+/** Launch-window fees above the normal fee: authored (deterministic) + simulated this session. */
+function snipeStats(c: CoinSpec): Pick<CoinSummary, "snipeTaxSol" | "snipeTaxedTrades"> {
   let sol = 0;
-  let buys = 0;
+  let trades = 0;
   if (c.symbol === SNIPE_DEMO) {
-    for (const x of DEMO_SNIPES) sol += (x.budget * x.bps) / 10_000;
-    buys = DEMO_SNIPES.length;
+    for (const x of DEMO_SNIPES) sol += (x.budget * (x.bps - PARAMS.feeBps)) / 10_000;
+    trades = DEMO_SNIPES.length;
   } else if (c.createdAt <= EPOCH) {
     const r = rng("snipe:" + c.symbol);
     if (r() < 0.35) {
       sol = Math.round(between(r, 0.05, 2.4) * 1000) / 1000;
-      buys = 1 + Math.floor(r() * 5);
+      trades = 1 + Math.floor(r() * 5);
     }
   }
   const live = sessionSnipe.get(c.symbol);
   if (live) {
     sol += live.sol;
-    buys += live.buys;
+    trades += live.trades;
   }
-  return buys > 0 ? { snipeTaxSol: sol, snipeTaxedBuys: buys } : {};
+  return trades > 0 ? { snipeTaxSol: sol, snipeTaxedTrades: trades } : {};
+}
+
+/**
+ * Reward pool balance. D35: the 8% DBC leftover only lands at graduation, so a curve coin's pool
+ * holds just its buybacks (half of FUMPAD's fee share, plus its launch-window fees).
+ */
+function poolTokensOf(c: CoinSpec): number {
+  if (c.status === "graduated") return c.poolTokens;
+  const r = rng("pool:" + c.symbol);
+  return Math.round(curveRaised(c) * between(r, 18_000, 30_000) + (snipeStats(c).snipeTaxSol ?? 0) * 0.8 * 2.6e6);
 }
 
 function ticketsOpenOn(c: CoinSpec): number {
@@ -199,7 +217,7 @@ function summary(c: CoinSpec): CoinSummary {
     marketCapSol: price * SUPPLY,
     curveSol: curveRaised(c),
     graduationSol: PARAMS.graduationSol,
-    poolTokens: c.poolTokens,
+    poolTokens: poolTokensOf(c),
     ticketsOpen: ticketsOpenOn(c),
     spark: [...spark(c.symbol).slice(0, -1), price],
     ...boardExtras(c),
@@ -232,7 +250,7 @@ function boardExtras(c: CoinSpec): Pick<CoinSummary, "trades24h" | "socials" | "
 }
 
 function poolBought24h(c: CoinSpec): number {
-  const solToPool = (c.volume24hUsd / SOL_USD) * FEE * (PARAMS.feePoolShareBps / 10_000);
+  const solToPool = (c.volume24hUsd / SOL_USD) * POOL_SHARE;
   return solToPool / spotOf(c);
 }
 
@@ -253,14 +271,15 @@ function detail(c: CoinSpec): CoinDetail {
       { label: "X", href: `https://x.com/${c.symbol.toLowerCase()}onsol` },
       { label: "Telegram", href: `https://t.me/${c.symbol.toLowerCase()}portal` },
     ],
-    poolSeeded: PARAMS.rewardPoolSupply,
+    poolSeeded: grad ? PARAMS.rewardPoolSupply : 0,
     poolBought24h: poolBought24h(c),
     poolPaidOut: grad ? Math.round(between(r, 2, 30) * 1e6) : 0,
     queueOwed: queue.reduce((a, q) => a + q.amount, 0),
     ticketsCreated: s.ticketsOpen + Math.round(s.ticketsOpen * between(r, 0.4, 1.6)),
     ticketsPast10x: grad ? Math.round(between(r, 3, 40)) : Math.round(between(r, 0, 12)),
     referencePrice: price * c.refRatio,
-    ammPool: grad ? address("amm:" + c.symbol) : undefined,
+    dbcPool: address("dbc:" + c.symbol),
+    dammPool: grad ? address("damm:" + c.symbol) : undefined,
     virtualSol: vSol,
     virtualTokens: vTok,
     curveTokensLeft: grad ? 0 : Math.max(0, PARAMS.curveSupply - (PARAMS.initialVirtualTokens - vTok)),
@@ -300,6 +319,20 @@ export function mockSetAutoClaim(owner: Address, mint: Address, enabled: boolean
   else autoClaimOff.add(`${owner}:${mint}`);
 }
 
+/**
+ * v0.7 attestation phases (SPEC v0.7 §5): a qualifying sell is "verifying" until the keepers'
+ * 2-of-3 attestation lands (~1 min after finality), then sits in the challenge window until
+ * `claimableFrom`, then takes its usual state. The mock attests exactly `attestDelaySecs` after
+ * the sell, so a ticket filed in this session walks through every phase as the clock runs.
+ */
+function attestPhase(sellTs: number, settled: Ticket["state"], now = mockNow()): Pick<Ticket, "state" | "attestedAt" | "claimableFrom"> {
+  const attestedAt = sellTs + PARAMS.attestDelaySecs * 1000;
+  if (now < attestedAt) return { state: "verifying", attestedAt: undefined, claimableFrom: undefined };
+  const claimableFrom = attestedAt + PARAMS.ticketChallengeSecs * 1000;
+  const open = settled === "claimable" || settled === "tracking" || settled === "awaiting-graduation";
+  return { state: open && now < claimableFrom ? "challenge" : settled, attestedAt, claimableFrom };
+}
+
 function buildTicket(owner: Address, t: TicketSpec): Ticket {
   const c = SPEC_BY_SYMBOL.get(t.symbol)!;
   const id = address(`ticket:${owner}:${t.symbol}:${t.seq}`);
@@ -307,9 +340,28 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
   const execPrice = t.floorApplied ? sellPrice * 0.94 : sellPrice;
   const claimAmount = Math.round(t.tokens * (PARAMS.claimBps / 10_000));
   const median = c.status === "graduated" ? liveMedian(c) : liveSpot(c);
+  // Spec states "verifying"/"challenge" only mark the demo's young tickets: their settled state follows the coin.
+  const settled: Ticket["state"] =
+    t.state === "verifying" || t.state === "challenge" ? (c.status !== "graduated" ? "awaiting-graduation" : t.multiple >= 10 ? "claimable" : "tracking") : t.state;
+  const phase = attestPhase(t.sellTs, settled);
   const chainStatus: TicketChainStatus =
-    t.state === "queued" ? "queued" : t.state === "claimed" ? "claimed" : t.state === "expired" ? "expired" : t.state === "voided" ? "voided" : "open";
+    phase.state === "verifying"
+      ? "pending"
+      : t.state === "queued"
+        ? "queued"
+        : t.state === "claimed"
+          ? t.escrowed
+            ? "escrowed"
+            : "claimed"
+          : t.state === "expired"
+            ? "expired"
+            : t.state === "voided"
+              ? "voided"
+              : "open";
   const queued = t.state === "queued";
+  const r = rng(`src:${owner}:${t.symbol}:${t.seq}`);
+  const app = t.app ?? (t.source === "router" ? "fumpad" : owner === DEMO_WALLET ? undefined : appFor(r));
+  const source = t.source ?? (app === "fumpad" ? "router" : "outside");
   const queueNeedsPool = queued ? claimAmount / (PARAMS.maxClaimPoolBps / 10_000) : undefined;
   const bought = poolBought24h(c);
   const base: Ticket = {
@@ -324,13 +376,18 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
     tokens: t.tokens,
     originalTokens: t.originalTokens,
     sellPrice,
+    source,
+    app: source === "router" ? "fumpad" : app,
+    sellSignature: signature(`sell:${id}`),
+    attestedAt: phase.attestedAt,
+    claimableFrom: phase.claimableFrom,
     execPrice,
     sellSol: t.originalTokens * execPrice,
     sellUsd: t.originalTokens * execPrice * SOL_USD,
     sellTs: t.sellTs,
     expiresAt: queued || t.state === "claimed" ? undefined : t.sellTs + PARAMS.claimWindowSecs * 1000,
     chainStatus,
-    state: t.state,
+    state: phase.state,
     multiple: t.state === "claimed" ? (t.claimedMultiple ?? t.multiple) : median / sellPrice,
     peakMultiple: t.peak,
     claimAmount,
@@ -346,6 +403,8 @@ function buildTicket(owner: Address, t: TicketSpec): Ticket {
     crossedMultiple: t.peak >= 10 && t.state !== "expired" && t.state !== "voided" ? Math.min(t.peak, 10 + (t.seq + t.symbol.length) / 10) : undefined,
     claimMultiple: t.state === "claimed" ? (t.claimedMultiple ?? t.multiple) : undefined,
     rebuyDebited: t.originalTokens - t.tokens,
+    voidReason: t.state === "voided" ? "rebuy" : undefined,
+    escrowed: t.escrowed,
     autoClaim: !autoClaimOff.has(`${owner}:${mintAddress(c.symbol)}`),
     autoClaimed: t.state === "claimed" && t.seq % 2 === 0 ? true : undefined,
   };
@@ -361,7 +420,17 @@ function ticketsFor(owner: Address): Ticket[] {
     const c = SPEC_BY_SYMBOL.get(t.symbol)!;
     const now = c.status === "graduated" ? liveMedian(c) : liveSpot(c);
     const multiple = now / t.sellPrice;
-    return { ...t, multiple, peakMultiple: Math.max(t.peakMultiple, multiple), claimValueSol: t.claimAmount * now, autoClaim: !autoClaimOff.has(`${owner}:${t.mint}`) };
+    const settled: Ticket["state"] = c.status !== "graduated" ? "awaiting-graduation" : multiple >= PARAMS.triggerMultiple ? "claimable" : "tracking";
+    const phase = attestPhase(t.sellTs, settled);
+    return {
+      ...t,
+      ...phase,
+      chainStatus: phase.state === "verifying" ? ("pending" as const) : ("open" as const),
+      multiple,
+      peakMultiple: Math.max(t.peakMultiple, multiple),
+      claimValueSol: t.claimAmount * now,
+      autoClaim: !autoClaimOff.has(`${owner}:${t.mint}`),
+    };
   });
   const all = [...filed, ...specs.map((s) => buildTicket(owner, s))];
   for (const t of all) ticketOwners.set(t.id, owner);
@@ -421,16 +490,16 @@ function holdersFor(c: CoinSpec, viewer?: Address): { total: number; top: Holder
   const top: Holder[] = [];
   if (c.status === "graduated") {
     const d = detail(c);
-    top.push({ address: d.ammPool!, label: "PumpSwap pool", kind: "amm", share: ((d.ammTokens ?? 0) / SUPPLY) * 100 });
+    top.push({ address: d.dammPool!, label: "Meteora pool, LP locked", kind: "amm", share: ((d.ammTokens ?? 0) / SUPPLY) * 100 });
   } else {
     top.push({
-      address: address("curve:" + c.symbol),
-      label: "Bonding curve",
+      address: address("dbc:" + c.symbol),
+      label: "Bonding curve (Meteora)",
       kind: "amm",
       share: ((PARAMS.curveSupply - (c.raised ?? 0) * 6e6) / SUPPLY) * 100,
     });
   }
-  top.push({ address: address("pool:" + c.symbol), label: "Reward pool", kind: "pool", share: (c.poolTokens / SUPPLY) * 100 });
+  top.push({ address: address("pool:" + c.symbol), label: "Reward pool", kind: "pool", share: (poolTokensOf(c) / SUPPLY) * 100 });
   top.push({ address: creatorOf(c), label: "Creator", kind: "creator", share: between(r, 1.2, 4.6) });
   let s = between(r, 2.6, 3.8);
   for (let i = 0; i < 5; i++) {
@@ -458,7 +527,19 @@ function fumblesFor(c: CoinSpec, viewer?: Address): FumbleRow[] {
     const tokens = sol / p;
     const name = randomName(r);
     const owner = name ? addrOf(name) : anon(`${c.symbol}f${i}`);
-    rows.push({ ticket: address(`f:${c.symbol}:${i}`), owner, ownerName: name, tokens, sol, ts, multiple: median / Math.max(p, ticketPriceFloor(c, p)) });
+    const app = appFor(r);
+    rows.push({
+      ticket: address(`f:${c.symbol}:${i}`),
+      owner,
+      ownerName: name,
+      tokens,
+      sol,
+      ts,
+      multiple: median / Math.max(p, ticketPriceFloor(c, p)),
+      source: app === "fumpad" ? "router" : "outside",
+      app,
+      verifying: EPOCH - ts < PARAMS.attestDelaySecs * 1000 || undefined,
+    });
     ts -= Math.exp(between(r, Math.log(4), Math.log(30 * 60))) * MINUTE;
     if (ts < c.createdAt) break;
   }
@@ -473,6 +554,9 @@ function fumblesFor(c: CoinSpec, viewer?: Address): FumbleRow[] {
         ts: tk.sellTs,
         multiple: tk.multiple,
         isYou: viewer === DEMO_WALLET,
+        source: tk.source,
+        app: tk.app,
+        verifying: tk.state === "verifying" || undefined,
       });
     }
   }
@@ -511,7 +595,8 @@ function makeEvent(kind: FeedKind, seed: string, ts: number, coin?: CoinSpec): F
         );
       const p = priceAt(c.symbol, Math.min(ts, EPOCH));
       const sol = Math.exp(between(r, Math.log(0.5), Math.log(120)));
-      return { ...base, ...coinBits(c), kind, sol, tokens: sol / p, ticketPrice: p };
+      const app = appFor(r);
+      return { ...base, ...coinBits(c), kind, sol, tokens: sol / p, ticketPrice: p, source: app === "fumpad" ? ("router" as const) : ("outside" as const), app };
     }
     case "cross": {
       const c = pickGrad();
@@ -658,6 +743,11 @@ function profileOf(addr: Address): Profile {
 /* ── The implementation ───────────────────────────────────────────────────── */
 
 const bootedAt = typeof performance !== "undefined" ? performance.timeOrigin : 0;
+/** The mock's clock: a frozen epoch on the server (deterministic prerenders), epoch + elapsed in the browser. */
+function mockNow(): number {
+  if (typeof window === "undefined") return EPOCH;
+  return EPOCH + Math.max(0, Date.now() - bootedAt);
+}
 
 /** Deterministic recent trades for a coin (from its last-hour path), newest first. */
 function tradesFor(c: CoinSpec): TradeRow[] {
@@ -669,18 +759,42 @@ function tradesFor(c: CoinSpec): TradeRow[] {
     const side = hour[i].p >= hour[i - 1].p ? "buy" : "sell";
     const sol = Math.exp(between(r, Math.log(0.05), Math.log(c.status === "curve" ? 3 : 25)));
     const name = r() < 0.5 ? pick(r, USERS) : null;
-    out.push({ signature: signature(`tr:${c.symbol}:${i}`), mint: mintAddress(c.symbol), wallet: name ? name.address : anon(`tr:${c.symbol}:${i}`), side, tokens: sol / p, sol, price: p, ts: t - Math.floor(r() * 50_000) });
+    out.push({
+      signature: signature(`tr:${c.symbol}:${i}`),
+      mint: mintAddress(c.symbol),
+      wallet: name ? name.address : anon(`tr:${c.symbol}:${i}`),
+      side,
+      tokens: sol / p,
+      sol,
+      price: p,
+      ts: t - Math.floor(r() * 50_000),
+      venue: c.status === "graduated" ? "damm" : "dbc",
+      app: appFor(r),
+    });
   }
   if (c.symbol !== SNIPE_DEMO) return out;
-  // LMBO's launch block: snipers taxed into the pool (shown as "snipe-taxed"), the creator's
-  // bundled first buy exempt. Kept within the 12 rows the coin page shows.
+  // LMBO's launch block: snipers paying the launch-window fee (shown as "snipe fee"), the creator's
+  // first buy in the launch transaction at the normal fee. Kept within the 12 rows the coin page shows.
   const p0 = curvePriceAt(0);
   const launch: TradeRow[] = DEMO_SNIPES.map((x, i) => {
-    const tax = (x.budget * x.bps) / 10_000;
-    const sol = x.budget - tax;
-    return { signature: signature(`snipe:${c.symbol}:${i}`), mint: mintAddress(c.symbol), wallet: anon(`sniper:${i}`), side: "buy" as const, tokens: sol / p0, sol, price: p0, ts: c.createdAt + (i + 1) * 400, snipeTaxSol: tax, snipeTaxBps: x.bps };
+    const fee = (x.budget * x.bps) / 10_000;
+    const sol = x.budget - fee;
+    return {
+      signature: signature(`snipe:${c.symbol}:${i}`),
+      mint: mintAddress(c.symbol),
+      wallet: anon(`sniper:${i}`),
+      side: "buy" as const,
+      tokens: sol / p0,
+      sol,
+      price: p0,
+      ts: c.createdAt + (x.slot + 1) * 400,
+      snipeTaxSol: (x.budget * (x.bps - PARAMS.feeBps)) / 10_000,
+      snipeTaxBps: x.bps,
+      venue: "dbc" as const,
+      app: i === 1 ? "unknown_program" : "direct",
+    };
   }).reverse();
-  launch.push({ signature: signature(`launch:${c.symbol}`), mint: mintAddress(c.symbol), wallet: creatorOf(c), side: "buy", tokens: 0.5 / p0, sol: 0.5, price: p0, ts: c.createdAt });
+  launch.push({ signature: signature(`launch:${c.symbol}`), mint: mintAddress(c.symbol), wallet: creatorOf(c), side: "buy", tokens: 0.5 / p0, sol: 0.5, price: p0, ts: c.createdAt, venue: "dbc", app: "fumpad" });
   return [...out.slice(0, 8), ...launch];
 }
 
@@ -727,12 +841,12 @@ function simTrade(c: CoinSpec, ts: number, opts: { buy?: boolean; sol?: number; 
   }
   const price = liveSpot(c);
   const who = opts.wallet ?? (r() < 0.5 ? pick(r, USERS).address : anon(`live:${c.symbol}:${tickN}`));
-  // D19: buys inside the (stretched) launch window: part of `sol` goes to the pool as snipe tax.
-  const bps = buy ? mockSnipeBps(c, ts) : 0;
-  const tax = bps ? (sol * bps) / 10_000 : 0;
+  // D33: trades inside the (stretched) launch window pay the scheduler's higher fee, buys and sells alike.
+  const bps = mockFeeBps(c, ts);
+  const tax = bps > PARAMS.feeBps ? (sol * (bps - PARAMS.feeBps)) / 10_000 : 0;
   if (tax > 0) {
-    const cur = sessionSnipe.get(c.symbol) ?? { sol: 0, buys: 0 };
-    sessionSnipe.set(c.symbol, { sol: cur.sol + tax, buys: cur.buys + 1 });
+    const cur = sessionSnipe.get(c.symbol) ?? { sol: 0, trades: 0 };
+    sessionSnipe.set(c.symbol, { sol: cur.sol + tax, trades: cur.trades + 1 });
   }
   const trade: TradeRow = {
     signature: signature(`live:${c.symbol}:${tickN}`),
@@ -743,6 +857,8 @@ function simTrade(c: CoinSpec, ts: number, opts: { buy?: boolean; sol?: number; 
     sol: sol - tax,
     price,
     ts,
+    venue: c.status === "graduated" && !graduates ? "damm" : "dbc",
+    app: opts.wallet ? "fumpad" : appFor(r),
     ...(tax > 0 ? { snipeTaxSol: tax, snipeTaxBps: bps } : {}),
   };
   const point = { t: ts, p: price };
@@ -918,13 +1034,16 @@ export function mockRecordTrade(owner: Address, mintOrSymbol: string, side: Side
       tokens,
       originalTokens: tokens,
       sellPrice,
+      source: "router",
+      app: "fumpad",
+      sellSignature: signature(`filed:${owner}:${c.symbol}:${seq}`),
       execPrice: sellPrice,
       sellSol: amountOut,
       sellUsd: amountOut * SOL_USD,
       sellTs: ts,
       expiresAt: ts + PARAMS.claimWindowSecs * 1000,
-      chainStatus: "open",
-      state: c.status === "graduated" ? "tracking" : "awaiting-graduation",
+      chainStatus: "pending",
+      state: "verifying",
       multiple: 1,
       peakMultiple: 1,
       claimAmount,
@@ -1003,8 +1122,7 @@ export class MockFumpadData implements FumpadData {
   }
 
   now(): number {
-    if (typeof window === "undefined") return EPOCH;
-    return EPOCH + Math.max(0, Date.now() - bootedAt);
+    return mockNow();
   }
 
   async getSolUsd() {
@@ -1059,7 +1177,7 @@ export class MockFumpadData implements FumpadData {
 
   async getClaimQueue(mint: Address, viewer?: Address) {
     const c = specOf(mint);
-    if (!c || c.status !== "graduated") return { pool: c?.poolTokens ?? 0, owed: 0, entries: [] };
+    if (!c || c.status !== "graduated") return { pool: c ? poolTokensOf(c) : 0, owed: 0, entries: [] };
     const entries = queueFor(c, viewer);
     return { pool: c.poolTokens, owed: entries.reduce((a, e) => a + e.amount, 0), entries };
   }
@@ -1116,6 +1234,11 @@ export class MockFumpadData implements FumpadData {
       if (t) return t;
     }
     return null;
+  }
+
+  /** Mock-only: reflect an escrow withdrawal made in this session. */
+  markEscrowWithdrawn(id: Address) {
+    ticketOverrides.set(id, { ...ticketOverrides.get(id), escrowed: false, chainStatus: "claimed" });
   }
 
   /** Mock-only: reflect a claim made in this session. */
@@ -1180,37 +1303,35 @@ export class MockFumpadData implements FumpadData {
       });
   }
 
+  /**
+   * Meteora math (`../meteora`): the DBC curve before graduation (a buy that would pass the
+   * migration price is partially filled), DAMM v2 after; the fee in SOL, the scheduler's higher
+   * fee in the launch window; the ticket rules the keepers apply to every sell.
+   */
   async quoteTrade({ mint, side, amount, wallet }: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote> {
     const c = specOf(mint)!;
     const d = detail(c);
     const onCurve = c.status !== "graduated";
-    const x = onCurve ? d.virtualSol : d.ammSol!;
-    const y = onCurve ? d.virtualTokens : d.ammTokens!;
-    const spotBefore = x / y;
-    const amt = Math.max(0, amount || 0);
-    const split = (fee: number) => ({
-      feeSol: fee,
-      feePoolSol: fee * (PARAMS.feePoolShareBps / 10_000),
-      feePlatformSol: fee * (PARAMS.feePlatformShareBps / 10_000),
-      feeCreatorSol: fee * (PARAMS.feeCreatorShareBps / 10_000),
-    });
+    const reserves = onCurve ? curveReservesAt(PARAMS.initialVirtualSol, PARAMS.initialVirtualTokens, curveRaised(c)) : { sol: d.ammSol!, tokens: d.ammTokens! };
+    const feeBps = mockFeeBps(c, this.now(), { quote: true });
+    const venue = onCurve ? ("dbc" as const) : ("damm" as const);
+    const fees = (feeSol: number, normalFeeSol: number) => {
+      const sp = splitFee(feeSol, PARAMS);
+      return {
+        feeSol,
+        feePoolSol: sp.pool,
+        feePlatformSol: sp.platform,
+        feeCreatorSol: sp.creator,
+        venueFeeSol: sp.venue,
+        ...(feeBps > PARAMS.feeBps && feeSol > normalFeeSol ? { snipeTaxSol: feeSol - normalFeeSol, snipeTaxBps: feeBps } : {}),
+      };
+    };
     const tickets = wallet ? ticketsFor(wallet).filter((t) => t.symbol === c.symbol) : [];
-    const open = tickets.filter((t) => t.chainStatus === "open" || t.chainStatus === "queued");
+    const open = tickets.filter((t) => t.chainStatus === "open" || t.chainStatus === "queued" || t.chainStatus === "pending");
 
     if (side === "buy") {
-      const fee = amt * FEE;
-      const venueFee = onCurve ? 0 : (amt - fee) * VENUE_FEE;
-      // D19: a buy in the launch window pays snipe tax out of what it spends (to the reward pool).
-      const snipeBps = mockSnipeBps(c, this.now(), { quote: true });
-      const snipeTax = ((amt - fee) * snipeBps) / 10_000;
-      const solNet = amt - fee - venueFee - snipeTax;
-      let out = solNet > 0 ? cpOut(x, y, solNet) : 0;
-      let partialFill = false;
-      if (onCurve && out > d.curveTokensLeft) {
-        out = d.curveTokensLeft;
-        partialFill = true;
-      }
-      const exec = out > 0 ? (amt - fee - snipeTax) / out : spotBefore;
+      const q = quoteBuy(reserves, amount, feeBps, onCurve ? d.curveTokensLeft : Infinity);
+      const out = q.amountOut;
       const now = this.now();
       const recent = open.filter((t) => now - t.sellTs < PARAMS.rebuyWindowSecs * 1000).sort((a, b) => b.sellTs - a.sellTs);
       let left = out;
@@ -1221,25 +1342,24 @@ export class MockFumpadData implements FumpadData {
       });
       return {
         side,
-        amountIn: amt,
+        amountIn: Math.max(0, amount || 0),
         amountOut: out,
-        ...split(fee),
-        venueFeeSol: venueFee,
-        spotBefore,
-        execPrice: exec,
-        priceImpact: out > 0 ? (exec / spotBefore - 1) * 100 : 0,
-        venue: onCurve ? "curve" : "pumpswap",
-        partialFill,
+        ...fees(q.feeSol, (q.amountIn * PARAMS.feeBps) / 10_000),
+        spotBefore: q.spotBefore,
+        execPrice: q.execPrice,
+        priceImpact: out > 0 ? (q.execPrice / q.spotBefore - 1) * 100 : 0,
+        venue,
+        partialFill: q.completesCurve || undefined,
+        usedSol: q.completesCurve ? q.amountIn : undefined,
         rebuyWarning: hit.length ? { tickets: hit.filter((h) => h.debit > 0), totalDebit: out - left } : undefined,
-        ...(snipeTax > 0 ? { snipeTaxSol: snipeTax, snipeTaxBps: snipeBps } : {}),
       };
     }
 
     // sell
-    const gross = amt > 0 ? cpOut(y, x, amt) : 0;
-    const venueFee = onCurve ? 0 : gross * VENUE_FEE;
-    const fee = (gross - venueFee) * FEE;
-    const exec = amt > 0 ? (gross - venueFee) / amt : spotBefore;
+    const q = quoteSell(reserves, amount, feeBps);
+    const amt = q.amountIn;
+    const exec = q.execPrice;
+    const spotBefore = q.spotBefore;
     const bal = wallet ? await this.getBalances(wallet, mint) : { tokens: amt, maturedTokens: amt, sol: 0 };
     const ticketTokens = Math.min(amt, bal.maturedTokens);
     const usdValue = ticketTokens * exec * SOL_USD;
@@ -1258,13 +1378,12 @@ export class MockFumpadData implements FumpadData {
     return {
       side,
       amountIn: amt,
-      amountOut: gross - venueFee - fee,
-      ...split(fee),
-      venueFeeSol: venueFee,
+      amountOut: q.amountOut,
+      ...fees(q.feeSol, (q.feeSol * PARAMS.feeBps) / feeBps),
       spotBefore,
       execPrice: exec,
       priceImpact: amt > 0 ? (1 - exec / spotBefore) * -100 : 0,
-      venue: onCurve ? "curve" : "pumpswap",
+      venue,
       ticket: {
         files: !reason && amt > 0,
         reason,

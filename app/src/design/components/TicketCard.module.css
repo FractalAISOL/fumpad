@@ -37,6 +37,21 @@
   text-overflow: ellipsis;
 }
 
+/* Where the sell happened: a fact, in the quiet mono of the facts row (never money-orange). */
+.src {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" var(--wdth-num);
+  letter-spacing: var(--tr-num);
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 1px;
+}
+
+/* Not attested yet: the gauge reads as provisional. */
+.verifying .g {
+  opacity: 0.6;
+}
+
 .g {
   grid-column: 1 / -1;
   display: grid;

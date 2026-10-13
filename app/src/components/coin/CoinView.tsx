@@ -8,6 +8,7 @@ import {
   type FumbleRow,
   type Holder,
   type PricePoint,
+  type ProtocolParams,
   type QueueEntry,
   type Ticket,
   type TradeRow,
@@ -268,7 +269,7 @@ export function CoinView({
           <span>launched {f.date(coin.createdAt)}</span>
           <span>
             {grad
-              ? `graduated${coin.graduatedAt ? ` ${f.date(coin.graduatedAt)}` : ""}, PumpSwap`
+              ? `graduated${coin.graduatedAt ? ` ${f.date(coin.graduatedAt)}` : ""}, trading on Meteora`
               : `on the bonding curve, ${f.fixed((coin.curveSol / target) * 100, 1)}%`}
           </span>
         </div>
@@ -345,6 +346,19 @@ export function CoinView({
   const fumbleCols: Column<FumbleRow>[] = [
     { key: "who", header: "Seller", render: (r) => <Address address={r.owner} name={r.ownerName} you={r.isYou || r.owner === address} /> },
     { key: "when", header: "When", render: (r) => <span className="muted">{f.ago(r.ts, now)}</span>, sortValue: (r) => r.ts, hideBelow: "sm" },
+    {
+      key: "where",
+      header: "Sold on",
+      hideBelow: "md",
+      render: (r) =>
+        r.verifying ? (
+          <Badge tone="muted" dot>
+            verifying
+          </Badge>
+        ) : (
+          <span className="muted">{r.source === "router" ? "FUMPAD" : (f.appName(r.app) ?? "elsewhere")}</span>
+        ),
+    },
     { key: "sold", header: "Sold", align: "end", render: (r) => <Tokens value={r.tokens} compact />, sortValue: (r) => r.tokens },
     { key: "for", header: "For", align: "end", render: (r) => <Sol value={r.sol} />, sortValue: (r) => r.sol, hideBelow: "md" },
     {
@@ -408,7 +422,7 @@ export function CoinView({
             </Panel>
           ) : (
             <Panel className={s.oCurve} aria-labelledby="curve-h">
-              <PanelHead id="curve-h" title="Bonding curve" aside={`graduates at ${f.fixed(target, target < 10 ? 2 : 0)} SOL, then moves to PumpSwap`} />
+              <PanelHead id="curve-h" title="Bonding curve" aside={`Meteora DBC, graduates at ${f.fixed(target, target < 10 ? 2 : 0)} SOL`} />
               <div className={s.curveBox}>
                 <div className={s.curveStats}>
                   <Stat label={`${f.fixed(Math.max(0, target - coin.curveSol), 2)} SOL to go. Claims on this coin open at graduation.`}>
@@ -423,13 +437,14 @@ export function CoinView({
                 <CurveMeter raised={coin.curveSol} target={target} />
               </div>
               <PanelNote>
-                Sells on the curve still file tickets. They count toward 10× right away; you can claim once the coin graduates and the{" "}
+                At {f.fixed(target, target < 10 ? 2 : 0)} SOL the curve completes and its liquidity moves to a Meteora DAMM v2 pool, 100% locked for good. Sells on the
+                curve, on any app, still count: they file tickets toward 10× right away, and you can claim once the coin graduates and the{" "}
                 {f.durationShort(params.oracleWindowSecs)} median holds there.
               </PanelNote>
             </Panel>
           )}
           <Panel className={s.oFumbles} aria-labelledby="fumbles-h">
-            <PanelHead id="fumbles-h" title="Recent fumbles" aside={`sells over ${f.usd(params.minSellUsd)} through FUMPAD`} />
+            <PanelHead id="fumbles-h" title="Recent fumbles" aside={`sells over ${f.usd(params.minSellUsd)}, any app`} />
             <Table
               caption={`Recent ${coin.symbol} fumbles`}
               columns={fumbleCols}
@@ -438,14 +453,14 @@ export function CoinView({
               highlight={(r) => !!r.isYou || r.owner === address}
               empty={
                 <EmptyState title="No fumbles yet" compact>
-                  Nobody has sold ${coin.symbol} for {f.usd(params.minSellUsd)} or more through FUMPAD. The first ticket starts the board.
+                  Nobody has sold ${coin.symbol} for {f.usd(params.minSellUsd)} or more yet, on any app. The first ticket starts the board.
                 </EmptyState>
               }
             />
           </Panel>
 
           <Panel className={s.oTrades} aria-labelledby="trades-h">
-            <PanelHead id="trades-h" title="Recent trades" aside="through FUMPAD, live" />
+            <PanelHead id="trades-h" title="Recent trades" aside="every app, live" />
             {trades === null ? (
               <Loading label="Loading trades">
                 <div className={s.tradesSkel}>
@@ -465,12 +480,14 @@ export function CoinView({
                       </span>
                       <span className={s.who}>
                         <Address address={t.wallet} you={t.wallet === address} />
-                        {t.snipeTaxSol !== undefined && t.snipeTaxBps !== undefined && (
-                          <span title={`${f.fixed(t.snipeTaxSol, 3)} SOL of this buy went to the reward pool (snipe protection).`}>
+                        {t.snipeTaxSol !== undefined && t.snipeTaxBps !== undefined ? (
+                          <span title={`Traded in the launch window: a ${f.fixed(t.snipeTaxBps / 100, 1)}% fee instead of ${f.fixed(params.feeBps / 100, 2)}%. FUMPAD's share goes to the reward pool.`}>
                             <Badge tone="muted" className={s.taxTag}>
-                              snipe-taxed {f.fixed(t.snipeTaxBps / 100, 0)}%
+                              snipe fee {f.fixed(t.snipeTaxBps / 100, 0)}%
                             </Badge>
                           </span>
+                        ) : (
+                          f.appName(t.app) && <span className={s.via}>via {f.appName(t.app)}</span>
                         )}
                       </span>
                       <Tokens value={t.tokens} compact />
@@ -507,6 +524,8 @@ export function CoinView({
                 className={description || links.length ? s.kvGap : undefined}
                 rows={[
                   { k: "Mint", v: <Address address={coin.mint} avatar={false} link={false} copy /> },
+                  ...(coin.dbcPool ? [{ k: "Curve, Meteora DBC", v: <Address address={coin.dbcPool} avatar={false} link={false} copy /> }] : []),
+                  ...(coin.dammPool ? [{ k: "Pool, Meteora DAMM v2", v: <Address address={coin.dammPool} avatar={false} link={false} copy /> }] : []),
                   { k: "Tickets filed", v: <span className="num">{f.int(coin.ticketsCreated)}</span> },
                   { k: "Volume, 24h", v: <Sol value={coin.volume24hSol} /> },
                 ]}
@@ -537,43 +556,41 @@ export function CoinView({
                     { k: "Largest single claim, 10% of pool", v: <Tokens value={coin.poolTokens * 0.1} /> },
                     { k: "Bought back, 24h", v: <Tokens value={coin.poolBought24h} signed /> },
                     { k: "Paid out, all time", v: <Tokens value={coin.poolPaidOut} /> },
-                    { k: "Seeded at launch, 8%", v: <Tokens value={coin.poolSeeded} /> },
+                    { k: `Arrived at graduation, ${f.fixed((params.rewardPoolSupply / params.totalSupply) * 100, 0)}%`, v: <Tokens value={coin.poolSeeded} /> },
                     ...(coin.snipeTaxSol
-                      ? [{ k: `Snipe tax at launch, ${f.int(coin.snipeTaxedBuys ?? 0)} ${coin.snipeTaxedBuys === 1 ? "buy" : "buys"}`, v: <Sol value={coin.snipeTaxSol} /> }]
+                      ? [{ k: `Launch-window fees, ${f.int(coin.snipeTaxedTrades ?? 0)} ${coin.snipeTaxedTrades === 1 ? "trade" : "trades"}`, v: <Sol value={coin.snipeTaxSol} /> }]
                       : []),
                   ]}
                 />
-                <p className={s.splitLabel}>Where each 1% trade fee goes</p>
-                <SplitBar
-                  label="Fee split"
-                  parts={[
-                    { label: "pool", share: 50 },
-                    { label: "FUMPAD", share: 30 },
-                    { label: "creator", share: 20 },
-                  ]}
-                />
+                <FeeSplit params={params} />
               </PanelBody>
               <PanelNote>
-                Liquidity is locked forever in an immutable locker. Its trading fees are skimmed: tokens go to this pool, SOL to FUMPAD and the creator.
+                The liquidity is a Meteora DAMM v2 position owned by FUMPAD&apos;s fee claimer, 100% permanently locked: nobody can withdraw it, including us. Its fees
+                are claimed in SOL and split like every trade fee.
               </PanelNote>
             </Panel>
           ) : (
             <Panel className={s.oPool} aria-labelledby="pool-h">
               <PanelHead id="pool-h" title="Reward pool" aside="filling" />
               <PanelBody>
-                <Stat label="8% seeded at launch, plus curve-fee buybacks">
+                <Stat label="Bought back from trade fees so far">
                   <Tokens value={coin.poolTokens} size="xl" symbol={coin.symbol} />
                 </Stat>
                 <KV
                   className={s.kvGap}
                   rows={[
+                    {
+                      k: `Arrives at graduation, ${f.fixed((params.rewardPoolSupply / params.totalSupply) * 100, 0)}% of supply`,
+                      v: <Tokens value={params.rewardPoolSupply} compact />,
+                    },
                     { k: "Tickets waiting on graduation", v: <span className="num">{f.int(coin.ticketsOpen)}</span> },
                     { k: "Already past 10×", v: <span className="num">{coin.ticketsPast10x}</span> },
                     ...(coin.snipeTaxSol
-                      ? [{ k: `Snipe tax at launch, ${f.int(coin.snipeTaxedBuys ?? 0)} ${coin.snipeTaxedBuys === 1 ? "buy" : "buys"}`, v: <Sol value={coin.snipeTaxSol} /> }]
+                      ? [{ k: `Launch-window fees, ${f.int(coin.snipeTaxedTrades ?? 0)} ${coin.snipeTaxedTrades === 1 ? "trade" : "trades"}`, v: <Sol value={coin.snipeTaxSol} /> }]
                       : []),
                   ]}
                 />
+                <FeeSplit params={params} />
               </PanelBody>
             </Panel>
           )}
@@ -597,6 +614,30 @@ export function CoinView({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where each trade fee goes (D32): Meteora keeps its protocol share, FUMPAD's share splits
+ * 50 / 30 / 20 (the bar), whichever app the trade came from.
+ */
+function FeeSplit({ params }: { params: ProtocolParams }) {
+  const pct = (bps: number) => f.fixed(bps / 100, bps % 100 ? 2 : 0);
+  const ours = (params.feeBps * (10_000 - params.venueFeeShareBps)) / 10_000;
+  return (
+    <>
+      <p className={s.splitLabel}>
+        Of each {pct(params.feeBps)}% trade fee, on any app, Meteora keeps {pct(params.feeBps - ours)}%. FUMPAD&apos;s {pct(ours)}% goes:
+      </p>
+      <SplitBar
+        label="Fee split"
+        parts={[
+          { label: "pool", share: params.feePoolShareBps / 100 },
+          { label: "FUMPAD", share: params.feePlatformShareBps / 100 },
+          { label: "creator", share: params.feeCreatorShareBps / 100 },
+        ]}
+      />
+    </>
   );
 }
 

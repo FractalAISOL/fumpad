@@ -242,7 +242,7 @@ export function Hero() {
             The launchpad for people who sell too early.
           </h1>
           <p className={s.lede}>
-            Sell a coin through FUMPAD. If it later holds 10× your sell price, you claim 10% of the tokens you sold.
+            Sell a FUMPAD coin, here or on any app. If it later holds 10× your sell price, you claim 10% of the tokens you sold.
           </p>
         </div>
 

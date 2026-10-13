@@ -466,10 +466,17 @@ export interface TicketSpec {
   queuedAt?: number;
   claimedAt?: number;
   claimedMultiple?: number;
+  /** Sold through the FUMPAD router, else on another app (`app` label when known). */
+  source?: "router" | "outside";
+  app?: string;
+  escrowed?: boolean;
 }
 
 export const DEMO_TICKETS: TicketSpec[] = [
-  { symbol: "MIDC", seq: 2, sellTs: d(8, 19, 22, 51), originalTokens: 4_200_000, tokens: 4_200_000, multiple: 11.4, peak: 11.9, state: "claimable" },
+  { symbol: "MIDC", seq: 2, sellTs: d(8, 19, 22, 51), originalTokens: 4_200_000, tokens: 4_200_000, multiple: 11.4, peak: 11.9, state: "claimable", source: "outside", app: "axiom" },
+  // v0.7 attestation states: a sell the keepers are still verifying, and one inside its challenge window.
+  { symbol: "COPE", seq: 3, sellTs: EPOCH - 25_000, originalTokens: 1_400_000, tokens: 1_400_000, multiple: 1, peak: 1, state: "verifying", source: "outside", app: "jupiter" },
+  { symbol: "MIDC", seq: 4, sellTs: EPOCH - 2 * 3_600_000, originalTokens: 2_100_000, tokens: 2_100_000, multiple: 1.3, peak: 1.4, state: "challenge" },
   {
     symbol: "GOBT",
     seq: 0,
@@ -481,6 +488,7 @@ export const DEMO_TICKETS: TicketSpec[] = [
     state: "queued",
     queuePosition: 4,
     queuedAt: d(10, 9, 6, 12),
+    source: "router",
   },
   {
     symbol: "COPE",
@@ -492,6 +500,8 @@ export const DEMO_TICKETS: TicketSpec[] = [
     peak: 8.6,
     state: "tracking",
     floorApplied: true,
+    source: "outside",
+    app: "direct",
   },
   { symbol: "CRNE", seq: 0, sellTs: d(10, 4, 1, 15), originalTokens: 5_100_000, tokens: 5_100_000, multiple: 11.6, peak: 11.6, state: "awaiting-graduation" },
   { symbol: "FRGA", seq: 0, sellTs: d(7, 23, 15, 2), originalTokens: 900_000, tokens: 900_000, multiple: 3.4, peak: 4.1, state: "tracking" },
@@ -508,8 +518,25 @@ export const DEMO_TICKETS: TicketSpec[] = [
     state: "claimed",
     claimedAt: d(9, 20, 14, 2),
     claimedMultiple: 12.6,
+    source: "router",
   },
   { symbol: "LGRN", seq: 0, sellTs: d(7, 12, 9, 30), originalTokens: 7_400_000, tokens: 7_400_000, multiple: 0.4, peak: 2.3, state: "expired" },
+  // D16: a payout the wallet's token account refused (e.g. closed), waiting in the ticket's escrow.
+  {
+    symbol: "WBSC",
+    seq: 1,
+    sellTs: d(8, 30, 16, 5),
+    originalTokens: 900_000,
+    tokens: 900_000,
+    multiple: 41,
+    peak: 44,
+    state: "claimed",
+    claimedAt: d(10, 8, 9, 40),
+    claimedMultiple: 12.2,
+    source: "outside",
+    app: "jupiter",
+    escrowed: true,
+  },
 ];
 
 /** Deterministic tickets for any other wallet (connected wallets in the mock). */

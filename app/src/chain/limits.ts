@@ -2,9 +2,9 @@
  * What a transaction really costs the wallet, and when Instant trading must ask first.
  *
  * M-9 (security-review/REPORT.md): the per-trade limit used to compare only the amount typed,
- * so the 1% fee (on launches) and first-time account rent (token account, Position, a new
- * coin's accounts) went through silently on top. The limit now applies to the wallet's actual
- * outflow: simulated from the built transaction when the RPC answers, else a worst case.
+ * so fees and first-time account rent (token accounts, a new coin's accounts) went through
+ * silently on top. The limit now applies to the wallet's actual outflow: simulated from the
+ * built transaction when the RPC answers, else a worst case.
  *
  * L-8: Instant trading also has a session cap (default 5 SOL): once the instant outflow in this
  * browser session reaches it, every trade asks on screen, whatever its size.
@@ -21,25 +21,32 @@ const big = (n: number) => BigInt(n);
 export const rentFor = (bytes: number) => big((128 + bytes) * 6960);
 /** The wallet's Token-2022 ATA (165 + account type + ImmutableOwner TLV, with room for transfer-fee state). */
 export const ATA_RENT = rentFor(182);
-/** FUMPAD Position PDA (8 + Position::INIT_SPACE 322). */
-export const POSITION_RENT = rentFor(330);
-/** First buy of a coin: the program creates both (init_if_needed). */
-export const FIRST_TIME_RENT = ATA_RENT + POSITION_RENT;
+/** The wallet's WSOL account (165 B), opened and closed around each router trade (refunded in the same transaction). */
+export const WSOL_RENT = rentFor(165);
 /**
- * A launch: Token-2022 mint with metadata (≤ ~700 B), Coin, two vaults, plus the creator's ATA and
- * Position for the first buy. Rounded up; only used when simulation isn't available.
+ * First buy of a coin: the coin's token account, plus the WSOL account counted as spent even
+ * though it closes again (the worst case errs high). v0.7 buys create no Position (the keepers'
+ * attestations do).
+ */
+export const FIRST_TIME_RENT = ATA_RENT + WSOL_RENT;
+/** Other actions (claim, escrow): at most the coin's token account. */
+export const OTHER_RENT = ATA_RENT;
+/**
+ * A launch: DBC pool + vaults + Token-2022 mint with metadata (≈0.0088 SOL, spike §7), Coin and
+ * the reward vault (`register_coin`), plus the creator's token account for a first buy. Rounded
+ * up; only used when simulation isn't available.
  */
 export const LAUNCH_RENT = big(30_000_000);
 const BASE_FEE = big(5_000);
 
 /** Worst-case outflow for an action when the transaction can't be simulated. */
 export function worstCaseSpend(kind: "buy" | "launch" | "other", amountLamports: bigint): bigint {
-  const rent = kind === "launch" ? LAUNCH_RENT : kind === "buy" ? FIRST_TIME_RENT : POSITION_RENT;
+  const rent = kind === "launch" ? LAUNCH_RENT : kind === "buy" ? FIRST_TIME_RENT : OTHER_RENT;
   return (amountLamports > big(0) ? amountLamports : big(0)) + rent + MAX_PRIORITY_FEE_LAMPORTS + BASE_FEE * big(2);
 }
 
 /**
- * Lamports `wallet` loses if `tx` lands: buy amounts, the FUMPAD fee, account rent and network
+ * Lamports `wallet` loses if `tx` lands: buy amounts (the pool fee included), account rent and network
  * fees, from a simulation of the exact message. Sells come out ≤ 0 (they pay the wallet).
  * Returns null if the RPC can't simulate it (the caller falls back to `worstCaseSpend`).
  */

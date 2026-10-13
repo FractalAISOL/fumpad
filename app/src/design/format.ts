@@ -222,3 +222,28 @@ export function shortAddr(a: string, head = 4, tail = 4): string {
   if (a.length <= head + tail + 1) return a;
   return `${a.slice(0, head)}…${a.slice(-tail)}`;
 }
+
+/* ── Apps and venues ───────────────────────────────────────────────────────── */
+
+/**
+ * Display names for the indexer's app labels (`@fumpad/meteora` `appLabel`). Labels are
+ * best-effort and display only; anything not listed (direct swaps, bots, unlabelled programs)
+ * shows as "elsewhere". Naming an app states where a trade came from; it isn't an endorsement.
+ */
+const APP_NAMES: Record<string, string> = {
+  fumpad: "FUMPAD",
+  axiom: "Axiom",
+  jupiter: "Jupiter",
+  okx: "OKX",
+  dflow: "DFlow",
+  padre: "Padre",
+};
+/** "Axiom", "FUMPAD"…, or undefined when the label is unknown or generic. */
+export function appName(app: string | undefined): string | undefined {
+  return app ? APP_NAMES[app] : undefined;
+}
+/** "sold on Axiom", "sold on FUMPAD", else "sold elsewhere". */
+export function soldOn(t: { source?: "router" | "outside"; app?: string }): string {
+  const name = t.source === "router" ? "FUMPAD" : appName(t.app);
+  return name ? `sold on ${name}` : "sold elsewhere";
+}

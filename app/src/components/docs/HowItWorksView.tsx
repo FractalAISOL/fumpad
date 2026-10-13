@@ -1,25 +1,28 @@
 "use client";
 
 import Link from "next/link";
+import { feeBpsAtSlot } from "@/data/meteora";
 import { Gauge, SplitBar } from "@/design";
 import * as f from "@/design/format";
 import { useProtocolParams } from "../shell/Providers";
 import { DocPage, DocSection, Facts, type TocItem } from "./Doc";
 import s from "./Doc.module.css";
 
-/** Protocol constants that are not `Global.params` (fixed in the program, docs/SPEC.md). */
-const LP_SKIM_PLATFORM = 60;
-const LP_SKIM_CREATOR = 40;
-const PUMPSWAP_LP_FEE_PCT = 0.2;
+/** Protocol constants that are not `Global.params` (fixed in the program, docs/SPEC-v0.7-meteora.md). */
 const REFERENCE_WINDOW_SECS = 600;
 const MAX_QUEUED_PER_WALLET = 2;
-const ESCAPE_HATCH_DAYS = 7;
 const TIMELOCK_HOURS = 48;
 const SLOT_SECS = 0.4;
+/** D31: attestations need 2 of the 3 keepers. */
+const KEEPERS = 3;
+const ATTEST_THRESHOLD = 2;
+/** Apps that trade Meteora pools, named as examples (not partners). */
+const APPS = "Axiom, Jupiter, GMGN or Photon";
 
 const TOC: TocItem[] = [
   { id: "concept", label: "The idea" },
   { id: "tickets", label: "Tickets" },
+  { id: "verify", label: "How a sell becomes a ticket" },
   { id: "claims", label: "Claims and the 10× median" },
   { id: "fees", label: "Fees & rewards" },
   { id: "snipe", label: "Snipe protection" },
@@ -29,14 +32,7 @@ const TOC: TocItem[] = [
   { id: "faq", label: "FAQ" },
 ];
 
-const pctOfBps = (bps: number) => f.fixed(bps / 100, bps % 100 === 0 ? 0 : 1);
-
-/** D19 schedule: min(start, ⌈100%·(W − d)/W⌉) at slot offset d < W. */
-function snipeSchedule(windowSlots: number, startBps: number): number[] {
-  const out: number[] = [];
-  for (let d = 0; d < windowSlots; d++) out.push(Math.min(startBps, Math.ceil((10_000 * (windowSlots - d)) / windowSlots)));
-  return out;
-}
+const pctOfBps = (bps: number) => f.fixed(bps / 100, bps % 100 === 0 ? 0 : bps % 10 === 0 ? 1 : 2);
 
 export function HowItWorksView({ cluster }: { cluster: string | null }) {
   const p = useProtocolParams();
@@ -45,11 +41,15 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
   const maxClaimPct = pctOfBps(p.maxClaimPoolBps);
   const poolPct = f.fixed((p.rewardPoolSupply / p.totalSupply) * 100, 0);
   const fee = pctOfBps(p.feeBps);
+  const venueFeeBps = (p.feeBps * p.venueFeeShareBps) / 10_000;
+  const ourFee = pctOfBps(p.feeBps - venueFeeBps);
   const split = [p.feePoolShareBps, p.feePlatformShareBps, p.feeCreatorShareBps].map((b) => b / 100);
   const minSell = f.usdRule(p.minSellUsd);
   const hold = f.duration(p.minHoldSecs);
   const median = f.durationAdj(p.oracleWindowSecs);
-  const schedule = snipeSchedule(p.snipeWindowSlots, p.snipeStartBps);
+  const challenge = f.duration(p.ticketChallengeSecs);
+  const snipeOn = p.snipeWindowSlots > 0 && p.snipeStartBps > p.feeBps;
+  const schedule = snipeOn ? Array.from({ length: p.snipeWindowSlots }, (_, d) => feeBpsAtSlot(p, d)) : [];
   const grad = p.graduationSol < 10 ? f.fixed(p.graduationSol, 2) : f.int(p.graduationSol);
 
   return (
@@ -57,8 +57,8 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       title="How FUMPAD works"
       lede={
         <>
-          FUMPAD is a Solana launchpad for people who sell too early. Sell through FUMPAD and you get a ticket. If the coin later holds {trigger} your sell
-          price, you can claim {claimPct}% of what you sold back from the coin&apos;s reward pool.
+          FUMPAD is a Solana launchpad for people who sell too early. Trade FUMPAD coins anywhere: every sell over {minSell} counts. It files a ticket, and if
+          the coin later holds {trigger} your sell price, you can claim {claimPct}% of what you sold back from the coin&apos;s reward pool.
         </>
       }
       aside={
@@ -73,9 +73,9 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
     >
       <DocSection id="concept" title="The idea">
         <p>
-          Everyone has sold a coin that went on to do {trigger}. On FUMPAD that sell is on the record: every sell of {minSell} or more through FUMPAD files a
-          ticket at your sell price. Each coin carries its own reward pool, seeded with {poolPct}% of the supply at launch and topped up by trading fees.
-          When a ticket crosses {trigger}, its owner claims from that pool.
+          Everyone has sold a coin that went on to do {trigger}. On FUMPAD that sell is on the record: every sell of {minSell} or more of a FUMPAD coin files a
+          ticket at your sell price, whether you sold here or on {APPS}. Each coin carries its own reward pool: {poolPct}% of the supply set aside for it,
+          plus buybacks from every trade&apos;s fee. When a ticket crosses {trigger}, its owner claims from that pool.
         </p>
         <p>
           It is a rebate on a specific regret, paid in the coin itself. It is not insurance, and it isn&apos;t guaranteed: a claim pays only while the
@@ -84,11 +84,12 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="tickets" title="Tickets">
-        <p>A sell through FUMPAD files a ticket when all of these hold. If one doesn&apos;t, the sell still goes through, just without a ticket.</p>
+        <p>A sell files a ticket when all of these hold. If one doesn&apos;t, the sell still goes through, just without a ticket.</p>
         <Facts
           label="Ticket rules"
           rows={[
             { k: "Smallest sell that files a ticket", v: <span className="num">{minSell}</span> },
+            { k: "Where", v: "FUMPAD or any other app, on the coin's own pools" },
             { k: "Time the tokens must sit in your wallet first", v: <span className="num">{hold}</span> },
             { k: "Open tickets per wallet, per coin", v: <span className="num">{f.int(p.maxOpenTickets)}</span> },
             { k: "Coin creator's own sells", v: "never file" },
@@ -99,15 +100,38 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
           recent-average floor instead, so a crash staged right before a sell can&apos;t make a ticket cheap. The floor errs higher, never lower.
         </p>
         <p>
-          <b>Rebuys.</b> Buying the same coin back through FUMPAD within {f.duration(p.rebuyWindowSecs)} of a sell shrinks that ticket by the amount you
-          bought, newest ticket first. Buy it all back and the ticket is void. Sells on other venues never file tickets.
+          <b>Rebuys.</b> Buying the same coin back within {f.duration(p.rebuyWindowSecs)} of a sell, on any app, shrinks that ticket by the amount you
+          bought, newest ticket first. Buy it all back and the ticket is void. A buy and a sell in the same transaction never files anything.
         </p>
+      </DocSection>
+
+      <DocSection id="verify" title="How a sell becomes a ticket">
+        <p>
+          Most trades don&apos;t go through FUMPAD, so the tickets don&apos;t come from our app. FUMPAD runs {KEEPERS} independent keepers, each on its own
+          machine and its own Solana RPC. Each one reads every finalized trade on a FUMPAD coin&apos;s pools, from every app, re-derives the ticket with the
+          same public rules (hold time, rebuys, floor price, the SOL/USD price at the time of the sell) and signs it. When {ATTEST_THRESHOLD} of {KEEPERS}{" "}
+          signatures agree, the ticket is created on chain, usually within {f.duration(p.attestDelaySecs)} of your sell. Sells through FUMPAD go the same way.
+        </p>
+        <p>
+          A new ticket then sits in a <b>{challenge} challenge window</b>. A public watcher re-checks every attestation against the chain, and if one is
+          wrong, the guardian can void it in that window. The ticket counts toward {trigger} the whole time; it just can&apos;t be claimed before the window
+          ends. My fumbles shows it as <i>Verifying</i>, then <i>Challenge window</i> with the time claims open.
+        </p>
+        <Facts
+          label="Verification"
+          rows={[
+            { k: "Signatures needed", v: <span className="num">{ATTEST_THRESHOLD} of {KEEPERS} keepers</span> },
+            { k: "Typical time to a ticket", v: <span className="num">~{f.duration(p.attestDelaySecs)}</span> },
+            { k: "Challenge window before claims", v: <span className="num">{challenge}</span> },
+            { k: "Ticket rent", v: "paid by the keeper, not you" },
+          ]}
+        />
       </DocSection>
 
       <DocSection id="claims" title="Claims and the 10× median">
         <p>
-          A ticket is claimable once the coin has graduated and its <b>{median} median price</b> holds at {trigger} your ticket price or more. A median
-          over many keeper samples, not a single trade, so a one-block spike doesn&apos;t count.
+          A ticket is claimable once the coin has graduated, its challenge window has passed, and its <b>{median} median price</b> holds at {trigger} your
+          ticket price or more. A median over many keeper samples, not a single trade, so a one-block spike doesn&apos;t count.
         </p>
         <Facts
           label="Claim rules"
@@ -122,13 +146,15 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
         <p>
           If the claim fits the pool, it pays in the same transaction. If it doesn&apos;t, it joins the coin&apos;s claim queue, ordered by sell time; smaller
           claims that fit can skip ahead. Queued claims don&apos;t expire and are never paid in part. Claims are made for you by default (auto-claim, to
-          your own wallet only); you can turn that off per coin in <Link href="/fumbles">My fumbles</Link>.
+          your own wallet only); you can turn that off per coin in <Link href="/fumbles">My fumbles</Link>. If your wallet can&apos;t receive the payout, it
+          waits in an escrow only you can withdraw.
         </p>
       </DocSection>
 
       <DocSection id="fees" title="Fees & rewards">
         <p>
-          Every FUMPAD trade pays a {fee}% fee on its SOL side, before and after graduation. It splits {split[0]} / {split[1]} / {split[2]}:
+          Every trade on a FUMPAD coin&apos;s pools pays a {fee}% fee in SOL, on any app, before and after graduation. Meteora, which runs the pools, keeps{" "}
+          {pctOfBps(venueFeeBps)}%. FUMPAD&apos;s {ourFee}% splits {split[0]} / {split[1]} / {split[2]}:
         </p>
         <div className={s.figure}>
           <SplitBar
@@ -141,16 +167,16 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
           />
         </div>
         <p>
-          The pool&apos;s share buys the coin back into its reward pool. After graduation the locked liquidity also earns PumpSwap&apos;s{" "}
-          {f.fixed(PUMPSWAP_LP_FEE_PCT, 2)}% LP fee on all volume, from any app. FUMPAD skims that growth: the token side goes to the reward pool, the SOL
-          side splits {LP_SKIM_PLATFORM} / {LP_SKIM_CREATOR} between FUMPAD and the creator, which works out to about the same 50 / 30 / 20 by value.
+          The pool&apos;s share buys the coin back into its reward pool. After graduation the locked liquidity earns the same fee on all volume, and FUMPAD
+          splits it the same way. There is no extra fee for trading through FUMPAD.
         </p>
         <Facts
           label="Fee numbers"
           rows={[
-            { k: "Trading fee, every FUMPAD trade", v: <span className="num">{fee}%</span> },
-            { k: "Reward pool seeded at launch", v: <span className="num">{poolPct}% of supply</span> },
-            { k: "LP fee skim, SOL side", v: <span className="num">{LP_SKIM_PLATFORM} / {LP_SKIM_CREATOR}</span> },
+            { k: "Pool fee, every trade, any app", v: <span className="num">{fee}%</span> },
+            { k: "Of which Meteora", v: <span className="num">{pctOfBps(venueFeeBps)}%</span> },
+            { k: "Of which FUMPAD (pool / FUMPAD / creator)", v: <span className="num">{ourFee}%</span> },
+            { k: "Reward pool at graduation", v: <span className="num">{poolPct}% of supply</span> },
           ]}
         />
       </DocSection>
@@ -159,70 +185,86 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
         {schedule.length ? (
           <>
             <p>
-              Buys in the first {f.int(p.snipeWindowSlots)} slots after launch (about {f.fixed(p.snipeWindowSlots * SLOT_SECS, 1)} seconds) pay a snipe tax
-              on top of the normal fee, stepping down slot by slot. The whole tax goes to the coin&apos;s reward pool, so a sniper funds the people who sell
-              later.
+              Trades in the first {f.int(p.snipeWindowSlots)} slots after launch (about {f.fixed(p.snipeWindowSlots * SLOT_SECS, 1)} seconds) pay a higher
+              fee, buys and sells alike, falling slot by slot from {pctOfBps(p.snipeStartBps)}% to the normal {fee}%. FUMPAD&apos;s whole share of those fees
+              goes to the coin&apos;s reward pool, so a sniper funds the people who sell later.
             </p>
             <figure className={s.figure}>
-              <ul className={s.steps} aria-label="Snipe tax by slot after launch">
+              <ul className={s.steps} aria-label="Fee by slot after launch">
                 {schedule.map((bps, d) => (
                   <li key={d}>
                     <span>{d === 0 ? "Launch slot" : `Slot +${d}`}</span>
                     <span className={s.bar} aria-hidden="true">
                       <i style={{ width: `${bps / 100}%` }} />
                     </span>
-                    <span className="num">{pctOfBps(bps)}%</span>
+                    <span className="num">{pctOfBps(Math.round(bps))}%</span>
                   </li>
                 ))}
                 <li>
                   <span>Slot +{schedule.length}</span>
-                  <span className={s.bar} aria-hidden="true" />
-                  <span className="num">0%</span>
+                  <span className={s.bar} aria-hidden="true">
+                    <i style={{ width: `${p.feeBps / 100}%` }} />
+                  </span>
+                  <span className="num">{fee}%</span>
                 </li>
               </ul>
-              <figcaption>Tax as a share of what the buyer spends. From slot +{schedule.length}, buys pay only the {fee}% fee.</figcaption>
+              <figcaption>Fee as a share of the trade. From slot +{schedule.length}, trades pay the normal {fee}%.</figcaption>
             </figure>
             <p>
-              A taxed buy never costs more than the same buy outside the window; it just gets fewer tokens. Sells are never taxed. The creator&apos;s own
-              first buy inside the launch transaction is exempt; every other wallet pays, including any the creator runs.
+              <b>Creators:</b> your first buy gets the normal fee; snipers pay up to {pctOfBps(p.snipeStartBps)}%. The buy rides in the launch transaction as
+              the pool&apos;s very first trade, so nobody gets in ahead of you. Every other wallet pays the window fee, including any the creator runs.
             </p>
           </>
         ) : (
-          <p>Snipe protection is switched off for new launches right now: buys pay only the {fee}% fee from the first slot.</p>
+          <p>Snipe protection is switched off for new launches right now: trades pay only the {fee}% fee from the first slot.</p>
         )}
       </DocSection>
 
       <DocSection id="graduation" title="Graduation">
         <p>
-          Every coin starts on FUMPAD&apos;s own bonding curve. When the curve has raised {grad} SOL it completes, and anyone can graduate it: the raised SOL
-          and the reserved tokens open a PumpSwap pool at the curve&apos;s final price.
-          {p.graduationFeeSol > 0 && (
-            <> A graduation fee of {f.fixed(p.graduationFeeSol, 2)} SOL comes out of the raise to pay the setup rent for the coin&apos;s claim queue and price samples.</>
-          )}
+          Every coin launches on a Meteora Dynamic Bonding Curve with FUMPAD&apos;s settings, and trades on any app from its first block. When the curve has
+          raised {grad} SOL it completes: the last buy is filled only up to the end and the rest of its SOL stays in the buyer&apos;s wallet. The coin then
+          moves to a Meteora DAMM v2 pool at the curve&apos;s final price. Anyone can trigger that, and Meteora&apos;s own keepers usually do within moments.
         </p>
         <p>
-          Sells on the curve file tickets too. They count toward {trigger} straight away and become claimable once the coin graduates. If a completed coin
-          can&apos;t graduate within {ESCAPE_HATCH_DAYS} days, curve sells reopen so holders can exit.
+          At graduation the {poolPct}% set aside for the reward pool lands in it, and claims open.
+          {p.graduationFeeSol > 0 && (
+            <>
+              {" "}
+              Meteora&apos;s migration fee (about {f.fixed(p.graduationFeeSol, 2)} SOL) goes to FUMPAD and pays the setup rent for the coin&apos;s claim queue
+              and price samples.
+            </>
+          )}{" "}
+          Sells on the curve file tickets too. They count toward {trigger} straight away and become claimable once the coin graduates.
         </p>
       </DocSection>
 
       <DocSection id="lp" title="Liquidity locked forever">
         <p>
-          At graduation every LP token goes into a separate locker program with no admin and no upgrade authority. Nothing can withdraw the principal,
-          including FUMPAD. The locker can only skim fee growth, and it checks after every skim that what remains is worth at least what was locked.
+          At graduation the pool&apos;s whole liquidity position is permanently locked by Meteora&apos;s program and owned by a FUMPAD account that can only
+          claim its trading fees. Nobody can withdraw the liquidity, including FUMPAD and the creator. The lock lives in Meteora&apos;s programs, which their
+          team can upgrade; see the <Link href="/risk#meteora">risk disclosure</Link>.
         </p>
       </DocSection>
 
       <DocSection id="protections" title="Protections">
         <ul>
           <li>
-            <b>Hold time.</b> Tokens must sit in your wallet for {hold} before a sell of them counts, so buy-and-dump in one block files nothing.
+            <b>Hold time.</b> Tokens must sit in your wallet for {hold} before a sell of them counts, measured on chain across every app and transfer, so
+            buy-and-dump files nothing.
           </li>
           <li>
             <b>Recent-average floor.</b> Tickets are priced at your fill or the recent average, whichever is higher.
           </li>
           <li>
-            <b>Rebuy rule.</b> Buying back within {f.duration(p.rebuyWindowSecs)} shrinks or voids your ticket.
+            <b>Rebuy rule.</b> Buying back within {f.duration(p.rebuyWindowSecs)}, anywhere, shrinks or voids your ticket.
+          </li>
+          <li>
+            <b>Two-of-three attestation.</b> No single keeper can create a ticket, and every ticket waits out a {challenge} challenge window, watched by a
+            public checker.
+          </li>
+          <li>
+            <b>Only FUMPAD&apos;s pools.</b> Sells count on the coin&apos;s own curve and its graduated pool. Pools other people open for the coin don&apos;t.
           </li>
           <li>
             <b>Creator exclusion.</b> The creator&apos;s wallet never files tickets. Wallets that look linked to a creator are flagged publicly and left off
@@ -235,7 +277,8 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
             <b>Pool cap.</b> One payout can take at most {maxClaimPct}% of a pool, so one big claim can&apos;t drain it.
           </li>
           <li>
-            <b>Slow rule changes.</b> Protocol parameter changes wait {TIMELOCK_HOURS} hours before they apply, and fees are fixed per coin at launch.
+            <b>Slow rule changes.</b> Protocol parameter changes wait {TIMELOCK_HOURS} hours before they apply, and the fee split and reward terms are fixed per
+            coin at launch.
           </li>
         </ul>
       </DocSection>
@@ -248,6 +291,12 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
               nothing is paid.
             </p>
           </Faq>
+          <Faq q="Do sells on other apps count?">
+            <p>
+              Yes. A sell of {minSell} or more on {APPS} or any app that trades the coin&apos;s Meteora pools files a ticket like a sell here. Naming an app
+              isn&apos;t an endorsement: FUMPAD isn&apos;t affiliated with them, and their own fees apply.
+            </p>
+          </Faq>
           <Faq q="What happens if the pool is too small?">
             <p>
               Your claim waits in that coin&apos;s queue, in sell-time order, and pays in full once the pool can cover it. It doesn&apos;t expire while it
@@ -257,7 +306,9 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
           <Faq q="Why didn't my sell file a ticket?">
             <p>
               The usual reasons: it was under {minSell}, the tokens had been in your wallet for less than {hold}, you already have{" "}
-              {f.int(p.maxOpenTickets)} open tickets on that coin, you created the coin, or the sell went through another app.
+              {f.int(p.maxOpenTickets)} open tickets on that coin, you created the coin, you bought and sold in the same transaction, the sell went through a
+              pool FUMPAD didn&apos;t create, or it came from a program-controlled wallet whose seller can&apos;t be told apart. A sell that qualifies shows up
+              in My fumbles within a few minutes.
             </p>
           </Faq>
           <Faq q="Do I have to claim myself?">
@@ -267,14 +318,14 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
             </p>
           </Faq>
           <Faq q="What does a ticket cost?">
-            <p>
-              The {fee}% trading fee you pay on any FUMPAD trade, plus about 0.002 SOL of account rent that comes back when the ticket is closed.
-            </p>
+            <p>Nothing on top of the {fee}% pool fee every trade pays. The keepers pay the ticket&apos;s account rent.</p>
           </Faq>
           <Faq q="Can FUMPAD change the rules on my coin?">
             <p>
-              Fees are fixed per coin at launch. Other parameter changes wait {TIMELOCK_HOURS} hours before they apply. Locked liquidity can&apos;t be touched
-              by anyone. FUMPAD can pause launches, trading or claims in an emergency.
+              The fee split and reward terms are fixed per coin at launch. Other parameter changes wait {TIMELOCK_HOURS} hours before they apply. Locked
+              liquidity can&apos;t be withdrawn by anyone. FUMPAD can pause launches, buys through its app, attestations or claims in an emergency; selling
+              on Meteora is never paused by FUMPAD. Meteora controls its own programs and pools, as the <Link href="/risk#meteora">risk page</Link>{" "}
+              explains.
             </p>
           </Faq>
           {cluster && (

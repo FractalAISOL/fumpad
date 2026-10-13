@@ -37,7 +37,7 @@ function body(e: FeedEvent): ReactNode {
     case "fumble":
       return (
         <>
-          Sold {f.tokens(e.tokens)} <Tick e={e} /> for {f.sol(e.sol)} SOL.{" "}
+          Sold {f.tokens(e.tokens)} <Tick e={e} /> for {f.sol(e.sol)} SOL{e.source === "router" ? " on FUMPAD" : f.appName(e.app) ? ` on ${f.appName(e.app)}` : ""}.{" "}
           {pickLine(e.id, [
             "Ticket filed. See you at 10×, or never.",
             "Calling the top. Logging the ticket in case I'm wrong.",
@@ -85,18 +85,18 @@ function body(e: FeedEvent): ReactNode {
     case "graduation":
       return (
         <>
-          <Tick e={e} /> graduated. {raisedSol(e.raisedSol)} SOL on the curve, liquidity now on PumpSwap and locked for good. {f.int(e.ticketsUnlocked)} fumble tickets can claim at
+          <Tick e={e} /> graduated. {raisedSol(e.raisedSol)} SOL on the curve, liquidity now in a Meteora pool and locked for good. {f.int(e.ticketsUnlocked)} fumble tickets can claim at
           10×.
         </>
       );
     case "launch":
       return (
         <>
-          Launched <Tick e={e} />. 8% of supply already sits in its fumble pool. Sell it early, I dare you.
+          Launched <Tick e={e} />. 8% of supply is set aside for its fumble pool, and every sell over $50 counts, on any app. Sell it early, I dare you.
           {e.snipeTaxSol ? (
             <>
               {" "}
-              Snipers paid <span className="num">{f.sol(e.snipeTaxSol)}</span> SOL of snipe tax into it on the way in.
+              Snipers paid <span className="num">{f.sol(e.snipeTaxSol)}</span> SOL of launch-window fees on the way in; FUMPAD&apos;s share goes to the pool.
             </>
           ) : null}
         </>

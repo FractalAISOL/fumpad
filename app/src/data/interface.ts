@@ -53,7 +53,7 @@ export interface FumpadData {
   getHolders(mint: Address, viewer?: Address): Promise<{ total: number; top: Holder[] }>;
   getRecentFumbles(mint: Address, viewer?: Address): Promise<FumbleRow[]>;
   getClaimQueue(mint: Address, viewer?: Address): Promise<{ pool: number; owed: number; entries: QueueEntry[] }>;
-  /** Latest FUMPAD trades on a coin, newest first. */
+  /** Latest trades on a coin's own pools (DBC + DAMM v2, every app), newest first. */
   getRecentTrades(mint: Address, limit?: number): Promise<TradeRow[]>;
 
   getFeed(opts?: { kind?: FeedKind | "all"; before?: number; limit?: number }): Promise<FeedEvent[]>;
@@ -71,12 +71,12 @@ export interface FumpadData {
 
   /** Coins the wallet holds now (chain balance > 0), with FUMPAD cost basis. */
   getPositions(wallet: Address): Promise<WalletPosition[]>;
-  /** Coins the wallet traded through FUMPAD and fully exited, last trade first. */
+  /** Coins the wallet traded (any app) and fully exited, last trade first. */
   getClosedPositions(wallet: Address): Promise<ClosedPosition[]>;
   /** Coins the wallet launched, newest first, with creator fees. */
   getCreatedCoins(wallet: Address): Promise<CreatedCoin[]>;
 
-  /** Off-chain quote mirroring the program's math (curve or PumpSwap + fee + ticket rules). */
+  /** Off-chain quote mirroring Meteora's math (DBC curve or DAMM v2 + the pool fee + ticket rules). */
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote>;
   /** Wallet balances for the trade panel. */
   getBalances(wallet: Address, mint: Address): Promise<{ sol: number; tokens: number; maturedTokens: number }>;

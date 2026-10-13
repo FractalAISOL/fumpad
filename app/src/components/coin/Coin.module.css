@@ -263,6 +263,15 @@
   color: var(--ink-3);
   text-align: center;
 }
+/* "Also trades on …": a quiet footnote under the button, not a call to action. */
+.elsewhere {
+  margin: var(--s-3) 0 0;
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--ink-3);
+}
 
 .kvGap {
   margin-top: var(--s-3);
@@ -377,6 +386,13 @@
 .taxTag {
   flex: none;
   white-space: nowrap;
+}
+/* Which app sent the trade: a quiet fact, never a badge (no app gets emphasis). */
+.via {
+  flex: none;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--ink-3);
 }
 /* Direction without hue (DESIGN.md): glyph + weight; sells read quieter. */
 .side {

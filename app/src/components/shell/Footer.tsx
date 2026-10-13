@@ -33,6 +33,7 @@ const GROUPS: { title: string; links: { href: string; label: string }[] }[] = [
     title: "Learn",
     links: [
       { href: "/how-it-works", label: "How it works" },
+      { href: "/how-it-works#verify", label: "Sells on any app" },
       { href: "/how-it-works#fees", label: "Fees & rewards" },
       { href: "/how-it-works#snipe", label: "Snipe protection" },
       { href: "/how-it-works#faq", label: "FAQ" },
@@ -108,8 +109,8 @@ export function Footer() {
 
         <div className={s.base}>
           <p className={s.disclaimer}>
-            FUMPAD is experimental software running on {network}. Fumble rewards are not insurance and are not guaranteed: payouts depend on each
-            coin&apos;s reward pool. Nothing here is financial advice.
+            FUMPAD is experimental software running on {network}. Coins trade on Meteora&apos;s pools, which FUMPAD doesn&apos;t control. Fumble rewards are
+            not insurance and are not guaranteed: payouts depend on each coin&apos;s reward pool. Nothing here is financial advice.
           </p>
           <p className={s.copy}>© 2026 FUMPAD</p>
         </div>
