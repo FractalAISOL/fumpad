@@ -23,6 +23,7 @@ export * from "./math/price.js";
 export * from "./meteora/accounts.js";
 export * from "./meteora/config.js";
 export * from "./meteora/instructions.js";
+export * from "./meteora/quote.js";
 export * from "./params.js";
 export * from "./pda.js";
 export * from "./units.js";
