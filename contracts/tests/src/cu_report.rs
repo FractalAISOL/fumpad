@@ -306,6 +306,20 @@ fn cu_report() {
     let meta = ok(w.env.send_as(&u, &[i], &[&u]));
     r.add("close_position (1 ticket)", &meta, 0);
 
+    let so = std::fs::metadata(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/deploy/fumpad.so")).unwrap().len() as usize;
+    println!("\n| Account | bytes | rent (LiteSVM, mainnet features) |\n|---|---|---|");
+    for (n, len) in [
+        ("fumpad.so program data (+45 header)", so + 45),
+        ("Global", 1_044),
+        ("Coin", 546),
+        ("Position", 315),
+        ("Ticket", 276),
+        ("Consumed", 82),
+        ("ClaimQueue", 81_976),
+        ("Observations", 8_280),
+    ] {
+        println!("| {n} | {len} | {} |", w.env.rent(len));
+    }
     println!("\n| Instruction (worst case measured) | CU | tx bytes |\n|---|---|---|");
     for (n, cu, b) in &r.0 {
         let bytes = if *b > 0 { b.to_string() } else { "—".into() };
