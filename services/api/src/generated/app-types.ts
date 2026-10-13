@@ -352,7 +352,7 @@ export interface LeaderRow {
   name?: string;
   isYou?: boolean;
   symbol?: string;
-  /** The coin behind `symbol` (links go by mint; older API builds omit it and link by symbol). */
+  /** The coin behind `symbol`: present whenever `symbol` is. Links go by mint only. */
   mint?: Address;
   /** Board-specific numeric columns. */
   soldForSol?: number;

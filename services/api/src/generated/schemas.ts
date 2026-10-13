@@ -1235,7 +1235,7 @@ export const SCHEMAS: Record<string, unknown> = {
       },
       "mint": {
         "$ref": "#/components/schemas/Address",
-        "description": "The coin behind `symbol` (links go by mint; older API builds omit it and link by symbol)."
+        "description": "The coin behind `symbol`: present whenever `symbol` is. Links go by mint only."
       },
       "multiple": {
         "type": "number"
