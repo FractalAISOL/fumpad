@@ -21,6 +21,8 @@ export interface DammMigration {
   dammPool: string;
   baseMint: string;
   quoteMint: string;
+  /** DAMM v2 `EvtInitializePool.sqrt_price`: the graduated pool's opening spot (Q64.64). */
+  sqrtPrice: bigint;
 }
 export interface PoolFacts {
   signature: string;
@@ -33,7 +35,7 @@ export function parsePoolFacts(input: ConfirmedTx): PoolFacts {
   const tx = normalizeTx(input);
   const out: PoolFacts = { signature: tx.signature, slot: tx.slot, dbcPools: [], migrations: [] };
   if (tx.err) return out;
-  const dammInits = new Map<string, { a: string; b: string }>();
+  const dammInits = new Map<string, { a: string; b: string; sqrtPrice: bigint }>();
   for (const ix of tx.flat) {
     const venue = venueOf(ix.programId);
     if (!venue) continue;
@@ -48,7 +50,7 @@ export function parsePoolFacts(input: ConfirmedTx): PoolFacts {
     }
     if (!ev || ev.name !== "EvtInitializePool") continue;
     if (venue === "dbc") out.dbcPools.push({ pool: ev.data.pool as string, config: ev.data.config as string, baseMint: ev.data.base_mint as string, creator: ev.data.creator as string });
-    else dammInits.set(ev.data.pool as string, { a: ev.data.token_a_mint as string, b: ev.data.token_b_mint as string });
+    else dammInits.set(ev.data.pool as string, { a: ev.data.token_a_mint as string, b: ev.data.token_b_mint as string, sqrtPrice: BigInt(ev.data.sqrt_price as bigint) });
   }
   for (const ix of tx.flat) {
     if (ix.programId !== DBC_PROGRAM_ID || instructionName("dbc", ix.data) !== "migration_damm_v2") continue;
@@ -56,7 +58,7 @@ export function parsePoolFacts(input: ConfirmedTx): PoolFacts {
     if (a.length <= MG.dammEventAuthority) continue;
     const init = dammInits.get(a[MG.dammPool]);
     if (!init || init.a !== a[MG.baseMint] || init.b !== a[MG.quoteMint]) continue;
-    out.migrations.push({ dbcPool: a[MG.virtualPool], config: a[MG.config], dammPool: a[MG.dammPool], baseMint: a[MG.baseMint], quoteMint: a[MG.quoteMint] });
+    out.migrations.push({ dbcPool: a[MG.virtualPool], config: a[MG.config], dammPool: a[MG.dammPool], baseMint: a[MG.baseMint], quoteMint: a[MG.quoteMint], sqrtPrice: init.sqrtPrice });
   }
   return out;
 }

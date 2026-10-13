@@ -1,0 +1,26 @@
+{
+  "name": "@fumpad/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic ticket-eligibility engine (SPEC v0.7 §5.4): finalized Meteora trades + wallet transfers of a FUMPAD mint -> tickets / rebuy debits with the v0.6 rules ported bit-exact. Shared by the attestors and the watcher.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -b",
+    "record": "tsx scripts/record-history.ts"
+  },
+  "dependencies": {
+    "@fumpad/meteora": "0.1.0"
+  },
+  "files": [
+    "dist"
+  ]
+}

@@ -152,6 +152,7 @@ describe("failed tx, pool facts", () => {
         dammPool: "ApxZdXkBjKWomGyWBA3LcCzUkjhq4UcoiT2kVaj7WDUk",
         baseMint: "BQqBiNLXNVB3Y3h6yqGMvTgEfrYjFzUa2KHPUsaUpump",
         quoteMint: "So11111111111111111111111111111111111111112",
+        sqrtPrice: 583337266871351588n,
       },
     ]);
     // the curve-completing buy and the graduated pool's trades are on exactly these pools

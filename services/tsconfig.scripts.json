@@ -8,5 +8,5 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts", "test/**/*.ts", "sdk/test/**/*.ts", "meteora/test/**/*.ts", "meteora/scripts/**/*.ts", "indexer/test/**/*.ts", "api/test/**/*.ts", "keeper/test/**/*.ts", "vitest.config.ts"]
+  "include": ["scripts/**/*.ts", "test/**/*.ts", "sdk/test/**/*.ts", "meteora/test/**/*.ts", "meteora/scripts/**/*.ts", "engine/test/**/*.ts", "engine/scripts/**/*.ts", "indexer/test/**/*.ts", "api/test/**/*.ts", "keeper/test/**/*.ts", "vitest.config.ts"]
 }
