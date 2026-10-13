@@ -218,6 +218,8 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
 
   const issues: ParseIssue[] = [];
   const pendings = new Map<number, Pending>(); // by swap ordinal
+  /** DBC pools created in this tx (authenticated EvtInitializePool): their base vault was minted into in-tx. */
+  const initializedPools = new Set<string>();
 
   for (const ix of tx.flat) {
     const venue = venueOf(ix.programId);
@@ -234,6 +236,7 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
       continue;
     }
     if (!ev) continue; // an event outside our subset (e.g. EvtClaimTradingFee)
+    if (ev.name === "EvtInitializePool" && venue === "dbc") initializedPools.add(ev.data.pool as string);
     const isSwapEvent = ev.name === "EvtSwap" || ev.name === "EvtSwap2" || ev.name === "EvtCurveComplete";
     if (!isSwapEvent) continue;
     if (!tx.hasStackHeights) {
@@ -271,6 +274,10 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
   const expected = new Map<string, { delta: bigint; keys: number[]; mint: string }>();
   for (const t of trades) {
     for (const [vault, mint, d] of vaultDeltas(t)) {
+      // A launch tx (pool init + first swaps): the base vault was created and minted the whole supply in
+      // this tx, so its delta is supply − swaps. Its base leg can't be cross-checked; the quote vault (also
+      // created here, starting at 0) still is.
+      if (t.venue === "dbc" && mint === t.baseMint && initializedPools.has(t.pool) && tx.tokenBalances.get(vault)?.pre === null) continue;
       const e = expected.get(vault) ?? { delta: 0n, keys: [], mint };
       e.delta += d;
       e.keys.push(t.ixKey);

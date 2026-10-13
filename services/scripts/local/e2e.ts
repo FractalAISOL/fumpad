@@ -14,6 +14,8 @@
  * match) → API checks. Exits non-zero on any failed check.
  */
 import { randomBytes } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
 
@@ -39,7 +41,7 @@ import { createPool, migrate } from "@fumpad/indexer";
 import { signLaunchAuth } from "@fumpad/api";
 
 import { airdrop, createFumpadConfig, directDammBuy, directDammSell, directDbcBuy, directDbcSell, LOCAL_PARAMS, routedBuy, routedSell, tokenBalance, transferSol } from "./actors.js";
-import { buildGrinder, keypair, keypairPath, type Postgres, type Service, sleep, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
+import { buildGrinder, keypair, keypairPath, LOCAL, type Postgres, type Service, sleep, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
 
 export interface E2EReport {
   ok: boolean;
@@ -317,10 +319,14 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     return { ok: checks.every((c) => c.ok), mint: M, checks, counts, wsEvents, durationSec: Math.round((Date.now() - t0) / 1000) };
   } catch (e) {
     check(`scenario aborted: ${String(e).slice(0, 400)}`, false);
+    const dir = join(LOCAL, "e2e-logs");
+    mkdirSync(dir, { recursive: true });
     for (const s of services) {
-      const tail = s.logs.filter((l) => /error|warn|fail/i.test(l)).slice(-8);
-      if (tail.length) log(`── ${s.name} ──\n${tail.join("\n")}`);
+      writeFileSync(join(dir, `${s.name}.log`), s.logs.join("\n"));
+      const tail = s.logs.filter((l) => /error|warn|fail|"level":(40|50)/i.test(l)).slice(-6);
+      if (tail.length) log(`── ${s.name} ──\n${tail.map((l) => l.slice(0, 500)).join("\n")}`);
     }
+    log(`service logs: ${dir}`);
     return { ok: false, mint: M, checks, counts: {}, wsEvents, durationSec: Math.round((Date.now() - t0) / 1000) };
   } finally {
     ws?.close();
