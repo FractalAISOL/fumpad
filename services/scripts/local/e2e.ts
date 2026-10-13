@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
 
 import {
+  SNIPE_PERIODS,
   type CoinRefs,
   confirmSignature,
   decodeCoin,
@@ -213,6 +214,10 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     check("creator's first buy got the min fee (1.25%), not the 99% launch-window fee", creatorTokens > 0n, `${creatorTokens} base units`);
 
     // ── curve trades: third-party direct + FUMPAD router ─────────────────────
+    // Third parties trade after the launch window: inside it the DBC fee scheduler charges up to 99% (D33),
+    // which would shrink every position below the $5 ticket minimum.
+    const launchSlot = (await conn.getTransaction(launchSig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }))!.slot;
+    await waitFor("launch window over", async () => ((await conn.getSlot("confirmed")) > launchSlot + SNIPE_PERIODS + 2 ? true : null), 30_000);
     await directDbcBuy(conn, alice, coin, SOL / 10n);
     await routedBuy(conn, bob, coin, "dbc", SOL / 10n);
     await directDbcBuy(conn, eve, coin, SOL / 20n);
@@ -270,6 +275,10 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     await directDammBuy(conn, eve, coinG, grad.dammPool, SOL / 50n);
     await directDammSell(conn, eve, coinG, grad.dammPool, (await tokenBalance(conn, eve.publicKey, mint)) / 3n);
     log("✓ DAMM v2 trades by eve (direct)");
+    // The curve ends ~14.7x above its start, so early sellers sit ~4x below the graduation price: a large
+    // FUMPAD-routed DAMM v2 buy lifts the spot well past their 10x trigger for the samples/median to see.
+    await routedBuy(conn, whale, coinG, "damm_v2", 2n * SOL);
+    log("✓ whale's routed DAMM v2 buy (price past the 10x trigger)");
 
     // ── samples → median → auto-claims past the challenge window ────────────
     const claimed = await waitFor("keeper auto-claims bob's ticket (median ≥ 10×, past challenge)", async () => {

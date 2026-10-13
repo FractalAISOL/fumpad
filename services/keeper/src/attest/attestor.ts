@@ -106,6 +106,7 @@ export class Attestor {
   private signedIds = new Set<string>();
   private coinBackoff = new Map<string, number>();
   private msgBackoff = new Map<string, { until: number; tries: number }>();
+  private lastSummary = new Map<string, string>();
   private readonly me: string;
 
   constructor(private o: AttestorOptions) {
@@ -156,6 +157,22 @@ export class Attestor {
     }
     const cands = candidates(mint, der.output, { clusterTag: g.clusterTag, now, maxAttestAgeSecs: Number(g.params.maxAttestAgeSecs) });
     this.stats.candidates += cands.length;
+    const sellReasons = der.output.sells.map((s) => (s.ticket ? "ticket" : s.reason));
+    const key = JSON.stringify([sellReasons, der.output.rebuys.length, der.output.issues.length, cands.length]);
+    if (this.lastSummary.get(mint) !== key) {
+      this.lastSummary.set(mint, key);
+      this.o.log.info(
+        {
+          mint,
+          maxSlot: der.maxSlot,
+          sells: der.output.sells.slice(-8).map((s) => ({ slot: s.slot, base: String(s.baseAmount), quote: String(s.quoteGross), result: s.ticket ? "ticket" : s.reason })),
+          rebuys: der.output.rebuys.length,
+          issues: der.output.issues.map((i) => `${i.kind}@${i.slot}`).slice(0, 5),
+          candidates: cands.length,
+        },
+        "attestor: derivation changed",
+      );
+    }
     if (!cands.length) return;
     const consumed = await this.o.chain.accountsExist(
       cands.map((c) => (c.kind === "sell" ? consumedSellPda(c.sell!.signature, c.ixKey) : consumedRebuyPda(c.rebuy!.signature, c.ixKey, c.rebuy!.ticket))),
