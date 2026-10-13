@@ -5,20 +5,23 @@
  * module checks the compiled message, not our intentions: an unexpected program, an
  * unexpected signer, a lookup table, an instruction acting for someone else or on another
  * coin, an account list that isn't the canonical one, a buy larger than the amount the user
- * typed or an outsized priority fee all refuse. The patterns mirror the v0.7 builders
- * (`./v07/client.ts`, the API's launch prepare) and `contracts/INTERFACE-v0.7.md`:
+ * typed or an outsized priority fee all refuse. The patterns are the app's builders (`./build.ts`)
+ * and the API's launch prepare, both @fumpad/sdk v0.7 (`contracts/INTERFACE-v0.7.md`); real
+ * transactions captured from the local stack pin them (`fixtures/local-v07.json`, the tests):
  *
  *   buy     [CB] ATA(coin) · wrap SOL (ATA(WSOL) · transfer → own WSOL · sync) · fumpad.buy · close WSOL
  *   sell    [CB] ATA(WSOL) · fumpad.sell · close WSOL
  *   claim   [CB] ATA(coin) · fumpad.claim
  *   auto-claim / withdraw (creator fees) / escrow: [CB] [ATA(coin)] + the one FUMPAD instruction
- *   launch  [CB] DBC initialize_virtual_pool_with_token2022 · [ATA(coin) · wrap SOL · DBC swap2
- *           (the creator's top-level first buy) · close WSOL] · fumpad.register_coin
+ *   launch  [CB] [wrap SOL] · DBC initialize_virtual_pool_with_token2022 · [ATA(coin) · DBC swap2
+ *           (the creator's top-level first buy, with the instructions sysvar)] · fumpad.register_coin
+ *           · [close WSOL]
  *
- * Every FUMPAD and Meteora instruction's account list is re-derived from the wallet, the coin's
- * mint and the one free account the program checks on chain (the DBC config, the DAMM v2 pool,
- * the ticket) and must match key for key: the router's swap accounts must be the wallet's own
- * canonical token accounts in the right direction, with the wallet as payer and no referral.
+ * Every FUMPAD and Meteora instruction is rebuilt with the SDK from the wallet, the coin's mint,
+ * the amounts it carries and the one free account the program checks on chain (the DBC config,
+ * the DAMM v2 pool, the ticket) and must match it exactly, accounts and data: the router's swap
+ * accounts must be the wallet's own canonical token accounts in the right direction, with the
+ * wallet as payer and no referral.
  * The wallet never signs a DAMM v2 instruction directly, nor any Token-2022 instruction, nor a
  * Token instruction other than SyncNative / CloseAccount on its own WSOL account.
  *
@@ -28,28 +31,45 @@
  * No React, no `@/` imports: unit-tested by `allowlist.test.ts` with `npm test`.
  */
 import { ed25519 } from "@noble/curves/ed25519";
-import { ComputeBudgetProgram, PublicKey, SystemProgram, type VersionedTransaction } from "@solana/web3.js";
+import { ComputeBudgetProgram, PublicKey, SystemProgram, type TransactionInstruction, type VersionedTransaction } from "@solana/web3.js";
 import {
-  ATA_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID as ATA_PROGRAM_ID,
+  claimIx,
   coinPda,
   DAMM_V2_PROGRAM_ID,
   DBC_IX,
   DBC_PROGRAM_ID,
-  FUMPAD_IX,
+  dbcBuyIx,
+  dbcInitializePoolToken2022Ix,
+  eventAuthorityPda,
+  FUMPAD_IDL,
   FUMPAD_PROGRAM_ID,
-  fumpadEventAuthority,
-  type FumpadIxName,
   globalPda,
-  startsWith,
-  SYSVAR_INSTRUCTIONS_ID,
+  registerCoinIx,
+  routerBuyIx,
+  routerSellIx,
+  setAutoClaimIx,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
+  withdrawCreatorFeesIx,
+  withdrawEscrowIx,
   WSOL_MINT,
   wsolAta,
-} from "./v07/ids";
-import { claimIx, dammSwapAccounts, dbcInitPoolIx, dbcSwapAccounts, registerCoinIx, setAutoClaimIx, withdrawCreatorFeesIx, withdrawEscrowIx } from "./v07/ix";
+} from "@fumpad/sdk";
 
 export { ATA_PROGRAM_ID, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID };
+
+/** FUMPAD v0.7 instructions a user wallet signs. */
+type FumpadIxName = "buy" | "sell" | "register_coin" | "claim" | "set_auto_claim" | "withdraw_creator_fees" | "withdraw_escrow";
+/** Anchor discriminators, from the SDK's IDL. */
+const FUMPAD_IX = Object.fromEntries(
+  (["buy", "sell", "register_coin", "claim", "set_auto_claim", "withdraw_creator_fees", "withdraw_escrow"] as const).map((n) => {
+    const ix = (FUMPAD_IDL.instructions as unknown as { name: string; discriminator: number[] }[]).find((i) => i.name === n);
+    if (!ix) throw new Error(`IDL has no ${n}`);
+    return [n, ix.discriminator];
+  }),
+) as unknown as Record<FumpadIxName, readonly number[]>;
+const startsWith = (d: Uint8Array, p: readonly number[]) => d.length >= p.length && p.every((b, i) => d[i] === b);
 
 /** Total priority fee a silently signed transaction may carry (0.01 SOL). */
 export const MAX_PRIORITY_FEE_LAMPORTS = BigInt(10_000_000);
@@ -172,13 +192,31 @@ function vetComputeBudget(ixs: Ix[]): Ix[] {
 function sameKeys(got: PublicKey[], want: PublicKey[]): boolean {
   return got.length === want.length && got.every((k, i) => k.equals(want[i]));
 }
-const keysOf = (metas: { pubkey: PublicKey }[]) => metas.map((m) => m.pubkey);
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+/**
+ * The instruction is exactly `want` (rebuilt with @fumpad/sdk from the wallet, the coin and the one
+ * free account the program checks on chain): same program, same accounts in order, same data.
+ */
+function isExactly(ix: Ix, want: TransactionInstruction): boolean {
+  return ix.program.equals(want.programId) && sameKeys(ix.keys, want.keys.map((m) => m.pubkey)) && sameBytes(ix.data, want.data);
+}
+/** Rebuild with the SDK; arguments decoded from a tampered instruction may make the builder throw. */
+function rebuilt(build: () => TransactionInstruction): TransactionInstruction | null {
+  try {
+    return build();
+  } catch {
+    return null;
+  }
+}
+const coinAtaOf = (owner: PublicKey, mint: PublicKey) =>
+  PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_2022_PROGRAM_ID.toBuffer(), mint.toBuffer()], ATA_PROGRAM_ID)[0];
 
 /**
  * ATA create / create_idempotent for the wallet's own account, paid by the wallet, and only
  * for the coin (Token-2022) or, when the action wraps/unwraps SOL, WSOL (SPL Token).
+ * Returns true for the WSOL account.
  */
-function vetAtaCreate(ix: Ix, wallet: PublicKey, mint: PublicKey, allowWsol: boolean) {
+function vetAtaCreate(ix: Ix, wallet: PublicKey, mint: PublicKey, allowWsol: boolean): boolean {
   if (!(ix.data.length === 0 || (ix.data.length === 1 && (ix.data[0] === 0 || ix.data[0] === 1)))) refuse("unexpected token account instruction");
   if (ix.keys.length !== 6) refuse("unexpected token account layout");
   const [payer, account, owner, ataMint, system, tokenProgram] = ix.keys;
@@ -189,6 +227,7 @@ function vetAtaCreate(ix: Ix, wallet: PublicKey, mint: PublicKey, allowWsol: boo
   if (!coin && !wsol) refuse("it creates a token account for another token");
   const [expected] = PublicKey.findProgramAddressSync([owner.toBuffer(), tokenProgram.toBuffer(), ataMint.toBuffer()], ATA_PROGRAM_ID);
   if (!account.equals(expected)) refuse("token account address doesn't match");
+  return wsol;
 }
 
 /** System transfer from the wallet into its own WSOL account (wrapping SOL for a buy). Returns lamports. */
@@ -200,38 +239,50 @@ function vetWrapTransfer(ix: Ix, wallet: PublicKey): bigint {
 }
 
 /** SPL Token: only SyncNative / CloseAccount on the wallet's own WSOL account (SOL back to the wallet). */
-function vetTokenIx(ix: Ix, wallet: PublicKey, allowSync: boolean) {
+function vetTokenIx(ix: Ix, wallet: PublicKey, allowSync: boolean): "sync" | "close" {
   const acct = wsolAta(wallet);
-  if (allowSync && ix.data.length === 1 && ix.data[0] === 17 && ix.keys.length === 1 && ix.keys[0].equals(acct)) return;
+  if (allowSync && ix.data.length === 1 && ix.data[0] === 17 && ix.keys.length === 1 && ix.keys[0].equals(acct)) return "sync";
   if (ix.data.length === 1 && ix.data[0] === 9 && ix.keys.length === 3 && ix.keys[0].equals(acct) && ix.keys[1].equals(wallet) && ix.keys[2].equals(wallet))
-    return;
-  refuse("unexpected token instruction");
+    return "close";
+  return refuse("unexpected token instruction");
 }
 
-/** Router `buy` / `sell`: exact data, our accounts, the venue's canonical swap accounts for this wallet and coin. Returns the buy's SOL. */
+/**
+ * Router `buy` / `sell`: rebuilt with the SDK for this wallet, this coin and the venue's pool
+ * (the DBC config / the DAMM v2 pool, which the router checks belong to the coin), with the
+ * amounts, minimum and mode decoded from the instruction, then compared byte for byte: our
+ * accounts, the wallet's own canonical token accounts in the right direction, no referral.
+ * Returns the buy's SOL.
+ */
 function vetRouterTrade(ix: Ix, side: "buy" | "sell", wallet: PublicKey, mint: PublicKey): bigint {
-  const len = side === "buy" ? 25 : 24;
-  if (ix.data.length !== len) refuse(`malformed ${side}`);
-  if (side === "buy" && ix.data[24] !== 0 && ix.data[24] !== 1) refuse("unexpected swap mode");
-  if (u64(ix.data, 8) === BigInt(0)) refuse(`empty ${side}`);
-  const [trader, , , venue] = ix.keys;
-  if (ix.keys.length < 6 || !trader.equals(wallet)) refuse("it acts for another wallet");
+  if (ix.data.length !== (side === "buy" ? 25 : 24)) refuse(`malformed ${side}`);
+  const mode = side === "buy" ? ix.data[24] : 0;
+  if (mode !== 0 && mode !== 1) refuse("unexpected swap mode");
+  const amountIn = u64(ix.data, 8);
+  const minOut = u64(ix.data, 16);
+  if (amountIn === BigInt(0)) refuse(`empty ${side}`);
+  if (ix.keys.length < 6 || !ix.keys[0].equals(wallet)) refuse("it acts for another wallet");
+  const venueProgram = ix.keys[3];
   const remaining = ix.keys.slice(6);
-  let want: PublicKey[];
-  if (venue.equals(DBC_PROGRAM_ID)) {
+  let venue: "dbc" | "damm_v2";
+  if (venueProgram.equals(DBC_PROGRAM_ID)) {
+    venue = "dbc";
     if (remaining.length !== 15) refuse("unexpected curve swap accounts");
-    want = keysOf(dbcSwapAccounts({ trader: wallet, mint, config: remaining[1], side }));
-  } else if (venue.equals(DAMM_V2_PROGRAM_ID)) {
+  } else if (venueProgram.equals(DAMM_V2_PROGRAM_ID)) {
+    venue = "damm_v2";
     if (remaining.length !== 14) refuse("unexpected pool swap accounts");
-    want = keysOf(dammSwapAccounts({ trader: wallet, mint, pool: remaining[1], side }));
   } else {
     return refuse("it routes to an unknown venue");
   }
   // The router's own accounts: trader, global, this coin, the venue program, event authority, program.
-  if (!sameKeys(ix.keys.slice(0, 6), [wallet, globalPda(), coinPda(mint), venue, fumpadEventAuthority(), FUMPAD_PROGRAM_ID]))
+  if (!sameKeys(ix.keys.slice(0, 6), [wallet, globalPda(), coinPda(mint), venueProgram, eventAuthorityPda(), FUMPAD_PROGRAM_ID]))
     refuse(`unexpected ${side} accounts`);
-  if (!sameKeys(remaining, want)) refuse("the swap doesn't use your own token accounts on this coin's pool");
-  return side === "buy" ? u64(ix.data, 8) : BigInt(0);
+  const coin = venue === "dbc" ? { mint, dbcConfig: remaining[1] } : { mint, dbcConfig: PublicKey.default, dammPool: remaining[1] };
+  const want = rebuilt(() =>
+    side === "buy" ? routerBuyIx({ trader: wallet, coin, venue, amountIn, minOut, mode }) : routerSellIx({ trader: wallet, coin, venue, amountIn, minOut }),
+  );
+  if (!want || !isExactly(ix, want)) refuse("the swap doesn't use your own token accounts on this coin's pool");
+  return side === "buy" ? amountIn : BigInt(0);
 }
 
 /** Borsh string at `o` → [value, next offset]. */
@@ -251,30 +302,62 @@ export interface LaunchShape {
   firstBuy?: { amountIn: bigint; minOut: bigint; mode: number };
 }
 
-/** DBC `initialize_virtual_pool_with_token2022` for this wallet + mint: keys re-derived from its config. */
+/** DBC `initialize_virtual_pool_with_token2022` for this wallet + mint: rebuilt from its config and metadata, the creator paying. */
 function vetDbcInit(ix: Ix, wallet: PublicKey, mint: PublicKey): Omit<LaunchShape, "firstBuy"> {
-  if (!startsWith(ix.data, DBC_IX.initialize_virtual_pool_with_token2022)) refuse("unexpected curve instruction");
+  if (!startsWith(ix.data, DBC_IX.initializeVirtualPoolWithToken2022)) refuse("unexpected curve instruction");
   if (ix.keys.length !== 14) refuse("unexpected launch accounts");
   const config = ix.keys[0];
   const [name, a] = borshStr(ix.data, 8);
   const [symbol, b] = borshStr(ix.data, a);
   const [uri, c] = borshStr(ix.data, b);
   if (c !== ix.data.length) refuse("malformed launch metadata");
-  if (!sameKeys(ix.keys, keysOf(dbcInitPoolIx({ config, creator: wallet, mint, name, symbol, uri }).keys)))
-    refuse("the launch creates a different coin or pool");
+  const want = rebuilt(() => dbcInitializePoolToken2022Ix({ config, creator: wallet, mint, payer: wallet, name, symbol, uri }));
+  if (!want || !isExactly(ix, want)) refuse("the launch creates a different coin or pool");
   return { config, name, symbol, uri };
 }
 
-/** The creator's top-level DBC `swap2` buy: this coin's pool on `config`, the wallet's own accounts, no referral. */
+/**
+ * The creator's top-level DBC `swap2` buy: this coin's pool on `config`, the wallet's own
+ * accounts, no referral, and the instructions sysvar (without it DBC can't see the pool init in
+ * the same transaction and charges the first buy the launch window's 99% fee).
+ */
 function vetDbcFirstBuy(ix: Ix, wallet: PublicKey, mint: PublicKey, config: PublicKey): NonNullable<LaunchShape["firstBuy"]> {
   if (!startsWith(ix.data, DBC_IX.swap2) || ix.data.length !== 25) refuse("unexpected curve instruction");
   const mode = ix.data[24];
   if (mode !== 0 && mode !== 1) refuse("unexpected swap mode");
-  const want = keysOf(dbcSwapAccounts({ trader: wallet, mint, config, side: "buy" }));
-  const extra = ix.keys.slice(15);
-  if (!sameKeys(ix.keys.slice(0, 15), want) || extra.length > 1 || (extra.length === 1 && !extra[0].equals(SYSVAR_INSTRUCTIONS_ID)))
-    refuse("your first buy isn't on this coin's pool with your own accounts");
-  return { amountIn: u64(ix.data, 8), minOut: u64(ix.data, 16), mode };
+  const amountIn = u64(ix.data, 8);
+  const minOut = u64(ix.data, 16);
+  const want = rebuilt(() => dbcBuyIx({ config, mint, owner: wallet, lamportsIn: amountIn, minOut, mode, ixSysvar: true }));
+  if (!want || !isExactly(ix, want)) refuse("your first buy isn't on this coin's pool with your own accounts");
+  return { amountIn, minOut, mode };
+}
+
+/** The exact SDK instruction a claim-side action must be (accounts re-derived, data re-encoded). */
+function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_fees" | "withdraw_escrow", wallet: PublicKey, mint: PublicKey): void {
+  switch (main) {
+    case "claim": {
+      // The ticket is the one free account (the program checks its owner and mint); the payout goes to the wallet's own account.
+      const want = ix.keys.length === 14 ? rebuilt(() => claimIx({ owner: wallet, mint, ticket: ix.keys[4] })) : null;
+      if (!want || !isExactly(ix, want)) refuse("unexpected claim accounts");
+      return;
+    }
+    case "set_auto_claim":
+      if (!isExactly(ix, setAutoClaimIx(wallet, mint, true)) && !isExactly(ix, setAutoClaimIx(wallet, mint, false))) refuse("unexpected auto-claim instruction");
+      return;
+    case "withdraw_creator_fees":
+      if (!isExactly(ix, withdrawCreatorFeesIx(wallet, mint))) refuse("unexpected withdrawal accounts");
+      return;
+    case "withdraw_escrow": {
+      // Free: the ticket (program-checked owner, mint, status) and the escrow payer (must be
+      // Ticket.escrow_payer on chain; it only gets the escrow's rent back). The payout goes to the wallet's own account.
+      const want =
+        ix.keys.length === 11
+          ? rebuilt(() => withdrawEscrowIx({ owner: wallet, mint, ticket: ix.keys[3], destination: coinAtaOf(wallet, mint), escrowPayer: ix.keys[7] }))
+          : null;
+      if (!want || !isExactly(ix, want)) refuse("unexpected escrow accounts");
+      return;
+    }
+  }
 }
 
 /**
@@ -302,25 +385,27 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
   let mains = 0;
   let buys = BigInt(0);
   let wrapped = BigInt(0);
-  // Launch bookkeeping: init → [first buy] → register_coin, all on one config.
+  // Launch bookkeeping: [wrap SOL] → init → [coin ATA · first buy] → register_coin → [close WSOL], all on one config.
   let init: Omit<LaunchShape, "firstBuy"> | null = null;
   let firstBuy: LaunchShape["firstBuy"];
+  /** A launch's pool (and its mint) come first: before it only the creator's SOL wrap may run. */
+  const beforeInit = () => action === "launch" && !init;
 
-  for (const [i, ix] of rest.entries()) {
+  for (const ix of rest) {
     const p = ix.program;
     if (p.equals(ATA_PROGRAM_ID)) {
-      vetAtaCreate(ix, wallet, mint, UNWRAPS.includes(action));
+      const wsol = vetAtaCreate(ix, wallet, mint, UNWRAPS.includes(action));
+      if (beforeInit() && !wsol) refuse("the launch is out of order");
     } else if (p.equals(SystemProgram.programId)) {
       if (!WRAPS.includes(action)) refuse("it moves SOL");
       wrapped += vetWrapTransfer(ix, wallet);
     } else if (p.equals(TOKEN_PROGRAM_ID)) {
       if (!UNWRAPS.includes(action)) refuse("unexpected token instruction");
-      vetTokenIx(ix, wallet, WRAPS.includes(action));
+      const kind = vetTokenIx(ix, wallet, WRAPS.includes(action));
+      if (beforeInit() && kind !== "sync") refuse("the launch is out of order");
     } else if (p.equals(DBC_PROGRAM_ID)) {
       if (action !== "launch") refuse("it calls the curve directly");
       if (!init) {
-        // The pool (and the mint) come first: nothing may run before them.
-        if (i !== 0) refuse("the launch is out of order");
         init = vetDbcInit(ix, wallet, mint);
       } else {
         if (firstBuy || mains) refuse("the launch has an unexpected extra swap");
@@ -328,48 +413,22 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
         buys += firstBuy.amountIn;
       }
     } else if (p.equals(FUMPAD_PROGRAM_ID)) {
+      if (beforeInit()) refuse("the launch is out of order");
       if (!startsWith(ix.data, FUMPAD_IX[main])) refuse("it contains a FUMPAD instruction this action doesn't use");
       if (mains++) refuse("it repeats the action");
       // Every user instruction's first account is the acting wallet, as signer.
       if (!ix.keys[0]?.equals(wallet) || !isSigner(ix.keys[0])) refuse("it acts for another wallet");
-      switch (main) {
-        case "buy":
-        case "sell":
-          buys += vetRouterTrade(ix, main, wallet, mint);
-          break;
-        case "claim":
-          if (ix.data.length !== 8 || ix.keys.length !== 14 || !sameKeys(ix.keys, keysOf(claimIx({ owner: wallet, mint, ticket: ix.keys[4] }).keys)))
-            refuse("unexpected claim accounts");
-          break;
-        case "set_auto_claim":
-          if (ix.data.length !== 9 || ix.data[8] > 1 || !sameKeys(ix.keys, keysOf(setAutoClaimIx({ wallet, mint, enabled: true }).keys)))
-            refuse("unexpected auto-claim instruction");
-          break;
-        case "withdraw_creator_fees":
-          if (ix.data.length !== 8 || !sameKeys(ix.keys, keysOf(withdrawCreatorFeesIx({ creator: wallet, mint }).keys)))
-            refuse("unexpected withdrawal accounts");
-          break;
-        case "withdraw_escrow":
-          if (
-            ix.data.length !== 8 ||
-            ix.keys.length !== 11 ||
-            !sameKeys(ix.keys, keysOf(withdrawEscrowIx({ owner: wallet, mint, ticket: ix.keys[3], escrowPayer: ix.keys[7] }).keys))
-          )
-            refuse("unexpected escrow accounts");
-          break;
-        case "register_coin":
-          if (!init) refuse("the launch is out of order");
-          if (ix.data.length !== 8 || !sameKeys(ix.keys, keysOf(registerCoinIx({ creator: wallet, mint, config: init!.config }).keys)))
-            refuse("it registers a different coin");
-          break;
-      }
+      if (main === "buy" || main === "sell") buys += vetRouterTrade(ix, main, wallet, mint);
+      else if (main === "register_coin") {
+        if (!isExactly(ix, registerCoinIx({ creator: wallet, mint, dbcConfig: init!.config }))) refuse("it registers a different coin");
+      } else vetUserIx(ix, main, wallet, mint);
     } else {
       refuse(`it calls a program FUMPAD doesn't use (${p.toBase58().slice(0, 8)}…)`);
     }
   }
 
   if (mains !== 1) refuse("it isn't a FUMPAD transaction");
-  if (action === "launch" && (!init || !rest[0].program.equals(DBC_PROGRAM_ID))) refuse("it isn't a launch");
+  if (action === "launch" && !init) refuse("it isn't a launch");
   if (wrapped > BigInt(0) && buys === BigInt(0)) refuse("it wraps SOL without a buy");
   const solIn = buys > wrapped ? buys : wrapped;
   if (policy.maxSolInLamports !== undefined && solIn > policy.maxSolInLamports) refuse("it spends more SOL than you entered");

@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, sendAndConfirmTransaction, SystemProgram, Transaction, VersionedTransaction } from "@solana/web3.js";
 import { buildBuyTx, buildSellTx, fumpadClient, minOutFromQuote } from "../src/chain/build";
-import { coinAta } from "../src/chain/v07/ids";
+import { coinAta } from "@fumpad/sdk";
 
 const API = (process.env.NEXT_PUBLIC_FUMPAD_API ?? "").replace(/\/+$/, "");
 const RPC = process.env.RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC ?? "https://api.devnet.solana.com";

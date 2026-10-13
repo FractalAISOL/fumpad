@@ -7,15 +7,13 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Keypair, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { checkLaunchBinding, expectedFirstBuy, LAUNCH_SLIPPAGE_BPS, type LaunchIntent } from "./launch";
-import { decodeDbcCurveStart, type DbcCurveStart } from "./v07/accounts";
-import { quoteFreshBuy, withSlippage } from "./v07/dbc";
-import { coinAta, TOKEN_2022_PROGRAM_ID } from "./v07/ids";
-import { computeBudgetIxs, createAtaIdempotentIx, dbcFirstBuyIx, dbcInitPoolIx, registerCoinIx, unwrapSolIx, wrapSolIxs } from "./v07/ix";
-import { DEVNET_DBC_CONFIG, SDK_FRESH_BUYS } from "./v07/testdata";
+import { Keypair, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { type DbcPoolConfig, launchInstructions, wrapSolIxs, withSlippage } from "@fumpad/sdk";
+import { readDbcConfig } from "./build";
+import { DEVNET_DBC_CONFIG, SDK_FRESH_BUYS } from "./fixtures/devnetDbcConfig";
+import { checkLaunchBinding, expectedFirstBuy, LAUNCH_SLIPPAGE_BPS, type LaunchIntent, quoteFirstBuy } from "./launch";
 
-const curve = decodeDbcCurveStart(new Uint8Array(DEVNET_DBC_CONFIG));
+const curve = readDbcConfig(new Uint8Array(DEVNET_DBC_CONFIG));
 const readCurve = async () => curve;
 const wallet = Keypair.generate().publicKey;
 const config = Keypair.generate().publicKey;
@@ -27,21 +25,21 @@ const BUDGET = BigInt(100_000_000);
  */
 const vanityKeypair = () => Keypair.generate();
 
+/** The API's launch (@fumpad/sdk `launchInstructions`, as `POST /v1/launch/prepare` builds it), signed by the mint. */
 function launch(mintKp: Keypair, o: { buyIn?: bigint; minOut?: bigint; name?: string; symbol?: string; uri?: string; wrap?: bigint } = {}) {
   const m = mintKp.publicKey;
-  const ixs: TransactionInstruction[] = [
-    ...computeBudgetIxs(400_000),
-    dbcInitPoolIx({ config, creator: wallet, mint: m, name: o.name ?? "Pigeon", symbol: o.symbol ?? "PIGN", uri: o.uri ?? "ipfs://pign" }),
-  ];
-  if (o.buyIn) {
-    ixs.push(
-      createAtaIdempotentIx(wallet, wallet, m, TOKEN_2022_PROGRAM_ID, coinAta(wallet, m)),
-      ...wrapSolIxs(wallet, o.wrap ?? o.buyIn),
-      dbcFirstBuyIx({ creator: wallet, mint: m, config, amountIn: o.buyIn, minOut: o.minOut ?? expectedFirstBuy(curve, o.buyIn)!.minTokensOut }),
-      unwrapSolIx(wallet),
-    );
-  }
-  ixs.push(registerCoinIx({ creator: wallet, mint: m, config }));
+  const ixs = launchInstructions({
+    creator: wallet,
+    mint: m,
+    dbcConfig: config,
+    name: o.name ?? "Pigeon",
+    symbol: o.symbol ?? "PIGN",
+    uri: o.uri ?? "ipfs://pign",
+    buyLamports: o.buyIn,
+    minTokensOut: o.buyIn ? (o.minOut ?? expectedFirstBuy(curve, o.buyIn)!.minTokensOut) : undefined,
+  });
+  // An extra wrap on top of the buy (more SOL moved than typed).
+  if (o.wrap) ixs.splice(1, 0, ...wrapSolIxs(wallet, o.wrap - (o.buyIn ?? BigInt(0))));
   const t = new VersionedTransaction(
     new TransactionMessage({ payerKey: wallet, recentBlockhash: "11111111111111111111111111111111", instructions: ixs }).compileToV0Message(),
   );
@@ -55,24 +53,25 @@ const intentFor = (mintKp: Keypair, initialBuyLamports = BigInt(0)): LaunchInten
 };
 const refused = (p: Promise<unknown>, re: RegExp) => assert.rejects(p, (e: unknown) => e instanceof Error && re.test(e.message));
 
-describe("DBC config + first-buy math (pinned to the official SDK)", () => {
+describe("DBC config + first-buy math (@fumpad/sdk, pinned to Meteora's official SDK)", () => {
   it("decodes the devnet config: 99% → 1.25% scheduler, first swap at the min fee, 0.85 SOL threshold", () => {
-    assert.equal(curve.minFeeNumerator, BigInt(12_500_000));
-    assert.equal(curve.firstSwapMinFee, true);
+    const b = curve.baseFee;
+    assert.equal(b.cliffFeeNumerator - b.reductionFactor * BigInt(b.numberOfPeriod), BigInt(12_500_000));
+    assert.equal(curve.enableFirstSwapWithMinFee, 1);
     assert.equal(curve.migrationQuoteThreshold, BigInt(850_000_000));
     assert.equal(curve.swapBaseAmount, BigInt("729655071047103"));
     assert.equal(curve.sqrtStartPrice, BigInt("10169090682030081"));
   });
 
   it("quotes a fresh pool's first buy exactly as Meteora's SDK does", () => {
-    for (const [lamports, out] of SDK_FRESH_BUYS) assert.equal(quoteFreshBuy(curve, lamports, curve.minFeeNumerator)?.tokensOut, out);
+    for (const [lamports, out] of SDK_FRESH_BUYS) assert.equal(quoteFirstBuy(curve, lamports), out);
   });
 
   it("refuses config bytes that aren't a DBC PoolConfig", () => {
     const bad = new Uint8Array(DEVNET_DBC_CONFIG);
     bad[0] ^= 1;
-    assert.throws(() => decodeDbcCurveStart(bad), /Unexpected DBC config/);
-    assert.throws(() => decodeDbcCurveStart(new Uint8Array(DEVNET_DBC_CONFIG).subarray(0, 1000)), /Unexpected DBC config/);
+    assert.throws(() => readDbcConfig(bad), /Unexpected DBC config/);
+    assert.throws(() => readDbcConfig(new Uint8Array(DEVNET_DBC_CONFIG).subarray(0, 1000)), /Unexpected DBC config/);
   });
 
   it("the first buy is the budget (fee included) with 1% slippage on the SDK quote", () => {
@@ -140,7 +139,7 @@ describe("checkLaunchBinding", () => {
       }),
       /couldn't read/,
     );
-    const noMin: DbcCurveStart = { ...curve, firstSwapMinFee: false };
+    const noMin: DbcPoolConfig = { ...curve, enableFirstSwapWithMinFee: 0 };
     await refused(
       checkLaunchBinding(tx, intentFor(k, BUDGET), async () => noMin),
       /snipe fee/,

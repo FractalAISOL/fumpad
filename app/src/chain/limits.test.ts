@@ -1,12 +1,9 @@
 /** M-9 / L-8 instant-trading limits and the shown-quote slippage bound. `npm test` */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Keypair } from "@solana/web3.js";
 import { minLamports, minOutFromQuote, minTokensBase, SLIPPAGE_BPS } from "./build";
-import { dbcSwapAccounts, routerBuyIx } from "./v07/ix";
 import { FIRST_TIME_RENT, instantDecision, LAUNCH_RENT, solLamports, worstCaseSpend } from "./limits";
 
-const SOL = BigInt(1_000_000_000);
 const limits = { maxSol: 1, sessionCapSol: 5 };
 
 describe("instant limits", () => {
@@ -40,14 +37,5 @@ describe("slippage from the shown quote (M-9)", () => {
     assert.equal(minTokensBase(2.5), BigInt(2_500_000));
     assert.equal(minLamports(0.0000000014), BigInt(1));
     assert.equal(minLamports(1), BigInt(1_000_000_000));
-  });
-
-  it("puts the shown quote's minimum into the router instruction, untouched (no SDK re-quote)", () => {
-    const user = Keypair.generate().publicKey;
-    const mint = Keypair.generate().publicKey;
-    const ix = routerBuyIx({ trader: user, mint, venue: "dbc", swapAccounts: dbcSwapAccounts({ trader: user, mint, config: mint, side: "buy" }), amountIn: SOL, minOut: BigInt(777) });
-    assert.equal(ix.data.readBigUInt64LE(8), SOL);
-    assert.equal(ix.data.readBigUInt64LE(16), BigInt(777));
-    assert.equal(ix.data[24], 1); // PartialFill on the curve
   });
 });

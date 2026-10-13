@@ -3,8 +3,10 @@
  *
  * v0.7 (SPEC-v0.7 §2): the API reserves a `…fmbL` mint and returns
  *
- *   [CB] DBC initialize_virtual_pool_with_token2022 · [ATA · wrap SOL · DBC swap2 (the creator's
- *   top-level first buy, at the normal fee) · close WSOL] · fumpad.register_coin
+ *   [CB] [wrap SOL] · DBC initialize_virtual_pool_with_token2022 · [ATA(coin) · DBC swap2 (the
+ *   creator's top-level first buy, at the min fee)] · fumpad.register_coin · [close WSOL]
+ *
+ * (@fumpad/sdk `launchInstructions`)
  *
  * already signed as that mint; the user's wallet signs as creator and fee payer, silently when
  * Instant trading is on. `checkPreparedLaunch` (the allow-list's launch pattern: every account
@@ -16,7 +18,8 @@
  *   - name, symbol and uri are exactly the form's values;
  *   - the first buy exists iff the user asked for one, spends exactly the amount typed, and its
  *     minimum out is what that amount buys as a fresh pool's first, min-fee swap on the
- *     transaction's own DBC config (read from chain, not from the API), within our slippage.
+ *     transaction's own DBC config (read from chain, not from the API), within our slippage
+ *     (quoted with the SDK's DBC math, the same function the API uses).
  *
  * The config itself needn't be trusted here: `register_coin` fails the whole transaction unless
  * it is on FUMPAD's on-chain allow-list (`Global.configs`).
@@ -26,8 +29,7 @@
 import type { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import type { LaunchShape } from "./allowlist";
 import { checkPreparedLaunch } from "./program";
-import type { DbcCurveStart } from "./v07/accounts";
-import { quoteFreshBuy, withSlippage } from "./v07/dbc";
+import { type DbcPoolConfig, type DbcVirtualPool, quoteDbcBuy, withSlippage } from "@fumpad/sdk";
 
 /** Slippage the app asks the API to apply to the creator's first buy (bps). */
 export const LAUNCH_SLIPPAGE_BPS = 100;
@@ -42,12 +44,26 @@ export interface FirstBuy {
   minTokensOut: bigint;
 }
 
+/**
+ * Base units a buy of `amountIn` lamports (fee included) gets as a fresh pool's first swap in the
+ * launch transaction (DBC `enable_first_swap_with_min_fee`: the scheduler's floor, not the window's
+ * 99%), from the curve's start price. Null when the curve can't fill it.
+ */
+export function quoteFirstBuy(cfg: DbcPoolConfig, amountIn: bigint): bigint | null {
+  if (amountIn <= BigInt(0)) return null;
+  const fresh = { sqrtPrice: cfg.sqrtStartPrice, activationPoint: BigInt(0), quoteReserve: BigInt(0) } as DbcVirtualPool;
+  try {
+    return quoteDbcBuy(cfg, fresh, amountIn, BigInt(0), { firstSwapMinFee: true }).amountOut;
+  } catch {
+    return null;
+  }
+}
+
 /** What the creator's first buy must look like for a budget on a fresh pool of this config. */
-export function expectedFirstBuy(curve: DbcCurveStart, budgetLamports: bigint, slippageBps = LAUNCH_SLIPPAGE_BPS): FirstBuy | null {
-  if (budgetLamports <= BigInt(0)) return null;
-  const q = quoteFreshBuy(curve, budgetLamports, curve.minFeeNumerator);
-  if (!q || q.tokensOut <= BigInt(0)) return null;
-  return { amountIn: budgetLamports, tokensOut: q.tokensOut, minTokensOut: withSlippage(q.tokensOut, slippageBps) };
+export function expectedFirstBuy(cfg: DbcPoolConfig, budgetLamports: bigint, slippageBps = LAUNCH_SLIPPAGE_BPS): FirstBuy | null {
+  const out = quoteFirstBuy(cfg, budgetLamports);
+  if (out === null || out <= BigInt(0)) return null;
+  return { amountIn: budgetLamports, tokensOut: out, minTokensOut: withSlippage(out, slippageBps) };
 }
 
 export interface LaunchIntent {
@@ -80,7 +96,7 @@ const refuse = (why: string): never => {
 export async function checkLaunchBinding(
   tx: VersionedTransaction,
   intent: LaunchIntent,
-  readCurve: (config: PublicKey) => Promise<DbcCurveStart>,
+  readCurve: (config: PublicKey) => Promise<DbcPoolConfig>,
 ): Promise<LaunchShape> {
   // Shape, accounts, signers (the mint's signature verified), summed SOL ≤ the amount typed.
   const shape = checkPreparedLaunch(tx, intent.wallet, intent.mint, intent.suffix, intent.initialBuyLamports);
@@ -94,14 +110,14 @@ export async function checkLaunchBinding(
   }
   const buy = shape.firstBuy ?? refuse("your first buy is missing");
   if (buy.amountIn !== intent.initialBuyLamports) refuse("the first buy spends a different amount than you entered");
-  let curve: DbcCurveStart;
+  let curve: DbcPoolConfig;
   try {
     curve = await readCurve(shape.config);
   } catch {
     return refuse("couldn't read the launch's curve to check your first buy");
   }
   // Without the min-fee exemption the creator's buy would pay the launch window's 99%.
-  if (!curve.firstSwapMinFee) refuse("this launch would charge your first buy the snipe fee");
+  if (curve.enableFirstSwapWithMinFee !== 1) refuse("this launch would charge your first buy the snipe fee");
   const want = expectedFirstBuy(curve, intent.initialBuyLamports) ?? refuse("your first buy is too small");
   if (buy.minOut === BigInt(0) || buy.minOut + ROUNDING_SLACK < want.minTokensOut || buy.minOut > want.tokensOut + ROUNDING_SLACK)
     refuse("the first buy's minimum tokens don't match the quote");
