@@ -215,7 +215,8 @@ mod tests {
         r.push(t + 45, q);
         assert_eq!(r.median_q64(t + 45), None, "span 45 s < 60 s");
         r.push(t + 60, q);
-        assert_eq!(r.median_q64(t + 60), Some(q + 1));
+        // samples q, q+1, q+2, q, q → sorted median = q
+        assert_eq!(r.median_q64(t + 60), Some(q));
         // One manipulated sample (×10) can't move the median outside the honest values.
         r.push(t + 75, q * 10);
         assert_eq!(r.len as usize, PREGRAD_RING_LEN);
