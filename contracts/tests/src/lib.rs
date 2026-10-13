@@ -516,6 +516,8 @@ mod config_tests;
 #[cfg(test)]
 mod cu_report;
 #[cfg(test)]
+mod e2e_tests;
+#[cfg(test)]
 mod fees_tests;
 #[cfg(test)]
 pub(crate) mod lifecycle_tests;
