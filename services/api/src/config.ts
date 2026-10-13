@@ -68,8 +68,39 @@ export interface ApiConfig {
   waitlistRateLimitPerMin: number;
   /** Sign-ups one IP may add per rolling day (DB-enforced, across instances). */
   waitlistPerIpPerDay: number;
-  /** HMAC key for ip_hash. Unset = derived from DATABASE_URL. */
+  /**
+   * HMAC key for ip_hash (`WAITLIST_IP_SALT`). Independent of every DATABASE_URL, so moving or
+   * rotating a database never changes the hashes. Required in production; outside production an
+   * unset value means a fixed development salt.
+   */
   waitlistIpSalt?: string;
+  /**
+   * The waitlist's own Postgres (`WAITLIST_DATABASE_URL`, e.g. Railway `waitlist-db`): kept out
+   * of the backend DB so a devnet/backend schema reset can never wipe sign-ups. Outside production
+   * an unset value falls back to DATABASE_URL.
+   */
+  waitlistDatabaseUrl?: string;
+  /**
+   * Set when the waitlist routes must not run (production without WAITLIST_DATABASE_URL or
+   * WAITLIST_IP_SALT, or pointed at the backend DB): `POST /v1/waitlist` answers 503 and the API
+   * logs it loudly; every other route keeps working.
+   */
+  waitlistDisabledReason?: string;
+}
+
+/** Outside production only: the ip_hash key when WAITLIST_IP_SALT is unset. */
+export const DEV_WAITLIST_IP_SALT = "fumpad-waitlist-dev-salt-not-for-production";
+
+/** Where the waitlist lives and why it may be off (pure; see ApiConfig.waitlist*). */
+export function waitlistConfig(env: NodeJS.ProcessEnv, prod: boolean): Pick<ApiConfig, "waitlistIpSalt" | "waitlistDatabaseUrl" | "waitlistDisabledReason"> {
+  const url = env.WAITLIST_DATABASE_URL?.trim() || undefined;
+  const salt = env.WAITLIST_IP_SALT?.trim() || undefined;
+  if (!prod) return { waitlistDatabaseUrl: url ?? env.DATABASE_URL, waitlistIpSalt: salt ?? DEV_WAITLIST_IP_SALT };
+  const problems: string[] = [];
+  if (!url) problems.push("WAITLIST_DATABASE_URL is not set (the waitlist must live in its own database in production)");
+  else if (url === env.DATABASE_URL?.trim()) problems.push("WAITLIST_DATABASE_URL equals DATABASE_URL (it must be a separate database)");
+  if (!salt) problems.push("WAITLIST_IP_SALT is not set (generate: openssl rand -hex 32)");
+  return { waitlistDatabaseUrl: url, waitlistIpSalt: salt, waitlistDisabledReason: problems.length ? problems.join("; ") : undefined };
 }
 
 export function loadApiConfig(env = process.env): ApiConfig {
@@ -117,6 +148,6 @@ export function loadApiConfig(env = process.env): ApiConfig {
     launchRpcTimeoutMs: Number(env.LAUNCH_RPC_TIMEOUT_MS ?? 5_000),
     waitlistRateLimitPerMin: Number(env.WAITLIST_RATE_LIMIT_PER_MIN ?? 5),
     waitlistPerIpPerDay: Number(env.WAITLIST_PER_IP_PER_DAY ?? 20),
-    waitlistIpSalt: env.WAITLIST_IP_SALT || undefined,
+    ...waitlistConfig(env, prod),
   };
 }

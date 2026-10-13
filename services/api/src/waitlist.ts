@@ -1,18 +1,24 @@
 /**
  * `POST /v1/waitlist`: the pre-launch waiting room (fumpad.app) collects an email, an X
- * handle, or both. Stored in `waitlist` (indexer migration 007), deduped case-insensitively.
+ * handle, or both, deduped case-insensitively.
+ *
+ * Storage: the waitlist has its OWN database (`WAITLIST_DATABASE_URL`, Railway `waitlist-db`),
+ * a separate pool, and its own schema (`migrateWaitlist`: idempotent, only the `waitlist` table)
+ * run at API start. A backend/devnet schema reset therefore never touches sign-ups. Outside
+ * production it falls back to DATABASE_URL; in production without its own DB (or without
+ * WAITLIST_IP_SALT) the route answers 503 and the API logs it loudly; every other route works.
  *
  * Privacy: the raw IP is never stored or logged here. `ip_hash` = HMAC-SHA256(ip) under
- * `WAITLIST_IP_SALT` (falls back to a key derived from DATABASE_URL, which is already a server
- * secret), used only to cap sign-ups per IP per day.
+ * `WAITLIST_IP_SALT` (independent of any database URL), used only to cap sign-ups per IP per day.
  *
  * Abuse: a per-IP route limit (in memory, per instance), a per-IP daily cap in the DB (holds
  * across instances and restarts), and a honeypot field. The response is the same whether the
  * contact was new or already on the list, so the endpoint can't be used to test who signed up.
  */
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
 
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from "fastify";
+import pg from "pg";
 
 import type { Db } from "@fumpad/indexer";
 
@@ -102,24 +108,145 @@ export function ipHasher(salt: string): (ip: string) => string {
   return (ip) => createHmac("sha256", salt).update(ip).digest("hex");
 }
 
-export function waitlistSalt(cfg: Pick<ApiConfig, "waitlistIpSalt" | "databaseUrl">): string {
-  return cfg.waitlistIpSalt || createHash("sha256").update(`fumpad-waitlist:${cfg.databaseUrl}`).digest("hex");
+/** The ip_hash key: WAITLIST_IP_SALT (the config already applied the dev fallback / the production requirement). */
+export function waitlistSalt(cfg: Pick<ApiConfig, "waitlistIpSalt">): string {
+  if (!cfg.waitlistIpSalt) throw new Error("waitlist: WAITLIST_IP_SALT is not set");
+  return cfg.waitlistIpSalt;
 }
 
-export function registerWaitlistRoutes(app: FastifyInstance, cfg: ApiConfig, db: Db) {
+/**
+ * The waitlist's own schema: only the `waitlist` table (same shape as indexer migration 007, which
+ * stays in the backend DB for history). Idempotent; serialised by an advisory lock so several API
+ * instances starting at once don't race.
+ */
+export const WAITLIST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS waitlist (
+  id         BIGSERIAL PRIMARY KEY,
+  email      TEXT,
+  x_handle   TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ip_hash    TEXT NOT NULL,
+  CONSTRAINT waitlist_contact CHECK (email IS NOT NULL OR x_handle IS NOT NULL),
+  CONSTRAINT waitlist_email_len CHECK (email IS NULL OR length(email) <= 254),
+  CONSTRAINT waitlist_handle_len CHECK (x_handle IS NULL OR length(x_handle) <= 15)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS waitlist_email_key ON waitlist (email) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS waitlist_x_handle_key ON waitlist (x_handle) WHERE x_handle IS NOT NULL;
+CREATE INDEX IF NOT EXISTS waitlist_ip_recent ON waitlist (ip_hash, created_at DESC);
+`;
+const WAITLIST_MIGRATION_LOCK = 7271101;
+
+export async function migrateWaitlist(db: Pick<pg.Pool, "connect">): Promise<void> {
+  const c = await db.connect();
+  try {
+    await c.query("BEGIN");
+    await c.query("SELECT pg_advisory_xact_lock($1)", [WAITLIST_MIGRATION_LOCK]);
+    await c.query(WAITLIST_SCHEMA);
+    await c.query("COMMIT");
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    c.release();
+  }
+}
+
+/** Pool for the waitlist DB: small, with a connect timeout so a dead waitlist DB can't hang a request. */
+export function createWaitlistPool(url: string): pg.Pool {
+  return new pg.Pool({ connectionString: url, max: 3, connectionTimeoutMillis: 10_000, application_name: "fumpad-waitlist" });
+}
+
+/** The waitlist's DB handle + schema readiness (migrated once; retried after a failure). */
+export class WaitlistStore {
+  private ready: Promise<void> | null = null;
+  constructor(
+    readonly db: Db,
+    /** true when this store created the pool (it ends it on close). */
+    readonly ownsPool: boolean,
+    /** false = development fallback on the backend DATABASE_URL. */
+    readonly dedicated: boolean,
+  ) {}
+  ensureSchema(): Promise<void> {
+    this.ready ??= migrateWaitlist(this.db).catch((e: Error) => {
+      this.ready = null;
+      throw e;
+    });
+    return this.ready;
+  }
+  async close() {
+    if (this.ownsPool) await this.db.end();
+  }
+}
+
+const UNAVAILABLE = "The waitlist is unavailable right now. Try again later or follow @Fumblepad for the launch.";
+
+/**
+ * Where the waitlist lives: `injected` (tests) > WAITLIST_DATABASE_URL (its own pool) > outside production
+ * the backend pool. Null = disabled (`registerWaitlistRoutes` logs the reason loudly and answers 503).
+ */
+export function openWaitlistStore(cfg: ApiConfig, backendDb: Db, injected?: WaitlistStore | null): WaitlistStore | null {
+  if (injected !== undefined) return injected;
+  if (cfg.waitlistDisabledReason || !cfg.waitlistDatabaseUrl) return null;
+  if (cfg.waitlistDatabaseUrl === cfg.databaseUrl) return new WaitlistStore(backendDb, false, false);
+  return new WaitlistStore(createWaitlistPool(cfg.waitlistDatabaseUrl), true, true);
+}
+
+function shout(log: FastifyBaseLogger, reason: string) {
+  log.error({ waitlist: "disabled", reason }, `!!! WAITLIST DISABLED: POST /v1/waitlist answers 503: ${reason} !!!`);
+}
+
+export function registerWaitlistRoutes(app: FastifyInstance, cfg: ApiConfig, store: WaitlistStore | null) {
+  const routeOpts = { config: { rateLimit: { max: cfg.waitlistRateLimitPerMin, timeWindow: "1 minute", keyGenerator: (req: FastifyRequest) => clientIp(req) } } };
+  if (!store) {
+    const reason = cfg.waitlistDisabledReason ?? "no waitlist database configured";
+    shout(app.log, reason);
+    // Keep shouting (hourly) while it's misconfigured, so it can't scroll out of sight.
+    const t = setInterval(() => shout(app.log, reason), 3_600_000);
+    t.unref();
+    app.addHook("onClose", async () => clearInterval(t));
+    app.post("/v1/waitlist", routeOpts, async (_req, reply) => reply.code(503).send({ error: UNAVAILABLE }));
+    return;
+  }
   const hash = ipHasher(waitlistSalt(cfg));
-  app.post(
-    "/v1/waitlist",
-    { config: { rateLimit: { max: cfg.waitlistRateLimitPerMin, timeWindow: "1 minute", keyGenerator: (req: FastifyRequest) => clientIp(req) } } },
-    async (req, reply) => {
-      const entry = parseWaitlistBody(req.body);
-      if (entry.bot) return reply.code(201).send({ ok: true });
-      const ipHash = hash(clientIp(req));
-      const recent = await db.query<{ n: string }>("SELECT count(*) AS n FROM waitlist WHERE ip_hash = $1 AND created_at > now() - interval '1 day'", [ipHash]);
-      if (Number(recent.rows[0]?.n ?? 0) >= cfg.waitlistPerIpPerDay) throw new WaitlistError(429, "Too many sign-ups from this network today. Try again tomorrow.");
-      // Any unique hit (same email or same handle) is a duplicate: keep the first row.
-      await db.query("INSERT INTO waitlist (email, x_handle, ip_hash) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [entry.email, entry.xHandle, ipHash]);
-      return reply.code(201).send({ ok: true });
-    },
+  if (!store.dedicated) app.log.warn("waitlist: using the backend DATABASE_URL (development fallback; production requires WAITLIST_DATABASE_URL)");
+  // Schema at start, in the background: a slow or down waitlist DB never delays the rest of the API.
+  store.ensureSchema().then(
+    () => app.log.info({ dedicated: store.dedicated }, "waitlist schema ready"),
+    (e: Error) => app.log.error({ err: e.message }, "!!! waitlist schema migration failed (retried on the next sign-up) !!!"),
   );
+  app.addHook("onClose", async () => store.close());
+  app.post("/v1/waitlist", routeOpts, async (req, reply) => {
+    const entry = parseWaitlistBody(req.body);
+    if (entry.bot) return reply.code(201).send({ ok: true });
+    try {
+      await store.ensureSchema();
+    } catch (e) {
+      app.log.error({ err: (e as Error).message }, "waitlist database unavailable");
+      throw new WaitlistError(503, UNAVAILABLE);
+    }
+    const ipHash = hash(clientIp(req));
+    const recent = await store.db.query<{ n: string }>("SELECT count(*) AS n FROM waitlist WHERE ip_hash = $1 AND created_at > now() - interval '1 day'", [ipHash]);
+    if (Number(recent.rows[0]?.n ?? 0) >= cfg.waitlistPerIpPerDay) throw new WaitlistError(429, "Too many sign-ups from this network today. Try again tomorrow.");
+    // Any unique hit (same email or same handle) is a duplicate: keep the first row.
+    await store.db.query("INSERT INTO waitlist (email, x_handle, ip_hash) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [entry.email, entry.xHandle, ipHash]);
+    return reply.code(201).send({ ok: true });
+  });
+}
+
+const CSV_COLUMNS = ["id", "email", "x_handle", "created_at"];
+
+function csvCell(v: unknown): string {
+  const s = v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : String(v);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * The sign-ups as CSV (header + one row per sign-up, oldest first). `ip_hash` only on request
+ * (`includeIpHash`, for a full-fidelity restore); nobody needs it to contact anyone.
+ */
+export async function waitlistCsv(db: Pick<Db, "query">, opts: { includeIpHash?: boolean } = {}): Promise<{ csv: string; rows: number }> {
+  const cols = opts.includeIpHash ? [...CSV_COLUMNS, "ip_hash"] : CSV_COLUMNS;
+  const r = await db.query<Record<string, unknown>>(`SELECT ${cols.join(", ")} FROM waitlist ORDER BY created_at, id`);
+  const lines = [cols.join(","), ...r.rows.map((row) => cols.map((c) => csvCell(row[c])).join(","))];
+  return { csv: lines.join("\n") + "\n", rows: r.rows.length };
 }

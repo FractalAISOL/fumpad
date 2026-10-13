@@ -23,10 +23,13 @@
     "local:app": "tsx scripts/local/app-stack.ts",
     "validator": "tsx scripts/local/dev-chain.ts",
     "bootstrap:rehearsal": "tsx scripts/local/bootstrap-rehearsal.ts",
+    "multisig:rehearsal": "tsx scripts/local/multisig-rehearsal.ts",
+    "rpc-check": "tsx scripts/ops/rpc-check.ts",
     "api-types": "node scripts/gen-api-types.mjs",
     "test:all": "vitest run"
   },
   "devDependencies": {
+    "@sqds/multisig": "^2.1.4",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

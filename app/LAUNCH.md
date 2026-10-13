@@ -8,7 +8,7 @@ Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. 
 |---|---|---|
 | Gate | `src/proxy.ts` + `src/prelaunch/gate.ts` (tests: `gate.test.ts`) | Next.js 16 Proxy (the old "middleware"). On a gated host: `/` is rewritten to the waiting room, `/terms` `/risk` `/privacy` to the waiting-room copies of the legal pages, and every other page redirects (307, temporary) to `/`. Build assets (`/_next/*`), share cards (`/og/*`), `/api/*` and static files (favicon, icons, OG images, `robots.txt`, manifest) pass through. |
 | Waiting room | `src/app/soon/` (page, layout, legal pages, OG image), `src/components/prelaunch/` | Its own frame: no app header, tab bar, footer, wallet, live socket or Privy. `components/prelaunch/ShellGate.tsx` drops the app shell for the `soon` segment in the root layout. On other hosts it's viewable at `/soon`. |
-| Waitlist | `POST /v1/waitlist` on the API (`services/api/src/waitlist.ts`, table from `services/indexer/migrations/007_waitlist.sql`) | Email or X handle, deduped, IP stored only as an HMAC hash. The page posts to `NEXT_PUBLIC_FUMPAD_API`. |
+| Waitlist | `POST /v1/waitlist` on the API (`services/api/src/waitlist.ts`), stored in its **own** Postgres (`waitlist-db`, `WAITLIST_DATABASE_URL`; services/DEPLOY-v07.md §7) | Email or X handle, deduped, IP stored only as an HMAC hash. The page posts to `NEXT_PUBLIC_FUMPAD_API`. |
 
 ## Environment variables (Vercel, Production)
 
@@ -20,7 +20,7 @@ Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. 
 | `NEXT_PUBLIC_FUMPAD_API` | (already set) | The waitlist posts to `<API>/v1/waitlist`. Without it the form says the waitlist isn't connected. |
 | `NEXT_PUBLIC_SITE_URL` | (currently `https://fumpad.vercel.app`) | Base for absolute OG/Twitter image URLs. Set it to `https://fumpad.app` once the domain is attached so previews point at the real domain. |
 
-The API's `CORS_ORIGINS` (Railway, service `api`) must include `https://fumpad.app` and `https://www.fumpad.app` (done on Oct 12 2026). Optional API knobs: `WAITLIST_IP_SALT` (HMAC key for IP hashes, set), `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20).
+The API's `CORS_ORIGINS` (Railway, service `api`) must include `https://fumpad.app` and `https://www.fumpad.app` (done on Oct 12 2026). Required in production: `WAITLIST_DATABASE_URL` (`${{waitlist-db.DATABASE_URL}}`) and `WAITLIST_IP_SALT` (HMAC key for IP hashes, set); without either the API answers 503 on the waitlist only. Optional: `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20).
 
 ## Security settings (Vercel env, all environments)
 
@@ -59,8 +59,10 @@ The waiting room stays reachable at `/soon` afterwards; delete `src/app/soon`, `
 
 ## Export the waitlist
 
-```sql
-SELECT coalesce(email, '') AS email, coalesce('@' || x_handle, '') AS x, created_at FROM waitlist ORDER BY created_at;
+```sh
+cd ~/fumpad/services
+railway variables --service waitlist-db --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p' \
+  | npx tsx scripts/ops/waitlist-export.ts --url-stdin      # → ~/fumpad-keys/waitlist/waitlist-<ts>.csv (mode 600)
 ```
 
-(Railway → Postgres → Query, or `psql "$DATABASE_URL"`.) Contacts are stored lowercased; `ip_hash` is not personal data on its own but is only for rate limiting, so leave it out of exports.
+Columns `id,email,x_handle,created_at` (handles without `@`, lowercased). `ip_hash` is not personal data on its own but is only for rate limiting, so it is left out unless `--include-ip-hash` (full restore). The database must never be reset with the devnet backend (services/DEPLOY-v07.md §7).

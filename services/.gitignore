@@ -5,3 +5,5 @@ sdk/test-vectors/target/
 sdk/test-vectors/Cargo.lock
 .local/
 grinder/target/
+# multisig create keys (scripts/ops/multisig.ts): never commit
+*create-key*.json

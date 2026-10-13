@@ -20,7 +20,7 @@ import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
 import { registerLaunchRoutes } from "./launch/routes.js";
 import { MintVault } from "./launch/vault.js";
 import { clientIpTrust, ssrAuthorized, SSR_HEADER } from "./net.js";
-import { WaitlistError, registerWaitlistRoutes } from "./waitlist.js";
+import { openWaitlistStore, registerWaitlistRoutes, WaitlistError, type WaitlistStore } from "./waitlist.js";
 
 /** Mint-existence / block-height probe for the vanity pool sweeper. */
 export function connectionProbe(conn: Connection): ChainProbe {
@@ -67,6 +67,8 @@ export interface ApiDeps {
   live: LiveHub;
   /** D18 vanity mint pool; null when MINT_POOL_KEY is unset (launch endpoints answer 503). */
   pool: MintPool | null;
+  /** The waitlist DB (WAITLIST_DATABASE_URL, own pool); null = waitlist disabled (503). */
+  waitlist: WaitlistStore | null;
 }
 
 export async function buildServer(
@@ -128,7 +130,8 @@ export async function buildServer(
             rpcTimeoutMs: cfg.launchRpcTimeoutMs,
           })
         : null;
-  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool };
+  const waitlist = openWaitlistStore(cfg, db, deps?.waitlist);
+  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool, waitlist };
 
   await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "POST", "OPTIONS"] });
   // SSR requests (shared secret header, H-2) are exempt; everyone else is limited per real IP.
@@ -404,14 +407,14 @@ export async function buildServer(
     reply.code(dbOk ? 200 : 503);
     reply.header("cache-control", "no-store");
     if (!isSsr(req)) return { ok: dbOk };
-    return { ok: dbOk, version: serviceInfo("api"), lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, wsConnections: wsTotal, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool };
+    return { ok: dbOk, version: serviceInfo("api"), lastIndexedBlockAgeSecs: lagSecs, wsClients: live.subscribers, wsConnections: wsTotal, live: live.stats, cache: { hits: cache.hits, misses: cache.misses }, vanityPool, waitlist: waitlist ? (waitlist.dedicated ? "own-db" : "backend-db (dev)") : "disabled" };
   });
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────
   registerLaunchRoutes(app, cfg, { conn, chain, pool, db });
 
   // ── Pre-launch waitlist ─────────────────────────────────────────────────────
-  registerWaitlistRoutes(app, cfg, db);
+  registerWaitlistRoutes(app, cfg, waitlist);
   let sweeper: NodeJS.Timeout | undefined;
   if (pool && cfg.launchSweepMs > 0) {
     sweeper = setInterval(() => {

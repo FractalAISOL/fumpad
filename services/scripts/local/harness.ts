@@ -10,7 +10,7 @@
  * (scripts/devnet/bootstrap-v07.ts on a validator started WITHOUT `global`).
  */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,9 +134,26 @@ export interface Validator {
   wsUrl: string;
   proc: ChildProcess;
   stop(): Promise<void>;
+  /**
+   * Stops the validator, writes a snapshot of its last root warped to `slot` (agave-ledger-tool create-snapshot
+   * --warp-slot) and restarts on the SAME ledger (accounts and programs kept). With a long epoch
+   * (`slotsPerEpoch`), Clock.unix_timestamp jumps forward ≈ 0.3 s per warped
+   * slot (stake-weighted vote time, clamped to PoH time − 25 %): this is how the local rehearsals make a 48 h
+   * timelock elapse.
+   */
+  warp(slot: number): Promise<void>;
 }
 
-export async function startValidator(opts: { rpcPort?: number; upgradeAuthority: Keypair; solUsd?: number; global?: GlobalPreload }): Promise<Validator> {
+export async function startValidator(opts: {
+  rpcPort?: number;
+  upgradeAuthority: Keypair;
+  solUsd?: number;
+  global?: GlobalPreload;
+  /** Extra genesis args (e.g. more `--bpf-program` / `--account`). */
+  extraArgs?: string[];
+  /** Genesis epoch length; long epochs make `warp` advance the clock (see Validator.warp). */
+  slotsPerEpoch?: number;
+}): Promise<Validator> {
   const rpcPort = opts.rpcPort ?? 8899;
   const so = join(CONTRACTS, "target/deploy/fumpad.so");
   if (!existsSync(so)) throw new Error("missing contracts/target/deploy/fumpad.so: run `anchor build -p fumpad` in contracts/");
@@ -148,8 +165,7 @@ export async function startValidator(opts: { rpcPort?: number; upgradeAuthority:
   const pyth = writePythFixture(opts.solUsd ?? 150);
   const authPath = join(LOCAL, "upgrade-authority.json");
   writeFileSync(authPath, JSON.stringify(Array.from(opts.upgradeAuthority.secretKey)));
-  const args = [
-    "--reset",
+  const base = [
     "--quiet",
     "--ledger", ledger,
     "--rpc-port", String(rpcPort),
@@ -158,42 +174,77 @@ export async function startValidator(opts: { rpcPort?: number; upgradeAuthority:
     ...(process.env.FUMPAD_GOSSIP_PORT
       ? ["--gossip-port", process.env.FUMPAD_GOSSIP_PORT, "--dynamic-port-range", `${Number(process.env.FUMPAD_GOSSIP_PORT) + 1}-${Number(process.env.FUMPAD_GOSSIP_PORT) + 40}`]
       : []),
+  ];
+  const genesis = [
+    "--reset",
+    ...(opts.slotsPerEpoch ? ["--slots-per-epoch", String(opts.slotsPerEpoch)] : []),
     "--upgradeable-program", FUMPAD_PROGRAM_ID.toBase58(), so, authPath,
     "--bpf-program", DBC_PROGRAM_ID.toBase58(), join(FIXTURES, "dbc_mainnet.so"),
     "--bpf-program", DAMM_V2_PROGRAM_ID.toBase58(), join(FIXTURES, "damm_v2_mainnet.so"),
     "--account", "-", join(FIXTURES, "damm_v2_migration_config_mainnet.json"),
     "--account", "-", pyth,
     ...(opts.global ? ["--account", "-", await writeGlobalFixture(opts.global)] : []),
+    ...(opts.extraArgs ?? []),
   ];
-  const proc = spawn("solana-test-validator", args, { env: { ...process.env, PATH }, stdio: ["ignore", "ignore", "pipe"], cwd: LOCAL });
-  let stderr = "";
-  proc.stderr?.on("data", (d) => (stderr += d.toString()));
   const rpcUrl = `http://127.0.0.1:${rpcPort}`;
   const conn = new Connection(rpcUrl, "confirmed");
-  const t0 = Date.now();
-  for (;;) {
-    if (proc.exitCode !== null) throw new Error(`validator exited: ${stderr}`);
-    try {
-      await conn.getLatestBlockhash();
-      if ((await conn.getSlot()) > 2) break;
-    } catch {
-      /* not up yet */
+  const launch = async (args: string[], minSlot: number) => {
+    const p = spawn("solana-test-validator", args, { env: { ...process.env, PATH }, stdio: ["ignore", "ignore", "pipe"], cwd: LOCAL });
+    let stderr = "";
+    p.stderr?.on("data", (d) => (stderr += d.toString()));
+    const t0 = Date.now();
+    for (;;) {
+      if (p.exitCode !== null) throw new Error(`validator exited: ${stderr}`);
+      try {
+        await conn.getLatestBlockhash();
+        if ((await conn.getSlot()) > minSlot) break;
+      } catch {
+        /* not up yet */
+      }
+      if (Date.now() - t0 > 90_000) throw new Error(`validator did not start: ${stderr}`);
+      await sleep(500);
     }
-    if (Date.now() - t0 > 90_000) throw new Error(`validator did not start: ${stderr}`);
-    await sleep(500);
-  }
-  return {
+    return p;
+  };
+  const kill = async (p: ChildProcess) => {
+    if (p.exitCode === null) {
+      p.kill("SIGINT");
+      await new Promise((r) => setTimeout(r, 1500));
+      if (p.exitCode === null) p.kill("SIGKILL");
+      for (let i = 0; i < 40 && p.exitCode === null && p.signalCode === null; i++) await sleep(250);
+    }
+  };
+  let lastWarp: number | undefined;
+  const v: Validator = {
     rpcUrl,
     wsUrl: `ws://127.0.0.1:${rpcPort + 1}`,
-    proc,
+    proc: await launch([...genesis, ...base], 2),
     async stop() {
-      if (proc.exitCode === null) {
-        proc.kill("SIGINT");
-        await new Promise((r) => setTimeout(r, 1500));
-        if (proc.exitCode === null) proc.kill("SIGKILL");
-      }
+      await kill(v.proc);
+    },
+    async warp(slot: number) {
+      // The restart warps from the last ROOTED bank: wait until everything sent so far is finalized,
+      // otherwise the unrooted tail (recent transactions) is dropped.
+      // After an earlier warp, also wait until the status cache (last 300 roots) holds no pre-warp slot:
+      // they would fall outside the 1M-slot SlotHistory after a second warp and the snapshot would not load.
+      const tip = Math.max(await conn.getSlot("confirmed"), lastWarp === undefined ? 0 : lastWarp + 310);
+      for (let i = 0; i < 1200 && (await conn.getSlot("finalized")) <= tip; i++) await sleep(250);
+      const root = await conn.getSlot("finalized");
+      lastWarp = slot;
+      await kill(v.proc);
+      for (let i = 0; i < 40 && (await probe.getSlot().then(() => true, () => false)); i++) await sleep(250);
+      // `--warp-slot` on a plain restart warps from the newest SNAPSHOT (genesis here) and drops every block
+      // since; so first snapshot the replayed root, warped, with agave-ledger-tool, then restart on it.
+      runBinary("agave-ledger-tool", ["create-snapshot", "--ledger", ledger, String(root), ledger, "--warp-slot", String(slot)], {});
+      // the old vote tower would lock the lone validator out of voting on the warped fork
+      for (const f of readdirSync(ledger)) if (/^tower-.*\.bin$/.test(f)) rmSync(join(ledger, f));
+      v.proc = await launch(base, slot);
+      // let a few blocks land so the warped clock is the one transactions see
+      const after = await conn.getSlot();
+      for (let i = 0; i < 40 && (await conn.getSlot()) < after + 3; i++) await sleep(250);
     },
   };
+  return v;
 }
 
 export interface Postgres {

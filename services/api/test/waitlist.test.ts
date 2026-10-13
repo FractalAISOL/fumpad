@@ -1,6 +1,7 @@
 /** Pre-launch waitlist: body parsing, normalisation, client IP and IP hashing. */
 import { describe, expect, it } from "vitest";
 
+import { DEV_WAITLIST_IP_SALT, loadApiConfig, waitlistConfig } from "../src/config.js";
 import { clientIp, ipHasher, normalizeEmail, normalizeHandle, parseWaitlistBody, waitlistSalt } from "../src/waitlist.js";
 
 describe("waitlist normalisation", () => {
@@ -62,7 +63,36 @@ describe("client IP + hashing", () => {
     expect(h("1.2.3.4")).not.toBe(h("1.2.3.5"));
     expect(h("1.2.3.4")).not.toContain("1.2.3.4");
     expect(ipHasher("other")("1.2.3.4")).not.toBe(h("1.2.3.4"));
-    expect(waitlistSalt({ waitlistIpSalt: "s", databaseUrl: "x" })).toBe("s");
-    expect(waitlistSalt({ databaseUrl: "postgres://a" })).toMatch(/^[0-9a-f]{64}$/);
+    expect(waitlistSalt({ waitlistIpSalt: "s" })).toBe("s");
+    expect(() => waitlistSalt({})).toThrow(/WAITLIST_IP_SALT/);
+  });
+});
+
+const PROD = { NODE_ENV: "production", DATABASE_URL: "postgres://backend/db", RPC_URL: "http://rpc", CORS_ORIGINS: "https://fumpad.app", API_SSR_SECRET: "x".repeat(32) };
+
+describe("waitlist database + salt config", () => {
+  it("outside production: falls back to DATABASE_URL and a fixed dev salt (never derived from a DB URL)", () => {
+    const a = loadApiConfig({ DATABASE_URL: "postgres://a/1" } as NodeJS.ProcessEnv);
+    const b = loadApiConfig({ DATABASE_URL: "postgres://b/2" } as NodeJS.ProcessEnv);
+    expect(a.waitlistDatabaseUrl).toBe("postgres://a/1");
+    expect(a.waitlistIpSalt).toBe(DEV_WAITLIST_IP_SALT);
+    expect(b.waitlistIpSalt).toBe(a.waitlistIpSalt); // moving the DB doesn't change the hashes
+    expect(a.waitlistDisabledReason).toBeUndefined();
+    const c = loadApiConfig({ DATABASE_URL: "postgres://a/1", WAITLIST_DATABASE_URL: "postgres://w/1", WAITLIST_IP_SALT: "salt" } as NodeJS.ProcessEnv);
+    expect([c.waitlistDatabaseUrl, c.waitlistIpSalt]).toEqual(["postgres://w/1", "salt"]);
+  });
+
+  it("production: needs its own DB and the salt, else the waitlist alone is disabled (config still loads)", () => {
+    const none = loadApiConfig(PROD as NodeJS.ProcessEnv);
+    expect(none.waitlistDisabledReason).toMatch(/WAITLIST_DATABASE_URL is not set/);
+    expect(none.waitlistDisabledReason).toMatch(/WAITLIST_IP_SALT is not set/);
+    expect(none.waitlistDatabaseUrl).toBeUndefined(); // never the backend DB
+    const same = loadApiConfig({ ...PROD, WAITLIST_DATABASE_URL: PROD.DATABASE_URL, WAITLIST_IP_SALT: "s" } as NodeJS.ProcessEnv);
+    expect(same.waitlistDisabledReason).toMatch(/separate database/);
+    const noSalt = loadApiConfig({ ...PROD, WAITLIST_DATABASE_URL: "postgres://w/1" } as NodeJS.ProcessEnv);
+    expect(noSalt.waitlistDisabledReason).toMatch(/^WAITLIST_IP_SALT is not set/);
+    const ok = loadApiConfig({ ...PROD, WAITLIST_DATABASE_URL: "postgres://w/1", WAITLIST_IP_SALT: "s" } as NodeJS.ProcessEnv);
+    expect(ok.waitlistDisabledReason).toBeUndefined();
+    expect(waitlistConfig({ WAITLIST_DATABASE_URL: " postgres://w/1 ", WAITLIST_IP_SALT: " s " } as NodeJS.ProcessEnv, true)).toEqual({ waitlistDatabaseUrl: "postgres://w/1", waitlistIpSalt: "s", waitlistDisabledReason: undefined });
   });
 });
