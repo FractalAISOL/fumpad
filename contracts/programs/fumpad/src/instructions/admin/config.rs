@@ -1,4 +1,4 @@
-//! SPEC v0.7 §2/§7: the allow-list of FUMPAD DBC configs, changed only through a 48h timelock.
+//! SPEC v0.7 §2/§7: the allow-list of FUMPAD DBC configs, changed only through a 1 h timelock (`CONFIG_TIMELOCK_SECS`).
 
 use anchor_lang::prelude::*;
 

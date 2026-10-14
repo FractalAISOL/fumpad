@@ -140,7 +140,7 @@ fn config_allow_list_is_timelocked_and_validated() {
     let mut env = Env::new();
     let g = env.global();
     let other = env.create_dbc_config(&meteora::devnet_config_params());
-    // Not yet allowed; queue → too early → 48h → executes.
+    // Not yet allowed; queue → too early → 1 h → executes.
     ok(env.queue_config(other, true));
     assert_fumpad_err(env.execute_config(other), FumpadError::TimelockNotElapsed);
     env.warp(fumpad::CONFIG_TIMELOCK_SECS);
