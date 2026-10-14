@@ -63,7 +63,7 @@ pub const DEFAULT_BUYBACK_MAX_DEVIATION_BPS: u16 = 300; // spot within ±3% of t
 pub const DEFAULT_BUYBACK_MAX_POOL_BPS: u16 = 50; // slice ≤ 0.5% of quote depth
 
 /// v0.7: the engine's max |block_time − Pyth publish_time| (SPEC v0.7 §5.4: 60 s). Bounded 30–300 s.
-pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 60;
+pub const DEFAULT_MAX_PRICE_AGE_SECS: u64 = 120;
 /// D31: attestations older than this (now − block_time) are rejected.
 pub const DEFAULT_MAX_ATTEST_AGE_SECS: i64 = 86_400;
 /// D31: ticket tokens per coin becoming effective per hour ≤ this share of supply (20%); excess is deferred (M-1).

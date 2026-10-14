@@ -53,7 +53,7 @@ export const DEFAULT_PARAMS: Params = {
   buybackMaxDeviationBps: 300,
   buybackMaxPoolBps: 50,
   solUsdFeedId: PYTH_SOL_USD_FEED_ID,
-  maxPriceAgeSecs: 60n,
+  maxPriceAgeSecs: 120n,
   maxAttestAgeSecs: 86_400n,
   maxAttestTokensPerHourBps: 2_000,
   ticketChallengeSecs: 21_600n,

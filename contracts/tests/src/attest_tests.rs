@@ -207,7 +207,7 @@ fn record_binding_rules() {
         (SellRecord { block_time: env.now() + 120, pyth_publish_time: env.now() + 100, ..base }, FumpadError::InvalidAttestation),
         (SellRecord { block_time: env.now() - 2 * 86_400, pyth_publish_time: env.now() - 2 * 86_400, ..base }, FumpadError::InvalidAttestation),
         (SellRecord { pyth_publish_time: base.block_time + 1, ..base }, FumpadError::StalePythPrice),
-        (SellRecord { pyth_publish_time: base.block_time - 61, ..base }, FumpadError::StalePythPrice),
+        (SellRecord { pyth_publish_time: base.block_time - 121, ..base }, FumpadError::StalePythPrice),
         (SellRecord { slot: 0, ..base }, FumpadError::InvalidAttestation),
     ];
     for (i, (r, e)) in cases.into_iter().enumerate() {
@@ -216,8 +216,8 @@ fn record_binding_rules() {
         let res = env.attest_sell(&r, &[0, 1]);
         assert_eq!(err_code(&res), Some(fumpad_err(e)), "case {i} expected {e:?}");
     }
-    // Pyth exactly 60 s before the trade is fine (max_price_age_secs = 60).
-    ok(env.attest_sell(&SellRecord { pyth_publish_time: base.block_time - 60, ..base }, &[0, 1]));
+    // Pyth exactly 120 s before the trade is fine (max_price_age_secs = 120).
+    ok(env.attest_sell(&SellRecord { pyth_publish_time: base.block_time - 120, ..base }, &[0, 1]));
     // 24h + 1 s later the same kind of record is too old.
     env.warp(fumpad::DEFAULT_MAX_ATTEST_AGE_SECS + 1);
     let old = SellRecord { ix_key: 9_999, ..base };

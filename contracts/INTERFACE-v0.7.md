@@ -423,7 +423,7 @@ min_hold_secs i64, rebuy_window_secs i64, claim_window_secs i64, max_open_ticket
 engine reads hold/rebuy from the coin snapshot) · `oracle_window_secs i64, oracle_min_spacing_secs i64,
 oracle_min_samples u16, keeper_stale_secs i64, buyback_max_deviation_bps u16, buyback_max_pool_bps u16` (v0.6) ·
 `sol_usd_feed_id [u8;32]` (pinned Pyth SOL/USD) · `max_price_age_secs u64` (engine's max |block_time −
-publish_time|; default **60**, bounds 30–300) · `max_attest_age_secs i64` (default 86,400; bounds 3,600–604,800) ·
+publish_time|; default **120** (was 60; user decision 2026-10-14), bounds 30–300) · `max_attest_age_secs i64` (default 86,400; bounds 3,600–604,800) ·
 `max_attest_tokens_per_hour_bps u16` (default 2,000; bounds 1–10,000) · `ticket_challenge_secs i64` (default 21,600;
 bounds 3,600–172,800) · `attest_threshold u8` (must be 2 in v1) · **`launch_signer Pubkey`** (default
 `Pubkey::default()` = no launch co-signer; otherwise `register_coin` needs its signature — off-chain review L1;

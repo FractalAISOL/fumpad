@@ -275,3 +275,5 @@ decision; each pins down something the spec left open or that the mainnet binari
    venue fee (`BUYBACK_VENUE_FEE_ALLOWANCE_BPS`), below a 3% fee, so a full slice with spot near the top of the ±3% band
    fails its min-out (fail-closed; the keeper retries later or smaller); at spot ≈ guard it passes (tested).
 
+
+31. **Pyth max price age 120 s (user decision 2026-10-14).** `DEFAULT_MAX_PRICE_AGE_SECS` / SDK default 60 → 120 s: the on-chain Pyth SOL/USD feed used by keepers (PYTH_SOURCE=onchain) updates about every 53 s on average, so 60 s dropped honest sells; the price only gates the ≥ $50 check. Devnet Global set to 120 via queue_params → execute_params. Bounds unchanged (30–300 s).
