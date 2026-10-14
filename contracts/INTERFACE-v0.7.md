@@ -90,17 +90,17 @@ Notation: `(s)` signer, `(w)` writable, `[ev]` = trailing `event_authority`, `pr
 ### Admin / governance
 | Ix | Args | Accounts | Notes |
 |---|---|---|---|
-| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3], operators: Vec<Pubkey>` (0–2 keys; a Vec so the bootstrap's bundled create_config + init simulation fits 1,232 bytes) | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the 48h timelock**. Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `operators` (≤ 2 and distinct, else `InvalidParams`; none may be a keeper, else `KeeperOperatorOverlap`) are set at once. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper), `OperatorsSet` (if any operator) and one `ConfigUpdated { add: true }` per config |
-| `queue_params` | `params: Params` | admin (s), global (w) [ev] | 48h timelock (D15). `Params::is_valid`. Event `ParamsQueued` |
+| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3], operators: Vec<Pubkey>` (0–2 keys; a Vec so the bootstrap's bundled create_config + init simulation fits 1,232 bytes) | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the config timelock**. Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `operators` (≤ 2 and distinct, else `InvalidParams`; none may be a keeper, else `KeeperOperatorOverlap`) are set at once. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper), `OperatorsSet` (if any operator) and one `ConfigUpdated { add: true }` per config |
+| `queue_params` | `params: Params` | admin (s), global (w) [ev] | 1 h timelock (`PARAMS_TIMELOCK_SECS`; D15, §8 2026-10-14). `Params::is_valid`. Event `ParamsQueued` |
 | `execute_params` | — | caller (s), global (w) [ev] | permissionless after eta. Event `ParamsUpdated` |
 | `cancel_params` | — | authority (s; admin or guardian), global (w) [ev] | Event `ParamsCancelled` |
 | `set_pause` | `paused: u8` | authority (s; admin or guardian), global (w) [ev] | bits ⊆ `PAUSE_ALL` (0b1_1111); non-zero lapses after 7 days. Event `PauseSet` |
 | `set_keepers` | `keepers: [Pubkey; 3]` | admin (s), global (w) [ev] | immediate. A key not in the previous set gets `keeper_added_at = now` (never 0): its attestation signatures count only from `now + 6h` (`KEEPER_ATTEST_FREEZE_SECS`). Keys that stay keep their timestamp (a bootstrap key stays at 0 = no freeze; removed and re-added = a new key, frozen). A key that is a current operator → `KeeperOperatorOverlap` (move the jobs key with `set_operators` first). Event `KeepersSet` |
 | `set_operators` | `operators: [Pubkey; 2]` | admin (s), global (w) [ev] | immediate, no freeze (operators never create tickets). Non-default keys distinct (`InvalidParams`), none a current keeper (`KeeperOperatorOverlap`); all-default = no operator (jobs stop: pre-grad samples / buybacks and `claim_for` refuse everyone, post-grad samples become fallback-only). Event `OperatorsSet` |
-| `propose_admin` | `new_admin, platform_treasury, guardian: Pubkey` | admin (s), global (w) [ev] | 48h. Event `AdminProposed` |
+| `propose_admin` | `new_admin, platform_treasury, guardian: Pubkey` | admin (s), global (w) [ev] | 6 h (`ADMIN_TIMELOCK_SECS`; D24, §8 2026-10-14). Event `AdminProposed` |
 | `accept_admin` | — | new_admin (s; = pending_admin), global (w) [ev] | Event `AdminAccepted` |
 | `cancel_admin` | — | authority (s; admin or guardian), global (w) [ev] | Event `AdminProposalCancelled` |
-| `queue_config` | `config: Pubkey, add: bool` | admin (s), global (w), dbc_config (= `config`; DBC-owned `PoolConfig`, validated when `add`) [ev] | allow-list change, 48h (`CONFIG_TIMELOCK_SECS`). Replaces any pending config change. Validation §5.4. Event `ConfigQueued` |
+| `queue_config` | `config: Pubkey, add: bool` | admin (s), global (w), dbc_config (= `config`; DBC-owned `PoolConfig`, validated when `add`) [ev] | allow-list change, 1 h (`CONFIG_TIMELOCK_SECS`; §8 2026-10-14). Replaces any pending config change. Validation §5.4. Event `ConfigQueued` |
 | `execute_config` | — | caller (s), global (w), dbc_config (= pending; re-validated on add) [ev] | permissionless after eta. Add: into the first empty slot of `Global.configs` (8 slots; `ConfigListFull`), duplicate → `InvalidParams`. Remove: clears the slot (registered coins keep working). Event `ConfigUpdated` |
 | `cancel_config` | — | authority (s; admin or guardian), global (w) [ev] | Event `ConfigCancelled` |
 | `migrate_global` | — | admin (s,w), global (w, raw), system_program [ev] | layout-upgrade hook. On the current 1,044-byte layout: if `operators` is all default (a Global initialized before operators existed — those bytes were `reserved`) and `keepers[0]` is set, fills `operators[0] = keepers[0]` (the key that ran the jobs keeper; the ONE way a key can be both, until `set_operators` moves it) and emits `OperatorsSet`; otherwise a no-op. Any other length → `UnsupportedGlobalLayout`. Event `GlobalMigrated` |
@@ -415,7 +415,7 @@ publish_time|; default **60**, bounds 30–300) · `max_attest_age_secs i64` (de
 `max_attest_tokens_per_hour_bps u16` (default 2,000; bounds 1–10,000) · `ticket_challenge_secs i64` (default 21,600;
 bounds 3,600–172,800) · `attest_threshold u8` (must be 2 in v1) · **`launch_signer Pubkey`** (default
 `Pubkey::default()` = no launch co-signer; otherwise `register_coin` needs its signature — off-chain review L1;
-changed like every param: `queue_params` → 48 h → `execute_params`, guardian can cancel). `Params` = 168 bytes (was 136).
+changed like every param: `queue_params` → 1 h → `execute_params`, guardian can cancel). `Params` = 168 bytes (was 136).
 
 ### 5.2 `Global` — PDA `["global"]`
 `bump u8, admin Pubkey, platform_treasury Pubkey, guardian Pubkey, keepers [Pubkey;3], keeper_added_at [i64;3],
@@ -540,6 +540,18 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 6060 KeeperOperatorOverlap · 6061 PoolIsRegistered**.
 
 ## 8. Changelog
+### 2026-10-14 — timelocks 1 h routine / 6 h authority (SPEC v0.7 clarification 29; user decision)
+1. **Constant values only — no account layout, instruction, account-list, event or error-code change.**
+   `PARAMS_TIMELOCK_SECS` 172,800 → **3,600** (`queue_params` → `execute_params`), `CONFIG_TIMELOCK_SECS` 172,800 →
+   **3,600** (`queue_config` → `execute_config`), `ADMIN_TIMELOCK_SECS` 172,800 → **21,600** (`propose_admin` →
+   `accept_admin`). `eta` in `ParamsQueued` / `ConfigQueued` / `AdminProposed` and `Global.pending_*eta` follow.
+   Unchanged: `KEEPER_ATTEST_FREEZE_SECS` (6 h), `MAX_PAUSE_SECS` (7 d), ticket challenge window bounds.
+2. Error 6015 `TimelockNotElapsed` message is now "Timelock has not elapsed" (was "Timelock (48h) has not elapsed");
+   the IDL differs only in that msg and two doc strings. SDK: `PARAMS_TIMELOCK_SECS`, `CONFIG_TIMELOCK_SECS`,
+   `ADMIN_TIMELOCK_SECS` (`TIMELOCK_SECS` kept as a deprecated alias of the admin one).
+3. Devnet: a program upgrade (redeploy the `.so`) is all it takes; already-pending changes keep the eta stored when
+   they were queued.
+
 ### 2026-10-13 d — pre-audit fixes: operators, DAMM pool status, D12 price floor, stranded value (services follow)
 1. **Operators.** `Global.reserved [u8;64]` → `operators [Pubkey;2]` (same offset 980, Global still 1,044 bytes).
    `record_samples` keeper samples, `claim_for` and pre-graduation `execute_buyback` require an operator (were: a
