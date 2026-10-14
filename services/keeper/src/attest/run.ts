@@ -2,9 +2,12 @@
  * Process wiring for the attestor and watcher modes (main.ts `--mode attestor|watcher`).
  *
  * Env: RPC_URL (this keeper's own provider), KEEPER_SECRET_KEY | KEEPER_KEYPAIR, DATABASE_URL (shared
- * signature board; required in production), ATTEST_LOOP_MS (15 s), PYTH_SOURCE=hermes|constant
- * (HERMES_URL, PYTH_API_KEY (alias HERMES_API_KEY; sent as `Authorization: Bearer`), HERMES_API_KEY_HEADER
- * (other header name, raw key); PYTH_CONSTANT_USD for local chains only),
+ * signature board; required in production), ATTEST_LOOP_MS (15 s), PYTH_SOURCE=onchain|hermes|constant
+ * (onchain = production default, free: PYTH_RPC_URL = a Solana MAINNET RPC on every cluster (default
+ * RPC_URL), PYTH_RPC_MIN_GAP_MS, PYTH_ONCHAIN_INDEX_LAG_SECS (20), PYTH_ONCHAIN_HEAD_TTL_MS (15 s),
+ * PYTH_ONCHAIN_MAX_CANDIDATES (100k); hermes = paid Hermes: HERMES_URL, PYTH_API_KEY (alias
+ * HERMES_API_KEY; sent as `Authorization: Bearer`), HERMES_API_KEY_HEADER (other header name, raw key);
+ * PYTH_CONSTANT_USD for local chains only),
  * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, PORT / HEALTH_PORT, DRY_RUN.
  * Liveness (V7-M6): ATTEST_COIN_CONCURRENCY (4), ATTEST_TICK_BUDGET_MS (60 s), ATTEST_COIN_RPC_BUDGET
  * (5,000 calls per coin per tick), ATTEST_TX_CACHE (200k txs), ATTEST_BLOCK_CACHE (50k slots).
@@ -19,7 +22,7 @@ import { Connection, type Keypair } from "@solana/web3.js";
 import pg from "pg";
 import pino from "pino";
 
-import { constantPythSource, HermesPythSource, LruMap, type PythSource } from "@fumpad/engine";
+import { constantPythSource, HermesPythSource, LruMap, OnchainPythSource, type PythSource } from "@fumpad/engine";
 import { MeteoraRpc } from "@fumpad/meteora";
 
 import { Alerter } from "../alerts.js";
@@ -32,7 +35,22 @@ import { guardHistory } from "./history-check.js";
 import { requireKeyRole } from "../role.js";
 
 export function pythSourceFromEnv(env = process.env): PythSource {
-  const kind = env.PYTH_SOURCE ?? (env.NODE_ENV === "production" ? "hermes" : "constant");
+  const kind = env.PYTH_SOURCE ?? (env.NODE_ENV === "production" ? "onchain" : "constant");
+  if (kind === "onchain") {
+    // Free, chain-native (engine/src/pyth-onchain.ts): the SOL/USD push account's writes, always read on
+    // Solana MAINNET (devnet's copy updates only every ~5 min). PYTH_RPC_URL defaults to RPC_URL, so a
+    // devnet keeper must set it to a mainnet endpoint (same provider: e.g. Helius host devnet→mainnet).
+    const url = env.PYTH_RPC_URL || env.RPC_URL;
+    if (!url) throw new Error("PYTH_SOURCE=onchain needs PYTH_RPC_URL (Solana mainnet) or RPC_URL");
+    const rpc = new MeteoraRpc(url, { minGapMs: Number(env.PYTH_RPC_MIN_GAP_MS ?? env.RPC_MIN_GAP_MS ?? 0) });
+    // The selection window (grace / lookback) is consensus: never configurable per keeper.
+    return new OnchainPythSource(rpc, {
+      indexLagSecs: env.PYTH_ONCHAIN_INDEX_LAG_SECS ? Number(env.PYTH_ONCHAIN_INDEX_LAG_SECS) : undefined,
+      headTtlMs: env.PYTH_ONCHAIN_HEAD_TTL_MS ? Number(env.PYTH_ONCHAIN_HEAD_TTL_MS) : undefined,
+      maxCandidates: env.PYTH_ONCHAIN_MAX_CANDIDATES ? Number(env.PYTH_ONCHAIN_MAX_CANDIDATES) : undefined,
+      expectGenesisHash: env.PYTH_ONCHAIN_ANY_CLUSTER === "1" && env.NODE_ENV !== "production" ? null : undefined,
+    });
+  }
   if (kind === "hermes") {
     const apiKey = env.PYTH_API_KEY || env.HERMES_API_KEY || undefined;
     // Hermes refuses unauthenticated requests since 2026-10: without a key every sell would go unattested.
@@ -45,6 +63,11 @@ export function pythSourceFromEnv(env = process.env): PythSource {
     return constantPythSource(BigInt(Math.round(usd * 1e8)), 0n, -8, 1);
   }
   throw new Error(`unknown PYTH_SOURCE ${kind}`);
+}
+
+/** Fail fast at startup when PYTH_SOURCE=onchain points at a non-mainnet RPC. */
+export async function checkPythSource(pyth: PythSource): Promise<void> {
+  if (pyth instanceof OnchainPythSource) await pyth.verifyCluster();
 }
 
 /** Session advisory lock id per keeper key: one process per attestor key, several keys per database. */
@@ -100,6 +123,7 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
     board = new MemoryBoard();
   }
   const pyth = pythSourceFromEnv(env);
+  await checkPythSource(pyth);
   const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
   const chain = new RpcChainView(conn);
   const derive = (coin: Parameters<typeof deriveCoin>[1], g: Parameters<typeof deriveCoin>[2]) =>

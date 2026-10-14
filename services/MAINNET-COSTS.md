@@ -114,6 +114,17 @@ watcher each use their own provider, DEPLOY-v07.md §1), B, C, D on
 $49–$249 plans → **≈ $650–$1,250 / month**; a lean start (all four on ~$49 plans + Triton PAYG) ≈ $200–$300 / month
 if the request rates fit (check with `rpc-check`, which measures the 429 threshold).
 
+### 5b. SOL/USD price for the $50 ticket minimum — **$0**
+
+Pyth Hermes now needs a paid plan (Starter **$500/mo**), so the attestors and the watcher default to
+`PYTH_SOURCE=onchain` (engine/src/pyth-onchain.ts): the SOL/USD price is read from the writes to Pyth's sponsored
+push account `7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE` on Solana mainnet through each keeper's own RPC — no
+key, no subscription. Measured 2026-10-13 (24 h of mainnet): 1,817 writes/day (one every ~53 s), 225k signatures on
+the account (readers) + 56k on the push-oracle program. Extra calls per keeper per day: **≈ 2,100** for full-day
+coverage (281 `getSignaturesForAddress` pages + ~1,800 `getTransaction`), plus at most 4 calls per 15 s while new
+sells keep arriving (finalized head + newest page per list; ≤ 23k/day worst case) — < 1M calls/month, inside every
+plan in §5 (credit weights per method vary by provider). Hermes stays available as `PYTH_SOURCE=hermes` (paid key).
+
 ## 6. Railway (estimate)
 
 Pro plan **$20/month per workspace** incl. $20 of usage; usage $20 per vCPU-month, $10 per GB-RAM-month, $0.05/GB

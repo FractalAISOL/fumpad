@@ -9,6 +9,7 @@ export * from "./fetch.js";
 export * from "./history.js";
 export * from "./lru.js";
 export * from "./pyth.js";
+export * from "./pyth-onchain.js";
 export * from "./rules/position.js";
 export * from "./rules/price.js";
 export * from "./rules/reference.js";

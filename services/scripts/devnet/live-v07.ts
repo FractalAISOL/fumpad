@@ -495,12 +495,10 @@ class Run {
 
   // ── watcher re-derivation, run locally (the live watcher has no public domain) ─────────
   async verify(rpcUrl: string) {
-    const env: Record<string, string | undefined> = { PYTH_SOURCE: "hermes" };
-    const pf = join(homedir(), "fumpad-keys/devnet/pyth.env");
-    for (const line of readFileSync(pf, "utf8").split("\n")) {
-      const m = /^\s*(?:export\s+)?PYTH_API_KEY\s*=\s*["']?([^"'\s]*)/.exec(line);
-      if (m) env.PYTH_API_KEY = m[1];
-    }
+    // PYTH_SOURCE=onchain reads the SOL/USD push account on MAINNET (same Helius key, host devnet→mainnet)
+    const pythRpc = new URL(rpcUrl);
+    pythRpc.hostname = pythRpc.hostname.replace("devnet", "mainnet");
+    const env: Record<string, string | undefined> = { PYTH_SOURCE: "onchain", PYTH_RPC_URL: pythRpc.hostname.includes("mainnet") ? pythRpc.toString() : "https://api.mainnet-beta.solana.com" };
     const pyth = pythSourceFromEnv(env as NodeJS.ProcessEnv);
     const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv({});
     const rpc = new MeteoraRpc(rpcUrl, { minGapMs: 50 });

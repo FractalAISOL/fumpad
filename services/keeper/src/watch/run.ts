@@ -14,6 +14,7 @@ import { createServer } from "node:http";
 import { Connection, PublicKey } from "@solana/web3.js";
 import pino from "pino";
 
+import { PriceNotReady } from "@fumpad/engine";
 import { MeteoraRpc } from "@fumpad/meteora";
 import type { CoinAccount, GlobalAccount } from "@fumpad/sdk";
 
@@ -21,7 +22,7 @@ import { Alerter } from "../alerts.js";
 import { RpcChainView } from "../attest/chain.js";
 import { deriveCoin, type Derivation } from "../attest/derive.js";
 import { guardHistory } from "../attest/history-check.js";
-import { deriveLimitsFromEnv, pythSourceFromEnv, type Running } from "../attest/run.js";
+import { checkPythSource, deriveLimitsFromEnv, pythSourceFromEnv, type Running } from "../attest/run.js";
 import { type CoinVerification, verifyCoin } from "./verify.js";
 
 export interface WatcherDeps {
@@ -96,6 +97,8 @@ export class Watcher {
               .slice(0, 600)}`,
           );
       } catch (e) {
+        // a recent sell's SOL/USD window isn't finalized yet (PYTH_SOURCE=onchain): keep the last result, retry next tick
+        if (e instanceof PriceNotReady) continue;
         this.stats.errors++;
         this.results.set(mint, { mint, verdicts: [], missing: [], checkedAt: this.now(), error: String(e).slice(0, 300) });
         await this.d.alerts?.alert(`watch:${mint}`, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)}`);
@@ -125,6 +128,7 @@ export async function runWatcher(env = process.env): Promise<Running> {
   const rpc = new MeteoraRpc(url, { minGapMs: Number(env.RPC_MIN_GAP_MS ?? 0) });
   const chain = new RpcChainView(conn, "finalized");
   const pyth = pythSourceFromEnv(env);
+  await checkPythSource(pyth);
   const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
   // L7: re-alert an unresolved item every 30 min (the challenge window is 6 h: one alert per window was too few)
   const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: "[fumpad-watcher]", cooldownMs: Number(env.WATCH_ALERT_COOLDOWN_MS ?? 30 * 60_000) });

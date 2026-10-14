@@ -54,8 +54,13 @@ Opening the app only after the handover means no hot key holds admin power while
    npm run rpc-check -- --env $K/rpc.env --env $K/rpc-b.env --env $K/rpc-c.env --env $K/rpc-d.env
    ```
    After the first coin exists, re-run with `--l8-slot <its launch slot>`.
-4. **Pyth / Hermes**: mainnet key in `$K/pyth.env` (`PYTH_API_KEY=…`); check `200` with the curl of DEPLOY-v07.md §9
-   (path `$K/pyth.env`). All three attestors and the watcher use the same source.
+4. **SOL/USD (Pyth, free)**: attestors + watcher run `PYTH_SOURCE=onchain` (the default with `NODE_ENV=production`):
+   the price comes from Pyth's sponsored SOL/USD push account on mainnet via each one's own `RPC_URL` (no key, $0;
+   `PYTH_RPC_URL` only if the price should come from another mainnet endpoint). Nothing to buy. Check one provider
+   reads it: `FUMPAD_RPC_ENV_FILE=$K/rpc-b.env npx tsx engine/scripts/record-pyth-onchain.ts 600 8` must end with
+   `determinism: N/N identical across providers` (it compares with the public RPC; it rewrites the test fixture, so
+   `git checkout engine/test/fixtures/pyth-onchain.mainnet.json.gz` afterwards). All three attestors and the watcher
+   must use the same source (`hermes` remains an option with a paid key in `$K/pyth.env`, DEPLOY-v07.md §9).
 5. **Telegram**: `$K/telegram.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — a separate mainnet chat; check
    `getMe` → `"ok":true` (DEPLOY-v07.md §9). Guardians and the ops person are in the chat.
 6. **Governance parties** (MULTISIG.md §2–3): 5 admin Ledger voters (3-of-5, 48 h Squads time lock) + 3 guardian
@@ -119,8 +124,8 @@ Opening the app only after the handover means no hot key holds admin power while
     | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
     | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
-    | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
-    | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = E, `PYTH_*`, `TELEGRAM_*` (guardians' chat) |
+    | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=onchain` (no key; price read via the same `RPC_URL`), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
+    | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = E, `PYTH_SOURCE=onchain`, `TELEGRAM_*` (guardians' chat) |
     Create them with env set but **don't deploy the keeper/attestors before day 0** (no Global yet). Grinder +
     Postgres can start early (the vanity pool fills).
 14. **App (Vercel)**: no code change, no SDK repack — build-time env only (Production; `NEXT_PUBLIC_*` are inlined at

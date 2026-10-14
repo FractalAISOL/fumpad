@@ -22,7 +22,7 @@ import { type PublicKey, type TransactionInstruction, ComputeBudgetProgram } fro
 import { PublicKey as Pk } from "@solana/web3.js";
 import type { Logger } from "pino";
 
-import { CrawlBudgetExceeded, LruMap } from "@fumpad/engine";
+import { CrawlBudgetExceeded, LruMap, PriceNotReady } from "@fumpad/engine";
 import { createHash } from "node:crypto";
 
 import {
@@ -209,6 +209,11 @@ export class Attestor {
         } catch (e) {
           if (e instanceof CrawlBudgetExceeded) {
             log.info({ mint: m }, "attestor: crawl budget reached; continuing next tick");
+            continue;
+          }
+          if (e instanceof PriceNotReady) {
+            // the SOL/USD window of a recent sell isn't finalized yet (PYTH_SOURCE=onchain): next tick
+            log.debug({ mint: m, blockTime: e.blockTime }, "attestor: SOL/USD window not final yet; continuing next tick");
             continue;
           }
           this.stats.errors++;
