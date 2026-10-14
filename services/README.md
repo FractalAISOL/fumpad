@@ -255,6 +255,13 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
   change** (`gov:params:*` / `gov:config:*` / `gov:admin:*`: params diff, config add/remove, new admin / treasury /
   guardian, eta — `keeper/src/watch/governance.ts`; the timelocks are 1 h / 6 h, SPEC v0.7 clarification 29, so the
   guardian must cancel fast); re-alerted every `WATCH_ALERT_COOLDOWN_MS` (30 min) until resolved.
+- **Derivation failures** (attestor + watcher): alerted at most once per hour per coin per error signature (error
+  class + message with numbers / keys blanked, `keeper/src/alerts.ts`); a different error alerts at once.
+- **Older program versions** (`sdk/src/layouts.ts`): events and accounts written before an upgrade on the same program
+  id decode with documented defaults for the fields they lack (e.g. CoinRegistered without fee_policy → standard);
+  a payload of any other length fails closed (`FumpadDecodeError`, derivation error + alert). After a program upgrade
+  that appends fields, add the old layout there first. `scripts/devnet/scan-layouts.ts` lists every layout the program
+  has emitted; `scripts/devnet/derive-coin.ts <mint>|all` runs the attestor derivation read-only.
 
 ### Keeper board (per-keeper roles — the documented default, V7-M1)
 The three attestors share one Postgres for the signature board. Give each its own role so one compromised keeper

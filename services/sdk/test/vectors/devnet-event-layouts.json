@@ -1,0 +1,222 @@
+{
+ "cluster": "devnet",
+ "capturedAt": "2026-10-14",
+ "note": "scripts/devnet/scan-layouts.ts: one real payload (discriminator ‖ borsh) per event name × byte length over the program's whole devnet history; accounts = live counts per size",
+ "programTxs": 522,
+ "events": {
+  "ClaimQueued": [
+   {
+    "len": 154,
+    "seen": 2,
+    "sig": "59pRwcYDjDFTHGXAZ3DPYTqA7oWAYnC9YKwMVipQEA8w6QUERZMwAmyqTDWDMo5Cisetqg9rAHoqDBUmWgFq5wpr",
+    "slot": 510688572,
+    "raw": "lpO6vGXEtuEEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt7hjkpMB9675GK+vkJcdulaqeVVK/Nqd2oz+LcVAURLyhY2ka5HTGxrPkH/IkWa/a6LsPA1hAHcxWRWAcEbne9E2OryGwgkAAAEACl/OagAAAAD7uT/dtUCj+Go0L0s02T49hnLKx23zKDGxf/tqjrgeJA=="
+   }
+  ],
+  "CoinRegistered": [
+   {
+    "len": 160,
+    "seen": 1,
+    "sig": "4RPL4866m3AJLb2inxVUb26ry259v7BYtycusQpwA9SnR3shSHQsuxz6HErQ7wGM4w9ce7ZHjEx2TkesoAvTU1u7",
+    "slot": 510673016,
+    "raw": "Sb0TWOxQzaoEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt5fjHyK/FXBNGXh4E0gCPSrnRnRLqHLdfHutK/CH5wz2V6OOMIE0r6Yo6kcClT/RJQWjQMkXW+kjYOSRdUE0hqUI76Rc/jssr5VdtLaSNzIhmh0QphUlTTmRCmyi5YFHwXhAcB4AAAAACAAAAAAAAACHUM5qAAAAAA=="
+   },
+   {
+    "len": 199,
+    "seen": 2,
+    "sig": "5jEPW9az9suhXZ3JYohLzbqLNPtqyrabWagxaWHXqib4oeAnzYvno71aLgkVFqmwdSKMnEp8mJ3tCmGNheog4JfR",
+    "slot": 511087840,
+    "raw": "Sb0TWOxQzarOGLTZAEcAY0ayj+nbC1lWeJ8J2dsprMepzNnUqmCG55fjHyK/FXBNGXh4E0gCPSrnRnRLqHLdfHutK/CH5wz2nLdfBUakC2ehCD4PIbvX5QTk4whhN7H5NGieOJAq6WzB7afDebn1yBuBlmk8ZjRBhUdW4HZHAeGWp7y0hJgxV+CUdh4AAAAAGQAAAAAAAACI089qAAAAAAFkAIwAAQBo6sFfusIZkUhAysKn6m3GqFZkjWzD08oylXwY5m6G5g=="
+   }
+  ],
+  "ConfigQueued": [
+   {
+    "len": 96,
+    "seen": 2,
+    "sig": "4HXAvjPfGGN6wCgg6mjg4YfbKTdsidkPJ63S9svzLxRfpTbdcqstkjn3YA7GYn3pW39tDK3d8gQJnM5qiPFcjjCf",
+    "slot": 511038899,
+    "raw": "BGuuicFBUSnB7afDebn1yBuBlmk8ZjRBhUdW4HZHAeGWp7y0hJgxVwH+s89qAAAAAO6lz2oAAAAAAWQAjAABAGjqwV+6whmRSEDKwqfqbcaoVmSNbMPTyjKVfBjmbobm"
+   }
+  ],
+  "ConfigUpdated": [
+   {
+    "len": 49,
+    "seen": 1,
+    "sig": "61docBKjCgUnSrB63xGG7vuKJfUg3ycPwFFoFF5V1FQf1rTv2oQHzLkAvzwzEYj8k1GdkHp6EnVPJsiPrySGPsx9",
+    "slot": 510664590,
+    "raw": "KPHmegsTxsII76Rc/jssr5VdtLaSNzIhmh0QphUlTTmRCmyi5YFHwQGnSM5qAAAAAA=="
+   },
+   {
+    "len": 88,
+    "seen": 1,
+    "sig": "4cYixzUnRchFbow1mVTrzMUJuBmDTbZ6EKMBhMU5TjEoJUSwZeWQgnqZfbr3WYQPEpWz2iajQVrdLbcioMTzzqGr",
+    "slot": 511054004,
+    "raw": "KPHmegsTxsLB7afDebn1yBuBlmk8ZjRBhUdW4HZHAeGWp7y0hJgxVwH/s89qAAAAAAFkAIwAAQBo6sFfusIZkUhAysKn6m3GqFZkjWzD08oylXwY5m6G5g=="
+   }
+  ],
+  "CurveCompleted": [
+   {
+    "len": 80,
+    "seen": 2,
+    "sig": "5Q28R1BMkipXNGTWybCXAaRDuWiedWiGiTbb2vHauyUNSfz4qeqFgR3XCR5FxNrPizXj5N4197mGQdkDkzXBGkC6",
+    "slot": 510673572,
+    "raw": "Aa6kf9uB8w4EJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt1ejjjCBNK+mKOpHApU/0SUFo0DJF1vpI2DkkXVBNIalDFHOagAAAAA="
+   }
+  ],
+  "FeesClaimed": [
+   {
+    "len": 82,
+    "seen": 2,
+    "sig": "4VuVYr2YdNQZuwavAZhXVnaEvp5rSCTbf6ybnik52M3X1jAYHCySJhugCiyCzYTLdGosSqW3JaeANXKzVuiL8Lw",
+    "slot": 510673083,
+    "raw": "Fmhu3iadDj4EJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGtwDAkSEAAAAAAMCRIQAAAAAAAAAAAAAAAAAAAAAAAAAAAAGXUM5qAAAAAA=="
+   },
+   {
+    "len": 122,
+    "seen": 8,
+    "sig": "2UoNrDdhwZEq3kCXU9QkzSZ91kvMVsqZ9scSmbQ4rtFHPvTA444Jn2iTvQjMQxpGysYW8BBcvGjHwFn1G5Vwtr4Q",
+    "slot": 511087914,
+    "raw": "Fmhu3iadDj7OGLTZAEcAY0ayj+nbC1lWeJ8J2dsprMepzNnUqmCG5wCAvGgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGZ089qAAAAAIC8aAAAAAAAaOrBX7rCGZFIQMrCp+ptxqhWZI1sw9PKMpV8GOZuhuY="
+   }
+  ],
+  "GlobalInitialized": [
+   {
+    "len": 281,
+    "seen": 1,
+    "sig": "61docBKjCgUnSrB63xGG7vuKJfUg3ycPwFFoFF5V1FQf1rTv2oQHzLkAvzwzEYj8k1GdkHp6EnVPJsiPrySGPsx9",
+    "slot": 510664590,
+    "raw": "jrq8qEDkCBR7GXy4mBygAvya2UMbOn4j9bdzKUlZrFqEy0pI6Jj5Ld3mDInbXuuPvtDEiNSBqchcQqXwt3wuEJQ6vRgxPwKVexl8uJgcoAL8mtlDGzp+I/W3cylJWaxahMtKSOiY+S0BiBO4C9AHoIYBAOgD6AP0AQAAAAAAADwAAAAAAAAAgDoJAAAAAAAAp3YAAAAAAAVYAgAAAAAAAAoAAAAAAAAAHABYAgAAAAAAACwBMgDvDYtv2izrpB2hXUCV0do5Kg0vjtDGx7wPTPrIwoC1bTwAAAAAAAAAgFEBAAAAAADQBxAOAAAAAAAAAppveK7BDEGPWg5eIDqJdbly7DoqdicJXiHwv13mzHkEp0jOagAAAAA="
+   }
+  ],
+  "GlobalMigrated": [
+   {
+    "len": 24,
+    "seen": 2,
+    "sig": "2pqwVU9vMLsed4D3euYsG9pMsfgsG9Ekg2LWT1Rzg6DzHGZgzY8j537PzRDjx4KpKJyMVXswTjjJZd1Ue3XhqHJi",
+    "slot": 510792955,
+    "raw": "S6uh55nuiD0UBAAAFAQAAGrAzmoAAAAA"
+   }
+  ],
+  "Graduated": [
+   {
+    "len": 168,
+    "seen": 2,
+    "sig": "45S8bxvCfbXZ1dcmN9mZs2c9QHhFpWd53Se9giekyUaw3iAYjHd4VagkWwachsPYut99RFkux8qJ5MV4wBGnjmxX",
+    "slot": 510673848,
+    "raw": "M/FCMoz1nMAEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt1mGUgAldAtzs8RhnVBAKeqV4OoQPI916IWPCd/v/zEHUVMuUMzbqKo9dmZLGDQ/BwaPxtJtHA2XrUaFyrXBf9UCAJVzwkgAACCzgQAAAAAAAQAAAAAAAAAhs4EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE5RzmoAAAAA"
+   }
+  ],
+  "KeepersSet": [
+   {
+    "len": 136,
+    "seen": 1,
+    "sig": "61docBKjCgUnSrB63xGG7vuKJfUg3ycPwFFoFF5V1FQf1rTv2oQHzLkAvzwzEYj8k1GdkHp6EnVPJsiPrySGPsx9",
+    "slot": 510664590,
+    "raw": "GbR0tPeJFJD7uT/dtUCj+Go0L0s02T49hnLKx23zKDGxf/tqjrgeJA0RhlucxAgAZ/t+NX8hhy9qPz9zz5qaoxZCpBBnphP/Yfelq6sf/LZGO6ZdixJ+7w7+qY3MrIuEbz1jNdcFoYYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACnSM5qAAAAAA=="
+   }
+  ],
+  "OperatorsSet": [
+   {
+    "len": 80,
+    "seen": 2,
+    "sig": "2pqwVU9vMLsed4D3euYsG9pMsfgsG9Ekg2LWT1Rzg6DzHGZgzY8j537PzRDjx4KpKJyMVXswTjjJZd1Ue3XhqHJi",
+    "slot": 510792955,
+    "raw": "KRS3k271w1D7uT/dtUCj+Go0L0s02T49hnLKx23zKDGxf/tqjrgeJAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAasDOagAAAAA="
+   }
+  ],
+  "ParamsQueued": [
+   {
+    "len": 192,
+    "seen": 1,
+    "sig": "8PNBMe4XeNgv6Up2TFwN3p9EN1MULJYPYiveSGRBLjfPMK7f4QfRr1TCTtYLrMnYJqyJMskWvZMWsa21umPSXqo",
+    "slot": 511038992,
+    "raw": "msm7C0v1zRSIE7gL0AeghgEA6APoA/QBAAAAAAAAPAAAAAAAAACAOgkAAAAAAACndgAAAAAABVgCAAAAAAAACgAAAAAAAAAcAFgCAAAAAAAALAEyAO8Ni2/aLOukHaFdQJXR2jkqDS+O0MbHvA9M+sjCgLVteAAAAAAAAACAUQEAAAAAANAHEA4AAAAAAAACmm94rsEMQY9aDl4gOol1uXLsOip2JwleIfC/XebMeQQUtM9qAAAAAASmz2oAAAAA"
+   }
+  ],
+  "ParamsUpdated": [
+   {
+    "len": 184,
+    "seen": 1,
+    "sig": "3sWyraFaPE3YiHqV3UXH17fKLCmf91UhNwB4U8fc5KBcSDLDxWCd5h7AUCUieSc5hiCHL5Qz8KKH8rznU5YBEMHA",
+    "slot": 511054099,
+    "raw": "AqOKY4cLiKmIE7gL0AeghgEA6APoA/QBAAAAAAAAPAAAAAAAAACAOgkAAAAAAACndgAAAAAABVgCAAAAAAAACgAAAAAAAAAcAFgCAAAAAAAALAEyAO8Ni2/aLOukHaFdQJXR2jkqDS+O0MbHvA9M+sjCgLVteAAAAAAAAACAUQEAAAAAANAHEA4AAAAAAAACmm94rsEMQY9aDl4gOol1uXLsOip2JwleIfC/XebMeQQWtM9qAAAAAA=="
+   }
+  ],
+  "PoolMigrated": [
+   {
+    "len": 120,
+    "seen": 2,
+    "sig": "2vKqMemkTqcpHd8a2gKMjt3EfmA6VXQg7zKQSUer3eLN4hWAWEHpvRSonco38oyssg7LFNjbnAvCM1HKR4g29xyh",
+    "slot": 510673830,
+    "raw": "+swYwyX9mAYEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt1mGUgAldAtzs8RhnVBAKeqV4OoQPI916IWPCd/v/zEH+7k/3bVAo/hqNC9LNNk+PYZyysdt8ygxsX/7ao64HiSAxPsAAAAAAEpRzmoAAAAA"
+   }
+  ],
+  "RoutedTrade": [
+   {
+    "len": 146,
+    "seen": 7,
+    "sig": "4PjK8pZyzxw4UxvVh5sC73CWo83W6HgxwpWMyimoAMs58cLGzdNwD4E3Z1bjihv1LRRbSMD8qKTHE7nxRMQbNLes",
+    "slot": 510673049,
+    "raw": "U3sAF1Bi6rUEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt1ep6kC3YxkOfqrNAVRVa2paJFpCYoV4jpWOmRLpclU2AAHYhNnlIHsAAADh9QUAAAAA0BITAAAAAADOVGvqoFgyAAAAAAAAAAAAxt0sK9o5PgAAAAAAAAAAAJlAcB4AAAAAj1DOagAAAAA="
+   }
+  ],
+  "SampleRecorded": [
+   {
+    "len": 66,
+    "seen": 470,
+    "sig": "4gwkjzhPQv4zdD6jYa7HsDKie4nFb32vip6nMoSRVB3fXGngtraCp467Aqrcn2QWjSvxyurCMkHw8Rr7xVqjQD3g",
+    "slot": 510673881,
+    "raw": "VIMhCcG4Z/IEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGtwF/AnjWw0oAAAAAAAAAAAAAAFZRzmoAAAAA"
+   }
+  ],
+  "TicketAttested": [
+   {
+    "len": 398,
+    "seen": 4,
+    "sig": "2xhVEwvpXBFmp45A78sUSMH3AkjhShMUAmvmMLDv4A1VFMYJnwV911mMfo5L48gqvZd7nMufiqKqJVUK5mpsWczq",
+    "slot": 510673444,
+    "raw": "SAlJvrx0TDwEJIlGTaTKUBCyR6FHzywoWhDrBYGLKa+vBTIrjxbGt4WNpGuR0xsaz5B/yJFmv2ui7DwNYQB3MVkVgHBG53vRuGOSkwH3rvkYr6+Qlx26Vqp5VUr82p3ajP4txUBREvIAAAAAAAAAAFejjjCBNK+mKOpHApU/0SUFo0DJF1vpI2DkkXVBNIalAADx8mzq557OX36N2hSwdCNYbprxWT6dNvEoqcorxGw4oxHX6wso6CUSJJCIHd2nOMfUrhq2nptC6Agwz4Yu3J4NAAADAAOs3TSXYwAA6uvwBAAAAAADrN00l2MAAJWbWYKzDAAAAAAAAAAAAAB2AwAAAAAAANxQzmoAAAAA2EFwHgAAAADcUM5qAAAAAGH3paurH/y2RjumXYsSfu8O/qmNzKyLhG89YzXXBaGG+7k/3bVAo/hqNC9LNNk+PYZyysdt8ygxsX/7ao64HiRh96Wrqx/8tkY7pl2LEn7vDv6pjcysi4RvPWM11wWhhu5QzmoAAAAA7lDOagAAAAA="
+   }
+  ],
+  "TicketDebited": [
+   {
+    "len": 197,
+    "seen": 2,
+    "sig": "2tpKcQP9At4iqXAx6n9zdV2WkogB8KTKbFQ3kiVrSmnqkVRS5jk8fxhJLr4kzfriNugpid1HRxGKetGbDKsq2zcp",
+    "slot": 510674013,
+    "raw": "w15QoXVg55a4Y5KTAfeu+Rivr5CXHbpWqnlVSvzandqM/i3FQFES8gQkiUZNpMpQELJHoUfPLChaEOsFgYspr68FMiuPFsa3hY2ka5HTGxrPkH/IkWa/a6LsPA1hAHcxWRWAcEbne9ErcdnjO8xVlbi1nQPdpd179lUEeAcn2HmwPd3e5nqm+yqm2oot4T9Qd5b2cpo0zxmRNNsBFM4pfTqRjiQ7jV0AAAAFAOVlg/H9AQAAHkZaQ5lhAAAAdVHOagAAAAA="
+   }
+  ]
+ },
+ "accounts": {
+  "ClaimQueue": {
+   "81976": 2,
+   "total": 2
+  },
+  "Coin": {
+   "546": 2,
+   "593": 1,
+   "total": 3
+  },
+  "Consumed": {
+   "98": 6,
+   "total": 6
+  },
+  "Global": {
+   "1491": 1,
+   "total": 1
+  },
+  "Observations": {
+   "8280": 2,
+   "total": 2
+  },
+  "Position": {
+   "315": 4,
+   "total": 4
+  },
+  "Ticket": {
+   "276": 4,
+   "total": 4
+  }
+ }
+}

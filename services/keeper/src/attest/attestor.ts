@@ -43,7 +43,7 @@ import {
   type TicketAccount,
 } from "@fumpad/sdk";
 
-import type { Alerter } from "../alerts.js";
+import { type Alerter, deriveAlert } from "../alerts.js";
 import { roleProblem } from "../role.js";
 import { type SignatureBoard, validSignatures } from "./board.js";
 import type { Derivation } from "./derive.js";
@@ -218,7 +218,9 @@ export class Attestor {
           }
           this.stats.errors++;
           log.warn({ mint: m, err: String(e).slice(0, 300) }, "attestor: coin derivation failed");
-          await this.o.alerts?.alert(`derive:${m}`, `attestor ${this.me.slice(0, 6)}: derivation failed for ${m}: ${String(e).slice(0, 200)}`);
+          // once per hour per (coin, error signature); a new kind of failure alerts at once
+          const a = deriveAlert("derive", m, e);
+          await this.o.alerts?.alert(a.key, `attestor ${this.me.slice(0, 6)}: derivation failed for ${m}: ${String(e).slice(0, 200)} (repeats muted 1 h)`, a.opts);
         }
       }
     };

@@ -4,6 +4,7 @@ import { PublicKey } from "@solana/web3.js";
 import { normalize } from "./borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "./coder.js";
 import { BPS_DENOM, CLAIM_QUEUE_CAPACITY, FEE_POLICY, OBSERVATION_CAPACITY, PREGRAD_MIN_SAMPLES, PREGRAD_MIN_SPAN_SECS, PREGRAD_RING_LEN, PREGRAD_WINDOW_SECS } from "./constants.js";
+import { FumpadDecodeError, idlStructFields, idlTypeSize, type LegacyLayout, pickLayout, widen } from "./layouts.js";
 import { type Params, paramsFromIdl } from "./params.js";
 
 export type CoinStatus = "curve" | "complete" | "graduated";
@@ -209,7 +210,51 @@ export interface ConsumedAccount {
   messageHash: number[];
 }
 
-const decode = <T>(name: string, data: Uint8Array): T => normalize(fumpadCoder().accounts.decode(name, Buffer.from(data))) as T;
+type AccountName = "Global" | "Coin" | "Position" | "Ticket" | "Consumed";
+const accountLens = new Map<string, number>();
+/** Current borsh length (discriminator included) of an Anchor account, from the IDL. */
+export function accountLen(name: AccountName): number {
+  let n = accountLens.get(name);
+  if (n === undefined) accountLens.set(name, (n = 8 + idlStructFields(FUMPAD_IDL, name).reduce((s, f) => s + idlTypeSize(FUMPAD_IDL, f.type), 0)));
+  return n;
+}
+/**
+ * Historical account layouts (layouts.ts): fields appended at the end by a later program version; the older account
+ * reads with them zero. Coin's optional policy tail is handled in `decodeCoin`.
+ */
+const ACCOUNT_LEGACY: Partial<Record<AccountName, { label: string; appended: string[] }>> = {
+  // 2026-10-14 fee policies: Global 1,044 → 1,491 (`migrate_global` grows it in place, new bytes zero)
+  Global: { label: "pre-fee-policy Global", appended: ["config_policies", "config_coins", "pending_config_policy", "reserved"] },
+  // c9be557 (L-2): + message_hash; zero = no hash recorded (older markers are sell / rebuy only, never reopened)
+  Consumed: { label: "pre-L-2 Consumed", appended: ["message_hash"] },
+};
+const accountLegacy = new Map<string, LegacyLayout[]>();
+function legacyAccountLayouts(name: AccountName): LegacyLayout[] {
+  let out = accountLegacy.get(name);
+  if (out) return out;
+  out = [];
+  const spec = ACCOUNT_LEGACY[name];
+  if (spec) {
+    const fields = idlStructFields(FUMPAD_IDL, name);
+    const tail = fields.slice(fields.length - spec.appended.length);
+    if (tail.map((f) => f.name).join() !== spec.appended.join()) throw new Error(`IDL ${name}: expected trailing fields ${spec.appended.join(", ")}`);
+    const bytes = tail.reduce((s, f) => s + idlTypeSize(FUMPAD_IDL, f.type), 0);
+    out.push({ label: spec.label, at: accountLen(name) - bytes, bytes });
+  }
+  accountLegacy.set(name, out);
+  return out;
+}
+
+/** Decode an Anchor account in its current or a known historical layout; anything else throws FumpadDecodeError. */
+const decode = <T>(name: AccountName, data: Uint8Array): T => {
+  const legacy = pickLayout("account", name, data.length, accountLen(name), legacyAccountLayouts(name));
+  const bytes = legacy ? widen(data, legacy) : data;
+  try {
+    return normalize(fumpadCoder().accounts.decode(name, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength))) as T;
+  } catch (e) {
+    throw new FumpadDecodeError(`account ${name}: ${String(e).slice(0, 200)}`);
+  }
+};
 const strip = <T>(o: T & { reserved?: unknown }): T => {
   delete (o as { reserved?: unknown }).reserved;
   return o;
@@ -224,11 +269,6 @@ export const GLOBAL_ACCOUNT_LEN_V1 = 1_044;
  * as zero — standard policies, no coin counts, nothing pending — exactly what `migrate_global` writes.
  */
 export function decodeGlobal(data: Uint8Array): GlobalAccount {
-  if (data.length === GLOBAL_ACCOUNT_LEN_V1) {
-    const grown = new Uint8Array(GLOBAL_ACCOUNT_LEN);
-    grown.set(data);
-    data = grown;
-  }
   const g = decode<Record<string, unknown>>("Global", data);
   return strip({
     ...(g as unknown as GlobalAccount),
@@ -238,8 +278,13 @@ export function decodeGlobal(data: Uint8Array): GlobalAccount {
 }
 /** Decode a Coin (+ its fee-policy tail when `feePolicyKind != 0`: kind u8, buyback u16, wallet u16, max u16, wallet, paid u64). */
 export function decodeCoin(data: Uint8Array): CoinAccount {
-  const c = strip(decode<CoinAccount>("Coin", data));
-  if (c.feePolicyKind && data.length >= COIN_ACCOUNT_LEN + COIN_POLICY_TAIL_LEN) {
+  // 546 B standard coin, 593 B with the policy tail (only ever created for a non-standard policy).
+  const tail = data.length === COIN_ACCOUNT_LEN + COIN_POLICY_TAIL_LEN;
+  const c = strip(decode<CoinAccount>("Coin", tail ? data.subarray(0, COIN_ACCOUNT_LEN) : data));
+  if (!!c.feePolicyKind !== tail) {
+    throw new FumpadDecodeError(`account Coin ${c.mint.toBase58()}: fee_policy_kind ${c.feePolicyKind} with ${data.length} bytes (corrupt: a policy tail exists iff the kind is non-standard)`);
+  }
+  if (tail) {
     const o = COIN_ACCOUNT_LEN;
     const v = new DataView(data.buffer, data.byteOffset + o, COIN_POLICY_TAIL_LEN);
     c.feePolicy = { kind: data[o], buybackShare: v.getUint16(1, true), walletShare: v.getUint16(3, true), maxCoins: v.getUint16(5, true), wallet: new PublicKey(data.subarray(o + 7, o + 39)) };

@@ -10,7 +10,8 @@ import bs58 from "bs58";
 import { normalize } from "./borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "./coder.js";
 import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID } from "./constants.js";
-import { eventAuthorityPda } from "./pda.js";
+import { FumpadDecodeError, idlStructFields, idlTypeSize, type LegacyLayout, pickLayout, widen } from "./layouts.js";
+import { coinPda, eventAuthorityPda } from "./pda.js";
 
 type PK = PublicKey;
 export interface FeePolicyData { kind: number; buybackShare: number; walletShare: number; maxCoins: number; wallet: PK }
@@ -155,14 +156,88 @@ export function eventNameOf(payload: Uint8Array): string | undefined {
   return discs.find((e) => startsWith(payload, e.disc))?.name;
 }
 
-/** Decode discriminator ‖ borsh (the `raw` of an event). null for unknown events. */
+// ── historical layouts (layouts.ts) ───────────────────────────────────────
+/** Fields appended to an event by a later program version (current layout = the IDL's). */
+const APPENDED_FIELDS: Record<string, string[]> = {
+  CoinRegistered: ["fee_policy"],
+  FeesClaimed: ["to_wallet", "fee_wallet"],
+  ConfigQueued: ["policy"],
+  ConfigUpdated: ["policy"],
+  TicketAttested: ["effective_at"],
+  TicketVoided: ["coin", "reopened"],
+};
+/** Events embedding `Params`, which gained a trailing `launch_signer` (pubkey) inside the event. */
+const PARAMS_EVENTS = ["GlobalInitialized", "ParamsQueued", "ParamsUpdated"];
+
+/** Defaults of fields an older layout lacks, beyond the zero bytes `widen` inserts (layouts.ts). */
+const LEGACY_DEFAULTS: Record<string, (d: Record<string, unknown>) => void> = {
+  // effective_at = Ticket.attested_at = ts before the rate cap could defer a ticket
+  TicketAttested: (d) => void (d.effectiveAt = d.ts),
+  // the voided ticket's coin = the coin PDA of the event's mint (= the ticket's mint); reopen did not exist
+  TicketVoided: (d) => {
+    d.coin = coinPda(d.mint as PublicKey);
+    d.reopened = false;
+  },
+  // zero bytes already are the other defaults: FeePolicy 0… = standard, to_wallet 0 / fee_wallet default, launch_signer default
+};
+
+export interface EventLayouts {
+  /** Current payload length (discriminator included). */
+  current: number;
+  legacy: LegacyLayout[];
+}
+let layouts: Map<string, EventLayouts> | undefined;
+/** Known payload layouts per event name (current + historical), checked against the IDL and unambiguous. */
+export function eventLayouts(): Map<string, EventLayouts> {
+  if (layouts) return layouts;
+  const idl = FUMPAD_IDL;
+  const m = new Map<string, EventLayouts>();
+  for (const e of (idl as unknown as { events: { name: string }[] }).events) {
+    const fields = idlStructFields(idl, e.name);
+    const sizes = fields.map((f) => idlTypeSize(idl, f.type));
+    const current = 8 + sizes.reduce((a, b) => a + b, 0);
+    const legacy: LegacyLayout[] = [];
+    const appended = APPENDED_FIELDS[e.name];
+    if (appended) {
+      const tail = fields.slice(fields.length - appended.length).map((f) => f.name);
+      if (tail.join() !== appended.join()) throw new Error(`IDL ${e.name}: expected trailing fields ${appended.join(", ")} (got ${tail.join(", ")})`);
+      const bytes = sizes.slice(fields.length - appended.length).reduce((a, b) => a + b, 0);
+      legacy.push({ label: `without ${appended.join(", ")}`, at: current - bytes, bytes });
+    }
+    if (PARAMS_EVENTS.includes(e.name)) {
+      const i = fields.findIndex((f) => f.name === "params");
+      const pf = idlStructFields(idl, "Params");
+      if (i < 0 || pf[pf.length - 1].name !== "launch_signer") throw new Error(`IDL ${e.name}: Params.launch_signer expected last`);
+      legacy.push({ label: "Params without launch_signer", at: 8 + sizes.slice(0, i + 1).reduce((a, b) => a + b, 0) - 32, bytes: 32 });
+    }
+    if (new Set([current, ...legacy.map((l) => current - l.bytes)]).size !== legacy.length + 1) throw new Error(`IDL ${e.name}: ambiguous historical layouts`);
+    m.set(e.name, { current, legacy });
+  }
+  return (layouts = m);
+}
+
+/**
+ * Decode discriminator ‖ borsh (the `raw` of an event). null for events not in the IDL. Every historical layout of
+ * the event decodes (layouts.ts), its missing fields set to their documented defaults; a payload matching no known
+ * layout throws `FumpadDecodeError` (fail closed).
+ */
 export function decodeEventRaw(raw: string | Uint8Array): { name: string; data: Record<string, unknown> } | null {
-  const bytes = typeof raw === "string" ? unb64(raw) : raw;
+  let bytes = typeof raw === "string" ? unb64(raw) : raw;
   const name = eventNameOf(bytes);
   if (!name) return null;
-  const ev = fumpadCoder().events.decode(b64(bytes));
-  if (!ev) return null;
-  return { name: ev.name, data: normalize(ev.data) as Record<string, unknown> };
+  const l = eventLayouts().get(name)!;
+  const legacy = pickLayout("event", name, bytes.length, l.current, l.legacy);
+  if (legacy) bytes = widen(bytes, legacy);
+  let ev: { name: string; data: unknown } | null;
+  try {
+    ev = fumpadCoder().events.decode(b64(bytes));
+  } catch (e) {
+    throw new FumpadDecodeError(`event ${name}: ${String(e).slice(0, 200)}`);
+  }
+  if (!ev || ev.name !== name) throw new FumpadDecodeError(`event ${name}: undecodable payload`);
+  const data = normalize(ev.data) as Record<string, unknown>;
+  if (legacy) LEGACY_DEFAULTS[name]?.(data);
+  return { name, data };
 }
 
 /** Every fumpad event in a successful transaction, in execution order. Failed txs → []. */

@@ -16,6 +16,7 @@ export * from "./instructions/fumpad.js";
 export * from "./instructions/metas.js";
 export * from "./instructions/spl.js";
 export * from "./launch.js";
+export * from "./layouts.js";
 export * from "./math/claims.js";
 export * from "./math/price.js";
 export * from "./meteora/accounts.js";

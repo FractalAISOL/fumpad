@@ -19,7 +19,7 @@ import { PriceNotReady } from "@fumpad/engine";
 import { MeteoraRpc } from "@fumpad/meteora";
 import type { CoinAccount, GlobalAccount } from "@fumpad/sdk";
 
-import { Alerter } from "../alerts.js";
+import { Alerter, deriveAlert } from "../alerts.js";
 import { RpcChainView } from "../attest/chain.js";
 import { deriveCoin, type Derivation } from "../attest/derive.js";
 import { guardHistory } from "../attest/history-check.js";
@@ -107,7 +107,9 @@ export class Watcher {
         if (e instanceof PriceNotReady) continue;
         this.stats.errors++;
         this.results.set(mint, { mint, verdicts: [], missing: [], checkedAt: this.now(), error: String(e).slice(0, 300) });
-        await this.d.alerts?.alert(`watch:${mint}`, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)}`);
+        // once per hour per (coin, error signature); a new kind of failure alerts at once
+        const a = deriveAlert("watch", mint, e);
+        await this.d.alerts?.alert(a.key, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)} (repeats muted 1 h)`, a.opts);
       }
     }
     Object.assign(this.stats, { matches, mismatches, missing, issues, lastTickAt: this.now() });
