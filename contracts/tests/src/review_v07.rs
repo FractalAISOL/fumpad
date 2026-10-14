@@ -482,8 +482,8 @@ fn regression_launch_signer_binds_register_coin() {
     let launch = |env: &Env, signer: Option<&Keypair>, mint: &Pubkey| {
         let mut ixs = env.launch_ixs(&cfg, &kp_pk(&creator), mint, 0);
         let reg = ixs.last_mut().unwrap();
-        // Optional accounts `launch_signer`, `fee_policy` sit right before the event-CPI pair.
-        let at = reg.accounts.len() - 4;
+        // Optional account `launch_signer` sits right before the event-CPI pair.
+        let at = reg.accounts.len() - 3;
         if let Some(s) = signer {
             reg.accounts[at] = solana_instruction::AccountMeta::new_readonly(addr(&kp_pk(s)), true);
         }

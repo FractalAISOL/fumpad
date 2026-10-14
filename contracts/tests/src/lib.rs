@@ -402,8 +402,12 @@ impl Env {
     pub fn reward_vault(&self, mint: &Pubkey) -> Pubkey {
         base_ata(&self.reward_pool(), mint)
     }
-    pub fn fee_policy_pda(&self, mint: &Pubkey) -> Pubkey {
-        pda(&[fumpad::FEE_POLICY_SEED, mint.as_ref()])
+    /// A wallet-split coin's policy snapshot: the tail of its Coin account (`state::fee_policy`).
+    pub fn coin_policy_tail(&self, mint: &Pubkey) -> Option<fumpad::state::CoinPolicyTail> {
+        use anchor_lang::AnchorDeserialize;
+        let d = self.data(&self.coin_pda(mint));
+        let (start, len) = (fumpad::state::COIN_LEN, fumpad::state::COIN_POLICY_TAIL_LEN);
+        (d.len() >= start + len).then(|| fumpad::state::CoinPolicyTail::deserialize(&mut &d[start..start + len]).unwrap())
     }
 
     /// Send with `payer` as fee payer plus extra signers.

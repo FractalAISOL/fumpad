@@ -8,8 +8,9 @@
 //! instructions-sysvar check is needed here.
 //!
 //! Fee policy (2026-10-14): the coin snapshots its config slot's `FeePolicy` — the kind into `Coin.fee_policy_kind`,
-//! a non-standard policy into the `CoinFeePolicy` PDA ["fee_policy", mint] created here — and counts against the
-//! policy's `max_coins` (`Global.config_coins`), so later config changes never alter this coin's routing.
+//! a non-standard policy into the Coin account's tail (the account is created longer; `state::fee_policy`, no extra
+//! account: the launch tx has no room for one) — and counts against the policy's `max_coins`
+//! (`Global.config_coins`), so later config changes never alter this coin's routing.
 
 use anchor_lang::prelude::*;
 use anchor_spl::{
@@ -23,8 +24,7 @@ use crate::{
     error::FumpadError,
     events::CoinRegistered,
     external::meteora,
-    instructions::rewards::util::{create_pda_account, write_account},
-    state::{Coin, CoinFeePolicy, CoinStatus, FeeSplitBps, Global, PAUSE_LAUNCH},
+    state::{write_policy_tail, Coin, CoinPolicyTail, CoinStatus, FeeSplitBps, Global, PAUSE_LAUNCH},
 };
 
 #[event_cpi]
@@ -42,7 +42,8 @@ pub struct RegisterCoin<'info> {
     pub dbc_config: UncheckedAccount<'info>,
     /// CHECK: DBC virtual pool; owner, discriminator and fields checked in the handler.
     pub dbc_pool: UncheckedAccount<'info>,
-    #[account(init, payer = creator, space = 8 + Coin::INIT_SPACE, seeds = [COIN_SEED, mint.key().as_ref()], bump)]
+    /// `8 + Coin::INIT_SPACE`, plus the policy tail when the config's slot has a non-standard fee policy.
+    #[account(init, payer = creator, space = global.coin_account_len(&dbc_config.key()), seeds = [COIN_SEED, mint.key().as_ref()], bump)]
     pub coin: Box<Account<'info, Coin>>,
     /// CHECK: PDA ["reward_pool"] (the config's leftover receiver), owner of the reward vault.
     #[account(seeds = [REWARD_POOL_SEED], bump)]
@@ -59,10 +60,6 @@ pub struct RegisterCoin<'info> {
     pub system_program: Program<'info, System>,
     /// `Global.params.launch_signer` (required iff that is set; otherwise pass the fumpad program id = None).
     pub launch_signer: Option<Signer<'info>>,
-    /// CHECK: PDA ["fee_policy", mint], created here — required iff the config's policy isn't standard; otherwise
-    /// pass the fumpad program id (= None).
-    #[account(mut)]
-    pub fee_policy: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handle_register_coin(ctx: Context<RegisterCoin>) -> Result<()> {
@@ -106,27 +103,10 @@ pub fn handle_register_coin(ctx: Context<RegisterCoin>) -> Result<()> {
         },
     ))?;
 
-    // Fee-policy snapshot (a standard coin needs no PDA: `Coin.fee_split` holds its split).
+    // Fee-policy snapshot in the account's tail (the account was created with room for it; a standard coin has
+    // none: `Coin.fee_split` holds its split).
     if policy.kind != FEE_POLICY_STANDARD {
-        let info = ctx.accounts.fee_policy.as_ref().ok_or(FumpadError::FeePolicyAccountsRequired)?.to_account_info();
-        let (want, bump) = Pubkey::find_program_address(&[FEE_POLICY_SEED, mint.as_ref()], &crate::ID);
-        require_keys_eq!(info.key(), want, FumpadError::InvalidAccount);
-        create_pda_account(
-            &ctx.accounts.creator.to_account_info(),
-            &info,
-            &ctx.accounts.system_program.to_account_info(),
-            8 + CoinFeePolicy::INIT_SPACE,
-            &[FEE_POLICY_SEED, mint.as_ref(), &[bump]],
-        )?;
-        let snap = CoinFeePolicy {
-            bump,
-            mint,
-            dbc_config: config_key,
-            policy,
-            wallet_paid_lamports: 0,
-            reserved: [0; 32],
-        };
-        write_account(&info, &snap)?;
+        write_policy_tail(&ctx.accounts.coin.to_account_info(), &CoinPolicyTail { policy, wallet_paid_lamports: 0 })?;
     }
     let g = &mut ctx.accounts.global;
     g.config_coins[slot] = g.config_coins[slot].saturating_add(1);
@@ -146,7 +126,7 @@ pub fn handle_register_coin(ctx: Context<RegisterCoin>) -> Result<()> {
     c.total_supply = cfg.pre_migration_token_supply;
     c.rewards = params.reward_terms();
     c.fee_policy_kind = policy.kind;
-    // A non-standard policy routes by its `CoinFeePolicy`; `fee_split` stays zero (unused) for it.
+    // A non-standard policy routes by its snapshot (the tail); `fee_split` stays zero (unused) for it.
     c.fee_split = if policy.kind == FEE_POLICY_STANDARD { params.fee_split() } else { FeeSplitBps::default() };
     let (dbc_pool, launch_slot, launch_window_slots, creator) =
         (c.dbc_pool, c.launch_slot, c.launch_window_slots, c.creator);

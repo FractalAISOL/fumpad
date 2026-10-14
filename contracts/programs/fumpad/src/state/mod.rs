@@ -26,7 +26,8 @@ mod size_tests {
     fn account_sizes() {
         assert_eq!(8 + Global::INIT_SPACE, 1_491);
         assert_eq!(FeePolicy::INIT_SPACE, 39);
-        assert_eq!(8 + CoinFeePolicy::INIT_SPACE, 152);
+        assert_eq!(COIN_POLICY_TAIL_LEN, 47);
+        assert_eq!(COIN_LEN + COIN_POLICY_TAIL_LEN, 593);
         assert_eq!(Params::INIT_SPACE, 168);
         assert_eq!(8 + Coin::INIT_SPACE, 546);
         assert_eq!(8 + Position::INIT_SPACE, 315);

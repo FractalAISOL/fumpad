@@ -2,7 +2,7 @@
 //! `fee_claimer` PDA, unwrap them into the Coin and split them (D32 50/30/20; D33 launch window → 100% buyback).
 //!
 //! Fee policies (2026-10-14, INTERFACE §5.9): a coin registered under a wallet-split policy (`Coin.fee_policy_kind
-//! == FEE_POLICY_WALLET_SPLIT`, snapshot in its `CoinFeePolicy` PDA) splits each claim `buyback_share :
+//! == FEE_POLICY_WALLET_SPLIT`, snapshot in its Coin account's tail) splits each claim `buyback_share :
 //! wallet_share` between its buyback balance and the policy wallet (no platform / creator), and its first
 //! (launch-window) claim goes 100% to the wallet. The wallet's part is paid straight from `fee_claimer` to the
 //! wallet in the same instruction; it never enters the Coin, so the Coin lamport invariant is unchanged.
@@ -16,7 +16,7 @@ use crate::{
     events::FeesClaimed,
     external::meteora::{self, DAMM_V2_PROGRAM_ID, DBC_PROGRAM_ID},
     math::{launch_window_split, split_fee, wallet_launch_window_split, wallet_split, FeeSplit},
-    state::{Coin, CoinFeePolicy, CoinStatus, Global},
+    state::{read_policy_tail, write_policy_tail, Coin, CoinStatus, FeePolicy, Global},
 };
 
 use super::common::{close_fee_wsol, open_fee_wsol, signed_system_transfer};
@@ -72,11 +72,8 @@ pub struct ClaimFees<'info> {
     /// CHECK: DBC program.
     #[account(address = DBC_PROGRAM_ID @ FumpadError::WrongVenue)]
     pub dbc_program: UncheckedAccount<'info>,
-    /// The coin's fee-policy snapshot (PDA ["fee_policy", mint]): required iff `coin.fee_policy_kind != 0`,
+    /// CHECK: the policy wallet of the coin's snapshot (checked) — required iff `coin.fee_policy_kind != 0`,
     /// otherwise pass the fumpad program id (= None).
-    #[account(mut, seeds = [FEE_POLICY_SEED, mint.key().as_ref()], bump = fee_policy.bump, has_one = mint)]
-    pub fee_policy: Option<Box<Account<'info, CoinFeePolicy>>>,
-    /// CHECK: = `fee_policy.policy.wallet` (checked) when the coin has a wallet-split policy; else None.
     #[account(mut)]
     pub fee_wallet: Option<UncheckedAccount<'info>>,
 }
@@ -129,7 +126,7 @@ pub fn handle_claim_fees(ctx: Context<ClaimFees>) -> Result<()> {
     let seeds: &[&[u8]] = &[FEE_CLAIMER_SEED, &[ctx.bumps.fee_claimer]];
     meteora::invoke_passthrough(&a.dbc_program.to_account_info(), &accounts, data, Some((&fee_claimer.key(), seeds)))?;
 
-    let wallet = policy_wallet(&a.coin, &a.fee_policy, &a.fee_wallet)?;
+    let wallet = policy_wallet(&a.coin, &a.fee_wallet)?;
     let (claimed, rent) = close_fee_wsol(&fee_wsol, &fee_claimer, ctx.bumps.fee_claimer, &token_program)?;
     let split = apply_split(&mut ctx.accounts.coin, claimed, launch_window, wallet.as_ref().map(|w| w.1))?;
     let a = &ctx.accounts;
@@ -143,9 +140,7 @@ pub fn handle_claim_fees(ctx: Context<ClaimFees>) -> Result<()> {
         rent,
         wallet.as_ref().map(|w| &w.0),
     )?;
-    if let Some(p) = ctx.accounts.fee_policy.as_mut() {
-        p.wallet_paid_lamports = p.wallet_paid_lamports.saturating_add(split.wallet);
-    }
+    record_wallet_paid(&ctx.accounts.coin, split.wallet)?;
     let ts = Clock::get()?.unix_timestamp;
     let mint = ctx.accounts.coin.mint;
     emit_event!(ctx, FeesClaimed {
@@ -163,24 +158,29 @@ pub fn handle_claim_fees(ctx: Context<ClaimFees>) -> Result<()> {
     Ok(())
 }
 
-/// The policy wallet of a wallet-split coin (account + its policy), or None for a standard coin. A wallet-split
-/// coin must pass its `CoinFeePolicy` PDA and the policy's wallet (`FeePolicyAccountsRequired` / `InvalidAccount`);
-/// a standard coin ignores whatever is passed there.
-fn policy_wallet<'info>(
-    coin: &Coin,
-    fee_policy: &Option<Box<Account<'info, CoinFeePolicy>>>,
-    fee_wallet: &Option<UncheckedAccount<'info>>,
-) -> Result<Option<(AccountInfo<'info>, crate::state::FeePolicy)>> {
+/// The policy wallet of a wallet-split coin (account + its snapshotted policy, from the Coin account's tail), or None
+/// for a standard coin (which ignores whatever is passed there). A wallet-split coin must pass the snapshot's wallet
+/// (`FeeWalletRequired` / `InvalidAccount`).
+fn policy_wallet<'info>(coin: &Account<'info, Coin>, fee_wallet: &Option<UncheckedAccount<'info>>) -> Result<Option<(AccountInfo<'info>, FeePolicy)>> {
     if coin.fee_policy_kind == FEE_POLICY_STANDARD {
         return Ok(None);
     }
-    let (p, w) = match (fee_policy, fee_wallet) {
-        (Some(p), Some(w)) => (p, w),
-        _ => return err!(FumpadError::FeePolicyAccountsRequired),
-    };
-    require!(p.policy.kind == coin.fee_policy_kind, FumpadError::InvalidAccount);
-    require_keys_eq!(w.key(), p.policy.wallet, FumpadError::InvalidAccount);
-    Ok(Some((w.to_account_info(), p.policy)))
+    let tail = read_policy_tail(&coin.to_account_info())?;
+    require!(tail.policy.kind == coin.fee_policy_kind, FumpadError::InvalidAccount);
+    let w = fee_wallet.as_ref().ok_or(FumpadError::FeeWalletRequired)?;
+    require_keys_eq!(w.key(), tail.policy.wallet, FumpadError::InvalidAccount);
+    Ok(Some((w.to_account_info(), tail.policy)))
+}
+
+/// Stats: add what this claim paid the policy wallet to the coin's tail (raw write; Anchor only rewrites the prefix).
+fn record_wallet_paid(coin: &Account<Coin>, paid: u64) -> Result<()> {
+    if coin.fee_policy_kind == FEE_POLICY_STANDARD || paid == 0 {
+        return Ok(());
+    }
+    let info = coin.to_account_info();
+    let mut tail = read_policy_tail(&info)?;
+    tail.wallet_paid_lamports = tail.wallet_paid_lamports.saturating_add(paid);
+    write_policy_tail(&info, &tail)
 }
 
 /// Pay a settled claim out of `fee_claimer` (where `close_fee_wsol` left it): the Coin's share (buyback +
@@ -222,7 +222,7 @@ fn apply_split(
     coin: &mut Coin,
     claimed: u64,
     launch_window: bool,
-    policy: Option<crate::state::FeePolicy>,
+    policy: Option<FeePolicy>,
 ) -> Result<FeeSplit> {
     if launch_window {
         coin.launch_fees_settled = true;
@@ -298,10 +298,8 @@ pub struct ClaimLpFees<'info> {
     /// CHECK: DAMM v2 program.
     #[account(address = DAMM_V2_PROGRAM_ID @ FumpadError::WrongVenue)]
     pub damm_program: UncheckedAccount<'info>,
-    /// As in `claim_fees`: required iff `coin.fee_policy_kind != 0`, else the fumpad program id (= None).
-    #[account(mut, seeds = [FEE_POLICY_SEED, mint.key().as_ref()], bump = fee_policy.bump, has_one = mint)]
-    pub fee_policy: Option<Box<Account<'info, CoinFeePolicy>>>,
-    /// CHECK: = `fee_policy.policy.wallet` (checked) when the coin has a wallet-split policy; else None.
+    /// CHECK: as in `claim_fees`: the snapshot's policy wallet, required iff `coin.fee_policy_kind != 0`, else the
+    /// fumpad program id (= None).
     #[account(mut)]
     pub fee_wallet: Option<UncheckedAccount<'info>>,
 }
@@ -351,7 +349,7 @@ pub fn handle_claim_lp_fees(ctx: Context<ClaimLpFees>) -> Result<()> {
         Some((&fee_claimer.key(), seeds)),
     )?;
 
-    let wallet = policy_wallet(&a.coin, &a.fee_policy, &a.fee_wallet)?;
+    let wallet = policy_wallet(&a.coin, &a.fee_wallet)?;
     let (claimed, rent) = close_fee_wsol(&fee_wsol, &fee_claimer, ctx.bumps.fee_claimer, &token_program)?;
     let split = apply_split(&mut ctx.accounts.coin, claimed, false, wallet.as_ref().map(|w| w.1))?;
     let a = &ctx.accounts;
@@ -365,9 +363,7 @@ pub fn handle_claim_lp_fees(ctx: Context<ClaimLpFees>) -> Result<()> {
         rent,
         wallet.as_ref().map(|w| &w.0),
     )?;
-    if let Some(p) = ctx.accounts.fee_policy.as_mut() {
-        p.wallet_paid_lamports = p.wallet_paid_lamports.saturating_add(split.wallet);
-    }
+    record_wallet_paid(&ctx.accounts.coin, split.wallet)?;
     let ts = Clock::get()?.unix_timestamp;
     let mint = ctx.accounts.coin.mint;
     emit_event!(ctx, FeesClaimed {

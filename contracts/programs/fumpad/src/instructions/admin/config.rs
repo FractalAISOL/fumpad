@@ -108,7 +108,7 @@ pub fn handle_execute_config(ctx: Context<ExecuteConfig>) -> Result<()> {
         g.config_coins[i] = 0;
         pending_policy
     } else {
-        // Registered coins keep working and keep their own policy snapshot (`CoinFeePolicy` / `Coin.fee_split`).
+        // Registered coins keep working and keep their own policy snapshot (Coin policy tail / `Coin.fee_split`).
         let i = g.config_slot(&config).ok_or(FumpadError::ConfigNotAllowed)?;
         let old = g.config_policies[i];
         g.configs[i] = Pubkey::default();

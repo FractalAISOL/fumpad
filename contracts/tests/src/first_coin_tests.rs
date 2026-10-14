@@ -11,7 +11,7 @@ use crate::*;
 use fumpad::error::FumpadError;
 use fumpad::events::{BuybackExecuted, CoinRegistered, ConfigQueued, ConfigUpdated, FeesClaimed};
 use fumpad::external::meteora as m;
-use fumpad::state::{CoinFeePolicy, FeePolicy, Global, Params};
+use fumpad::state::{CoinPolicyTail, FeePolicy, Global, Params, COIN_LEN, COIN_POLICY_TAIL_LEN};
 use fumpad::{FEE_POLICY_STANDARD, FEE_POLICY_WALLET_SPLIT};
 use solana_keypair::Keypair;
 
@@ -51,17 +51,20 @@ fn first_coin_registers_snapshot_and_fee_schedule_99_to_3_over_25_slots() {
     let (mut env, first, wallet) = setup(1);
     let fc = env.launch_on(first, SOL / 10);
     let sc = env.launch(SOL / 10);
-    // Snapshot: kind in the Coin, details in the CoinFeePolicy PDA; the standard coin has neither.
+    // Snapshot: kind in the Coin, the policy in the Coin account's tail (47 bytes longer, rent by the creator); the
+    // standard coin has neither.
     let coin = env.coin(&fc);
     assert_eq!(coin.launch_window_slots, FIRST_COIN_PERIODS as u64);
     assert_eq!(coin.fee_policy_kind, FEE_POLICY_WALLET_SPLIT);
     assert_eq!(coin.fee_split, Default::default(), "fee_split unused (zero) for a wallet-split coin");
-    let snap: CoinFeePolicy = env.fetch(&env.fee_policy_pda(&fc.mint));
-    assert_eq!((snap.mint, snap.dbc_config, snap.policy, snap.wallet_paid_lamports), (fc.mint, first, first_policy(wallet, 1), 0));
-    assert_eq!(env.lamports(&env.fee_policy_pda(&fc.mint)), env.rent(152), "rent paid by the creator");
+    let snap = env.coin_policy_tail(&fc.mint).unwrap();
+    assert_eq!(snap, CoinPolicyTail { policy: first_policy(wallet, 1), wallet_paid_lamports: 0 });
+    assert_eq!(env.data(&fc.coin_pda()).len(), COIN_LEN + COIN_POLICY_TAIL_LEN);
+    env.assert_coin_invariant(&fc);
     let std = env.coin(&sc);
     assert_eq!((std.fee_policy_kind, std.fee_split, std.launch_window_slots), (FEE_POLICY_STANDARD, Params::default().fee_split(), 8));
-    assert!(!env.exists(&env.fee_policy_pda(&sc.mint)));
+    assert_eq!(env.data(&sc.coin_pda()).len(), COIN_LEN);
+    assert!(env.coin_policy_tail(&sc.mint).is_none());
     let g: Global = env.fetch(&env.global());
     assert_eq!((g.config_coins[0], g.config_coins[1]), (1, 1));
     // The creator's launch-tx buy gets DBC's min fee, which on this config is 3% (≈ 0.097 SOL reaches the curve,
@@ -121,7 +124,7 @@ fn first_coin_launch_window_to_wallet_then_1_0_buyback_1_4_wallet_standard_unaff
     assert!(coin.launch_fees_settled);
     assert_eq!((coin.buyback_lamports, coin.platform_fees_unclaimed, coin.creator_fees_unclaimed), (0, 0, 0));
     assert_eq!(coin.fees_claimed_lamports, accrued);
-    assert_eq!(env.fetch::<CoinFeePolicy>(&env.fee_policy_pda(&fc.mint)).wallet_paid_lamports, accrued);
+    assert_eq!(env.coin_policy_tail(&fc.mint).unwrap().wallet_paid_lamports, accrued);
     assert_eq!(env.lamports(&env.fee_claimer()), 0);
     assert!(!env.exists(&env.fee_wsol()));
     env.assert_coin_invariant(&fc);
@@ -247,8 +250,8 @@ fn coin_policy_snapshot_survives_config_removal_and_re_add() {
     env.svm.airdrop(&addr(&wallet2), SOL).unwrap();
     env.allow_config_with(first, first_policy(wallet2, 0));
     let fc2 = env.launch_on(first, 0);
-    assert_eq!(env.fetch::<CoinFeePolicy>(&env.fee_policy_pda(&fc2.mint)).policy.wallet, wallet2);
-    assert_eq!(env.fetch::<CoinFeePolicy>(&env.fee_policy_pda(&fc.mint)).policy, first_policy(wallet, 1));
+    assert_eq!(env.coin_policy_tail(&fc2.mint).unwrap().policy.wallet, wallet2);
+    assert_eq!(env.coin_policy_tail(&fc.mint).unwrap().policy, first_policy(wallet, 1));
     let alice = env.new_user(100);
     ok(env.direct_buy(&fc, &alice, 10 * SOL));
     let k = env.op();
@@ -271,15 +274,15 @@ fn max_coins_caps_the_config_even_for_the_launch_signer() {
         env.fund_wsol(&creator, SOL / 10);
         let mut ixs = env.launch_ixs(&config, &kp_pk(&creator), &kp_pk(&mint), SOL / 10);
         let reg = ixs.last_mut().unwrap();
-        // Optional accounts `launch_signer`, `fee_policy`, then the event-CPI pair.
-        let at = reg.accounts.len() - 4;
+        // Optional account `launch_signer`, then the event-CPI pair.
+        let at = reg.accounts.len() - 3;
         reg.accounts[at] = solana_instruction::AccountMeta::new_readonly(addr(&kp_pk(&launch_key)), true);
         let size = env.tx_size(&creator, &ixs, &[&creator, &mint, &launch_key]);
         (env.send_as(&creator, &ixs, &[&creator, &mint, &launch_key]), size)
     };
     let (r, size) = launch(&mut env, first);
     ok(r);
-    assert!(size <= 1232, "first-coin launch tx (co-signed, + fee_policy) {size} bytes");
+    assert!(size <= 1232, "first-coin launch tx (co-signed) {size} bytes");
     println!("first-coin launch tx {size} bytes");
     // A second coin on the first-coin config: refused even with a valid launch co-signature (leaked API key).
     let (r, _) = launch(&mut env, first);
@@ -293,40 +296,27 @@ fn max_coins_caps_the_config_even_for_the_launch_signer() {
 }
 
 #[test]
-fn fee_policy_accounts_are_required_and_checked() {
+fn fee_wallet_is_required_and_checked() {
     let (mut env, first, wallet) = setup(0);
-    // register_coin without the fee_policy PDA / with another address.
-    let creator = env.new_user(10);
-    for (pda, want) in [(None, FumpadError::FeePolicyAccountsRequired), (Some(Pubkey::new_unique()), FumpadError::InvalidAccount)] {
-        let mint = Keypair::new();
-        let mut ixs = env.launch_ixs(&first, &kp_pk(&creator), &kp_pk(&mint), 0);
-        let pool = meteora::dbc_pool_pda(&first, &kp_pk(&mint));
-        *ixs.last_mut().unwrap() = env.register_coin_ix_with(&first, &pool, &kp_pk(&creator), &kp_pk(&mint), pda);
-        assert_fumpad_err(env.send_as(&creator, &ixs, &[&creator, &mint]), want);
-    }
-    // A standard config ignores the slot (passing None is the norm).
     let sc = env.launch(0);
-    assert_eq!(env.coin(&sc).fee_policy_kind, FEE_POLICY_STANDARD);
     let fc = env.launch_on(first, 0);
     skip_first_window(&mut env);
     let k = env.op();
-    // claim_fees / claim_lp_fees of a wallet-split coin without its policy accounts.
+    // claim_fees of a wallet-split coin without the fee wallet (the optional slot = program id = None).
     let mut i = env.claim_fees_ix(&fc, &kp_pk(&k));
     let n = i.accounts.len();
-    for j in [n - 4, n - 3] {
-        i.accounts[j] = solana_instruction::AccountMeta::new_readonly(addr(&fumpad::ID), false);
-    }
-    assert_fumpad_err(env.send_as(&k, &[i.clone()], &[&k]), FumpadError::FeePolicyAccountsRequired);
+    i.accounts[n - 3] = solana_instruction::AccountMeta::new_readonly(addr(&fumpad::ID), false);
+    assert_fumpad_err(env.send_as(&k, &[i], &[&k]), FumpadError::FeeWalletRequired);
     // Wrong wallet.
     let mut i = env.claim_fees_ix(&fc, &kp_pk(&k));
     i.accounts[n - 3].pubkey = addr(&kp_pk(&k));
     assert_fumpad_err(env.send_as(&k, &[i], &[&k]), FumpadError::InvalidAccount);
-    // Another coin's fee_policy PDA (seeds bound to the mint) is refused by the account constraints.
-    let fc_other = env.launch_on(first, 0);
-    assert_eq!(env.fetch::<CoinFeePolicy>(&env.fee_policy_pda(&fc_other.mint)).policy.wallet, wallet);
-    let mut i = env.claim_fees_ix(&fc, &kp_pk(&k));
-    i.accounts[n - 4].pubkey = addr(&env.fee_policy_pda(&fc_other.mint));
-    assert!(env.send_as(&k, &[i], &[&k]).is_err());
+    // A standard coin ignores whatever is passed there (nothing is paid to it).
+    let mut i = env.claim_fees_ix(&sc, &kp_pk(&k));
+    i.accounts[n - 3] = solana_instruction::AccountMeta::new(addr(&wallet), false);
+    let w0 = env.lamports(&wallet);
+    let ev: FeesClaimed = event(&ok(env.send_as(&k, &[i], &[&k])));
+    assert_eq!((ev.to_wallet, ev.fee_wallet, env.lamports(&wallet)), (0, Pubkey::default(), w0));
     ok(env.claim_fees(&fc));
 }
 

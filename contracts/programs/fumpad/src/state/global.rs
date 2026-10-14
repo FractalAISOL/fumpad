@@ -49,7 +49,7 @@ pub struct Global {
     // ── 2026-10-14: per-config fee policies. Global grew 1,044 → 1,491 bytes; `migrate_global` grows an older
     // Global in place (new bytes zero = `FEE_POLICY_STANDARD` everywhere, no counts). ──
     /// Fee policy of each allow-listed config (same index as `configs`). Snapshotted into every coin registered on
-    /// that config (`Coin.fee_policy_kind` + its `CoinFeePolicy` PDA), so removing or replacing a config never
+    /// that config (`Coin.fee_policy_kind` + the Coin account's policy tail), so removing or replacing a config never
     /// changes an existing coin's routing.
     pub config_policies: [FeePolicy; MAX_CONFIGS],
     /// Coins registered on each slot's config since it was allow-listed (enforces `FeePolicy.max_coins`).
@@ -284,6 +284,14 @@ impl Global {
     }
     pub fn is_allowed_config(&self, config: &Pubkey) -> bool {
         self.config_slot(config).is_some()
+    }
+    /// Account length `register_coin` gives a coin on `config` (the policy tail iff its slot's policy isn't standard;
+    /// not allow-listed → the plain length, `register_coin` then refuses with `ConfigNotAllowed`).
+    pub fn coin_account_len(&self, config: &Pubkey) -> usize {
+        match self.config_slot(config) {
+            Some(i) => crate::state::coin_account_len(&self.config_policies[i]),
+            None => crate::state::COIN_LEN,
+        }
     }
     /// Allow-list slot of `config`.
     pub fn config_slot(&self, config: &Pubkey) -> Option<usize> {

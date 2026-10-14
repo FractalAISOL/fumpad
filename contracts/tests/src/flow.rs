@@ -84,14 +84,7 @@ impl Env {
         v
     }
 
-    /// `register_coin`, passing the `fee_policy` PDA iff the config's allow-list slot has a non-standard policy.
     pub fn register_coin_ix(&self, config: &Pubkey, pool: &Pubkey, creator: &Pubkey, mint: &Pubkey) -> Instruction {
-        let g: fumpad::state::Global = self.fetch(&self.global());
-        let special = g.config_slot(config).is_some_and(|i| g.config_policies[i].kind != fumpad::FEE_POLICY_STANDARD);
-        self.register_coin_ix_with(config, pool, creator, mint, special.then(|| self.fee_policy_pda(mint)))
-    }
-
-    pub fn register_coin_ix_with(&self, config: &Pubkey, pool: &Pubkey, creator: &Pubkey, mint: &Pubkey, fee_policy: Option<Pubkey>) -> Instruction {
         ix(
             fumpad::accounts::RegisterCoin {
                 creator: *creator,
@@ -106,7 +99,6 @@ impl Env {
                 associated_token_program: ATA_PROGRAM,
                 system_program: SYSTEM,
                 launch_signer: None,
-                fee_policy,
                 event_authority: ev_auth(),
                 program: fumpad::ID,
             },
@@ -335,18 +327,16 @@ impl Env {
     }
 
     // ── fees ─────────────────────────────────────────────────────────────────
-    /// The optional `(fee_policy, fee_wallet)` pair of a coin's fee claims: its PDA + the policy wallet when the
-    /// coin has a non-standard policy, else None.
-    pub fn fee_policy_accounts(&self, c: &TCoin) -> (Option<Pubkey>, Option<Pubkey>) {
+    /// The optional `fee_wallet` of a coin's fee claims: the snapshotted policy wallet of a wallet-split coin, else None.
+    pub fn fee_wallet_of(&self, c: &TCoin) -> Option<Pubkey> {
         if self.coin(c).fee_policy_kind == fumpad::FEE_POLICY_STANDARD {
-            return (None, None);
+            return None;
         }
-        let p: fumpad::state::CoinFeePolicy = self.fetch(&self.fee_policy_pda(&c.mint));
-        (Some(self.fee_policy_pda(&c.mint)), Some(p.policy.wallet))
+        self.coin_policy_tail(&c.mint).map(|t| t.policy.wallet)
     }
 
     pub fn claim_fees_ix(&self, c: &TCoin, caller: &Pubkey) -> Instruction {
-        let (fee_policy, fee_wallet) = self.fee_policy_accounts(c);
+        let fee_wallet = self.fee_wallet_of(c);
         ix(
             fumpad::accounts::ClaimFees {
                 caller: *caller,
@@ -367,7 +357,6 @@ impl Env {
                 dbc_pool_authority: m::DBC_POOL_AUTHORITY,
                 dbc_event_authority: m::DBC_EVENT_AUTHORITY,
                 dbc_program: meteora::DBC,
-                fee_policy,
                 fee_wallet,
                 event_authority: ev_auth(),
                 program: fumpad::ID,
@@ -384,7 +373,7 @@ impl Env {
 
     pub fn claim_lp_fees_ix(&self, c: &TCoin, caller: &Pubkey, nft_mint: &Pubkey) -> Instruction {
         let coin = self.coin(c);
-        let (fee_policy, fee_wallet) = self.fee_policy_accounts(c);
+        let fee_wallet = self.fee_wallet_of(c);
         ix(
             fumpad::accounts::ClaimLpFees {
                 caller: *caller,
@@ -406,7 +395,6 @@ impl Env {
                 damm_pool_authority: m::DAMM_POOL_AUTHORITY,
                 damm_event_authority: m::DAMM_EVENT_AUTHORITY,
                 damm_program: meteora::DAMM,
-                fee_policy,
                 fee_wallet,
                 event_authority: ev_auth(),
                 program: fumpad::ID,
@@ -426,7 +414,8 @@ impl Env {
     pub fn assert_coin_invariant(&self, c: &TCoin) {
         let coin = self.coin(c);
         let lamports = self.lamports(&c.coin_pda());
-        let want = self.rent(8 + <fumpad::state::Coin as anchor_lang::Space>::INIT_SPACE)
+        // the account's own length: a wallet-split coin carries its policy tail
+        let want = self.rent(self.data(&c.coin_pda()).len())
             + coin.creator_fees_unclaimed
             + coin.platform_fees_unclaimed
             + coin.buyback_lamports;

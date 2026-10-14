@@ -130,8 +130,8 @@ pub enum FumpadError {
     PoolIsRegistered,
     #[msg("The config's fee policy already registered its max_coins")]
     ConfigCoinLimit,
-    #[msg("This coin's fee policy needs its fee_policy PDA and fee wallet accounts")]
-    FeePolicyAccountsRequired,
+    #[msg("This coin's fee policy pays a wallet: pass its fee wallet account")]
+    FeeWalletRequired,
     #[msg("The fee wallet would be left below rent exemption: fund it first")]
     FeeWalletNotRentExempt,
 }

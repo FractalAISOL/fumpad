@@ -29,9 +29,6 @@ pub const REWARD_POOL_SEED: &[u8] = b"reward_pool";
 /// D30: swap payer for buybacks; owns only ATA(buyback, WSOL).
 #[constant]
 pub const BUYBACK_SEED: &[u8] = b"buyback";
-/// Per-coin fee-policy snapshot (`CoinFeePolicy`), created by `register_coin` only for a non-standard policy.
-#[constant]
-pub const FEE_POLICY_SEED: &[u8] = b"fee_policy"; // ["fee_policy", mint]
 
 // ── Fixed-point ──────────────────────────────────────────────────────────────
 /// Prices are lamports per base unit of the token, in Q64.64 (u128).

@@ -84,8 +84,9 @@ pub struct Coin {
     /// `PREGRAD_MIN_SPAN_SECS`). Carved out of the former 64 reserved bytes (Coin size unchanged; zeroed = empty).
     pub pregrad_ring: PregradRing,
     /// 2026-10-14: the config's fee policy kind at `register_coin` (`FEE_POLICY_*`; 0 = standard = `fee_split`).
-    /// Non-zero: the policy is snapshotted in the `CoinFeePolicy` PDA ["fee_policy", mint] and `fee_split` is unused
-    /// (zero). Carved out of `reserved` (Coin size unchanged; zeroed = standard, so existing coins read standard).
+    /// Non-zero: the whole policy is snapshotted in the account's tail (`state::fee_policy`, the account is
+    /// `COIN_POLICY_TAIL_LEN` bytes longer) and `fee_split` is unused (zero). Carved out of `reserved` (the borsh
+    /// Coin is unchanged; zeroed = standard, so existing coins read standard).
     pub fee_policy_kind: u8,
     pub reserved: [u8; 1],
 }

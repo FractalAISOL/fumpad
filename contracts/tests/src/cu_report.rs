@@ -313,7 +313,7 @@ fn cu_report() {
     for (n, len) in [
         ("fumpad.so program data (+45 header)", so + 45),
         ("Global", 1_491),
-        ("CoinFeePolicy (wallet-split coins only)", 152),
+        ("Coin with a fee-policy tail (wallet-split coins only)", 593),
         ("Coin", 546),
         ("Position", 315),
         ("Ticket", 276),
