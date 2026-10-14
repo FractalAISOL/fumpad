@@ -236,6 +236,9 @@ fn dbc_config_vectors_match_checked_in_file() {
     for (name, p, curve) in [
         ("mainnet", meteora::mainnet_config_params(), meteora::MAINNET_CURVE),
         ("devnet", meteora::devnet_config_params(), meteora::DEVNET_CURVE),
+        // First-coin launch config (2026-10-14): same curve, 99% → 3% over 25 slots, 3% migrated DAMM v2 fee.
+        ("first_coin_mainnet", meteora::first_coin_mainnet_config_params(), meteora::MAINNET_CURVE),
+        ("first_coin_devnet", meteora::first_coin_devnet_config_params(), meteora::DEVNET_CURVE),
     ] {
         let mut data = meteora::IX_CREATE_CONFIG.to_vec();
         p.serialize(&mut data).unwrap();
@@ -249,7 +252,8 @@ fn dbc_config_vectors_match_checked_in_file() {
                     {"sqrt_price": curve.1.to_string(), "liquidity": curve.2.to_string()},
                     {"sqrt_price": meteora::MAX_SQRT_PRICE.to_string(), "liquidity": curve.3.to_string()},
                 ],
-                "fee_scheduler": {"cliff_fee_numerator": meteora::SNIPE_CLIFF_FEE_NUMERATOR, "number_of_period": meteora::SNIPE_PERIODS, "period_frequency_slots": 1, "reduction_factor": meteora::SNIPE_REDUCTION},
+                "fee_scheduler": {"cliff_fee_numerator": p.base_fee.cliff_fee_numerator, "number_of_period": p.base_fee.first_factor, "period_frequency_slots": p.base_fee.second_factor, "reduction_factor": p.base_fee.third_factor},
+                "migrated_pool_fee_bps": p.migrated_pool_fee_bps,
                 "create_config_data_hex": hex(&data),
             }),
         );

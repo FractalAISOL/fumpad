@@ -47,6 +47,14 @@ export interface DbcConfigParameters {
 export const SNIPE_CLIFF_FEE_NUMERATOR = 990_000_000n;
 export const SNIPE_REDUCTION = 122_187_500n;
 export const SNIPE_PERIODS = 8;
+/**
+ * First-coin "launch config" (user decision 2026-10-14; SPEC Clarification 29): 99% → 3% linear over 25 periods of
+ * 1 slot (≈ 10 s; (990,000,000 − 30,000,000) / 25 exact), then 3% on the curve; migrated DAMM v2 fee 3% (`OnlyB`).
+ * Curve / supply / leftover / locks identical to the standard config. Allow-listed with a wallet-split fee policy.
+ */
+export const FIRST_COIN_PERIODS = 25;
+export const FIRST_COIN_REDUCTION = 38_400_000n;
+export const FIRST_COIN_FEE_BPS = 300;
 /** D34: DBC's migration fee is an integer percentage → 1% of the raise to the partner. */
 export const MIGRATION_FEE_PERCENTAGE = 1;
 export const MAX_SQRT_PRICE = 79_226_673_521_066_979_257_578_248_091n;
@@ -91,6 +99,12 @@ export function fumpadConfigParams(network: keyof typeof FUMPAD_CURVES): DbcConf
       { sqrtPrice: MAX_SQRT_PRICE, liquidity: lb },
     ],
   };
+}
+
+/** The first-coin config: `fumpadConfigParams` with the 99% → 3% / 25-slot scheduler and a 3% DAMM v2 fee. */
+export function firstCoinConfigParams(network: keyof typeof FUMPAD_CURVES): DbcConfigParameters {
+  const p = fumpadConfigParams(network);
+  return { ...p, baseFee: { ...p.baseFee, firstFactor: FIRST_COIN_PERIODS, thirdFactor: FIRST_COIN_REDUCTION }, migratedPoolFeeBps: FIRST_COIN_FEE_BPS };
 }
 
 class B {

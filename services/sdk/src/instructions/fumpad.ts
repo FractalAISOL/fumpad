@@ -20,6 +20,7 @@ import {
   WSOL_MINT,
 } from "../constants.js";
 import { dammSwapAccounts, dbcMigrationAccounts, dbcSwapAccounts } from "../meteora/instructions.js";
+import { type FeePolicy, STANDARD_FEE_POLICY } from "../accounts.js";
 import { type Params, paramsToIdl } from "../params.js";
 import {
   ata,
@@ -38,6 +39,7 @@ import {
   dbcVaultPda,
   escrowPda,
   feeClaimerPda,
+  feePolicyPda,
   feeWsolPda,
   globalPda,
   observationsPda,
@@ -66,6 +68,11 @@ export interface CoinRefs {
   dammPool?: PublicKey;
   dammPosition?: PublicKey;
   creator?: PublicKey;
+  /**
+   * Wallet-split policy coins (`CoinAccount.feePolicyKind != 0`): the policy wallet (`CoinFeePolicy.policy.wallet`).
+   * Fee claims then pass the coin's `feePolicyPda` + this wallet; omitted/null = standard coin (both None).
+   */
+  feeWallet?: PublicKey | null;
 }
 const dbcPoolOf = (c: CoinRefs) => c.dbcPool ?? dbcPoolPda(c.dbcConfig, c.mint);
 const dammPoolOf = (c: CoinRefs) => c.dammPool ?? dammPoolPda(c.mint);
@@ -97,6 +104,8 @@ export function initializeGlobalIx(a: {
   keepers?: PublicKey[];
   operators?: PublicKey[];
   configs?: PublicKey[];
+  /** Fee policy of `configs[i]` (shorter list: the rest are standard). Trailing standard policies are dropped (tx size). */
+  policies?: FeePolicy[];
 }): TransactionInstruction {
   const keepers = a.keepers ?? [];
   if (keepers.length > MAX_KEEPERS) throw new Error(`at most ${MAX_KEEPERS} keepers`);
@@ -105,6 +114,9 @@ export function initializeGlobalIx(a: {
   assertDisjoint(keepers, operators);
   const configs = a.configs ?? [];
   if (configs.length > MAX_CONFIGS) throw new Error(`at most ${MAX_CONFIGS} configs`);
+  const policies = [...(a.policies ?? [])];
+  if (policies.length > configs.length) throw new Error("more fee policies than configs");
+  while (policies.length && isStandard(policies[policies.length - 1])) policies.pop();
   return ix(
     "initialize_global",
     { payer: a.payer, global: globalPda(), programData: programDataPda() },
@@ -115,6 +127,7 @@ export function initializeGlobalIx(a: {
       params: paramsToIdl(a.params),
       keepers: [...keepers, ...Array(MAX_KEEPERS - keepers.length).fill(PublicKey.default)],
       operators,
+      policies,
     },
     configs.map((pubkey) => r(pubkey)),
   );
@@ -136,7 +149,10 @@ export const proposeAdminIx = (admin: PublicKey, newAdmin: PublicKey, platformTr
   ix("propose_admin", { admin, global: globalPda() }, { newAdmin, platformTreasury, guardian });
 export const acceptAdminIx = (newAdmin: PublicKey) => ix("accept_admin", { newAdmin, global: globalPda() });
 export const cancelAdminIx = (authority: PublicKey) => ix("cancel_admin", { authority, global: globalPda() });
-export const queueConfigIx = (admin: PublicKey, config: PublicKey, add: boolean) => ix("queue_config", { admin, global: globalPda(), dbcConfig: config }, { config, add });
+const isStandard = (p: FeePolicy) => p.kind === 0 && p.buybackShare === 0 && p.walletShare === 0 && p.maxCoins === 0 && p.wallet.equals(PublicKey.default);
+/** `queue_config` — `policy` = the slot's fee policy when adding (default standard); must be standard when removing. */
+export const queueConfigIx = (admin: PublicKey, config: PublicKey, add: boolean, policy: FeePolicy = STANDARD_FEE_POLICY) =>
+  ix("queue_config", { admin, global: globalPda(), dbcConfig: config }, { config, add, policy });
 export const executeConfigIx = (caller: PublicKey, pendingConfig: PublicKey) => ix("execute_config", { caller, global: globalPda(), dbcConfig: pendingConfig });
 export const cancelConfigIx = (authority: PublicKey) => ix("cancel_config", { authority, global: globalPda() });
 export const migrateGlobalIx = (admin: PublicKey) => ix("migrate_global", { admin, global: globalPda() });
@@ -147,7 +163,8 @@ export const migrateGlobalIx = (admin: PublicKey) => ix("migrate_global", { admi
  * `launchSigner`: the API's launch key, required (as a signer) iff `Global.params.launch_signer` is set
  * (off-chain review L1); omitted → the optional account is passed as the fumpad program id.
  */
-export function registerCoinIx(a: { creator: PublicKey; mint: PublicKey; dbcConfig: PublicKey; launchSigner?: PublicKey | null }): TransactionInstruction {
+/** `feePolicy`: true iff the config's allow-list slot has a non-standard fee policy (the coin's `feePolicyPda` is created). */
+export function registerCoinIx(a: { creator: PublicKey; mint: PublicKey; dbcConfig: PublicKey; launchSigner?: PublicKey | null; feePolicy?: boolean }): TransactionInstruction {
   return ix("register_coin", {
     creator: a.creator,
     global: globalPda(),
@@ -158,6 +175,7 @@ export function registerCoinIx(a: { creator: PublicKey; mint: PublicKey; dbcConf
     rewardPool: rewardPoolPda(),
     rewardVault: rewardVault(a.mint),
     launchSigner: a.launchSigner ?? null,
+    feePolicy: a.feePolicy ? feePolicyPda(a.mint) : null,
   });
 }
 
@@ -207,8 +225,11 @@ export function claimFeesIx(caller: PublicKey, c: CoinRefs): TransactionInstruct
     feeClaimer: feeClaimerPda(),
     feeWsol: feeWsolPda(),
     rewardVault: rewardVault(c.mint),
+    ...policyAccounts(c),
   });
 }
+/** The optional (fee_policy, fee_wallet) pair of claim_fees / claim_lp_fees. */
+const policyAccounts = (c: CoinRefs) => (c.feeWallet ? { feePolicy: feePolicyPda(c.mint), feeWallet: c.feeWallet } : { feePolicy: null, feeWallet: null });
 export function claimLpFeesIx(caller: PublicKey, c: CoinRefs & { dammPosition: PublicKey; positionNftMint: PublicKey }): TransactionInstruction {
   const pool = dammPoolOf(c);
   return ix("claim_lp_fees", {
@@ -224,6 +245,7 @@ export function claimLpFeesIx(caller: PublicKey, c: CoinRefs & { dammPosition: P
     feeClaimer: feeClaimerPda(),
     feeWsol: feeWsolPda(),
     rewardVault: rewardVault(c.mint),
+    ...policyAccounts(c),
   });
 }
 /**

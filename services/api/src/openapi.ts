@@ -66,8 +66,14 @@ export const OPENAPI = {
     "/v1/launch/prepare": {
       post: {
         summary:
-          "D18 vanity launch: reserve a …fmbL mint and return the mint-signed launch tx. Body {creator, name, symbol, uri, initialBuyLamports?, slippageBps?, priorityMicroLamports?, auth: {message, signature}}; auth.message = 'FUMPAD launch\\ncreator: <creator>\\nsymbol: <symbol>\\nnonce: <16-64 [A-Za-z0-9_-]>\\nissuedAt: <unix ms>' signed (ed25519 signMessage) by the creator wallet; signature base58 or base64.",
-        responses: { "200": { description: "OK" }, "401": { description: "Missing/invalid wallet signature" }, "429": { description: "Rate limited" }, "503": { description: "Pool empty / launches disabled" } },
+          "D18 vanity launch: reserve a …fmbL mint and return the mint-signed launch tx. Body {creator, name, symbol, uri, initialBuyLamports?, slippageBps?, priorityMicroLamports?, launchConfig?: 'standard'|'first_coin', auth: {message, signature}}; response {mint, transaction, lastValidBlockHeight, expiresAt, suffix, firstBuy?, config: {kind, dbcConfig, feeBps, snipeStartBps, snipeWindowSlots, migratedPoolFeeBps, feePolicy}}. launchConfig 'first_coin' (the one-off 3% config, wallet-split fee policy) needs LAUNCH_FIRST_COIN=true (403 otherwise; 409 when it isn't allow-listed or its launch was used); auth.message = 'FUMPAD launch\\ncreator: <creator>\\nsymbol: <symbol>\\nnonce: <16-64 [A-Za-z0-9_-]>\\nissuedAt: <unix ms>' signed (ed25519 signMessage) by the creator wallet; signature base58 or base64.",
+        responses: { "200": { description: "OK" }, "401": { description: "Missing/invalid wallet signature" }, "403": { description: "first_coin not enabled" }, "409": { description: "first_coin not available" }, "429": { description: "Rate limited" }, "503": { description: "Pool empty / launches disabled" } },
+      },
+    },
+    "/v1/launch/options": {
+      get: {
+        summary: "Launch configs this server offers: {firstCoin: null | {dbcConfig, wallet, buybackShareBps, walletShareBps, launchesLeft}} (first_coin only with LAUNCH_FIRST_COIN=true and while allow-listed with launches left)",
+        responses: { "200": { description: "OK" } },
       },
     },
     "/v1/coins/{mint}/prices": {

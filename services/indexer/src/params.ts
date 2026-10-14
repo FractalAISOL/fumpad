@@ -1,6 +1,8 @@
 /**
  * Global.params + the FUMPAD DBC config's curve, cached in `meta.global` for the API (v0.7: the curve lives
- * in the DBC config, D30; the first allow-listed config is "the" curve shown to users).
+ * in the DBC config, D30; the first allow-listed STANDARD-policy config is "the" curve shown to users). Every
+ * allow-listed config's fee schedule + fee policy is cached too (`configCurves`, `configPolicies`): a coin's own
+ * fee is its config's (the first-coin config trades at 3%, INTERFACE §5.9).
  */
 import type { Connection } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
@@ -47,6 +49,28 @@ export interface CurveInfo {
   snipeWindowSlots: number;
   snipeStartBps: number;
   sqrtStartPrice: bigint;
+  /** DAMM v2 pool fee after graduation, bps. */
+  migratedPoolFeeBps: number;
+}
+
+/** A config's fee schedule (what a coin on it pays), as cached per config. */
+export interface ConfigFees {
+  feeBps: number;
+  snipeStartBps: number;
+  snipeWindowSlots: number;
+  migratedPoolFeeBps: number;
+}
+export const configFees = (c: CurveInfo): ConfigFees => ({ feeBps: c.feeBps, snipeStartBps: c.snipeStartBps, snipeWindowSlots: c.snipeWindowSlots, migratedPoolFeeBps: c.migratedPoolFeeBps });
+
+/** An allow-list slot's fee policy, JSON-safe (wallet base58, null when standard). */
+export interface StoredPolicy {
+  config: string;
+  kind: number;
+  buybackShare: number;
+  walletShare: number;
+  maxCoins: number;
+  coins: number;
+  wallet: string | null;
 }
 
 export type ApiParams = Params & CurveInfo & { feePoolShareBps: number };
@@ -71,6 +95,7 @@ export function curveFromConfig(cfg: ReturnType<typeof decodeDbcConfig>): CurveI
     snipeWindowSlots: bf.numberOfPeriod * Number(bf.periodFrequency),
     snipeStartBps: Number(bf.cliffFeeNumerator / 100_000n),
     sqrtStartPrice: cfg.sqrtStartPrice,
+    migratedPoolFeeBps: cfg.migratedPoolFeeBps,
   };
 }
 
@@ -92,6 +117,7 @@ export function defaultCurve(): CurveInfo {
     snipeWindowSlots: p.baseFee.firstFactor * Number(p.baseFee.secondFactor),
     snipeStartBps: Number(p.baseFee.cliffFeeNumerator / 100_000n),
     sqrtStartPrice: p.sqrtStartPrice,
+    migratedPoolFeeBps: p.migratedPoolFeeBps,
   };
 }
 
@@ -100,23 +126,46 @@ export function curveFromStored(s: Record<string, string | number> | undefined):
   if (!s) return defaultCurve();
   const o: Record<string, unknown> = { ...s };
   for (const k of BIG_CURVE_KEYS) o[k] = BigInt(s[k] as string);
+  if (o.migratedPoolFeeBps === undefined) o.migratedPoolFeeBps = o.feeBps; // cached before the field existed
   return o as unknown as CurveInfo;
 }
 
 export const apiParams = (p: Params, c: CurveInfo): ApiParams => ({ ...p, ...c, feePoolShareBps: p.feeBuybackShareBps });
 
-/** Fetch Global (+ its first config's curve) from chain and cache it in `meta`; fall back to the cached copy, then defaults. */
-export async function loadParams(conn: Connection, db: Queryable): Promise<{ params: Params; treasury?: string; admin?: string; configs?: string[]; curve: CurveInfo }> {
+/** Fetch Global (+ its configs' curves) from chain and cache it in `meta`; fall back to the cached copy, then defaults. */
+export async function loadParams(conn: Connection, db: Queryable): Promise<{ params: Params; treasury?: string; admin?: string; configs?: string[]; curve: CurveInfo; configPolicies?: StoredPolicy[] }> {
   try {
     const a = await conn.getAccountInfo(globalPda(), "confirmed");
     if (a) {
       const g = decodeGlobal(new Uint8Array(a.data));
-      const configs = g.configs.filter((k) => !k.equals(PublicKey.default)).map((k) => k.toBase58());
+      const slots = g.configs.map((k, i) => ({ k, i })).filter(({ k }) => !k.equals(PublicKey.default));
+      const configs = slots.map(({ k }) => k.toBase58());
+      const configPolicies: StoredPolicy[] = slots.map(({ k, i }) => {
+        const p = g.configPolicies?.[i];
+        return {
+          config: k.toBase58(),
+          kind: p?.kind ?? 0,
+          buybackShare: p?.buybackShare ?? 0,
+          walletShare: p?.walletShare ?? 0,
+          maxCoins: p?.maxCoins ?? 0,
+          coins: g.configCoins?.[i] ?? 0,
+          wallet: p && p.kind !== 0 ? p.wallet.toBase58() : null,
+        };
+      });
       let curve = defaultCurve();
-      if (configs.length) {
-        const ca = await conn.getAccountInfo(new PublicKey(configs[0]), "confirmed");
-        if (ca) curve = curveFromConfig(decodeDbcConfig(new Uint8Array(ca.data)));
-      }
+      const configCurves: Record<string, ConfigFees> = {};
+      const infos = configs.length ? await conn.getMultipleAccountsInfo(configs.map((c) => new PublicKey(c)), "confirmed") : [];
+      let shown = false;
+      infos.forEach((ca, i) => {
+        if (!ca) return;
+        const c = curveFromConfig(decodeDbcConfig(new Uint8Array(ca.data)));
+        configCurves[configs[i]] = configFees(c);
+        // "The" curve users see: the first standard-policy config (the first-coin config is a one-off).
+        if (!shown && configPolicies[i].kind === 0) {
+          curve = c;
+          shown = true;
+        }
+      });
       await setMeta(db, "global", {
         params: storeable(g.params),
         curve: storeable(curve),
@@ -128,8 +177,10 @@ export async function loadParams(conn: Connection, db: Queryable): Promise<{ par
         pauseExpiresAt: g.pauseExpiresAt.toString(),
         clusterTag: g.clusterTag,
         configs,
+        configPolicies,
+        configCurves,
       });
-      return { params: g.params, treasury: g.platformTreasury.toBase58(), admin: g.admin.toBase58(), configs, curve };
+      return { params: g.params, treasury: g.platformTreasury.toBase58(), admin: g.admin.toBase58(), configs, curve, configPolicies };
     }
   } catch {
     /* fall through */

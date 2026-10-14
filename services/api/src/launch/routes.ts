@@ -15,7 +15,7 @@
 import { type Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { FastifyInstance } from "fastify";
 
-import { decodeDbcConfig, type DbcVirtualPool, isFumpadVanityMint, launchInstructions, launchMetadataError, quoteDbcBuy } from "@fumpad/sdk";
+import { decodeDbcConfig, type DbcVirtualPool, FEE_POLICY, type FeePolicy, type GlobalAccount, isFumpadVanityMint, launchInstructions, launchMetadataError, quoteDbcBuy } from "@fumpad/sdk";
 
 import type { ChainReader } from "../chain.js";
 
@@ -39,6 +39,26 @@ export interface PrepareBody {
   priorityMicroLamports?: number;
   /** M-2: `{ message, signature }`, see launch/auth.ts (required unless LAUNCH_REQUIRE_SIGNATURE=false). */
   auth?: { message: string; signature: string };
+  /**
+   * "standard" (default): the first allow-listed config with the standard fee policy. "first_coin": the one-off
+   * first-coin config (3% fee, wallet-split policy) — only when the server runs with LAUNCH_FIRST_COIN=true and the
+   * config is allow-listed with launches left (`max_coins`).
+   */
+  launchConfig?: LaunchConfigKind;
+}
+
+export type LaunchConfigKind = "standard" | "first_coin";
+
+/** The config a prepared launch uses, with its real fees (the app shows these; it re-checks them on chain). */
+export interface LaunchConfigInfo {
+  kind: LaunchConfigKind;
+  dbcConfig: string;
+  /** Normal curve fee (bps), launch-window start fee (bps) over `snipeWindowSlots`, DAMM v2 fee after graduation (bps). */
+  feeBps: number;
+  snipeStartBps: number;
+  snipeWindowSlots: number;
+  migratedPoolFeeBps: number;
+  feePolicy: { kind: number; buybackShareBps: number; walletShareBps: number; wallet: string | null; maxCoins: number; coinsRegistered: number };
 }
 
 export interface PrepareResponse {
@@ -50,6 +70,8 @@ export interface PrepareResponse {
   expiresAt: number;
   suffix: string;
   firstBuy?: { solIn: string; tokensOut: string; minTokensOut: string };
+  /** The DBC config + fee policy this launch uses (always present; `kind` "first_coin" only when asked for). */
+  config: LaunchConfigInfo;
 }
 
 const bad = (msg: string) => new LaunchError(400, msg);
@@ -79,7 +101,27 @@ export function parsePrepareBody(body: unknown, cfg: Pick<ApiConfig, "launchMaxI
   if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 5_000) throw bad("invalid slippageBps");
   const priority = b.priorityMicroLamports === undefined ? 0 : Number(b.priorityMicroLamports);
   if (!Number.isInteger(priority) || priority < 0 || priority > cfg.launchMaxPriorityMicroLamports) throw bad("invalid priorityMicroLamports");
-  return { creator, name: b.name as string, symbol: b.symbol as string, uri: b.uri as string, initialBuyLamports, slippageBps, priority, auth: b.auth };
+  const launchConfig = b.launchConfig === undefined || b.launchConfig === null ? "standard" : b.launchConfig;
+  if (launchConfig !== "standard" && launchConfig !== "first_coin") throw bad("invalid launchConfig");
+  return { creator, name: b.name as string, symbol: b.symbol as string, uri: b.uri as string, initialBuyLamports, slippageBps, priority, auth: b.auth, launchConfig: launchConfig as LaunchConfigKind };
+}
+
+/**
+ * The allow-list slot a launch uses. "standard": the first slot with the standard fee policy (never the first-coin
+ * config, whatever its position). "first_coin": the first wallet-split slot that still has launches left
+ * (`max_coins` 0 = unlimited) — refused unless the server enables it (LAUNCH_FIRST_COIN=true).
+ */
+export function pickLaunchConfig(g: Pick<GlobalAccount, "configs" | "configPolicies" | "configCoins">, kind: LaunchConfigKind, firstCoinEnabled: boolean): { dbcConfig: PublicKey; policy: FeePolicy; coins: number } {
+  const slots = g.configs.map((k, i) => ({ dbcConfig: k, policy: g.configPolicies[i], coins: g.configCoins[i] })).filter((s) => !s.dbcConfig.equals(PublicKey.default));
+  if (kind === "standard") {
+    const s = slots.find((x) => x.policy.kind === FEE_POLICY.standard);
+    if (!s) throw new LaunchError(503, "no FUMPAD DBC config is allow-listed yet");
+    return s;
+  }
+  if (!firstCoinEnabled) throw new LaunchError(403, "the first-coin launch config is not enabled on this server");
+  const s = slots.find((x) => x.policy.kind === FEE_POLICY.walletSplit && (x.policy.maxCoins === 0 || x.coins < x.policy.maxCoins));
+  if (!s) throw new LaunchError(409, "the first-coin launch config is not available (not allow-listed, or its launch was used)");
+  return s;
 }
 
 /** Sliding one-minute window per key (per API instance; the DB caps hold across instances). */
@@ -128,16 +170,33 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
       const g = await withTimeout(deps.chain.global(), t, "global lookup");
       // L1: when the program requires the launch co-signature, this API's key signs register_coin
       const launchSigner = launchSignerFor(g.params.launchSigner, launchKey);
-      const dbcConfig = g.configs.find((k) => !k.equals(PublicKey.default));
-      if (!dbcConfig) throw new LaunchError(503, "no FUMPAD DBC config is allow-listed yet");
+      const slot = pickLaunchConfig(g, p.launchConfig, cfg.launchFirstCoin);
+      const dbcConfig = slot.dbcConfig;
       const cfgAcc = await withTimeout(deps.conn.getAccountInfo(dbcConfig, "confirmed"), t, "config lookup");
       if (!cfgAcc) throw new LaunchError(503, "the FUMPAD DBC config is missing");
       const config = decodeDbcConfig(new Uint8Array(cfgAcc.data));
+      const bf = config.baseFee;
+      const configInfo: LaunchConfigInfo = {
+        kind: p.launchConfig,
+        dbcConfig: dbcConfig.toBase58(),
+        feeBps: Number((bf.cliffFeeNumerator - bf.reductionFactor * BigInt(bf.numberOfPeriod)) / 100_000n),
+        snipeStartBps: Number(bf.cliffFeeNumerator / 100_000n),
+        snipeWindowSlots: bf.numberOfPeriod * Number(bf.periodFrequency),
+        migratedPoolFeeBps: config.migratedPoolFeeBps,
+        feePolicy: {
+          kind: slot.policy.kind,
+          buybackShareBps: slot.policy.buybackShare,
+          walletShareBps: slot.policy.walletShare,
+          wallet: slot.policy.kind === FEE_POLICY.standard ? null : slot.policy.wallet.toBase58(),
+          maxCoins: slot.policy.maxCoins,
+          coinsRegistered: slot.coins,
+        },
+      };
       const prepared = await pool.prepare(creator, req.ip, async (mint) => {
         if (!isFumpadVanityMint(mint, pool.cfg.suffix)) throw new Error("pooled mint has the wrong suffix");
         let minTokensOut = 0n;
         if (p.initialBuyLamports > 0n) {
-          // The pool's first swap in the creation tx pays the scheduler's minimum fee (1.25%), from the start price.
+          // The pool's first swap in the creation tx pays the scheduler's minimum fee (1.25%; 3% on the first-coin config), from the start price.
           const fresh = { sqrtPrice: config.sqrtStartPrice, activationPoint: 0n, quoteReserve: 0n } as DbcVirtualPool;
           const q = quoteDbcBuy(config, fresh, p.initialBuyLamports, 0n, { firstSwapMinFee: true });
           minTokensOut = q.amountOut - (q.amountOut * BigInt(p.slippageBps)) / 10_000n;
@@ -154,6 +213,7 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
           minTokensOut,
           priorityMicroLamports: p.priority > 0 ? p.priority : undefined,
           launchSigner: launchSigner?.publicKey,
+          feePolicy: slot.policy.kind !== FEE_POLICY.standard,
         });
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
         const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message();
@@ -163,7 +223,7 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
         if (launchSigner) tx.sign([launchSigner]); // the mint signs next (pool.prepare), the creator last
         return { tx, lastValidBlockHeight };
       }, { established });
-      req.log.info({ creator, mint: prepared.mint, reused: prepared.reusedReservation }, "launch prepared");
+      req.log.info({ creator, mint: prepared.mint, reused: prepared.reusedReservation, launchConfig: p.launchConfig }, "launch prepared");
       reply.header("cache-control", "no-store");
       return {
         mint: prepared.mint,
@@ -172,7 +232,21 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
         expiresAt: prepared.expiresAt,
         suffix: pool.cfg.suffix,
         firstBuy,
+        config: configInfo,
       };
     },
   );
+
+  // Whether this server offers the first-coin launch config right now (the app shows the option only then).
+  app.get("/v1/launch/options", async (_req, reply) => {
+    reply.header("cache-control", "no-store");
+    if (!cfg.launchFirstCoin || !deps.pool) return { firstCoin: null };
+    const g = await withTimeout(deps.chain.global(), t, "global lookup");
+    try {
+      const s = pickLaunchConfig(g, "first_coin", true);
+      return { firstCoin: { dbcConfig: s.dbcConfig.toBase58(), wallet: s.policy.wallet.toBase58(), buybackShareBps: s.policy.buybackShare, walletShareBps: s.policy.walletShare, launchesLeft: s.policy.maxCoins === 0 ? null : s.policy.maxCoins - s.coins } };
+    } catch {
+      return { firstCoin: null };
+    }
+  });
 }

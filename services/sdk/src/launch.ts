@@ -57,12 +57,14 @@ export interface LaunchParams {
   uri: string;
   /** Creator's first buy (lamports, before fees); 0 / undefined = no buy. */
   buyLamports?: bigint;
-  /** Min tokens out for the first buy (quote at the 1.25% min fee, minus slippage). */
+  /** Min tokens out for the first buy (quote at the config's min fee — 1.25% standard, 3% first-coin — minus slippage). */
   minTokensOut?: bigint;
   computeUnits?: number;
   priorityMicroLamports?: number;
   /** The API's launch key, when `Global.params.launch_signer` is set (it co-signs `register_coin`; off-chain review L1). */
   launchSigner?: PublicKey;
+  /** True iff `dbcConfig`'s allow-list slot has a non-standard fee policy (the first-coin config): `register_coin` creates the coin's `feePolicyPda`. */
+  feePolicy?: boolean;
 }
 
 /** The launch instructions in order (see module doc). */
@@ -80,7 +82,7 @@ export function launchInstructions(p: LaunchParams): TransactionInstruction[] {
     ixs.push(createAtaIdempotentIx(p.creator, p.creator, p.mint, TOKEN_2022_PROGRAM_ID));
     ixs.push(dbcBuyIx({ config: p.dbcConfig, mint: p.mint, owner: p.creator, lamportsIn: buy, minOut: p.minTokensOut ?? 0n, mode: SWAP_MODE.exactIn, ixSysvar: true }));
   }
-  ixs.push(registerCoinIx({ creator: p.creator, mint: p.mint, dbcConfig: p.dbcConfig, launchSigner: p.launchSigner }));
+  ixs.push(registerCoinIx({ creator: p.creator, mint: p.mint, dbcConfig: p.dbcConfig, launchSigner: p.launchSigner, feePolicy: p.feePolicy }));
   if (buy > 0n) ixs.push(closeTokenAccountIx(wsolAta(p.creator), p.creator, p.creator));
   return ixs;
 }

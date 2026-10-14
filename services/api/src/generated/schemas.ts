@@ -234,6 +234,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "description": {
         "type": "string"
       },
+      "fees": {
+        "$ref": "#/components/schemas/CoinFees",
+        "description": "The coin's own fee schedule and fee policy (contracts INTERFACE §5.9): a standard coin's equal the protocol params; the one-off first-coin config trades at 3% with FUMPAD's share split buyback / a designated wallet. Absent (older API) = the protocol params."
+      },
       "graduatedAt": {
         "$ref": "#/components/schemas/Millis"
       },
@@ -399,6 +403,57 @@ export const SCHEMAS: Record<string, unknown> = {
       "virtualSol",
       "virtualTokens",
       "volume24hSol"
+    ],
+    "type": "object"
+  },
+  "CoinFees": {
+    "additionalProperties": false,
+    "properties": {
+      "feeBps": {
+        "description": "Normal trading fee on the curve, bps (125 = 1.25%; the first-coin config: 300).",
+        "type": "number"
+      },
+      "migratedFeeBps": {
+        "description": "DAMM v2 pool fee after graduation, bps.",
+        "type": "number"
+      },
+      "policy": {
+        "description": "\"standard\": FUMPAD's share split pool / platform / creator (protocol params). \"wallet_split\": pool / `wallet`.",
+        "enum": [
+          "standard",
+          "wallet_split"
+        ],
+        "type": "string"
+      },
+      "poolShareBps": {
+        "description": "Wallet split only: FUMPAD's share as bps of volume (1.0% → the reward pool's buyback, 1.4% → `wallet`).",
+        "type": "number"
+      },
+      "snipeStartBps": {
+        "description": "Launch-window fee at the launch slot, bps (9,900 = 99%), falling to `feeBps` over `snipeWindowSlots`.",
+        "type": "number"
+      },
+      "snipeWindowSlots": {
+        "type": "number"
+      },
+      "wallet": {
+        "$ref": "#/components/schemas/Address",
+        "description": "Wallet split only: receives `walletShareBps` of volume and FUMPAD's whole launch-window share."
+      },
+      "walletPaidSol": {
+        "description": "Wallet split only: SOL paid to `wallet` so far.",
+        "type": "number"
+      },
+      "walletShareBps": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "feeBps",
+      "migratedFeeBps",
+      "snipeStartBps",
+      "snipeWindowSlots",
+      "policy"
     ],
     "type": "object"
   },

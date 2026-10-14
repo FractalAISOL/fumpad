@@ -1,4 +1,4 @@
-// Account decoders: IDL discriminators; Global round-trips through the borsh layout (1,044 bytes).
+// Account decoders: IDL discriminators; Global round-trips through the borsh layout (1,491 bytes).
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
@@ -6,6 +6,11 @@ import {
   accountDiscriminator,
   activeKeepers,
   bn,
+  configSlot,
+  FEE_POLICY,
+  feePolicyProblems,
+  STANDARD_FEE_POLICY,
+  walletSplit,
   decodeCoin,
   decodeGlobal,
   DEFAULT_PARAMS,
@@ -24,22 +29,43 @@ describe("account decoders", () => {
     const layout = (fumpadCoder().types as unknown as { typeLayouts: Map<string, { encode(v: unknown, b: Buffer): number }> }).typeLayouts.get("Global")!;
     const buf = Buffer.alloc(4096);
     const cfg = k();
+    const wallet = k();
+    const std = { kind: 0, buyback_share: 0, wallet_share: 0, max_coins: 0, wallet: PublicKey.default };
+    const pol = { kind: 1, buyback_share: 100, wallet_share: 140, max_coins: 1, wallet };
     const len = layout.encode(
       {
         bump: 1, admin: k(), platform_treasury: k(), guardian: k(), keepers: [k(), k(), k()], keeper_added_at: [bn(0n), bn(0n), bn(5n)], cluster_tag: 2, paused: 0,
         pause_expires_at: bn(0n), params: paramsToIdl(DEFAULT_PARAMS), pending_params: paramsToIdl(DEFAULT_PARAMS), pending_eta: bn(0n), pending_admin: PublicKey.default,
         pending_treasury: PublicKey.default, pending_guardian: PublicKey.default, pending_admin_eta: bn(0n), configs: [cfg, ...Array(7).fill(PublicKey.default)],
-        pending_config: PublicKey.default, pending_config_add: 0, pending_config_eta: bn(0n), reserved: Array(64).fill(0),
+        pending_config: PublicKey.default, pending_config_add: 0, pending_config_eta: bn(0n), operators: [PublicKey.default, PublicKey.default],
+        config_policies: [pol, ...Array(7).fill(std)], config_coins: [1, 0, 0, 0, 0, 0, 0, 0], pending_config_policy: std, reserved: Array(64).fill(0),
       },
       buf,
     );
-    expect(len + 8).toBe(1044);
+    expect(len + 8).toBe(1491);
     const g = decodeGlobal(Buffer.concat([Buffer.from(accountDiscriminator("Global")), buf.subarray(0, len)]));
     expect(g.configs[0].equals(cfg)).toBe(true);
     expect(g.clusterTag).toBe(2);
     expect(g.keeperAddedAt[2]).toBe(5n);
     expect(g.params.minSellUsdCents).toBe(5_000n);
     expect(g.params.maxOpenTickets).toBe(5);
+    const slot = configSlot(g, cfg)!;
+    expect(slot.index).toBe(0);
+    expect(slot.coins).toBe(1);
+    expect(slot.policy.kind).toBe(FEE_POLICY.walletSplit);
+    expect([slot.policy.buybackShare, slot.policy.walletShare, slot.policy.maxCoins]).toEqual([100, 140, 1]);
+    expect(slot.policy.wallet.equals(wallet)).toBe(true);
+    expect(feePolicyProblems(slot.policy)).toEqual([]);
+    expect(g.pendingConfigPolicy.kind).toBe(0);
+    expect(configSlot(g, k())).toBeNull();
+  });
+
+  it("wallet split: exact floors to the wallet, remainder to buyback (1.0 / 1.4 of 2.4)", () => {
+    const p = { buybackShare: 100, walletShare: 140 };
+    expect(walletSplit(2_400_000n, p)).toEqual({ buyback: 1_000_000n, wallet: 1_400_000n });
+    expect(walletSplit(1_000_001n, p)).toEqual({ buyback: 416_668n, wallet: 583_333n });
+    expect(feePolicyProblems({ ...STANDARD_FEE_POLICY, wallet: k() })).not.toEqual([]);
+    expect(feePolicyProblems({ kind: 1, buybackShare: 100, walletShare: 0, maxCoins: 1, wallet: k() })).not.toEqual([]);
   });
 });
 

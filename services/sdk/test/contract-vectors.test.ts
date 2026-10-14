@@ -14,6 +14,7 @@ import {
   consumedSellPda,
   dbcCreateConfigIx,
   ed25519InstructionData,
+  firstCoinConfigParams,
   encodeRebuyMessage,
   encodeSellMessage,
   FUMPAD_PROGRAM_ID,
@@ -94,10 +95,16 @@ describe("contracts/tests/vectors/attestation.json", () => {
 });
 
 describe("contracts/tests/vectors/dbc_config.json", () => {
-  for (const net of ["mainnet", "devnet"] as const) {
-    it(`${net}: create_config data is byte-identical`, () => {
-      const ix = dbcCreateConfigIx({ config: Keypair.generate().publicKey, payer: Keypair.generate().publicKey, params: fumpadConfigParams(net) });
-      expect(bytesToHex(ix.data)).toBe(D[net].create_config_data_hex);
+  for (const [key, net, params] of [
+    ["mainnet", "mainnet", fumpadConfigParams],
+    ["devnet", "devnet", fumpadConfigParams],
+    ["first_coin_mainnet", "mainnet", firstCoinConfigParams],
+    ["first_coin_devnet", "devnet", firstCoinConfigParams],
+  ] as const) {
+    it(`${key}: create_config data is byte-identical`, () => {
+      const ix = dbcCreateConfigIx({ config: Keypair.generate().publicKey, payer: Keypair.generate().publicKey, params: params(net) });
+      expect(bytesToHex(ix.data)).toBe(D[key].create_config_data_hex);
+      expect(D[key].migrated_pool_fee_bps).toBe(params(net).migratedPoolFeeBps);
       expect(ix.keys[1].pubkey.toBase58()).toBe(D.fee_claimer);
       expect(ix.keys[2].pubkey.toBase58()).toBe(D.leftover_receiver);
     });

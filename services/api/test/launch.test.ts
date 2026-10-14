@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_FUMPAD_PROGRAM_ID, FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError } from "@fumpad/sdk";
+import { DEFAULT_FUMPAD_PROGRAM_ID, FEE_POLICY, FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError, STANDARD_FEE_POLICY } from "@fumpad/sdk";
 
-import { parsePrepareBody, WindowLimiter } from "../src/launch/routes.js";
+import { parsePrepareBody, pickLaunchConfig, WindowLimiter } from "../src/launch/routes.js";
 import { keyFingerprint, MintVault, parsePoolKey } from "../src/launch/vault.js";
 
 const KEY_HEX = "11".repeat(32);
@@ -69,6 +69,11 @@ describe("POST /v1/launch/prepare body", () => {
     expect(bad({ ...ok, name: "" })).toThrow(/name/);
     expect(bad("x" as unknown as object)).toThrow(/JSON/);
   });
+  it("launchConfig: standard by default, first_coin on request, anything else refused", () => {
+    expect(parsePrepareBody(ok, cfg).launchConfig).toBe("standard");
+    expect(parsePrepareBody({ ...ok, launchConfig: "first_coin" }, cfg).launchConfig).toBe("first_coin");
+    expect(() => parsePrepareBody({ ...ok, launchConfig: "special" }, cfg)).toThrow(/launchConfig/);
+  });
   it("per-wallet window limiter", () => {
     const l = new WindowLimiter(2, 1_000);
     expect([l.take("a", 0), l.take("a", 1), l.take("a", 2), l.take("b", 2), l.take("a", 1_001)]).toEqual([true, true, false, true, true]);
@@ -85,8 +90,36 @@ describe("app/src/chain stays in sync with the v0.7 program", () => {
     expect(readFileSync(chainDir + "program.ts", "utf8")).toContain("VANITY_SUFFIX = FUMPAD_VANITY_SUFFIX");
     expect(FUMPAD_VANITY_SUFFIX).toBe("fmbL");
     expect(idlInstruction(FUMPAD_IDL, "set_auto_claim").accounts.map((a) => a.name)).toEqual(["wallet", "position", "event_authority", "program"]);
-    // 14 since INTERFACE §8.1 (optional launch_signer): app/src/chain/v07/ix.ts registerCoinIx + allowlist must follow
-    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(14);
+    // 14 since INTERFACE §8.1 (optional launch_signer), 15 since §8 2026-10-14 (optional fee_policy): the app's
+    // allow-list rebuilds register_coin with the SDK and must follow
+    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(15);
+  });
+});
+
+describe("launch config choice (first-coin config, INTERFACE §5.9)", () => {
+  const std = Keypair.generate().publicKey;
+  const first = Keypair.generate().publicKey;
+  const wallet = Keypair.generate().publicKey;
+  const firstPolicy = { kind: FEE_POLICY.walletSplit, buybackShare: 100, walletShare: 140, maxCoins: 1, wallet };
+  const g = (coins = 0, order: "std-first" | "first-first" = "std-first") => {
+    const slots = order === "std-first" ? [[std, STANDARD_FEE_POLICY], [first, firstPolicy]] : [[first, firstPolicy], [std, STANDARD_FEE_POLICY]];
+    return {
+      configs: [...slots.map((s) => s[0] as PublicKey), ...Array(6).fill(PublicKey.default)],
+      configPolicies: [...slots.map((s) => s[1] as typeof firstPolicy), ...Array(6).fill(STANDARD_FEE_POLICY)],
+      configCoins: order === "std-first" ? [5, coins, 0, 0, 0, 0, 0, 0] : [coins, 5, 0, 0, 0, 0, 0, 0],
+    };
+  };
+  it("standard never picks the first-coin config, whatever the slot order", () => {
+    expect(pickLaunchConfig(g(), "standard", true).dbcConfig.equals(std)).toBe(true);
+    expect(pickLaunchConfig(g(0, "first-first"), "standard", true).dbcConfig.equals(std)).toBe(true);
+  });
+  it("first_coin needs the server flag, an allow-listed wallet-split config and a launch left", () => {
+    expect(() => pickLaunchConfig(g(), "first_coin", false)).toThrow(/not enabled/);
+    const s = pickLaunchConfig(g(), "first_coin", true);
+    expect(s.dbcConfig.equals(first) && s.policy.wallet.equals(wallet)).toBe(true);
+    expect(() => pickLaunchConfig(g(1), "first_coin", true)).toThrow(/not available/);
+    const none = { configs: [std, ...Array(7).fill(PublicKey.default)], configPolicies: Array(8).fill(STANDARD_FEE_POLICY), configCoins: Array(8).fill(0) };
+    expect(() => pickLaunchConfig(none, "first_coin", true)).toThrow(/not available/);
   });
 });
 

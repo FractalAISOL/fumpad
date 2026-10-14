@@ -17,6 +17,7 @@ import type {
   ChartRange,
   CloseCall,
   CoinDetail,
+  CoinFees,
   CoinSummary,
   CreatedCoin,
   FeedEvent,
@@ -108,6 +109,36 @@ export interface CoinRow {
   snipe_tax_lamports: string | null;
   snipe_taxed_buys: number | null;
   pool_inflow_lamports: string | null;
+  // INTERFACE §5.9 (migration 011): the coin's fee policy snapshot and its own fee schedule (NULL = not synced yet)
+  fee_policy_kind?: number | null;
+  fee_wallet?: string | null;
+  fee_buyback_share?: number | null;
+  fee_wallet_share?: number | null;
+  fee_bps?: number | null;
+  snipe_start_bps?: number | null;
+  snipe_window_slots?: number | null;
+  migrated_fee_bps?: number | null;
+  wallet_fees_paid?: string | null;
+}
+
+/**
+ * The coin's own fees (INTERFACE §5.9): its config's schedule (chain-synced per coin; the protocol params until then
+ * — a coin's config is never re-synced to another one) and its snapshotted fee policy. The wallet split's shares are
+ * stored as weights written in bps of volume (100 / 140 = 1.0% / 1.4%).
+ */
+export function coinFees(c: Pick<CoinRow, "fee_policy_kind" | "fee_wallet" | "fee_buyback_share" | "fee_wallet_share" | "fee_bps" | "snipe_start_bps" | "snipe_window_slots" | "migrated_fee_bps" | "wallet_fees_paid">, p: ApiParams): CoinFees {
+  const feeBps = c.fee_bps ?? p.feeBps;
+  const wallet = !!c.fee_policy_kind && !!c.fee_wallet;
+  return {
+    feeBps,
+    migratedFeeBps: c.migrated_fee_bps ?? p.migratedPoolFeeBps ?? feeBps,
+    snipeStartBps: c.snipe_start_bps ?? p.snipeStartBps,
+    snipeWindowSlots: c.snipe_window_slots ?? p.snipeWindowSlots,
+    policy: wallet ? "wallet_split" : "standard",
+    ...(wallet
+      ? { poolShareBps: c.fee_buyback_share ?? 0, walletShareBps: c.fee_wallet_share ?? 0, wallet: c.fee_wallet!, walletPaidSol: lam(c.wallet_fees_paid ?? "0") }
+      : {}),
+  };
 }
 
 /**
@@ -513,6 +544,7 @@ export class Repo {
       ammTokens: c.status === "graduated" ? tok(c.virtual_tokens) : undefined,
       curveSol1h: lam(e.sol1h),
       poolInflowSol: lam(c.pool_inflow_lamports ?? "0"),
+      fees: coinFees(c, p),
     };
   }
 

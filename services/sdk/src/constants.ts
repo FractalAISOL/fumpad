@@ -107,8 +107,12 @@ export const SEEDS = {
   feeWsol: enc("fee_wsol"),
   rewardPool: enc("reward_pool"),
   buyback: enc("buyback"),
+  feePolicy: enc("fee_policy"),
   eventAuthority: enc("__event_authority"),
 } as const;
+
+/** Per-config fee policy kinds (`FeePolicy.kind`, INTERFACE §5.9). */
+export const FEE_POLICY = { standard: 0, walletSplit: 1 } as const;
 
 // ── units / math ────────────────────────────────────────────────────────────
 export const Q64 = 1n << 64n;

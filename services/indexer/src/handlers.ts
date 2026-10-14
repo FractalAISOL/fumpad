@@ -24,7 +24,8 @@ import {
   TICKET_STATUS_NAMES,
 } from "@fumpad/sdk";
 
-import { NOTIFY_CHANNEL, type Tx } from "./db.js";
+import { getMeta, NOTIFY_CHANNEL, type Tx } from "./db.js";
+import type { ConfigFees } from "./params.js";
 
 /** One event as handled here: name + normalized payload. */
 export interface IndexedEvent {
@@ -154,11 +155,30 @@ async function position(ctx: TxCtx, mint: string, wallet: string, ts: bigint, de
   );
 }
 
-/** Normal trading fee (D32, 1.25%): anything above it in the launch window is the D33 snipe fee. */
-const NORMAL_FEE_NUMERATOR = 12_500_000n;
-const FEE_DENOMINATOR = 1_000_000_000n;
-/** Meteora's protocol share is 20% of the fee; FUMPAD splits the remaining 80% 50 / 30 / 20. */
-function feeSplit(trading: bigint, p: Params) {
+/** Standard normal trading fee (D32, 1.25%), for coins whose own fee isn't known yet. */
+const STANDARD_FEE_BPS = 125n;
+/**
+ * The coin's per-trade fee facts: its normal fee (its config's: 1.25% standard, 3% on the first-coin config; the
+ * DAMM v2 fee after graduation) and its fee policy (INTERFACE §5.9).
+ */
+interface CoinFeeRow {
+  fee_policy_kind: number | null;
+  fee_buyback_share: number | null;
+  fee_wallet_share: number | null;
+  fee_bps: number | null;
+  migrated_fee_bps: number | null;
+}
+/**
+ * Meteora's protocol share is 20% of the fee; FUMPAD splits the remaining 80% (`trading`) 50 / 30 / 20 (standard),
+ * or buyback : wallet by the coin's wallet-split policy — the wallet's part is stored as `fee_platform` (FUMPAD's
+ * designated wallet, not the pool, not the creator), so pool + platform + creator stays = trading.
+ */
+function feeSplit(trading: bigint, p: Params, coin?: CoinFeeRow) {
+  if (coin?.fee_policy_kind && coin.fee_wallet_share) {
+    const den = BigInt((coin.fee_buyback_share ?? 0) + coin.fee_wallet_share);
+    const wallet = (trading * BigInt(coin.fee_wallet_share)) / den;
+    return { pool: trading - wallet, platform: wallet, creator: 0n };
+  }
   const platform = (trading * BigInt(p.feePlatformShareBps)) / BPS_DENOM;
   const creator = (trading * BigInt(p.feeCreatorShareBps)) / BPS_DENOM;
   return { pool: trading - platform - creator, platform, creator };
@@ -179,11 +199,22 @@ export async function applyEvents(ctx: TxCtx, events: IndexedEvent[]): Promise<v
       case "CoinRegistered": {
         const mint = b58(d.mint);
         const creator = b58(d.creator);
+        // The snapshotted fee policy (events from before 2026-10-14 have none = standard) and the config's fee
+        // schedule as cached by loadParams (chain sync fills it later when the config wasn't cached yet).
+        const fp = (d.feePolicy ?? null) as { kind: number; buybackShare: number; walletShare: number; wallet: unknown } | null;
+        const kind = fp ? Number(fp.kind) : 0;
+        const cached = await getMeta<{ configCurves?: Record<string, ConfigFees> }>(c, "global");
+        const cf = cached?.configCurves?.[b58(d.dbcConfig)];
         const ins = await c.query(
           `INSERT INTO coins (mint, creator, name, symbol, uri, created_at, created_sig, status, virtual_sol, virtual_tokens, real_sol, real_tokens,
-             price_q64, price_slot, reference_q64, pool_seeded, pool_tokens, dbc_pool, dbc_config, launch_slot, launch_window_slots)
-           VALUES ($1,$2,'','','',$3,$4,'curve',0,0,0,0,0,0,NULL,0,0,$5,$6,$7,$8) ON CONFLICT (mint) DO NOTHING`,
-          [mint, creator, s(ts), ctx.signature, b58(d.dbcPool), b58(d.dbcConfig), s(big(d.launchSlot)), s(big(d.launchWindowSlots))],
+             price_q64, price_slot, reference_q64, pool_seeded, pool_tokens, dbc_pool, dbc_config, launch_slot, launch_window_slots,
+             fee_policy_kind, fee_wallet, fee_buyback_share, fee_wallet_share, fee_bps, snipe_start_bps, snipe_window_slots, migrated_fee_bps)
+           VALUES ($1,$2,'','','',$3,$4,'curve',0,0,0,0,0,0,NULL,0,0,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (mint) DO NOTHING`,
+          [
+            mint, creator, s(ts), ctx.signature, b58(d.dbcPool), b58(d.dbcConfig), s(big(d.launchSlot)), s(big(d.launchWindowSlots)),
+            kind, kind ? b58(fp!.wallet) : null, kind ? Number(fp!.buybackShare) : null, kind ? Number(fp!.walletShare) : null,
+            cf?.feeBps ?? null, cf?.snipeStartBps ?? null, cf?.snipeWindowSlots ?? null, cf?.migratedPoolFeeBps ?? null,
+          ],
         );
         if (!ins.rowCount) break;
         // Trades the Meteora pipeline stored before the coin row existed (same launch tx).
@@ -226,16 +257,23 @@ export async function applyEvents(ctx: TxCtx, events: IndexedEvent[]): Promise<v
         const trading = big(fee.trading);
         const protocol = big(fee.protocol);
         const total = big(fee.total);
-        const split = feeSplit(trading, p);
         const sqrt = big(d.nextSqrtPrice);
         const spot = spotOf(sqrt);
         const onAmm = d.venue === "damm_v2";
+        const coin = await c.query<{ liquidity: string | null } & CoinFeeRow>(
+          "SELECT liquidity, fee_policy_kind, fee_buyback_share, fee_wallet_share, fee_bps, migrated_fee_bps FROM coins WHERE mint = $1",
+          [mint],
+        );
+        const cf = coin.rows[0];
+        const split = feeSplit(trading, p, cf);
         const feeBase = isBuy ? quoteGross + total : quoteGross;
-        const normal = (feeBase * NORMAL_FEE_NUMERATOR) / FEE_DENOMINATOR;
+        // The coin's own normal fee (its config's curve fee, or its DAMM v2 fee after graduation): anything above it
+        // is the D33 launch-window fee.
+        const normalBps = BigInt((onAmm ? (cf?.migrated_fee_bps ?? cf?.fee_bps) : cf?.fee_bps) ?? Number(STANDARD_FEE_BPS));
+        const normal = (feeBase * normalBps) / BPS_DENOM;
         const snipe = total > normal + 1n ? total - normal : 0n;
         const snipeBps = feeBase > 0n && snipe > 0n ? Number((total * BPS_DENOM) / feeBase) : 0;
-        const coin = await c.query<{ liquidity: string | null }>("SELECT liquidity FROM coins WHERE mint = $1", [mint]);
-        const L = coin.rows[0]?.liquidity ? BigInt(coin.rows[0].liquidity) : 0n;
+        const L = cf?.liquidity ? BigInt(cf.liquidity) : 0n;
         const vSol = L > 0n ? (L * sqrt) >> 128n : spot;
         const vTok = L > 0n && sqrt > 0n ? L / sqrt : 1n << 64n;
         const ins = await c.query(
@@ -280,14 +318,19 @@ export async function applyEvents(ctx: TxCtx, events: IndexedEvent[]): Promise<v
       case "FeesClaimed": {
         const mint = b58(d.mint);
         const ins = await c.query(
-          "INSERT INTO fee_claims (signature, idx, mint, venue, claimed, to_buyback, to_platform, to_creator, launch_window, ts) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING",
-          [ctx.signature, e.index, mint, Number(d.venue), s(big(d.claimed)), s(big(d.toBuyback)), s(big(d.toPlatform)), s(big(d.toCreator)), Boolean(d.launchWindow), s(ts)],
+          `INSERT INTO fee_claims (signature, idx, mint, venue, claimed, to_buyback, to_platform, to_creator, launch_window, ts, to_wallet, fee_wallet)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT DO NOTHING`,
+          [
+            ctx.signature, e.index, mint, Number(d.venue), s(big(d.claimed)), s(big(d.toBuyback)), s(big(d.toPlatform)), s(big(d.toCreator)), Boolean(d.launchWindow), s(ts),
+            s(big(d.toWallet ?? 0n)), d.toWallet !== undefined && big(d.toWallet) > 0n ? b58(d.feeWallet) : null,
+          ],
         );
         if (ins.rowCount)
           await c.query(
             `UPDATE coins SET buyback_pending = buyback_pending + $2, pool_inflow_lamports = pool_inflow_lamports + $2,
-               platform_fees_unclaimed = platform_fees_unclaimed + $3, creator_fees_unclaimed = creator_fees_unclaimed + $4 WHERE mint = $1`,
-            [mint, s(big(d.toBuyback)), s(big(d.toPlatform)), s(big(d.toCreator))],
+               platform_fees_unclaimed = platform_fees_unclaimed + $3, creator_fees_unclaimed = creator_fees_unclaimed + $4,
+               wallet_fees_paid = wallet_fees_paid + $5 WHERE mint = $1`,
+            [mint, s(big(d.toBuyback)), s(big(d.toPlatform)), s(big(d.toCreator)), s(big(d.toWallet ?? 0n))],
           );
         ctx.touched.add(mint);
         break;

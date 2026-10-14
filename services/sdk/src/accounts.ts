@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import { normalize } from "./borsh.js";
 import { FUMPAD_IDL, fumpadCoder } from "./coder.js";
-import { CLAIM_QUEUE_CAPACITY, OBSERVATION_CAPACITY, PREGRAD_MIN_SAMPLES, PREGRAD_MIN_SPAN_SECS, PREGRAD_RING_LEN, PREGRAD_WINDOW_SECS } from "./constants.js";
+import { BPS_DENOM, CLAIM_QUEUE_CAPACITY, FEE_POLICY, OBSERVATION_CAPACITY, PREGRAD_MIN_SAMPLES, PREGRAD_MIN_SPAN_SECS, PREGRAD_RING_LEN, PREGRAD_WINDOW_SECS } from "./constants.js";
 import { type Params, paramsFromIdl } from "./params.js";
 
 export type CoinStatus = "curve" | "complete" | "graduated";
@@ -25,6 +25,41 @@ export interface FeeSplitBps {
   buybackBps: number;
   platformBps: number;
   creatorBps: number;
+}
+
+/**
+ * A config's fee policy (INTERFACE §5.9): `kind` 0 standard (Params split, launch window → buyback) or 1 wallet split
+ * (our claimed fees split `buybackShare : walletShare` between the coin's buyback and `wallet`; launch window → 100%
+ * wallet; no platform / creator). `maxCoins` 0 = unlimited.
+ */
+export interface FeePolicy {
+  kind: number;
+  buybackShare: number;
+  walletShare: number;
+  maxCoins: number;
+  wallet: PublicKey;
+}
+export const STANDARD_FEE_POLICY: FeePolicy = Object.freeze({ kind: FEE_POLICY.standard, buybackShare: 0, walletShare: 0, maxCoins: 0, wallet: PublicKey.default });
+
+/** Mirror of `FeePolicy::is_valid` (the program also refuses a wallet that is one of fumpad's PDAs). */
+export function feePolicyProblems(p: FeePolicy): string[] {
+  const out: string[] = [];
+  if (p.kind === FEE_POLICY.standard) {
+    if (p.buybackShare || p.walletShare || !p.wallet.equals(PublicKey.default)) out.push("standard policy: shares must be 0 and wallet unset");
+  } else if (p.kind === FEE_POLICY.walletSplit) {
+    if (p.wallet.equals(PublicKey.default)) out.push("wallet-split policy needs a wallet");
+    if (p.walletShare <= 0) out.push("walletShare must be > 0");
+    if (BigInt(p.buybackShare + p.walletShare) > BPS_DENOM) out.push("buybackShare + walletShare must be ≤ 10,000");
+  } else out.push(`unknown policy kind ${p.kind}`);
+  if (p.maxCoins < 0 || p.maxCoins > 0xffff) out.push("maxCoins out of u16 range");
+  return out;
+}
+
+/** Split of one claim under a wallet-split policy: wallet = ⌊claimed × walletShare / (buyback + wallet)⌋, buyback the rest. */
+export function walletSplit(claimed: bigint, p: Pick<FeePolicy, "buybackShare" | "walletShare">): { buyback: bigint; wallet: bigint } {
+  const den = BigInt(p.buybackShare + p.walletShare);
+  const wallet = den === 0n ? 0n : (claimed * BigInt(p.walletShare)) / den;
+  return { buyback: claimed - wallet, wallet };
 }
 
 export interface GlobalAccount {
@@ -50,6 +85,18 @@ export interface GlobalAccount {
   pendingConfigEta: bigint;
   /** Jobs keys (samples, claim_for, pre-grad buybacks); disjoint from `keepers`. Default key = empty slot. */
   operators: PublicKey[];
+  /** Fee policy of each allow-list slot (same index as `configs`). */
+  configPolicies: FeePolicy[];
+  /** Coins registered on each slot since it was allow-listed (enforces `maxCoins`). */
+  configCoins: number[];
+  pendingConfigPolicy: FeePolicy;
+}
+
+/** The allow-list slot (policy + coins registered) of `config`, or null when it isn't allow-listed. */
+export function configSlot(g: Pick<GlobalAccount, "configs" | "configPolicies" | "configCoins">, config: PublicKey): { index: number; policy: FeePolicy; coins: number } | null {
+  if (config.equals(PublicKey.default)) return null;
+  const index = g.configs.findIndex((c) => c.equals(config));
+  return index < 0 ? null : { index, policy: g.configPolicies[index], coins: g.configCoins[index] };
 }
 
 export interface CoinAccount {
@@ -93,6 +140,16 @@ export interface CoinAccount {
   leftoverTokens: bigint;
   /** L5: last PREGRAD_RING_LEN keeper pre-grad samples (see `pregradMedianQ64`). */
   pregradRing: PregradRing;
+  /** Fee policy kind snapshotted at registration (`FEE_POLICY`); non-zero → details in `CoinFeePolicy` (`feePolicyPda`), `feeSplit` unused (zero). */
+  feePolicyKind: number;
+}
+
+export interface CoinFeePolicyAccount {
+  bump: number;
+  mint: PublicKey;
+  dbcConfig: PublicKey;
+  policy: FeePolicy;
+  walletPaidLamports: bigint;
 }
 
 /** L5: ring of keeper pre-graduation DBC spot samples (prices Q64.64 saturated to u64; ts unix seconds). */
@@ -165,11 +222,12 @@ export function decodeGlobal(data: Uint8Array): GlobalAccount {
   });
 }
 export const decodeCoin = (data: Uint8Array): CoinAccount => strip(decode<CoinAccount>("Coin", data));
+export const decodeCoinFeePolicy = (data: Uint8Array): CoinFeePolicyAccount => strip(decode<CoinFeePolicyAccount>("CoinFeePolicy", data));
 export const decodePosition = (data: Uint8Array): PositionAccount => strip(decode<PositionAccount>("Position", data));
 export const decodeTicket = (data: Uint8Array): TicketAccount => strip(decode<TicketAccount>("Ticket", data));
 export const decodeConsumed = (data: Uint8Array): ConsumedAccount => decode<ConsumedAccount>("Consumed", data);
 
-export function accountDiscriminator(name: "Global" | "Coin" | "Position" | "Ticket" | "Consumed" | "Observations" | "ClaimQueue"): Uint8Array {
+export function accountDiscriminator(name: "Global" | "Coin" | "CoinFeePolicy" | "Position" | "Ticket" | "Consumed" | "Observations" | "ClaimQueue"): Uint8Array {
   const a = (FUMPAD_IDL as unknown as { accounts: { name: string; discriminator: number[] }[] }).accounts.find((x) => x.name === name);
   if (!a) throw new Error(`no account ${name}`);
   return Uint8Array.from(a.discriminator);

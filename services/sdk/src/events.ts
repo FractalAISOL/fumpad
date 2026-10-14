@@ -13,10 +13,12 @@ import { EVENT_IX_TAG, FUMPAD_PROGRAM_ID } from "./constants.js";
 import { eventAuthorityPda } from "./pda.js";
 
 type PK = PublicKey;
-export interface CoinRegisteredEvent { mint: PK; creator: PK; dbcPool: PK; dbcConfig: PK; launchSlot: bigint; launchWindowSlots: bigint; ts: bigint }
+export interface FeePolicyData { kind: number; buybackShare: number; walletShare: number; maxCoins: number; wallet: PK }
+export interface CoinRegisteredEvent { mint: PK; creator: PK; dbcPool: PK; dbcConfig: PK; launchSlot: bigint; launchWindowSlots: bigint; ts: bigint; feePolicy: FeePolicyData }
 export interface RoutedTradeEvent { mint: PK; trader: PK; venue: number; isBuy: boolean; baseAmount: bigint; quoteGross: bigint; fee: bigint; preSqrtPrice: bigint; postSqrtPrice: bigint; slot: bigint; ts: bigint }
 export interface CurveCompletedEvent { mint: PK; dbcPool: PK; ts: bigint }
-export interface FeesClaimedEvent { mint: PK; venue: number; claimed: bigint; toBuyback: bigint; toPlatform: bigint; toCreator: bigint; launchWindow: boolean; ts: bigint }
+/** `toWallet` / `feeWallet`: wallet-split policy coins (0 / default otherwise). toBuyback + toPlatform + toCreator + toWallet = claimed. */
+export interface FeesClaimedEvent { mint: PK; venue: number; claimed: bigint; toBuyback: bigint; toPlatform: bigint; toCreator: bigint; launchWindow: boolean; ts: bigint; toWallet: bigint; feeWallet: PK }
 export interface FeesWithdrawnEvent { mint: PK; recipient: PK; lamports: bigint; creator: boolean; ts: bigint }
 export interface BuybackExecutedEvent { mint: PK; venue: number; lamportsIn: bigint; tokensOut: bigint; guardPriceQ64: bigint; spotPriceQ64: bigint; ts: bigint }
 export interface PoolMigratedEvent { mint: PK; dammPool: PK; migrator: PK; cost: bigint; ts: bigint }
@@ -44,7 +46,8 @@ export interface PositionClosedEvent { mint: PK; wallet: PK; ts: bigint }
 export interface AutoClaimSetEvent { mint: PK; wallet: PK; enabled: boolean; ts: bigint }
 export interface PauseSetEvent { paused: number; expiresAt: bigint; authority: PK; ts: bigint }
 export interface KeepersSetEvent { keepers: PK[]; addedAt: bigint[]; ts: bigint }
-export interface ConfigUpdatedEvent { config: PK; add: boolean; ts: bigint }
+export interface ConfigUpdatedEvent { config: PK; add: boolean; ts: bigint; policy: FeePolicyData }
+export interface ConfigQueuedEvent { config: PK; add: boolean; eta: bigint; ts: bigint; policy: FeePolicyData }
 export interface OperatorsSetEvent { operators: PK[]; ts: bigint }
 export interface UnregisteredFeesClaimedEvent { mint: PK; dbcPool: PK; dbcConfig: PK; claimed: bigint; platformTreasury: PK; ts: bigint }
 export interface PositionRewardClaimedEvent {
@@ -75,6 +78,7 @@ export interface EventMap {
   PauseSet: PauseSetEvent;
   KeepersSet: KeepersSetEvent;
   ConfigUpdated: ConfigUpdatedEvent;
+  ConfigQueued: ConfigQueuedEvent;
   OperatorsSet: OperatorsSetEvent;
   UnregisteredFeesClaimed: UnregisteredFeesClaimedEvent;
   PositionRewardClaimed: PositionRewardClaimedEvent;

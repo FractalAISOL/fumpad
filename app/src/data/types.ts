@@ -102,6 +102,31 @@ export interface CoinDetail extends CoinSummary {
   curveSol1h: number;
   /** SOL sent to the reward pool's buyback balance: half of FUMPAD's fee share plus its launch-window fees. */
   poolInflowSol?: number;
+  /**
+   * The coin's own fee schedule and fee policy (contracts INTERFACE §5.9): a standard coin's equal the protocol
+   * params; the one-off first-coin config trades at 3% with FUMPAD's share split buyback / a designated wallet.
+   * Absent (older API) = the protocol params.
+   */
+  fees?: CoinFees;
+}
+
+export interface CoinFees {
+  /** Normal trading fee on the curve, bps (125 = 1.25%; the first-coin config: 300). */
+  feeBps: number;
+  /** DAMM v2 pool fee after graduation, bps. */
+  migratedFeeBps: number;
+  /** Launch-window fee at the launch slot, bps (9,900 = 99%), falling to `feeBps` over `snipeWindowSlots`. */
+  snipeStartBps: number;
+  snipeWindowSlots: number;
+  /** "standard": FUMPAD's share split pool / platform / creator (protocol params). "wallet_split": pool / `wallet`. */
+  policy: "standard" | "wallet_split";
+  /** Wallet split only: FUMPAD's share as bps of volume (1.0% → the reward pool's buyback, 1.4% → `wallet`). */
+  poolShareBps?: number;
+  walletShareBps?: number;
+  /** Wallet split only: receives `walletShareBps` of volume and FUMPAD's whole launch-window share. */
+  wallet?: Address;
+  /** Wallet split only: SOL paid to `wallet` so far. */
+  walletPaidSol?: number;
 }
 
 export type ChartRange = "1h" | "1d" | "7d" | "all";

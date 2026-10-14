@@ -11,6 +11,7 @@ import { PublicKey } from "@solana/web3.js";
 import { coinPda, dbcLiquidityAt, decodeCoin, decodeDammPool, decodeDbcConfig, decodeDbcPool, decodeTokenAccount, priceQ64FromSqrt, rewardVault, virtualReserves } from "@fumpad/sdk";
 
 import type { Db } from "./db.js";
+import { configFees, curveFromConfig } from "./params.js";
 import type { Logger } from "./log.js";
 import { safeFetch, SafeFetchError, type SafeFetchOptions } from "./safeFetch.js";
 
@@ -85,6 +86,8 @@ export class ChainSync {
       }
     }
     const v = sqrt !== null && liquidity ? virtualReserves(sqrt, liquidity) : null;
+    // The coin's own fee schedule (its config's; the first-coin config trades at 3%, INTERFACE §5.9).
+    const fees = cfg ? configFees(curveFromConfig(cfg)) : null;
     await this.db.query(
       `UPDATE coins SET status = $2, pool_tokens = COALESCE($3, pool_tokens), buyback_pending = $4, platform_fees_unclaimed = $5, creator_fees_unclaimed = $6,
           sqrt_price = COALESCE($7, sqrt_price), liquidity = COALESCE($8, liquidity),
@@ -94,6 +97,8 @@ export class ChainSync {
           dbc_pool = COALESCE(dbc_pool, $17), dbc_config = COALESCE(dbc_config, $18),
           damm_pool = COALESCE($19, damm_pool), damm_position = COALESCE($20, damm_position),
           completed_at = COALESCE(completed_at, $21), graduated_at = COALESCE(graduated_at, $22),
+          fee_bps = COALESCE(fee_bps, $23), snipe_start_bps = COALESCE(snipe_start_bps, $24), snipe_window_slots = COALESCE(snipe_window_slots, $25),
+          migrated_fee_bps = COALESCE(migrated_fee_bps, $26), fee_policy_kind = $27,
           chain_synced_at = now()
         WHERE mint = $1`,
       [
@@ -104,6 +109,7 @@ export class ChainSync {
         c.dbcPool.toBase58(), cfgKey,
         graduated ? c.dammPool.toBase58() : null, graduated && !c.dammPosition.equals(PublicKey.default) ? c.dammPosition.toBase58() : null,
         c.completedAt ? c.completedAt.toString() : null, c.graduatedAt ? c.graduatedAt.toString() : null,
+        fees?.feeBps ?? null, fees?.snipeStartBps ?? null, fees?.snipeWindowSlots ?? null, fees?.migratedPoolFeeBps ?? null, c.feePolicyKind ?? 0,
       ],
     );
     if (this.opts.fetchMetadata) await this.fetchMetadata(mint);

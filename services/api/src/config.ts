@@ -41,6 +41,12 @@ export interface ApiConfig {
   mintPoolKey?: string;
   /** Launch binding key (L1): co-signs register_coin when Global.params.launch_signer is set. Separate from MINT_POOL_KEY. */
   launchSignerKey?: string;
+  /**
+   * LAUNCH_FIRST_COIN=true: `POST /v1/launch/prepare` accepts `launchConfig: "first_coin"` (the one-off first-coin
+   * DBC config: 3% fee, wallet-split fee policy, INTERFACE §5.9). Off by default; turn it off again after the first
+   * launch (the admin also removes the config from the allow-list, services/LAUNCH-DAY.md).
+   */
+  launchFirstCoin: boolean;
   vanitySuffix: string;
   /** A reservation returns to the pool after this long if its launch never landed. */
   launchReservationMs: number;
@@ -142,6 +148,7 @@ export function loadApiConfig(env = process.env): ApiConfig {
     logLevel: env.LOG_LEVEL ?? "info",
     mintPoolKey: env.MINT_POOL_KEY || undefined,
     launchSignerKey: env.LAUNCH_SIGNER_KEY || undefined,
+    launchFirstCoin: env.LAUNCH_FIRST_COIN === "true",
     vanitySuffix: env.VANITY_SUFFIX || "fmbL",
     launchReservationMs: Math.round(Number(env.LAUNCH_RESERVATION_MINUTES ?? 10) * 60_000),
     launchSweepMs: Number(env.LAUNCH_SWEEP_SECS ?? 15) * 1000,

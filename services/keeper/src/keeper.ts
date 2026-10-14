@@ -56,6 +56,9 @@ import {
   type DbcVirtualPool,
   decodeClaimQueue,
   decodeCoin,
+  decodeCoinFeePolicy,
+  FEE_POLICY,
+  feePolicyPda,
   decodeConsumed,
   decodeDammPool,
   decodeDbcPool,
@@ -122,6 +125,8 @@ interface CoinState {
   obs?: ObservationsAccount | null;
   queueReady?: boolean;
   positionNftMint?: PublicKey;
+  /** Wallet-split fee policy coins: the policy wallet from the coin's `CoinFeePolicy` snapshot (never changes). */
+  feeWallet?: PublicKey;
   /** Lowest trigger price (Q64) among open tickets. */
   minTriggerQ64?: bigint;
   openTickets: number;
@@ -528,9 +533,30 @@ export class Keeper {
   }
 
   // ── fees ─────────────────────────────────────────────────────────────────
+  /**
+   * The fee wallet a coin's claims must pass (INTERFACE §5.9): null for a standard coin; for a wallet-split coin the
+   * wallet snapshotted in its `CoinFeePolicy` PDA at registration (read once, cached; the snapshot never changes).
+   */
+  async feeWalletOf(c: CoinState): Promise<PublicKey | null> {
+    if (c.coin.feePolicyKind === FEE_POLICY.standard) return null;
+    if (c.feeWallet) return c.feeWallet;
+    const a = await this.conn.getAccountInfo(feePolicyPda(c.coin.mint));
+    if (!a || !a.owner.equals(FUMPAD_PROGRAM_ID)) throw new Error(`fee policy snapshot of ${c.coin.mint.toBase58()} missing`);
+    c.feeWallet = decodeCoinFeePolicy(new Uint8Array(a.data)).policy.wallet;
+    return c.feeWallet;
+  }
+
+  /** CoinRefs for a fee claim: the coin's accounts plus, for a wallet-split coin, its policy wallet. */
+  private async feeRefs(c: CoinState): Promise<CoinRefs> {
+    return { ...this.refs(c), feeWallet: await this.feeWalletOf(c) };
+  }
+
   async runFees(): Promise<number> {
     let n = 0;
     const skip = SKIP(["NothingToClaim", "LaunchWindowActive", "LaunchFeesUnsettled"]);
+    // A wallet-split coin's fee wallet below rent exemption blocks its claims until someone funds it (nothing is lost:
+    // the fees stay claimable on Meteora). Alert, don't fail the cycle.
+    const walletLow = SKIP(["FeeWalletNotRentExempt"]);
     // Expected "nothing to do" answers: logged at debug by the sender, not as a failed tx every cycle.
     const quiet = SKIP(["NothingToClaim"]);
     for (const c of this.coins.values()) {
@@ -541,9 +567,13 @@ export class Keeper {
       if (first || due) {
         n += await this.guard(`fees:${k.mint.toBase58()}`, async () => {
           c.lastFeesAt = Date.now();
-          const r = await this.sender.send(first ? "claim_fees(launch window)" : "claim_fees", { instructions: [cu(200_000), claimFeesIx(this.keeperKey, this.refs(c))] }, { retries: 1, quietCodes: quiet });
+          const r = await this.sender.send(first ? "claim_fees(launch window)" : "claim_fees", { instructions: [cu(200_000), claimFeesIx(this.keeperKey, await this.feeRefs(c))] }, { retries: 1, quietCodes: quiet });
           if (!r.ok) {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
+            if (r.code !== undefined && r.code !== null && walletLow.has(r.code)) {
+              await this.alerts.alert(`feewallet:${k.mint.toBase58()}`, `fee wallet ${c.feeWallet?.toBase58()} of ${k.mint.toBase58()} is below rent exemption: fund it (~0.001 SOL) so claim_fees can pay it`);
+              return 0;
+            }
             throw new Error(`claim_fees failed: ${r.error}`);
           }
           this.stats.feeClaims++;
@@ -563,9 +593,13 @@ export class Keeper {
             this.log.debug({ mint: k.mint.toBase58() }, "claim_lp_fees: nothing pending");
             return 0;
           }
-          const r = await this.sender.send("claim_lp_fees", { instructions: [cu(200_000), claimLpFeesIx(this.keeperKey, { ...this.refs(c), dammPosition: k.dammPosition, positionNftMint: nft })] }, { retries: 0, quietCodes: quiet });
+          const r = await this.sender.send("claim_lp_fees", { instructions: [cu(200_000), claimLpFeesIx(this.keeperKey, { ...(await this.feeRefs(c)), dammPosition: k.dammPosition, positionNftMint: nft })] }, { retries: 0, quietCodes: quiet });
           if (!r.ok) {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
+            if (r.code !== undefined && r.code !== null && walletLow.has(r.code)) {
+              await this.alerts.alert(`feewallet:${k.mint.toBase58()}`, `fee wallet ${c.feeWallet?.toBase58()} of ${k.mint.toBase58()} is below rent exemption: fund it (~0.001 SOL) so claim_lp_fees can pay it`);
+              return 0;
+            }
             throw new Error(`claim_lp_fees failed: ${r.error}`);
           }
           return 1;
