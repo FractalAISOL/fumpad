@@ -4,16 +4,16 @@
  * "deployer") + the Squads v4 program and its ProgramConfig dumped read-only from mainnet
  * (contracts/tests/fixtures/squads_v4_*), generated member keys, the real `initialize_global`.
  *
- *   A. create admin (3-of-5 voters + an initiate/execute ops key, 48 h Squads time lock) and guardian (2-of-3,
+ *   A. create admin (3-of-5 voters + an initiate/execute ops key, 6 h Squads time lock) and guardian (2-of-3,
  *      no time lock) multisigs from JSON configs (2nd create = no-op) · propose_admin(admin vault, treasury,
  *      guardian vault) by the current admin · accept_admin vault tx approved by 3 · negatives: executing
  *      early (Squads time lock), 2 approvals aren't enough, guardian multisig has no power yet
- *   ── warp 1 (> 48 h) ──
+ *   ── warp 1 (> 6 h) ──
  *   B. accept_admin executed THROUGH the admin multisig · old admin locked out · upgrade authority → admin
  *      vault (old authority locked out) · upgrade buffer written, handed to the vault, hash checked · admin vault
  *      txs: upgrade, extend (checked), queue_params, propose_admin(rotation) approved · guardian set_pause on/off (2-of-3,
  *      immediate) · negatives: 1 guardian approval, non-member approval, early upgrade
- *   ── warp 2 (> 48 h) ──
+ *   ── warp 2 (> 6 h) ──
  *   C. upgrade executed by the admin vault · checked extend refused from a CPI, unchecked (permissionless) extend OK · queue_params → guardian cancel_params · propose_admin
  *      rotation → guardian cancel_admin · final status
  *
@@ -160,7 +160,7 @@ try {
   await proposeAdminHandover(conn, deployer, { adminVault, guardianVault, treasury: treasury.publicKey }, "send", log);
   const g1 = await readGlobal(conn);
   const t1 = await chainTime(conn);
-  check("Global.pending_admin = admin vault, pending_guardian = guardian vault, pending_treasury, eta = now + 48 h", g1.pendingAdmin.equals(adminVault) && g1.pendingGuardian.equals(guardianVault) && g1.pendingTreasury.equals(treasury.publicKey) && Math.abs(Number(g1.pendingAdminEta) - (t1 + ADMIN_TIMELOCK_SECS)) < 120);
+  check("Global.pending_admin = admin vault, pending_guardian = guardian vault, pending_treasury, eta = now + 6 h", g1.pendingAdmin.equals(adminVault) && g1.pendingGuardian.equals(guardianVault) && g1.pendingTreasury.equals(treasury.publicKey) && Math.abs(Number(g1.pendingAdminEta) - (t1 + ADMIN_TIMELOCK_SECS)) < 120);
 
   const accept = await proposeVaultTx(conn, a.multisig, ops, { kind: "accept-admin" }, "send", log);
   await approveVaultTx(conn, a.multisig, accept, admins[0], "send", log);
@@ -175,7 +175,7 @@ try {
   await approveVaultTx(conn, g.multisig, early, guardians[1], "send", log);
   await refuses("guardian multisig set_pause before the handover", "Unauthorized", () => executeVaultTx(conn, g.multisig, early, guardians[0], "send", log));
 
-  await warpPast(Math.max(Number(g1.pendingAdminEta), st.executableAt ?? 0) + 60, "warp 1 (48 h admin timelock + 48 h Squads time lock)");
+  await warpPast(Math.max(Number(g1.pendingAdminEta), st.executableAt ?? 0) + 60, "warp 1 (6 h admin timelock + 6 h Squads time lock)");
 
   console.log("\n── B. accept_admin through the admin multisig; upgrade authority; guardian powers ──");
   await executeVaultTx(conn, a.multisig, accept, ops, "send", log);
@@ -217,7 +217,7 @@ try {
   check("guardian multisig set_pause(0)", (await readGlobal(conn)).paused === 0);
 
   const up = await proposalState(conn, a.multisig, upgrade);
-  await warpPast((up.executableAt ?? 0) + 60, "warp 2 (48 h Squads time lock on the upgrade)");
+  await warpPast((up.executableAt ?? 0) + 60, "warp 2 (6 h Squads time lock on the upgrade)");
 
   console.log("\n── C. upgrade through the admin vault; extend; guardian cancels ──");
   const before = await upgradeAuthority(conn);

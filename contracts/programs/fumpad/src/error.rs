@@ -33,7 +33,7 @@ pub enum FumpadError {
     NoPendingConfig,
     #[msg("No admin change is proposed")]
     NoPendingAdmin,
-    #[msg("Timelock (48h) has not elapsed")]
+    #[msg("Timelock has not elapsed")]
     TimelockNotElapsed,
     #[msg("Global account layout is unknown or newer than this program")]
     UnsupportedGlobalLayout,

@@ -16,7 +16,7 @@ fn admin_ix(admin: &Pubkey, global: Pubkey, data: impl anchor_lang::InstructionD
     ix(fumpad::accounts::AdminOnly { admin: *admin, global, event_authority: ev_auth(), program: fumpad::ID }, data)
 }
 
-/// Hand the guardian role to its own key (propose → 48h → accept). Returns the guardian.
+/// Hand the guardian role to its own key (propose → 6 h → accept). Returns the guardian.
 fn with_guardian(env: &mut Env) -> Keypair {
     let guardian = env.new_user(10);
     let (admin, g) = (env.admin.insecure_clone(), env.global());
@@ -56,7 +56,7 @@ fn initialize_global_only_by_upgrade_authority_and_validates() {
 }
 
 /// Bootstrap (deploy runbook): the upgrade authority's `initialize_global` sets the initial keepers and DBC config
-/// allow-list with no 6h attest freeze and no 48h config timelock; every later change keeps its freeze / timelock.
+/// allow-list with no 6h attest freeze and no 1 h config timelock; every later change keeps its freeze / timelock.
 #[test]
 fn bootstrap_keepers_attest_immediately_and_bootstrap_config_registers_immediately() {
     let mut env = Env::uninit();
@@ -73,7 +73,7 @@ fn bootstrap_keepers_attest_immediately_and_bootstrap_config_registers_immediate
     assert_eq!((ks.keepers, ks.added_at), (keepers, [0; 3]));
     let cu: ConfigUpdated = event(&meta);
     assert_eq!((cu.config, cu.add), (config, true));
-    // The bootstrap config registers coins right away (no 48h), and the bootstrap keepers attest right away (no 6h).
+    // The bootstrap config registers coins right away (no 1 h timelock), and the bootstrap keepers attest right away (no 6h).
     env.config = config;
     let t0 = env.now();
     let c = env.launch(SOL / 10);
@@ -101,7 +101,7 @@ fn bootstrap_keepers_attest_immediately_and_bootstrap_config_registers_immediate
     ok(env.set_keepers([keepers[0], keepers[1], kp_pk(&fresh)]));
     let r = env.sell_record(&c, &Pubkey::new_unique(), 10_000_000_000, 1 << 50);
     assert_fumpad_err(env.attest_sell(&r, &[0, 2]), FumpadError::NotEnoughKeeperSignatures);
-    // A later config add keeps its 48h timelock.
+    // A later config add keeps its 1 h timelock.
     let second = env.create_dbc_config(&meteora::mainnet_config_params());
     ok(env.queue_config(second, true));
     assert_fumpad_err(env.execute_config(second), FumpadError::TimelockNotElapsed);
@@ -216,7 +216,7 @@ fn regression_stolen_admin_key_cannot_outrun_the_guardian() {
     ok(env.queue_params(p));
     let evil_cfg = env.create_dbc_config(&meteora::mainnet_config_params());
     ok(env.queue_config(evil_cfg, true));
-    // Accept before 48h fails; the guardian cancels all three.
+    // Accept before 6 h fails; the guardian cancels all three.
     let i = ix(fumpad::accounts::AcceptAdmin { new_admin: kp_pk(&thief), global: g, event_authority: ev_auth(), program: fumpad::ID }, fumpad::instruction::AcceptAdmin {});
     assert_fumpad_err(env.send(&[i.clone()], &[&thief]), FumpadError::TimelockNotElapsed);
     for d in [
@@ -430,4 +430,114 @@ fn regression_fallback_samples_never_decide_the_median() {
     }
     let obs: fumpad::state::Observations = env.fetch_zc(&c.observations());
     assert!(obs.median_price_q64(env.now(), 1_800, 84).is_none());
+}
+
+/// SPEC v0.7 C-TL (2026-10-14): the timelock values themselves — 1 h for routine changes (params, DBC-config
+/// allow-list), 6 h for authority changes (admin / platform_treasury / guardian).
+#[test]
+fn timelock_values_are_1h_routine_6h_authority() {
+    assert_eq!(fumpad::PARAMS_TIMELOCK_SECS, 3_600);
+    assert_eq!(fumpad::CONFIG_TIMELOCK_SECS, 3_600);
+    assert_eq!(fumpad::ADMIN_TIMELOCK_SECS, 6 * 3_600);
+    // Unchanged by C-TL.
+    assert_eq!(fumpad::KEEPER_ATTEST_FREEZE_SECS, 6 * 3_600);
+    assert_eq!(fumpad::MAX_PAUSE_SECS, 7 * 86_400);
+}
+
+/// C-TL: `execute_params` fails at 1 h − 1 s and succeeds at exactly 1 h; the eta in the event is now + 1 h.
+#[test]
+fn params_timelock_boundary_1h() {
+    let mut env = Env::new();
+    let mut p = Params::default();
+    p.ticket_challenge_secs = 12 * 3_600;
+    let meta = ok(env.queue_params(p));
+    let eta = env.now() + 3_600;
+    assert_eq!(event::<ParamsQueued>(&meta).eta, eta);
+    assert_eq!(env.fetch::<Global>(&env.global()).pending_eta, eta);
+    env.warp(3_600 - 1);
+    assert_fumpad_err(env.execute_params(), FumpadError::TimelockNotElapsed);
+    env.warp(1);
+    assert_eq!(env.now(), eta);
+    ok(env.execute_params());
+    assert_eq!(env.fetch::<Global>(&env.global()).params, p);
+}
+
+/// C-TL: `execute_config` (add and remove) fails at 1 h − 1 s and succeeds at exactly 1 h.
+#[test]
+fn config_timelock_boundary_1h() {
+    let mut env = Env::new();
+    let g = env.global();
+    let other = env.create_dbc_config(&meteora::devnet_config_params());
+    for add in [true, false] {
+        let meta = ok(env.queue_config(other, add));
+        let eta = env.now() + 3_600;
+        assert_eq!(event::<ConfigQueued>(&meta).eta, eta);
+        env.warp(3_600 - 1);
+        assert_fumpad_err(env.execute_config(other), FumpadError::TimelockNotElapsed);
+        env.warp(1);
+        ok(env.execute_config(other));
+        assert_eq!(env.fetch::<Global>(&g).is_allowed_config(&other), add);
+    }
+}
+
+/// C-TL: `accept_admin` (admin + platform_treasury + guardian) fails at 6 h − 1 s and succeeds at exactly 6 h.
+#[test]
+fn admin_timelock_boundary_6h() {
+    let mut env = Env::new();
+    let (admin, g) = (env.admin.insecure_clone(), env.global());
+    let (new_admin, treasury, guardian) = (env.new_user(10), env.new_user(1), env.new_user(1));
+    let i = admin_ix(
+        &kp_pk(&admin),
+        g,
+        fumpad::instruction::ProposeAdmin { new_admin: kp_pk(&new_admin), platform_treasury: kp_pk(&treasury), guardian: kp_pk(&guardian) },
+    );
+    let meta = ok(env.send(&[i], &[&admin]));
+    let eta = env.now() + 6 * 3_600;
+    assert_eq!(event::<AdminProposed>(&meta).eta, eta);
+    assert_eq!(env.fetch::<Global>(&g).pending_admin_eta, eta);
+    let accept = ix(
+        fumpad::accounts::AcceptAdmin { new_admin: kp_pk(&new_admin), global: g, event_authority: ev_auth(), program: fumpad::ID },
+        fumpad::instruction::AcceptAdmin {},
+    );
+    env.warp(6 * 3_600 - 1);
+    assert_fumpad_err(env.send_as(&new_admin, &[accept.clone()], &[&new_admin]), FumpadError::TimelockNotElapsed);
+    env.warp(1);
+    assert_eq!(env.now(), eta);
+    ok(env.send_as(&new_admin, &[accept], &[&new_admin]));
+    let gl: Global = env.fetch(&g);
+    assert_eq!((gl.admin, gl.platform_treasury, gl.guardian), (kp_pk(&new_admin), kp_pk(&treasury), kp_pk(&guardian)));
+}
+
+/// C-TL: the guardian can still cancel each pending change inside its (shorter) window — at 1 h − 1 s for params
+/// and configs, at 6 h − 1 s for the admin proposal — and nothing executes afterwards.
+#[test]
+fn guardian_cancels_within_the_short_windows() {
+    let mut env = Env::new();
+    let guardian = with_guardian(&mut env);
+    let (admin, g) = (env.admin.insecure_clone(), env.global());
+    let thief = env.new_user(10);
+    // Params + config: cancelled 1 s before the 1 h eta.
+    let mut p = Params::default();
+    p.claim_bps = 2_500;
+    ok(env.queue_params(p));
+    let cfg = env.create_dbc_config(&meteora::mainnet_config_params());
+    ok(env.queue_config(cfg, true));
+    env.warp(3_600 - 1);
+    ok(env.send(&[guardian_ix(&kp_pk(&guardian), g, fumpad::instruction::CancelParams {})], &[&guardian]));
+    ok(env.send(&[guardian_ix(&kp_pk(&guardian), g, fumpad::instruction::CancelConfig {})], &[&guardian]));
+    env.warp(1);
+    assert_fumpad_err(env.execute_params(), FumpadError::NoPendingParams);
+    assert!(env.execute_config(cfg).is_err());
+    // Admin proposal: cancelled 1 s before the 6 h eta.
+    let i = admin_ix(&kp_pk(&admin), g, fumpad::instruction::ProposeAdmin { new_admin: kp_pk(&thief), platform_treasury: kp_pk(&thief), guardian: kp_pk(&thief) });
+    ok(env.send(&[i], &[&admin]));
+    env.warp(6 * 3_600 - 1);
+    ok(env.send(&[guardian_ix(&kp_pk(&guardian), g, fumpad::instruction::CancelAdmin {})], &[&guardian]));
+    env.warp(1);
+    let accept = ix(fumpad::accounts::AcceptAdmin { new_admin: kp_pk(&thief), global: g, event_authority: ev_auth(), program: fumpad::ID }, fumpad::instruction::AcceptAdmin {});
+    assert_fumpad_err(env.send_as(&thief, &[accept], &[&thief]), FumpadError::NoPendingAdmin);
+    let gl: Global = env.fetch(&g);
+    assert_eq!((gl.admin, gl.guardian), (kp_pk(&admin), kp_pk(&guardian)));
+    assert_eq!(gl.params, Params::default());
+    assert!(!gl.is_allowed_config(&cfg));
 }

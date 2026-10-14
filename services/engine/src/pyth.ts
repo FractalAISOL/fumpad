@@ -3,6 +3,8 @@
  * publish_time ≤ block_time; |Δ| ≤ 60 s else no ticket). All keepers and the watcher MUST use the same
  * source, or they will disagree and not reach 2-of-3.
  *
+ * - OnchainPythSource (pyth-onchain.ts, PYTH_SOURCE=onchain, production default): the writes to Pyth's sponsored
+ *   SOL/USD push account on Solana mainnet, read with plain JSON-RPC (free; Hermes needs a paid plan since 2026-10).
  * - HermesPythSource: Pyth Hermes historical API (`/v2/updates/price/{publish_time}`), as specified.
  *   Since 2026-10 Hermes answers 401 "unauthorized" to unauthenticated requests. The key is sent as
  *   `Authorization: Bearer <key>` (verified 2026-10-13 with the provisioned key on the historical endpoint:

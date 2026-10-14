@@ -24,15 +24,19 @@ SPEND="--send --i-understand-this-spends-real-sol"
 
 | when | what | irreversible? |
 |---|---|---|
-| T−7 d … T−3 d | providers, keys, multisigs, build, rehearsal, Railway mainnet project (services stopped) | no |
-| **T−3 d (day 0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
-| T−3 d … T−1 d | 48 h: voters approve `accept_admin` in Squads; services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
-| **T−1 d (day 2)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
-| **T0** | pre-flight re-check → open the app (prelaunch gate off) → first coin on the first-coin config → remove that config | the first coin's 3% fee + routing: yes (snapshotted) |
+| T−7 d … T−1 d | providers, keys, multisigs, build, rehearsal, Railway mainnet project (services stopped) | no |
+| **Day 0, morning (H0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
+| H0 … H0 + 6 h | 6 h: voters approve `accept_admin` in Squads (right away — the Squads 6 h lock starts at the 3rd approval); services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
+| **≥ H0 + 6 h (same day)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
+| **T0 (same evening or next morning)** | pre-flight re-check → open the app (prelaunch gate off) → first coin on the first-coin config → remove that config | the first coin's 3% fee + routing: yes (snapshotted) |
+
+(Was a 3-day schedule with the 48 h timelocks; since SPEC v0.7 clarification 29 the handover is 6 h on chain and the
+recommended Squads time lock is 6 h, so day 0 fits in one working day if the 3 voters approve within ~an hour of
+`propose_admin`.)
 
 Opening the app only after the handover means no hot key holds admin power while users have money in.
 
-## 1. Pre-flight (T−7 d … T−3 d)
+## 1. Pre-flight (T−7 d … T−1 d)
 
 1. **Release commit.** Tag it. Gates on that commit: `npm run typecheck`, `npm test`, `npm run local` (20/20),
    `npm run multisig:rehearsal`, `npm run mainnet:rehearsal` (must end `✓ mainnet rehearsal passed`).
@@ -54,11 +58,16 @@ Opening the app only after the handover means no hot key holds admin power while
    npm run rpc-check -- --env $K/rpc.env --env $K/rpc-b.env --env $K/rpc-c.env --env $K/rpc-d.env
    ```
    After the first coin exists, re-run with `--l8-slot <its launch slot>`.
-4. **Pyth / Hermes**: mainnet key in `$K/pyth.env` (`PYTH_API_KEY=…`); check `200` with the curl of DEPLOY-v07.md §9
-   (path `$K/pyth.env`). All three attestors and the watcher use the same source.
+4. **SOL/USD (Pyth, free)**: attestors + watcher run `PYTH_SOURCE=onchain` (the default with `NODE_ENV=production`):
+   the price comes from Pyth's sponsored SOL/USD push account on mainnet via each one's own `RPC_URL` (no key, $0;
+   `PYTH_RPC_URL` only if the price should come from another mainnet endpoint). Nothing to buy. Check one provider
+   reads it: `FUMPAD_RPC_ENV_FILE=$K/rpc-b.env npx tsx engine/scripts/record-pyth-onchain.ts 600 8` must end with
+   `determinism: N/N identical across providers` (it compares with the public RPC; it rewrites the test fixture, so
+   `git checkout engine/test/fixtures/pyth-onchain.mainnet.json.gz` afterwards). All three attestors and the watcher
+   must use the same source (`hermes` remains an option with a paid key in `$K/pyth.env`, DEPLOY-v07.md §9).
 5. **Telegram**: `$K/telegram.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — a separate mainnet chat; check
    `getMe` → `"ok":true` (DEPLOY-v07.md §9). Guardians and the ops person are in the chat.
-6. **Governance parties** (MULTISIG.md §2–3): 5 admin Ledger voters (3-of-5, 48 h Squads time lock) + 3 guardian
+6. **Governance parties** (MULTISIG.md §2–3): 5 admin Ledger voters (3-of-5, 6 h Squads time lock) + 3 guardian
    Ledgers (2-of-3, no time lock) + the ops key (`$K/ops.json`, initiate + execute only). Create both multisigs
    (deployer pays ≈ 0.004 SOL rent; Squads creation fee is 0 today):
    ```sh
@@ -119,8 +128,8 @@ Opening the app only after the handover means no hot key holds admin power while
     | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
     | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
-    | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
-    | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = E, `PYTH_*`, `TELEGRAM_*` (guardians' chat) |
+    | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=onchain` (no key; price read via the same `RPC_URL`), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
+    | `watcher` | `KEEPER_MODE=watcher`, `RPC_URL` = E, `PYTH_SOURCE=onchain`, `TELEGRAM_*` (guardians' chat) |
     Create them with env set but **don't deploy the keeper/attestors before day 0** (no Global yet). Grinder +
     Postgres can start early (the vanity pool fills).
 14. **App (Vercel)**: no code change, no SDK repack — build-time env only (Production; `NEXT_PUBLIC_*` are inlined at
@@ -138,7 +147,7 @@ Opening the app only after the handover means no hot key holds admin power while
     preview: the footer's program link = `$FUMPAD_PROGRAM_ID`, no "Devnet" badge. Keep `NEXT_PUBLIC_PRELAUNCH` unset
     (gate on) until T0. Preview deployment first; check CSP (app/LAUNCH.md).
 
-## 2. Day 0 (T−3 d): program, config, Global, keepers, propose_admin
+## 2. Day 0 morning (H0): program, config, Global, keepers, propose_admin
 
 Each `--send` prints a summary and asks you to type the phrase it shows (e.g. `program 7xKX9a`).
 ```sh
@@ -149,7 +158,7 @@ $B --step config        $SPEND                       # DBC create_config ×2: st
 $B --step init          $SPEND                       # initialize_global: IRREVERSIBLE params/cluster_tag/keepers + both configs with their fee
                                                      # policies (first coin: 1.0% buyback / 1.4% → firstCoin.feeWallet, max 1) — read the summary
 $B --step fund          $SPEND                       # operator 2 SOL, attestor-1/2/3 0.3 SOL
-$B --step propose-admin $SPEND                       # admin → admin vault, guardian → guardian vault (48 h)
+$B --step propose-admin $SPEND                       # admin → admin vault, guardian → guardian vault (6 h)
 $B --step verify                                     # all ✓; "next: after <eta> … accept-admin"
 $B --step accept-admin  $SPEND                       # ops key creates the accept_admin vault tx (no approval)
 $M show-tx $C --config $K/multisig/admin.json --index <N>   # voters check: accept_admin, signer = admin vault
@@ -159,14 +168,14 @@ watcher). Check: API `/v1/status`, attestor logs "3 active keepers", board RLS o
 keeper heartbeat in Telegram. The app stays gated; the team can test on `fumpad.vercel.app` (a small real coin —
 remember it costs real SOL and is permanent).
 
-## 3. T−3 d … T−1 d: approvals
+## 3. H0 … H0 + 6 h: approvals
 
-3 admin voters approve tx `N` in the Squads app on their Ledgers. The Squads 48 h time lock starts at the 3rd
-approval, so approve on day 0. `$B --step verify` / `$B --step accept-admin` (plan) show approvals and when it can
+3 admin voters approve tx `N` in the Squads app on their Ledgers. The Squads 6 h time lock starts at the 3rd
+approval, so approve right after `propose_admin` (the FUMPAD eta is H0 + 6 h; both must pass). `$B --step verify` / `$B --step accept-admin` (plan) show approvals and when it can
 execute. Any doubt → the guardian (still the deployer) cancels: `npx tsx scripts/ops/multisig.ts` is not needed,
 the deployer signs `cancel_admin` directly (rehearsed in MULTISIG.md §6).
 
-## 4. Day 2 (T−1 d): handover
+## 4. Day 0, ≥ H0 + 6 h: handover
 
 ```sh
 $B --step accept-admin      $SPEND     # executes once BOTH the FUMPAD eta and the Squads time lock passed
@@ -186,7 +195,7 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
    vanity pool ≥ 20, `/v1/status` green.
 2. Prelaunch gate release (app/LAUNCH.md "Open the app"): Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` → redeploy →
    `curl -sI https://fumpad.app/launches` = `200`.
-3. **First coin, on the one-off first-coin config** (user decision 2026-10-14; SPEC Clarification 29): 3% fee
+3. **First coin, on the one-off first-coin config** (user decision 2026-10-14; SPEC Clarification 30): 3% fee
    (99% → 3% over ~10 s, 3% after graduation too), of FUMPAD's 2.4%: 1.0% → its reward pool, 1.4% + FUMPAD's whole
    launch-window share → `firstCoin.feeWallet` (`7eXG…jFa3`); no platform / creator share.
    1. Before: `$B --step verify` shows the first-coin config allow-listed (`coins 0/1`, wallet = the config file's).
@@ -235,9 +244,9 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 - Bad attestation: `PAUSE_ATTEST` (16) + `void_ticket` by the guardian (Squads transaction builder).
 - App: `NEXT_PUBLIC_PRELAUNCH` back on + redeploy hides the app (the chain keeps running).
 - Keeper/attestor misbehaving: stop the Railway service (attestations need 2 of 3; one down is fine). A compromised
-  attestor key: guardian `PAUSE_ATTEST`, admin `set_keepers` (48 h Squads lock, then the 6 h freeze for the new key).
+  attestor key: guardian `PAUSE_ATTEST`, admin `set_keepers` (6 h Squads lock, then the 6 h freeze for the new key).
   A compromised operator (jobs) key: stop the `keeper` service; it can't attest — at worst it times samples / pre-grad
-  buybacks within the guards; admin `set_operators` to a fresh key (48 h Squads lock, no freeze), then redeploy the
+  buybacks within the guards; admin `set_operators` to a fresh key (6 h Squads lock, no freeze), then redeploy the
   keeper with it. A pause isn't needed for an operator compromise (`PAUSE_TRADE` stops pre-grad buybacks if wanted).
 - Unpause: `--bits 0` the same way.
 
@@ -248,28 +257,28 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
   recovers ≈ 3.8 SOL, the id can never be reused).
 - **Interrupted deploy**: `solana program show --buffers` → resume with `solana program deploy --buffer <B> …` or
   `solana program close <B>` to recover the buffer rent.
-- **After `initialize_global`, before the handover**: params can only change via `queue_params` (48 h);
+- **After `initialize_global`, before the handover**: params can only change via `queue_params` (1 h);
   keepers via `set_keepers` (immediate, 6 h freeze per new key), operators via `set_operators` (immediate); a wrong `propose_admin` → `cancel_admin` by the
   guardian (= deployer). A wrong Global (cluster_tag/params) can't be re-initialized: redeploy under a new program id.
 - **After the handover**: every fix is a Squads proposal — program upgrade (MULTISIG.md "Program upgrades
-  afterwards": buffer → hash check by every approver → 3 approvals → 48 h → execute), params (48 h FUMPAD + 48 h
-  Squads), config allow-list. Emergencies are the guardian's pause (§7).
+  afterwards": buffer → hash check by every approver → 3 approvals → 6 h → execute), params (6 h Squads + 1 h
+  FUMPAD), config allow-list (same), authority changes (6 h Squads + 6 h FUMPAD). Emergencies are the guardian's pause (§7).
 - **Services**: Railway "Redeploy" of the previous deployment; DB restore from Railway backups; the chain is the
   source of truth (the indexer re-derives from `BACKFILL_FROM_SLOT`).
 
 ## 9. Rehearsal (what was proven locally)
 
-`npm run mainnet:rehearsal` (≈ 16 min; `scripts/mainnet/rehearsal.ts`). **Result 2026-10-13: 37/37 ✓** (mainnet
-read at slot 456,589,591 with 23 read-only requests; DBC, DAMM v2 and Squads v4 on mainnet = the fixtures every test
+`npm run mainnet:rehearsal` (≈ 16 min; `scripts/mainnet/rehearsal.ts`). **Result 2026-10-14 (1 h / 6 h timelocks, 6 h Squads
+lock): 37/37 ✓ in 854 s** (2026-10-13 with 48 h: 37/37; mainnet read at slot 456,668,770 with 23 read-only requests; DBC, DAMM v2 and Squads v4 on mainnet = the fixtures every test
 suite runs; manifest committed as `scripts/mainnet/tested-programs.json`). Other stacks on the machine: set
 `FUMPAD_RPC_PORT`, `FUMPAD_API_PORT`, `FUMPAD_GOSSIP_PORT`, `FUMPAD_PG_PORT`. It reads mainnet only through `get*` calls (spaced, rate-limit aware), builds a validator with the
 exact mainnet DBC / DAMM v2 / Squads v4 / Token-2022 / Pyth-receiver bytes, the DAMM v2 migration config, Squads
 ProgramConfig, the DBC/DAMM pool authorities' real balances and mainnet's feature-gate set; deploys fumpad with the
 same `solana program deploy` call; runs every bootstrap step through the library and the CLI (incl. the refusals
 and a typed confirmation); runs the full service stack on mainnet params (600 s hold, $50 minimum, 85 SOL curve);
-and completes the handover with a clock warp past 48 h. Differences from mainnet that remain: the local rent rate is
+and completes the handover with a clock warp past 6 h. Differences from mainnet that remain: the local rent rate is
 ~37% higher than mainnet's (costs measured locally are upper bounds), prices are frozen at the dump's Pyth value,
-the smoke runs inside the 48 h window (the warp puts the chain ~2 days ahead of the services' clocks), and the Squads
+the smoke runs inside the 6 h window (the warp puts the chain ~6 h ahead of the services' clocks), and the Squads
 voters are generated keys rather than Ledgers.
 
 Found and fixed while rehearsing: (1) the SDK resolved the IDL's pinned `program` account of `initialize_global` to
@@ -322,7 +331,8 @@ providers keep full history; `rpc-check` verifies it.
    and publish H + `REL`). Later upgrades (upgrade authority = admin vault): build the new commit the same way and
    `solana-verify export-pda-tx … --uploader <admin vault>` → a Squads proposal next to the upgrade (MULTISIG.md).
 
-**Rehearsal (2026-10-13, Apple M1, colima vz + qemu-user amd64 emulation, solana-verify 0.5.2, commit = main after
+**Rehearsal (2026-10-13 — before the 2026-10-14 timelock change, which changes the bytes, so re-run steps 3–5 for
+the release commit; Apple M1, colima vz + qemu-user amd64 emulation, solana-verify 0.5.2, commit = main after
 the pre-audit hardening).** Steps 3–5 rehearsed read-only (no deploy, no transaction):
 
 | Build | Command | Size | Executable hash |

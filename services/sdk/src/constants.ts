@@ -150,7 +150,13 @@ export const PREGRAD_WINDOW_SECS = 300;
 export const PREGRAD_MIN_SAMPLES = 4;
 export const PREGRAD_MIN_SPAN_SECS = 60;
 export const MAX_PAUSE_SECS = 7 * 86_400;
-export const TIMELOCK_SECS = 48 * 3_600;
+/** Contracts PARAMS_TIMELOCK_SECS / CONFIG_TIMELOCK_SECS (SPEC v0.7 C-TL, 2026-10-14: 1 h routine, was 48 h). */
+export const PARAMS_TIMELOCK_SECS = 3_600;
+export const CONFIG_TIMELOCK_SECS = 3_600;
+/** Contracts ADMIN_TIMELOCK_SECS: propose_admin → accept_admin (admin, treasury, guardian). C-TL: 6 h, was 48 h. */
+export const ADMIN_TIMELOCK_SECS = 6 * 3_600;
+/** @deprecated the single 48 h timelock split in C-TL; this is the authority (admin) timelock. */
+export const TIMELOCK_SECS = ADMIN_TIMELOCK_SECS;
 /** `close_consumed` requires now > consumed.block_time + MAX_MAX_ATTEST_AGE_SECS. */
 export const MAX_MAX_ATTEST_AGE_SECS = 7 * 86_400;
 

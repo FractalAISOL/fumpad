@@ -92,7 +92,7 @@ function assertDisjoint(keepers: PublicKey[], operators: PublicKey[]): void {
  * `initialize_global` — payer must be the fumpad program's upgrade authority. Bootstrap: `keepers` (≤ 3 attestors)
  * start with NO 6h attest freeze, `operators` (≤ 2 jobs keys, never attestors) are set at once, and `configs` (≤ 8
  * FUMPAD DBC configs, validated like `execute_config` add, passed as remaining accounts) are allow-listed with NO
- * 48h timelock. Later changes keep their freeze / timelock.
+ * 1 h config timelock. Later changes keep their freeze / timelock.
  */
 export function initializeGlobalIx(a: {
   payer: PublicKey;

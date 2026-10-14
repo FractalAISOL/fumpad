@@ -4,9 +4,9 @@
  * (contracts/tests/fixtures, dumped read-only), a Pyth SOL/USD account, optionally a pre-seeded Global, and a
  * Postgres (DATABASE_URL, docker compose, or a throwaway `initdb` cluster).
  * Global: the e2e / app stacks still seed it into the genesis ONLY because their windows (10 s ticket challenge,
- * 5 s hold, 60 s oracle window) are outside `Params::is_valid` and the 48 h params timelock can't elapse on a test
+ * 5 s hold, 60 s oracle window) are outside `Params::is_valid` and the 1 h params timelock can't elapse on a test
  * chain; keepers + the DBC config no longer need seeding since `initialize_global` takes them (bootstrap: no 6 h
- * freeze, no 48 h timelock). The real `initialize_global` path is exercised by `npm run bootstrap:rehearsal`
+ * freeze, no 1 h config timelock). The real `initialize_global` path is exercised by `npm run bootstrap:rehearsal`
  * (scripts/devnet/bootstrap-v07.ts on a validator started WITHOUT `global`).
  */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
@@ -154,7 +154,7 @@ export interface Validator {
    * Stops the validator, writes a snapshot of its last root warped to `slot` (agave-ledger-tool create-snapshot
    * --warp-slot) and restarts on the SAME ledger (accounts and programs kept). With a long epoch
    * (`slotsPerEpoch`), Clock.unix_timestamp jumps forward ≈ 0.3 s per warped
-   * slot (stake-weighted vote time, clamped to PoH time − 25 %): this is how the local rehearsals make a 48 h
+   * slot (stake-weighted vote time, clamped to PoH time − 25 %): this is how the local rehearsals make a 6 h
    * timelock elapse.
    */
   warp(slot: number): Promise<void>;

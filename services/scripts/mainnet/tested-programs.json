@@ -1,6 +1,6 @@
 {
-  "takenAt": "2026-10-13T21:27:48.119Z",
-  "slot": 456589591,
+  "takenAt": "2026-10-14T02:15:24.174Z",
+  "slot": 456668770,
   "genesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   "programs": [
     {
@@ -85,7 +85,7 @@
       "owner": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
       "lamports": 1825031,
       "space": 134,
-      "sha256": "92e2a1afe191f9db630654b4afeed555c1a745312a9cde4983caa6a28238e802"
+      "sha256": "a7630a7c8b2a7c9ce6377780ead34ad627bc92ef80d270541071936f4c30bb99"
     },
     {
       "name": "wsol_mint",
@@ -109,7 +109,7 @@
       "name": "damm_v2_pool_authority",
       "id": "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC",
       "owner": "11111111111111111111111111111111",
-      "lamports": 177581437000,
+      "lamports": 177587371817,
       "space": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
@@ -185,13 +185,13 @@
       "p50": 0,
       "p75": 0,
       "p90": 0,
-      "max": 535714
+      "max": 181764
     }
   ],
   "pyth": {
-    "priceUsd": 106.82576909000001,
-    "publishTime": 1791926819,
-    "ageSecs": 14
+    "priceUsd": 107.41694632000001,
+    "publishTime": 1791944057,
+    "ageSecs": 35
   },
   "features": {
     "checked": 280,

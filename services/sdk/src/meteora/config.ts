@@ -48,7 +48,7 @@ export const SNIPE_CLIFF_FEE_NUMERATOR = 990_000_000n;
 export const SNIPE_REDUCTION = 122_187_500n;
 export const SNIPE_PERIODS = 8;
 /**
- * First-coin "launch config" (user decision 2026-10-14; SPEC Clarification 29): 99% → 3% linear over 25 periods of
+ * First-coin "launch config" (user decision 2026-10-14; SPEC Clarification 30): 99% → 3% linear over 25 periods of
  * 1 slot (≈ 10 s; (990,000,000 − 30,000,000) / 25 exact), then 3% on the curve; migrated DAMM v2 fee 3% (`OnlyB`).
  * Curve / supply / leftover / locks identical to the standard config. Allow-listed with a wallet-split fee policy.
  */

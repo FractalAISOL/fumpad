@@ -14,9 +14,9 @@
  *                      firstCoin.feeWallet, max_coins 1}] (no timelock), admin = guardian = deployer, platform_treasury
  *                      = config `treasury`
  *   fund               top up operator + attestor-1/2/3 from the deployer
- *   propose-admin      propose_admin(new admin = admin vault, treasury, guardian vault) by the deployer (48 h)
+ *   propose-admin      propose_admin(new admin = admin vault, treasury, guardian vault) by the deployer (6 h)
  *   accept-admin       admin multisig vault tx `accept_admin`: create it (ops key), report approvals, execute once both
- *                      the 48 h FUMPAD eta and the Squads time lock have passed (voters approve in the Squads app)
+ *                      the 6 h FUMPAD eta and the Squads time lock have passed (voters approve in the Squads app)
  *   upgrade-authority  BPF loader authority deployer → admin vault; refused until Global.admin = admin vault
  *   remove-first-coin-config  right after the first coin launched: queue_config(first-coin config, remove) by the admin
  *                      (deployer before the handover; else an admin-multisig vault tx by the ops key, voters approve),
@@ -77,7 +77,7 @@ import {
   programDataPda,
   proposeAdminIx,
   rewardPoolPda,
-  TIMELOCK_SECS,
+  ADMIN_TIMELOCK_SECS,
 } from "@fumpad/sdk";
 
 import { configProblems, firstCoinConfigProblems, firstCoinPolicy, paramsDiff } from "../devnet/bootstrap-v07.js";
@@ -91,7 +91,7 @@ export type MainnetCluster = "mainnet" | "local-fork";
 export type Mode = "plan" | "simulate" | "send";
 export const STEPS = ["keys", "program", "config", "init", "fund", "propose-admin", "accept-admin", "upgrade-authority", "verify", "remove-first-coin-config"] as const;
 export type Step = (typeof STEPS)[number];
-/** `all` = everything that can happen on day 0 (the handover's accept + upgrade authority need 48 h + approvals). */
+/** `all` = everything that can happen on day 0 (the handover's accept + upgrade authority need 6 h + approvals). */
 export const DAY0_STEPS: Step[] = ["keys", "program", "config", "init", "fund", "propose-admin", "verify"];
 
 /** Asked once per sending step with a summary; must return true to proceed (CLI: the operator types `phrase`). */
@@ -186,7 +186,7 @@ export async function partyProblems(conn: Connection, name: string, p: PartyConf
   lines.push(`${name}: Squads ${p.multisig} vault ${p.address} · ${m.threshold}-of-${voters} voters · time lock ${m.timeLock}s · ${m.members.length} members`);
   if (m.threshold < 2) problems.push(`${name}: threshold ${m.threshold} < 2`);
   if (!m.configAuthority.equals(PublicKey.default)) warnings.push(`${name}: config authority ${m.configAuthority.toBase58()} set (MULTISIG.md: autonomous, null)`);
-  if (name === "admin" && m.timeLock < TIMELOCK_SECS) warnings.push(`admin: Squads time lock ${m.timeLock}s < 48 h (MULTISIG.md recommends 172,800 s)`);
+  if (name === "admin" && m.timeLock < ADMIN_TIMELOCK_SECS) warnings.push(`admin: Squads time lock ${m.timeLock}s < 6 h (MULTISIG.md recommends 21,600 s)`);
   if (name === "guardian" && m.timeLock > 0) warnings.push(`guardian: Squads time lock ${m.timeLock}s (a pause should be immediate: MULTISIG.md recommends 0)`);
   return { problems, warnings, lines };
 }
@@ -514,7 +514,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
 
   // ── propose-admin ────────────────────────────────────────────────────────
   if (o.steps.includes("propose-admin")) {
-    say("\n▶ propose-admin (deployer proposes admin = admin vault, guardian = guardian vault, treasury; 48 h; the guardian (= deployer until then) can cancel_admin)");
+    say("\n▶ propose-admin (deployer proposes admin = admin vault, guardian = guardian vault, treasury; 6 h; the guardian (= deployer until then) can cancel_admin)");
     const pc = await partyCheck();
     warnings.push(...pc.warnings);
     const g = await globalNow();
@@ -536,7 +536,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
 
   // ── accept-admin ─────────────────────────────────────────────────────────
   if (o.steps.includes("accept-admin")) {
-    say("\n▶ accept-admin (through the admin multisig: vault tx → voters approve in the Squads app → after 48 h eta AND Squads time lock → execute)");
+    say("\n▶ accept-admin (through the admin multisig: vault tx → voters approve in the Squads app → after 6 h eta AND Squads time lock → execute)");
     const g = await globalNow();
     if (!g) failures.push("accept-admin: no Global");
     else if (g.admin.equals(admin)) say("  Global.admin = admin vault already (skip)");

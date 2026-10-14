@@ -7,7 +7,7 @@ use crate::constants::*;
 #[derive(InitSpace)]
 pub struct Global {
     pub bump: u8,
-    /// Squads multisig in production: queues params/configs (48h), proposes authority changes (48h), sets keepers,
+    /// Squads multisig in production: queues params/configs (1 h), proposes authority changes (6 h), sets keepers,
     /// pauses, migrates the layout.
     pub admin: Pubkey,
     /// Receives platform fees (`withdraw_platform_fees`).
@@ -137,7 +137,7 @@ pub struct Params {
     pub attest_threshold: u8,
 
     /// Off-chain review L1 (launch binding): when not `Pubkey::default()`, `register_coin` must also be signed by
-    /// this key (the API's launch co-signer). Changed like every param: `queue_params` → 48 h → `execute_params`.
+    /// this key (the API's launch co-signer). Changed like every param: `queue_params` → 1 h → `execute_params`.
     pub launch_signer: Pubkey,
 }
 

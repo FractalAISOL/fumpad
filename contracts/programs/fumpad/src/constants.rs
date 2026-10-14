@@ -38,7 +38,7 @@ pub const BPS_DENOM: u64 = 10_000;
 // ── Token ────────────────────────────────────────────────────────────────────
 pub const TOKEN_DECIMALS: u8 = 6;
 
-// ── Defaults (Global.params; admin-tunable behind the 48h timelock) ──────────
+// ── Defaults (Global.params; admin-tunable behind the 1 h params timelock) ───
 /// D32: our 1.00% (of the 1.25% DBC/DAMM fee) split 50 buyback / 30 platform / 20 creator.
 pub const DEFAULT_FEE_BUYBACK_SHARE_BPS: u16 = 5_000;
 pub const DEFAULT_FEE_PLATFORM_SHARE_BPS: u16 = 3_000;
@@ -73,12 +73,15 @@ pub const DEFAULT_TICKET_CHALLENGE_SECS: i64 = 6 * 3_600;
 /// D31: 2-of-3 keeper signatures (fixed in v1).
 pub const ATTEST_THRESHOLD: u8 = 2;
 
-/// D15: delay between `queue_params` and the earliest `execute_params`.
-pub const PARAMS_TIMELOCK_SECS: i64 = 48 * 3_600;
-/// M-2: delay between `propose_admin` and the earliest `accept_admin`.
-pub const ADMIN_TIMELOCK_SECS: i64 = 48 * 3_600;
-/// SPEC v0.7 §7: config allow-list changes are timelocked 48 h.
-pub const CONFIG_TIMELOCK_SECS: i64 = 48 * 3_600;
+/// D15 (SPEC v0.7 C-TL, 2026-10-14: was 48 h): delay between `queue_params` and the earliest `execute_params`.
+/// Routine change: 1 h.
+pub const PARAMS_TIMELOCK_SECS: i64 = 3_600;
+/// M-2 / D24 (SPEC v0.7 C-TL, 2026-10-14: was 48 h): delay between `propose_admin` and the earliest
+/// `accept_admin` (admin, platform_treasury, guardian). Authority change: 6 h.
+pub const ADMIN_TIMELOCK_SECS: i64 = 6 * 3_600;
+/// SPEC v0.7 §7 (C-TL, 2026-10-14: was 48 h): config allow-list changes (`queue_config` → `execute_config`)
+/// are a routine change: 1 h.
+pub const CONFIG_TIMELOCK_SECS: i64 = 3_600;
 /// M-3: a `set_pause` lapses after this long unless renewed.
 pub const MAX_PAUSE_SECS: i64 = 7 * 86_400;
 /// SPEC v0.7 §7: a keeper newly added by `set_keepers` can't count toward an attestation for 6 h.

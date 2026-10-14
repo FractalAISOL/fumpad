@@ -20,7 +20,7 @@ devnet curve simulates OK on devnet DBC **0.2.2** (35k CU) and the simulated con
 
 | key (`~/fumpad-keys/devnet/v07/`) | role | on chain | funded (SOL) |
 |---|---|---|---|
-| deployer `~/.config/solana/id.json` | upgrade authority, **admin**, **guardian** (devnet only: `initialize_global` sets guardian = admin; to split later: `propose_admin(admin, treasury, guardian)` → 48 h → `accept_admin`; `guardian.json` is generated for that. Mainnet: admin + guardian + upgrade authority go to Squads multisigs, `MULTISIG.md`) | — | pays everything below |
+| deployer `~/.config/solana/id.json` | upgrade authority, **admin**, **guardian** (devnet only: `initialize_global` sets guardian = admin; to split later: `propose_admin(admin, treasury, guardian)` → 6 h → `accept_admin`; `guardian.json` is generated for that. Mainnet: admin + guardian + upgrade authority go to Squads multisigs, `MULTISIG.md`) | — | pays everything below |
 | `operator.json` | **the jobs keeper** (samples, `claim_for`, pre-grad buybacks, cranks; pays graduation setup) | `Global.operators[0]` | 2.00 |
 | `attestor-1.json` | attestor 1 (attestations only) | `Global.keepers[0]` | 0.25 |
 | `attestor-2.json` | attestor 2 | `Global.keepers[1]` | 0.25 |
@@ -153,10 +153,10 @@ One image (`services/Dockerfile`, `SERVICE_ENTRY` picks the entry; `keeper/dist/
 | `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `LAUNCH_FIRST_COIN=false` (true only to launch the first coin, §11 / LAUNCH-DAY §5), `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional) | A | yes (`api-production-66441.up.railway.app`) |
 | `grinder` | existing | `grinder/Dockerfile` | unchanged (`DATABASE_URL`, `MINT_POOL_KEY`★, `POOL_TARGET`) | — | no |
 | `keeper` | existing | `keeper/dist/main.js`, `KEEPER_MODE=jobs` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (owner: `meta` table + advisory lock), `RPC_URL`★, **`KEEPER_SECRET_KEY`★ = operator** (never an attestor key: it refuses to start), `KEEPER_DAILY_BUDGET_SOL=3` (graduation setup ≈ 0.5 SOL/coin on devnet), `TELEGRAM_BOT_TOKEN`★/`TELEGRAM_CHAT_ID`, `PORT=8082` | A | no |
-| `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | **B** | no |
+| `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider B's **mainnet** endpoint), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | **B** | no |
 | `attestor-2` | **new**, own project + account | same | attestor-2 key, role `fumpad_attestor_2`, … | **C** | no |
 | `attestor-3` | **new**, own project + account (+ cloud) | same | attestor-3 key, role `fumpad_attestor_3`, … | **D** | no |
-| `watcher` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=watcher` | `RPC_URL`★, `PYTH_SOURCE=hermes`, `PYTH_API_KEY`★, `TELEGRAM_*` (guardian's chat), `PORT=8790`; no key, no DB | **E** (5th, ≠ every attestor's) | optional (`/v1/verification` public feed) |
+| `watcher` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=watcher` | `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider E's mainnet endpoint), `TELEGRAM_*` (guardian's chat), `PORT=8790`; no key, no DB | **E** (5th, ≠ every attestor's) | optional (`/v1/verification` public feed) |
 
 **Program id + cluster (every service except the grinder).** `FUMPAD_PROGRAM_ID` (base58) and `FUMPAD_CLUSTER`
 (`mainnet` | `devnet` | `localnet`) select the deployment; both **unset = the devnet deployment** (`5YMF…S9Fb`,
@@ -176,11 +176,32 @@ with `RPC_MIN_GAP_MS=250` (measured 2026-10-13: 150 ms still draws 429s, 250 ms 
 Put each extra URL in its own file (`~/fumpad-keys/devnet/rpc-b.env` with `RPC_URL=…`, mode 600). Which file feeds
 which keeper, the checks every provider must pass, and today's results: §8.
 
-**Pyth.** Hermes refuses unauthenticated requests since 2026-10. The engine now sends `Authorization: Bearer <key>`
-(verified 2026-10-13 with the key in `~/fumpad-keys/devnet/pyth.env` on the historical endpoint: Bearer → 200,
-`x-api-key` → 401, none → 401; fixed in `engine/src/pyth.ts`, default was `x-api-key`). Env `PYTH_API_KEY` (alias
-`HERMES_API_KEY`); attestors refuse to start in production with `PYTH_SOURCE=hermes` and no key. **All three attestors
-and the watcher must use the same price source** (or they disagree and never reach 2-of-3).
+**Pyth (SOL/USD for the $50 minimum) — `PYTH_SOURCE=onchain`, free.** Hermes needs a paid plan since 2026-10
+($500/mo Starter), so the default source (with `NODE_ENV=production`) is chain-native (`engine/src/pyth-onchain.ts`):
+the prices WRITTEN to Pyth's sponsored SOL/USD push account `7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE`
+(= PDA of the push oracle `pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT`, shard 0; owner = receiver
+`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ`), i.e. the receiver's `post_update` CPIs in successful finalized txs.
+For a sell at block time T: among writes landing in [T − 90 s, T + 30 s], the greatest `publish_time` ≤ T, null if
+older than `max_pyth_delta_secs` (60). A sell is priced once T + 30 s is ≥ 20 s behind the RPC's finalized head
+(~65 s after the sell; until then the coin is retried next tick, never "no price").
+- **Always mainnet.** The devnet copy of the account updates only every ~5 min (measured 2026-10-13), too stale for
+  60 s, so **devnet keepers read the mainnet feed**: `PYTH_RPC_URL` = the same provider's *mainnet* endpoint (Helius:
+  the devnet URL with host `devnet` → `mainnet`, same key; others: add `PYTH_RPC_URL=<mainnet url>` to that keeper's
+  `rpc-*.env`). The source checks the genesis hash at start and refuses a non-mainnet RPC. On mainnet `PYTH_RPC_URL`
+  can stay unset (defaults to `RPC_URL`). Public `https://api.mainnet-beta.solana.com` works for one keeper with
+  `PYTH_RPC_MIN_GAP_MS=1100` (its `getTransaction` limit is 10 per 10 s).
+- **Determinism**: verified 2026-10-13 on 120 sample times: Helius mainnet and the public RPC gave identical prices
+  and identical write sets; every on-chain write equals Hermes' update for the same publish_time (24/24). Fixture
+  + replay: `engine/test/pyth-onchain.test.ts`.
+- **Cadence risk**: the feed is written every ~53 s (heartbeat), so a price is typically 0–55 s old; in 24 h measured
+  there was one 17-min pusher gap (1.1% of the day) during which sells get no ticket (stale > 60 s), where Hermes
+  would still have had a price.
+- **Switching** (devnet ran Hermes): switch all four (attestor-1/2/3 + watcher) together. Tickets attested earlier
+  with Hermes prices can show as watcher mismatches (different `pyth_publish_time` / `usd_cents`) while their
+  challenge window is open; that's expected, don't void them for that.
+- `PYTH_SOURCE=hermes` stays available (paid key: `PYTH_API_KEY`, sent as `Authorization: Bearer`; production refuses
+  to start without it; rotation §9). **All three attestors and the watcher must use the same price source** (or they
+  disagree and never reach 2-of-3).
 
 ### Commands (in this order)
 
@@ -227,15 +248,19 @@ setsecret() { railway variables --service "$1" --skip-deploys --set-from-stdin "
    for i in 1 2 3; do
      railway add --service attestor-$i
      railway variables --service attestor-$i --skip-deploys \
-       --set "SERVICE_ENTRY=keeper/dist/main.js" --set "KEEPER_MODE=attestor" --set "PYTH_SOURCE=hermes" \
+       --set "SERVICE_ENTRY=keeper/dist/main.js" --set "KEEPER_MODE=attestor" --set "PYTH_SOURCE=onchain" \
        --set "ATTEST_BOARD_REQUIRE_RLS=1" --set "PORT=8080" --set "LOG_LEVEL=info"
      npx tsx $S key attestor-$i | setsecret attestor-$i KEEPER_SECRET_KEY
      npx tsx $S db-url attestor-$i | setsecret attestor-$i DATABASE_URL
-     envval ~/fumpad-keys/devnet/pyth.env PYTH_API_KEY | setsecret attestor-$i PYTH_API_KEY
    done
    envval ~/fumpad-keys/devnet/rpc.env   RPC_URL | setsecret attestor-1 RPC_URL
    envval ~/fumpad-keys/devnet/rpc-b.env RPC_URL | setsecret attestor-2 RPC_URL
    envval ~/fumpad-keys/devnet/rpc-c.env RPC_URL | setsecret attestor-3 RPC_URL
+   # SOL/USD is read on MAINNET (devnet's feed is ~5 min stale): Helius = same key, host devnet → mainnet;
+   # other providers: put PYTH_RPC_URL=<their mainnet url> in that rpc-*.env and pipe it the same way
+   envval ~/fumpad-keys/devnet/rpc.env   RPC_URL | sed 's#//devnet\.#//mainnet.#' | setsecret attestor-1 PYTH_RPC_URL
+   envval ~/fumpad-keys/devnet/rpc-b.env PYTH_RPC_URL | setsecret attestor-2 PYTH_RPC_URL
+   envval ~/fumpad-keys/devnet/rpc-c.env PYTH_RPC_URL | setsecret attestor-3 PYTH_RPC_URL
    # Telegram (same bot/chat as the keeper): envval <file> TELEGRAM_BOT_TOKEN | setsecret attestor-$i TELEGRAM_BOT_TOKEN
    for i in 1 2 3; do railway up --service attestor-$i --detach; done
    ```
@@ -244,9 +269,13 @@ setsecret() { railway variables --service "$1" --skip-deploys --set-from-stdin "
 7. **watcher**:
    ```sh
    railway add --service watcher
-   railway variables --service watcher --skip-deploys --set "SERVICE_ENTRY=keeper/dist/main.js" --set "KEEPER_MODE=watcher" --set "PYTH_SOURCE=hermes" --set "PORT=8790"
-   envval ~/fumpad-keys/devnet/pyth.env PYTH_API_KEY | setsecret watcher PYTH_API_KEY
-   envval ~/fumpad-keys/devnet/rpc-d.env RPC_URL     | setsecret watcher RPC_URL
+   railway variables --service watcher --skip-deploys --set "SERVICE_ENTRY=keeper/dist/main.js" --set "KEEPER_MODE=watcher" --set "PYTH_SOURCE=onchain" --set "PORT=8790"
+   envval ~/fumpad-keys/devnet/rpc-d.env RPC_URL      | setsecret watcher RPC_URL
+   envval ~/fumpad-keys/devnet/rpc-d.env PYTH_RPC_URL | setsecret watcher PYTH_RPC_URL   # its provider's mainnet url
+   # REQUIRED (governance timelocks are 1 h / 6 h, SPEC v0.7 clarification 29): the watcher alerts the guardian chat on
+   # every pending params / config / admin change — without these it only logs.
+   envval ~/fumpad-keys/devnet/telegram.env TELEGRAM_BOT_TOKEN | setsecret watcher TELEGRAM_BOT_TOKEN
+   envval ~/fumpad-keys/devnet/telegram.env TELEGRAM_CHAT_ID   | setsecret watcher TELEGRAM_CHAT_ID
    railway up --service watcher --detach
    railway domain --service watcher               # optional: public /v1/verification
    ```
@@ -421,8 +450,8 @@ Files: `~/fumpad-keys/<cluster>/telegram.env` (`TELEGRAM_BOT_TOKEN=…`) and `~/
    ```
 5. Logs: no `telegram alert failed`; the next alert arrives. (`TELEGRAM_CHAT_ID` doesn't change.)
 
-**Pyth / Hermes** (attestor-1/2/3 and the watcher; all four must use the same source). No downtime: new key first,
-old key revoked last.
+**Pyth / Hermes** — only if `PYTH_SOURCE=hermes` (paid plan; the default `onchain` source has no key). Attestor-1/2/3
+and the watcher; all four must use the same source. No downtime: new key first, old key revoked last.
 1. Issue a new API key where the current one was issued (Pyth/Hermes dashboard).
 2. `(umask 077; ${EDITOR:-nano} ~/fumpad-keys/devnet/pyth.env)` → replace `PYTH_API_KEY=`.
 3. Check (the historical endpoint the attestors use; `200` = key accepted, `401` = not):
@@ -442,41 +471,6 @@ old key revoked last.
 
 Mainnet: same commands with `~/fumpad-keys/mainnet/…` and the mainnet Railway project linked. `curl -K <(…)` keeps the
 secret out of the process list and the terminal.
-
-## 11. Fee policies + the first-coin config — upgrading the existing devnet deployment (2026-10-14)
-
-The new program reads Global as 1,491 bytes; the devnet Global is 1,044 until `migrate_global` grows it, so every
-instruction that loads Global fails in between — run step 2 right after step 1. Coins need nothing (their
-`fee_policy_kind` byte was reserved = 0 = standard; their accounts keep 546 bytes).
-
-```sh
-# 0. build — contracts/ (the .so the tests ran on; keypair: cp ~/fumpad-keys/devnet/fumpad-v07-program-keypair.json target/deploy/fumpad-keypair.json)
-cd ~/fumpad/contracts && anchor build -p fumpad          # target/deploy/fumpad.so ≈ 830,256 bytes (+ whatever the timelock branch adds)
-set -a; . ~/fumpad-keys/devnet/rpc.env; set +a
-solana program show 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb --url "$RPC_URL"     # "Data Length"
-# 1. extend if Data Length < the new .so size (bytes = difference + ~10,000 headroom), then upgrade
-solana program extend 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb <bytes> --url "$RPC_URL" --keypair ~/.config/solana/id.json
-solana program deploy target/deploy/fumpad.so --program-id target/deploy/fumpad-keypair.json \
-  --upgrade-authority ~/.config/solana/id.json --keypair ~/.config/solana/id.json --url "$RPC_URL" --with-compute-unit-price 10000
-# 2. right away: grow Global (migrate_global, admin = deployer) — services/
-cd ~/fumpad/services
-npx tsx scripts/devnet/bootstrap-v07.ts --step keys                    # creates dbc-config-first-coin.json + first-coin-wallet.json
-npx tsx scripts/devnet/bootstrap-v07.ts --step policies --simulate
-npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # migrate_global (1,044 → 1,491; ≈ 0.0023 SOL rent)
-# 3. the first-coin config: create it, queue its add with the wallet-split policy, fund the fee wallet's rent
-npx tsx scripts/devnet/bootstrap-v07.ts --step config --yes            # create_config (first coin: 99% → 3% / 25 slots, 3% DAMM v2)
-npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # queue_config(first-coin config, add, {1, 100, 140, max 1, first-coin-wallet})
-npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes              # first-coin-wallet → 0.01 SOL
-# 4. after the config timelock (CONFIG_TIMELOCK_SECS): execute the add, verify
-npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # execute_config
-npx tsx scripts/devnet/bootstrap-v07.ts --step verify                  # Global 1,491 B, standard + first-coin configs, policies
-# 5. services (this branch merged): indexer (migration 011 runs at start), api, keeper, attestors, watcher; app redeploy
-for s in indexer api keeper attestor-1 attestor-2 attestor-3 watcher; do railway up --service $s --detach; done
-#    to try the first-coin launch on devnet: api LAUNCH_FIRST_COIN=true, then fumpad.vercel.app/launch?config=first-coin;
-#    afterwards: bootstrap-v07.ts --step first-coin-done --yes (queue the removal), rerun after the timelock (execute)
-```
-Until step 4 the API offers no first-coin config (`/v1/launch/options` → `firstCoin: null`; prepare `first_coin` → 409)
-and standard launches work as before.
 
 ## 10. Operators split — upgrading the existing devnet deployment (2026-10-13 d)
 
@@ -511,3 +505,54 @@ attestor-1 SOL beyond its 0.25 target can be drained to the deployer. Then move 
 (separate projects / accounts / providers) one at a time: an attestor that is down only costs liveness while the other
 two sign.
 
+## 11. 2026-10-14 upgrade of the existing devnet deployment: timelocks 1 h / 6 h + fee policies / first-coin config + on-chain Pyth
+
+One program upgrade carries both contract changes: the timelock constants (SPEC v0.7 clarification 29:
+`PARAMS_TIMELOCK_SECS` = `CONFIG_TIMELOCK_SECS` = 1 h, `ADMIN_TIMELOCK_SECS` = 6 h, were 48 h; constants only) and
+the per-config fee policies (clarification 30, INTERFACE §5.9 / §8 2026-10-14 b: Global 1,044 → 1,491 bytes, grown by
+`migrate_global`). The new program reads Global as 1,491 bytes, so every instruction that loads Global fails from the
+upgrade until step 2 — run it right after. Coins need nothing (their `fee_policy_kind` byte was reserved = 0 =
+standard; their accounts keep 546 bytes). The operators step (§10) is unchanged and already done on devnet. Devnet
+runs the local `anchor build` (its deployed hash = the local macOS build, LAUNCH-DAY §10); only mainnet uses the
+docker build (`scripts/verify-build.sh`). A config change pending before the upgrade keeps its stored eta.
+
+```sh
+# 0. build — contracts/ (keypair: cp ~/fumpad-keys/devnet/fumpad-v07-program-keypair.json target/deploy/fumpad-keypair.json)
+cd ~/fumpad/contracts && anchor build -p fumpad
+ls -l target/deploy/fumpad.so                                # new size
+set -a; . ~/fumpad-keys/devnet/rpc.env; set +a
+solana program show 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb --url "$RPC_URL"   # "Data Length"
+# 1. extend iff Data Length < the new .so (bytes = difference + ~10,000 headroom), then ONE upgrade
+solana program extend 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb <bytes> --url "$RPC_URL" --keypair ~/.config/solana/id.json
+solana program deploy target/deploy/fumpad.so --program-id target/deploy/fumpad-keypair.json \
+  --upgrade-authority ~/.config/solana/id.json --keypair ~/.config/solana/id.json --url "$RPC_URL" --with-compute-unit-price 10000
+# 2. right away: grow Global (migrate_global, admin = deployer) — services/
+cd ~/fumpad/services
+npx tsx scripts/devnet/bootstrap-v07.ts --step keys                    # creates dbc-config-first-coin.json + first-coin-wallet.json
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --simulate
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # migrate_global (1,044 → 1,491; ≈ 0.0023 SOL rent)
+# 3. the first-coin config: create it, queue its add with the wallet-split policy (1 h timelock), fund the fee wallet
+npx tsx scripts/devnet/bootstrap-v07.ts --step config --yes            # create_config (first coin: 99% → 3% / 25 slots, 3% DAMM v2)
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # queue_config(first-coin config, add, {1, 100, 140, max 1, first-coin-wallet})
+npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes              # first-coin-wallet → 0.01 SOL (claims refuse to leave it below rent)
+# 4. services (this branch merged; indexer migration 011 runs at start). Attestors + watcher switch to the on-chain
+#    Pyth source TOGETHER (§4 "Pyth"): PYTH_SOURCE=onchain + PYTH_RPC_URL = each one's provider's MAINNET endpoint;
+#    the watcher alerts the guardian chat on pending governance changes (1 h / 6 h timelocks) — set its TELEGRAM_*.
+for s in attestor-1 attestor-2 attestor-3 watcher; do railway variables --service $s --skip-deploys --set "PYTH_SOURCE=onchain"; done
+envval ~/fumpad-keys/devnet/rpc.env   RPC_URL | sed 's#//devnet\.#//mainnet.#' | setsecret attestor-1 PYTH_RPC_URL
+envval ~/fumpad-keys/devnet/rpc-b.env PYTH_RPC_URL | setsecret attestor-2 PYTH_RPC_URL
+envval ~/fumpad-keys/devnet/rpc-c.env PYTH_RPC_URL | setsecret attestor-3 PYTH_RPC_URL
+envval ~/fumpad-keys/devnet/rpc-d.env PYTH_RPC_URL | setsecret watcher PYTH_RPC_URL
+envval ~/fumpad-keys/devnet/telegram.env TELEGRAM_BOT_TOKEN | setsecret watcher TELEGRAM_BOT_TOKEN
+envval ~/fumpad-keys/devnet/telegram.env TELEGRAM_CHAT_ID   | setsecret watcher TELEGRAM_CHAT_ID
+railway variables --service api --skip-deploys --set "LAUNCH_FIRST_COIN=false"
+for s in indexer api keeper attestor-1 attestor-2 attestor-3 watcher; do railway up --service $s --detach; done
+# 5. after the 1 h config timelock: execute the add, verify; redeploy the app (Vercel)
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # execute_config
+npx tsx scripts/devnet/bootstrap-v07.ts --step verify                  # bytecode = local .so, Global 1,491 B, standard + first-coin configs + policies
+```
+Until step 5 the API offers no first-coin config (`/v1/launch/options` → `firstCoin: null`; prepare `first_coin` → 409)
+and standard launches work as before. To try a first-coin launch on devnet: api `LAUNCH_FIRST_COIN=true`, then
+`fumpad.vercel.app/launch?config=first-coin`; afterwards `bootstrap-v07.ts --step first-coin-done --yes` (queues the
+removal), rerun after 1 h (executes), api `LAUNCH_FIRST_COIN=false`. Tickets attested earlier with Hermes prices may
+show as watcher mismatches (§4 "Pyth", Switching).

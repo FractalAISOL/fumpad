@@ -2,7 +2,8 @@
  * Watcher process (`--mode watcher`): independently re-derives every coin from its OWN RPC (ideally a 4th
  * provider), compares every on-chain TicketAttested / TicketDebited with the derivation (verify.ts), alerts
  * on any mismatch (Telegram, so the guardian can `void_ticket` inside the challenge window) and on derived
- * attestations that never landed, and serves a public verification feed:
+ * attestations that never landed, alerts on every pending governance change (params / DBC config queued, authority
+ * change proposed: governance.ts — the timelocks are 1 h / 6 h, SPEC v0.7 C-TL), and serves a public verification feed:
  *   GET /v1/verification            → every coin's verdicts (mismatches first)
  *   GET /v1/verification?mint=<m>   → one coin
  *   GET /v1/verification/ticket/<t> → one ticket's verdict
@@ -14,6 +15,7 @@ import { createServer } from "node:http";
 import { Connection, PublicKey } from "@solana/web3.js";
 import pino from "pino";
 
+import { PriceNotReady } from "@fumpad/engine";
 import { MeteoraRpc } from "@fumpad/meteora";
 import type { CoinAccount, GlobalAccount } from "@fumpad/sdk";
 
@@ -21,7 +23,8 @@ import { Alerter } from "../alerts.js";
 import { RpcChainView } from "../attest/chain.js";
 import { deriveCoin, type Derivation } from "../attest/derive.js";
 import { guardHistory } from "../attest/history-check.js";
-import { deriveLimitsFromEnv, pythSourceFromEnv, type Running } from "../attest/run.js";
+import { checkPythSource, deriveLimitsFromEnv, pythSourceFromEnv, type Running } from "../attest/run.js";
+import { governanceAlerts } from "./governance.js";
 import { type CoinVerification, verifyCoin } from "./verify.js";
 
 export interface WatcherDeps {
@@ -35,7 +38,7 @@ export interface WatcherDeps {
 
 export class Watcher {
   results = new Map<string, CoinVerification & { checkedAt: number; error?: string }>();
-  stats = { ticks: 0, coins: 0, matches: 0, mismatches: 0, missing: 0, issues: 0, errors: 0, lastTickAt: 0 };
+  stats = { ticks: 0, coins: 0, matches: 0, mismatches: 0, missing: 0, issues: 0, errors: 0, governancePending: 0, lastTickAt: 0 };
   constructor(private d: WatcherDeps) {}
 
   private now() {
@@ -45,6 +48,10 @@ export class Watcher {
   async tick(): Promise<void> {
     this.stats.ticks++;
     const g = await this.d.global();
+    // C-TL: pending governance changes first (the guardian has 1 h / 6 h to cancel).
+    const gov = governanceAlerts(g, this.now());
+    this.stats.governancePending = gov.length;
+    for (const a of gov) await this.d.alerts?.alert(a.key, a.text);
     const coins = await this.d.coins();
     this.stats.coins = coins.length;
     let matches = 0;
@@ -96,6 +103,8 @@ export class Watcher {
               .slice(0, 600)}`,
           );
       } catch (e) {
+        // a recent sell's SOL/USD window isn't finalized yet (PYTH_SOURCE=onchain): keep the last result, retry next tick
+        if (e instanceof PriceNotReady) continue;
         this.stats.errors++;
         this.results.set(mint, { mint, verdicts: [], missing: [], checkedAt: this.now(), error: String(e).slice(0, 300) });
         await this.d.alerts?.alert(`watch:${mint}`, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)}`);
@@ -125,6 +134,7 @@ export async function runWatcher(env = process.env): Promise<Running> {
   const rpc = new MeteoraRpc(url, { minGapMs: Number(env.RPC_MIN_GAP_MS ?? 0) });
   const chain = new RpcChainView(conn, "finalized");
   const pyth = pythSourceFromEnv(env);
+  await checkPythSource(pyth);
   const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
   // L7: re-alert an unresolved item every 30 min (the challenge window is 6 h: one alert per window was too few)
   const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: "[fumpad-watcher]", cooldownMs: Number(env.WATCH_ALERT_COOLDOWN_MS ?? 30 * 60_000) });

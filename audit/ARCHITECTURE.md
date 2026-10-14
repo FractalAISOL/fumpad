@@ -13,11 +13,11 @@ per-mint `Coin` account and everything FUMPAD holds for that mint.
 | 3 | **Token-2022 coin mint** | created by DBC `initialize_virtual_pool_with_token2022`; vanity `…fmbL` key from the API | no mint / freeze / metadata authority (config enforces `Immutable`) |
 | 4 | **Attestors ×3** (`KEEPER_MODE=attestor`) | `services/keeper/src/attest` | each holds one key in `Global.keepers` (attestation only); any 2 together can create tickets; each on its own cloud project / account / RPC provider (DEPLOY-v07 §1) |
 | 5 | **Jobs keeper** (`KEEPER_MODE=jobs`) | `services/keeper/src/keeper.ts` | holds an **operator** key (`Global.operators`), never an attestor key — disjoint on chain (`KeeperOperatorOverlap`) and refused by the service (`keeper/src/role.ts`) |
-| 6 | **Watcher** (`KEEPER_MODE=watcher`) | `services/keeper/src/watch` | no key; own RPC; alerts the guardian chat on any mismatch |
+| 6 | **Watcher** (`KEEPER_MODE=watcher`) | `services/keeper/src/watch` | no key; own RPC; alerts the guardian chat on any mismatch and on every pending governance change (params / config queued, authority change proposed) |
 | 7 | **Signature board** | Postgres tables `attest_signatures`, `attest_hints`, per-attestor DB roles + RLS | untrusted transport: signatures are verified, hints only delay (≤ 90 s) |
 | 8 | **Indexer + API** | `services/indexer`, `services/api` | untrusted for chain truth; the API holds the **launch co-signer key** and decrypts vanity-mint secrets |
 | 9 | **App** (Next.js) + **Privy embedded "Trading wallet"** | `app/` | the embedded wallet signs silently only allow-listed transactions (`app/src/chain/allowlist.ts`) |
-| 10 | **Squads v4 multisigs** | admin 3-of-5 + 48 h time lock (also upgrade authority); guardian 2-of-3, no time lock | governance |
+| 10 | **Squads v4 multisigs** | admin 3-of-5 + 6 h time lock (also upgrade authority); guardian 2-of-3, no time lock | governance |
 | 11 | **Pyth Hermes** (historical SOL/USD) | off-chain input to the engine | trusted for the $50 threshold only |
 | 12 | **RPC providers** | one per attestor + one for the watcher | each trusted only by the process that uses it |
 
@@ -41,7 +41,7 @@ per-mint `Coin` account and everything FUMPAD holds for that mint.
                       └──────┼───────────────┼───────────────────┼───────────────────┼──────────────────────────────┘
        ══ B1 ═══════════════ │ ═════════════ │ ════════ B2 ══════ │ ═══════════════════│═══════════════════════════════
              Squads admin    │   Squads      │                    │                    │
-             3-of-5 + 48 h ──┘   guardian ───┘          attestor-1 ── attestor-2 ── attestor-3      jobs keeper
+             3-of-5 + 6 h ───┘   guardian ───┘          attestor-1 ── attestor-2 ── attestor-3      jobs keeper
                                  2-of-3                   │ own RPC B   │ own RPC C   │ own RPC D   (operator key, RPC A)
                                                           (own project / account each)            (never an attestor key)
                                    ▲                      │             │             │
@@ -54,9 +54,10 @@ per-mint `Coin` account and everything FUMPAD holds for that mint.
          app + Privy embedded wallet: silent signing only for allow-listed transactions
 ```
 
-- **B1 (governance):** changes to params, the DBC-config allow-list and admin / treasury / guardian wait 48 h on
-  chain (plus the admin multisig's 48 h Squads time lock = ≥ 96 h end to end on mainnet). The guardian can cancel
-  them, pause, and void tickets.
+- **B1 (governance):** changes to params and the DBC-config allow-list wait 1 h on chain, admin / treasury /
+  guardian changes 6 h (SPEC v0.7 clarification 29; were 48 h), plus the admin multisig's 6 h Squads time lock on
+  mainnet (≥ 7 h / ≥ 12 h end to end). The guardian can cancel them, pause, and void tickets; the watcher alerts it
+  (Telegram) while any change is pending.
 - **B2 (attestation):** the program cannot see trades. It trusts any message signed by 2 distinct active keeper
   keys. Bounds: challenge window, guardian void, per-coin rate cap (defers), `PAUSE_ATTEST`, replay markers, record
   binding to program id / cluster / mint / pool / creator, max age. The watcher is the detection mechanism.
@@ -218,18 +219,18 @@ attest_sell ─► Open ──claim / claim_for (paid now)───────�
 
 | Action | Who | Delay | Notes |
 |---|---|---|---|
-| `initialize_global` | program upgrade authority (checked via ProgramData) | — | sets admin = guardian, treasury, `cluster_tag` (any u8, immutable), params (validated), bootstrap keepers (no 6 h freeze), operators (disjoint from the keepers), bootstrap DBC configs (validated, no 48 h) |
-| `queue_params` → `execute_params` | admin → anyone | 48 h | `Params::is_valid` bounds every field (SPEC §6.2 + v0.7 attestation params); reward terms and fee split are snapshotted per coin at `register_coin`; oracle / buyback / attestation params (`ticket_challenge_secs`, `max_attest_age_secs`, rate cap, `launch_signer`) are global |
+| `initialize_global` | program upgrade authority (checked via ProgramData) | — | sets admin = guardian, treasury, `cluster_tag` (any u8, immutable), params (validated), bootstrap keepers (no 6 h freeze), operators (disjoint from the keepers), bootstrap DBC configs (validated, no config timelock) |
+| `queue_params` → `execute_params` | admin → anyone | 1 h | `Params::is_valid` bounds every field (SPEC §6.2 + v0.7 attestation params); reward terms and fee split are snapshotted per coin at `register_coin`; oracle / buyback / attestation params (`ticket_challenge_secs`, `max_attest_age_secs`, rate cap, `launch_signer`) are global |
 | `cancel_params` | admin or guardian | immediate | |
-| `queue_config` → `execute_config` (add / remove a DBC config) | admin → anyone | 48 h | add re-validated at queue and execute; removal doesn't affect registered coins |
+| `queue_config` → `execute_config` (add / remove a DBC config) | admin → anyone | 1 h | add re-validated at queue and execute; removal doesn't affect registered coins |
 | `cancel_config` | admin or guardian | immediate | |
-| `propose_admin(admin, treasury, guardian)` → `accept_admin` | admin → the new admin key signs | 48 h | `cancel_admin` by admin or guardian |
+| `propose_admin(admin, treasury, guardian)` → `accept_admin` | admin → the new admin key signs | 6 h | `cancel_admin` by admin or guardian |
 | `set_keepers` | admin | immediate | new keys can't count toward attestations for 6 h; remaining keys keep their timestamp; a current operator key is refused |
 | `set_operators` | admin | immediate | ≤ 2 jobs keys; an attestor key is refused (`KeeperOperatorOverlap`); no freeze (operators can't create tickets) |
 | `set_pause(bits)` | admin or guardian | immediate | non-zero lapses after 7 d unless renewed; 0 unpauses |
 | `void_ticket(reason, reopen)` | guardian or admin | only inside the ticket's challenge window, `Open` tickets | `reopen = true` lets one corrected attestation of the same trade follow |
 | `migrate_global` | admin | — | on a Global from before `operators` existed (all-zero slots): `operators[0] = keepers[0]` (keeps the old jobs key working across the upgrade; `set_operators` then moves it — the devnet bootstrap does both in one tx); otherwise a no-op |
-| program upgrade | upgrade authority (admin Squads vault, 48 h Squads time lock) | 48 h (Squads) | can replace everything; the on-chain timelocks are meaningful only with the Squads time lock |
+| program upgrade | upgrade authority (admin Squads vault, 6 h Squads time lock) | 6 h (Squads) | can replace everything; the on-chain timelocks are meaningful only with the Squads time lock |
 
 Pause flags (`Global.paused`, in force only while `now < pause_expires_at`):
 
@@ -242,7 +243,7 @@ Pause flags (`Global.paused`, in force only while `now < pause_expires_at`):
 | 16 | `PAUSE_ATTEST` | `attest_sell`, `attest_rebuy` | |
 
 Planned mainnet roles (`services/MULTISIG.md`): admin = Squads vault, 3-of-5 Ledger voters + an ops key that can
-only initiate / execute, 48 h Squads time lock, `configAuthority = null`; guardian = Squads vault, 2-of-3, no time
+only initiate / execute, 6 h Squads time lock, `configAuthority = null`; guardian = Squads vault, 2-of-3, no time
 lock; upgrade authority = admin vault (transferred only after `accept_admin` executed through the vault); treasury
 = a Squads vault or hardware wallet.
 

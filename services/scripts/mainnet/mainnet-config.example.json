@@ -4,7 +4,7 @@
     "kind": "squads",
     "multisig": "<ADMIN_MULTISIG_PDA from: multisig.ts status>",
     "address": "<ADMIN_VAULT = vault[0] of that multisig>",
-    "label": "admin 3-of-5, 48 h time lock"
+    "label": "admin 3-of-5, 6 h time lock"
   },
   "guardian": {
     "kind": "squads",

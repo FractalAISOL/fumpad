@@ -1,4 +1,4 @@
-//! SPEC v0.7 §2/§7: the allow-list of FUMPAD DBC configs, changed only through the config timelock. Each slot
+//! SPEC v0.7 §2/§7: the allow-list of FUMPAD DBC configs, changed only through the 1 h config timelock (`CONFIG_TIMELOCK_SECS`). Each slot
 //! carries a fee policy (INTERFACE §5.9) that `register_coin` snapshots into the coin.
 
 use anchor_lang::prelude::*;

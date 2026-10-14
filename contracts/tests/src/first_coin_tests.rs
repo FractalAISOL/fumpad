@@ -1,5 +1,5 @@
 //! First-coin "launch config" + per-config fee policies (user decision 2026-10-14; INTERFACE §5.9, SPEC
-//! Clarification 29). Both configs side by side on the mainnet DBC 0.2.1 / DAMM v2 0.2.4 binaries:
+//! Clarification 30). Both configs side by side on the mainnet DBC 0.2.1 / DAMM v2 0.2.4 binaries:
 //! * standard config: 99% → 1.25% over 8 slots, 1.25% curve + DAMM fee, our 1% split 50/30/20, launch window → buyback;
 //! * first-coin config: 99% → 3% over 25 slots (≈ 10 s), 3% curve + DAMM fee, our 2.4% split 1.0 buyback / 1.4 wallet
 //!   (no platform, no creator), launch window → 100% wallet; `max_coins = 1`.

@@ -207,7 +207,7 @@ is schema-validated (400, L-3).
 Jobs: sampling (heartbeat every graduated coin, full rate near triggers / pending buybacks, batches ≤5 legacy,
 6–10 v0 + lookup table it manages, coins past half their interval ride along), graduate + post-graduation setup (init_observations, then 9× init_claim_queue in one tx: 1024-entry queue, 81,976 bytes, ~69k CU), auto-claim (D17),
 execute_buyback (median/±3% pre-checked), process_queue, skim+settle
-(NothingToSkim = skip), withdraw_platform_fees, execute_params after the 48 h timelock. Dynamic priority fee
+(NothingToSkim = skip), withdraw_platform_fees, execute_params / execute_config after the 1 h timelock. Dynamic priority fee
 (percentile of recent fees on written accounts, clamped to `PRIORITY_MAX_MICROLAMPORTS` and to
 `PRIORITY_MAX_LAMPORTS_PER_TX` per transaction), retries on expiry, in-flight guards, `DRY_RUN=true`
 (simulate only), `/health` (slim: ok, version, loop age, failing job names, over-budget flag), Telegram alerts
@@ -246,12 +246,15 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
   account. Issues are alerted (attestor and watcher); see the runbook below.
 - **Liveness** (V7-M6): incremental crawl (per-address cursors, closed token accounts never re-asked), per-coin RPC
   budget per tick (resumes next tick), `ATTEST_COIN_CONCURRENCY` coins in parallel, coins with recent sells first,
-  `ATTEST_TICK_BUDGET_MS` per tick, bounded caches. Hermes 404s for recent seconds are re-asked (V7-M5).
+  `ATTEST_TICK_BUDGET_MS` per tick, bounded caches. Hermes 404s for recent seconds are re-asked (V7-M5); with
+  `PYTH_SOURCE=onchain` a sell younger than ~65 s waits (PriceNotReady) until its price window is finalized.
 - **History (L8)**: coins launched before the RPC's `getFirstAvailableBlock` are refused (use an archive RPC);
   `RPC_HISTORY_CHECK=off` disables it.
 - **Watcher alerts** (L7): attestation mismatches (until the guardian voids), sells with a derived ticket that never
-  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues; re-alerted every
-  `WATCH_ALERT_COOLDOWN_MS` (30 min).
+  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues, and **every pending governance
+  change** (`gov:params:*` / `gov:config:*` / `gov:admin:*`: params diff, config add/remove, new admin / treasury /
+  guardian, eta — `keeper/src/watch/governance.ts`; the timelocks are 1 h / 6 h, SPEC v0.7 clarification 29, so the
+  guardian must cancel fast); re-alerted every `WATCH_ALERT_COOLDOWN_MS` (30 min) until resolved.
 
 ### Keeper board (per-keeper roles — the documented default, V7-M1)
 The three attestors share one Postgres for the signature board. Give each its own role so one compromised keeper
@@ -310,7 +313,9 @@ local validator.
 | `BUYBACK_JITTER` (1), `PREGRAD_TWAP_SAMPLES` (8), `PREGRAD_TWAP_SPACING_SECS` (15) | keeper | L5 pre-grad buyback guard |
 | `ATTEST_COIN_CONCURRENCY` (4), `ATTEST_TICK_BUDGET_MS` (60000), `ATTEST_COIN_RPC_BUDGET` (5000), `ATTEST_TX_CACHE` (200k), `ATTEST_BLOCK_CACHE` (50k), `ATTEST_PRICE_CACHE` (100k) | attestor, watcher | V7-M6 liveness |
 | `ATTEST_BOARD_REQUIRE_RLS` | attestor | `1` = refuse to start without per-keeper roles (mainnet) |
-| `PYTH_SOURCE` (`hermes` in production), `PYTH_API_KEY` (alias `HERMES_API_KEY`), `HERMES_URL`, `HERMES_API_KEY_HEADER` | attestor, watcher | **sealed** key, sent as `Authorization: Bearer` (Hermes answers 401 without it since 2026-10; verified). Production attestors refuse to start without it. Same source on every attestor + the watcher |
+| `PYTH_SOURCE` (`onchain` in production; `hermes`; `constant` local only) | attestor, watcher | SOL/USD source for the $50 minimum. **Same source on every attestor + the watcher** |
+| `PYTH_RPC_URL` (default `RPC_URL`), `PYTH_RPC_MIN_GAP_MS`, `PYTH_ONCHAIN_INDEX_LAG_SECS` (20), `PYTH_ONCHAIN_HEAD_TTL_MS` (15000), `PYTH_ONCHAIN_MAX_CANDIDATES` (100k) | attestor, watcher | `onchain` (free, engine/src/pyth-onchain.ts): writes to Pyth's SOL/USD push account `7UVim…pjLiE`, read on **Solana mainnet** on every cluster (refuses another genesis), so devnet keepers set `PYTH_RPC_URL` to a mainnet endpoint. Selection window (lookback 30 s, grace 30 s) is fixed in code: consensus |
+| `PYTH_API_KEY` (alias `HERMES_API_KEY`), `HERMES_URL`, `HERMES_API_KEY_HEADER` | attestor, watcher | `hermes` only (paid plan since 2026-10): **sealed** key, sent as `Authorization: Bearer`; production refuses to start without it |
 | `RPC_HISTORY_CHECK` (on) | attestor, watcher | `off` disables the L8 first-available-block check |
 | `WATCH_ALERT_COOLDOWN_MS` (30 min) | watcher | re-alert interval per item |
 | `LAUNCH_SIGNER_KEY` | api | **sealed**; 64-byte secret (base58 or JSON array) whose pubkey is `Params.launch_signer`; co-signs `register_coin` (L1). Separate from `MINT_POOL_KEY` |

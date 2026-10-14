@@ -6,7 +6,7 @@
  *      fees, and which feature gates are NOT active on mainnet → a local solana-test-validator with exactly those
  *      programs/accounts and mainnet's feature set (the Pyth account's publish time is moved to the far future so
  *      the frozen price stays fresh). fumpad is NOT in the genesis: it is deployed by the bootstrap.
- *   1. stand-in governance: admin (3-of-5 + ops key, 48 h time lock) and guardian (2-of-3 + ops key) Squads multisigs
+ *   1. stand-in governance: admin (3-of-5 + ops key, 6 h time lock) and guardian (2-of-3 + ops key) Squads multisigs
  *      with generated voter keys, created through scripts/ops/multisig.ts on the forked Squads program
  *   2. bootstrap-mainnet (library, cluster local-fork, cluster_tag 0, mainnet params): plan → program deploy (solana
  *      CLI) → simulate config/init/fund (nothing lands) → send config, init, fund → propose-admin through the CLI
@@ -16,10 +16,10 @@
  *      watcher) with the bootstrap's keys, on mainnet params: API launch (…fmbL mint, launch co-signer) → buys →
  *      600 s hold → sells ≥ $50 → tickets attested 2-of-3 → a 90 SOL PartialFill buy completes the 85 SOL curve →
  *      keeper migrates + graduates (observations + claim queue) → watcher re-derives every attestation.
- *      (Smoke runs inside the 48 h window: after the clock warp the chain is ~2 days ahead of the services' wall
+ *      (Smoke runs inside the 6 h window: after the clock warp the chain is ~6 h ahead of the services' wall
  *      clock, which mainnet never is.)
  *   4. handover: accept_admin vault tx (bootstrap, ops key) → 3 approvals → upgrade-authority refused (handover not
- *      done) → warp past 48 h → accept-admin executes → upgrade-authority → verify (handover complete) → old admin
+ *      done) → warp past 6 h → accept-admin executes → upgrade-authority → verify (handover complete) → old admin
  *      refused, guardian multisig pause drill, a post-handover trade.
  *   Results: services/.local/mainnet-rehearsal/report.json; on success the dumped manifest is written to
  *   scripts/mainnet/tested-programs.json (what LAUNCH-DAY.md compares mainnet against).
@@ -206,7 +206,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     check("CLI local-fork --send with a wrong typed phrase → nothing sent", !r5.ok && r5.out.includes("not confirmed") && (await readGlobal(conn)).pendingAdminEta === 0n);
     const r6 = cli(["--cluster", "local-fork", "--step", "propose-admin", "--send", "--rpc-env", rpcEnv], `${phrase}\n`);
     const g1 = await readGlobal(conn);
-    check("CLI local-fork propose-admin with the typed phrase → propose_admin(admin vault, treasury, guardian vault), eta = now + 48 h", r6.ok && g1.pendingAdmin.equals(adminVault) && g1.pendingGuardian.equals(guardianVault) && g1.pendingTreasury.equals(treasury) && Math.abs(Number(g1.pendingAdminEta) - ((await chainTime(conn)) + ADMIN_TIMELOCK_SECS)) < 300);
+    check("CLI local-fork propose-admin with the typed phrase → propose_admin(admin vault, treasury, guardian vault), eta = now + 6 h", r6.ok && g1.pendingAdmin.equals(adminVault) && g1.pendingGuardian.equals(guardianVault) && g1.pendingTreasury.equals(treasury) && Math.abs(Number(g1.pendingAdminEta) - ((await chainTime(conn)) + ADMIN_TIMELOCK_SECS)) < 300);
     check("CLI output never contains the RPC URL", ![r1, r2, r3, r4, r5, r6].some((r) => r.out.includes(v!.rpcUrl)));
     const ver = await boot("plan", ["verify"]);
     check("verify (day 0): program, config §5.4 + vector bytes, Global (cluster_tag 0, mainnet params, keepers, configs), handover pending, keepers funded", ver.ok, ver.next.join(" · "));
@@ -320,25 +320,25 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     stack = undefined;
 
     // ── 4. handover ───────────────────────────────────────────────────────────
-    console.log("\n══ 4. governance handover (accept_admin via the admin multisig, 48 h, upgrade authority) ══");
+    console.log("\n══ 4. governance handover (accept_admin via the admin multisig, 6 h, upgrade authority) ══");
     const h1 = await boot("send", ["accept-admin"]);
     const st0 = await proposalState(conn, a.multisig, 1n);
     check("bootstrap accept-admin: ops key created the accept_admin vault tx (no approval), voters are next", h1.ok && st0.status === "Active" && st0.approvals.length === 0 && h1.next.some((n) => n.includes("approve")));
     for (const m of voters.slice(0, 3)) await approveVaultTx(conn, a.multisig, 1n, m, "send", log);
     const st1 = await proposalState(conn, a.multisig, 1n);
-    check("3 voter approvals → Approved; Squads 48 h time lock running", st1.status === "Approved" && (st1.executableAt ?? 0) > (await chainTime(conn)) + ADMIN_TIMELOCK_SECS - 600);
+    check("3 voter approvals → Approved; Squads 6 h time lock running", st1.status === "Approved" && (st1.executableAt ?? 0) > (await chainTime(conn)) + ADMIN_TIMELOCK_SECS - 600);
     const h2 = await boot("send", ["accept-admin"]);
-    check("accept-admin before 48 h: nothing executed, reports when it can", h2.ok && (await readGlobal(conn)).admin.equals(deployer.publicKey) && h2.next.some((n) => n.startsWith("execute")));
+    check("accept-admin before 6 h: nothing executed, reports when it can", h2.ok && (await readGlobal(conn)).admin.equals(deployer.publicKey) && h2.next.some((n) => n.startsWith("execute")));
     const ua0 = await boot("send", ["upgrade-authority"]);
     check("upgrade-authority before the handover → refused, authority still the deployer", !ua0.ok && !!(await upgradeAuthority(conn)).authority?.equals(deployer.publicKey));
     const target = Math.max(Number(g1.pendingAdminEta), st1.executableAt ?? 0) + 120;
     for (let i = 0; i < 4 && (await chainTime(conn)) < target; i++) {
       const slot = await conn.getSlot();
       const tgt = slot + Math.ceil((target - (await chainTime(conn)) + 900) / 0.3);
-      log(`… warping slot ${slot} → ${tgt} (48 h FUMPAD eta + Squads time lock)`);
+      log(`… warping slot ${slot} → ${tgt} (6 h FUMPAD eta + 6 h Squads time lock)`);
       await v.warp(tgt);
     }
-    check("chain clock past the 48 h eta and the Squads time lock", (await chainTime(conn)) >= target);
+    check("chain clock past the 6 h eta and the Squads time lock", (await chainTime(conn)) >= target);
     const h3 = await boot("send", ["accept-admin"]);
     const g2 = await readGlobal(conn);
     check("accept-admin executed through the admin multisig: admin = admin vault, guardian = guardian vault, treasury set", h3.ok && g2.admin.equals(adminVault) && g2.guardian.equals(guardianVault) && g2.platformTreasury.equals(treasury) && g2.pendingAdminEta === 0n);

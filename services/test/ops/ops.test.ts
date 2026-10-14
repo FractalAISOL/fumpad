@@ -76,14 +76,14 @@ const pk = () => Keypair.generate().publicKey.toBase58();
 const cfg = (over: Partial<MultisigConfig> = {}): MultisigConfig => ({
   label: "admin",
   threshold: 3,
-  timeLockSecs: 172_800,
+  timeLockSecs: 21_600,
   members: [1, 2, 3, 4, 5].map(() => ({ pubkey: pk(), permissions: "all" as const })),
   createKeyPath: "admin-create-key.json",
   ...over,
 });
 
 describe("multisig config", () => {
-  it("accepts the recommended admin 3-of-5 / 48 h and guardian 2-of-3 / 0", () => {
+  it("accepts the recommended admin 3-of-5 / 6 h and guardian 2-of-3 / 0", () => {
     expect(checkMultisigConfig(cfg())).toEqual({ problems: [], warnings: [] });
     expect(checkMultisigConfig(cfg({ label: "guardian", threshold: 2, timeLockSecs: 0, members: [1, 2, 3].map(() => ({ pubkey: pk(), permissions: "all" as const })) }))).toEqual({ problems: [], warnings: [] });
   });
@@ -94,7 +94,7 @@ describe("multisig config", () => {
     expect(checkMultisigConfig(cfg({ members: [{ pubkey: "nope", permissions: "all" }] })).problems.join()).toMatch(/not a public key/);
     expect(checkMultisigConfig(cfg({ members: m.map((x) => ({ ...x, permissions: ["vote" as const] })) })).problems.join()).toMatch(/initiate.*execute|no member can initiate/);
     expect(checkMultisigConfig(cfg({ timeLockSecs: 100 * 86_400 })).problems.join()).toMatch(/timeLockSecs/);
-    expect(checkMultisigConfig(cfg({ timeLockSecs: 3600 })).warnings.join()).toMatch(/< 48h/);
+    expect(checkMultisigConfig(cfg({ timeLockSecs: 3600 })).warnings.join()).toMatch(/< 6h/);
     expect(checkMultisigConfig(cfg({ threshold: 5 })).warnings.join()).toMatch(/no spare voter/);
     expect(checkMultisigConfig(cfg({ label: "guardian", threshold: 2, timeLockSecs: 60, members: m.slice(0, 3) })).warnings.join()).toMatch(/delays emergency pauses/);
     // an ops key (initiate + execute, no vote) doesn't count toward the threshold

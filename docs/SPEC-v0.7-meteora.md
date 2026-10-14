@@ -87,7 +87,7 @@ Inputs: finalized txs only; `@fumpad/meteora` records (§ATTESTATION.md rules: e
 Keeper `record_samples` now read the DAMM v2 pool (`sqrt_price` at data offset 456, price = (sqrt/2⁶⁴)² × 10⁻³ SOL/token for 6-dec base / 9-dec WSOL; reserves `token_a_amount`/`token_b_amount` for depth). Median, coverage (84 samples, 5/6 buckets), fallback, heartbeat: unchanged. Pre-graduation samples (DBC `sqrt_price` at offset 280) are recorded for the pre-graduation buyback guard only; they never count for claims (D1).
 
 ## 7. Admin & safety (changes to v0.6 §6)
-Keep: params timelock (D15), bounds (D23, minus curve params — the curve now lives in the DBC config), guardian + two-step admin (D24), pause expiry (D25), Pyth 150 s (D26). New params: `max_attest_age_secs`, `max_attest_tokens_per_hour_bps`, `ticket_challenge_secs`, `attest_threshold` (fixed 2-of-3 in v1). Config allow-list changes timelocked 48 h. Pause flags: `PAUSE_LAUNCH`, `PAUSE_TRADE` (router buys, buyback), `PAUSE_CLAIMS`, `PAUSE_GRADUATE`, **`PAUSE_ATTEST`**. Keeper keys: 3, separate machines + RPC providers; `set_keepers` immediate (event) — a keeper-set change also starts a 6 h attest freeze for the new keys.
+Keep: params timelock (D15), bounds (D23, minus curve params — the curve now lives in the DBC config), guardian + two-step admin (D24), pause expiry (D25), Pyth 150 s (D26). New params: `max_attest_age_secs`, `max_attest_tokens_per_hour_bps`, `ticket_challenge_secs`, `attest_threshold` (fixed 2-of-3 in v1). Config allow-list changes timelocked (48 h; **1 h since clarification 29**, params 1 h, admin/treasury/guardian 6 h). Pause flags: `PAUSE_LAUNCH`, `PAUSE_TRADE` (router buys, buyback), `PAUSE_CLAIMS`, `PAUSE_GRADUATE`, **`PAUSE_ATTEST`**. Keeper keys: 3, separate machines + RPC providers; `set_keepers` immediate (event) — a keeper-set change also starts a 6 h attest freeze for the new keys.
 
 ## 8. Off-chain
 - **Indexer:** `@fumpad/meteora` source on (all venues, our pools) + FUMPAD events; fix v1 transactions everywhere (`maxSupportedTransactionVersion: 1`).
@@ -143,7 +143,7 @@ decision; each pins down something the spec left open or that the mainnet binari
    plus a 5-sample ring for the pre-grad buyback guard, see 24; no observations account before graduation). Pre-graduation buybacks additionally require the launch window to be over.
 11. **Router.** Buys: ExactIn or PartialFill; sells: ExactIn. Referral must be None (exact fee measurement).
    `RoutedTrade.quote_gross` = WSOL spent incl. fee (buy) / WSOL received + fee (sell).
-12. **Config allow-list**: 8 slots; add and remove are both 48h-timelocked; every add (and every `register_coin`)
+12. **Config allow-list**: 8 slots; add and remove are both timelocked (1 h, clarification 29; was 48 h); every add (and every `register_coin`)
    re-checks the config's structural FUMPAD fields.
 13. **Keeper freeze**: per key; keys that stay in the set keep their original timestamp.
 14. **Rent figures** in `contracts/CONTRACTS.md` are measured with LiteSVM 0.18's mainnet feature set (claim queue
@@ -169,7 +169,7 @@ decision; each pins down something the spec left open or that the mainnet binari
    transient `fee_wsol` isn't partner surplus: excluded from the setup budget, returned to the caller.
 19. **Launch binding (§2; off-chain review L1).** `Params.launch_signer` (default unset): when set, `register_coin`
    must be co-signed by that key — the API signs the launch tx it builds, as it co-signs the vanity mint — so only
-   API-built launches register. Changed through the params timelock (48 h). Verified on the mainnet DBC 0.2.1
+   API-built launches register. Changed through the params timelock (1 h, clarification 29; was 48 h). Verified on the mainnet DBC 0.2.1
    binary: `enable_first_swap_with_min_fee` gives the min fee to one swap of the pool-creation tx only (extra
    top-level swaps pay 99%), so `register_coin` doesn't introspect the tx.
 20. **Clusters.** Devnet and mainnet use different fumpad program ids (`5YMF…` is devnet's); attestation messages
@@ -190,10 +190,10 @@ decision; each pins down something the spec left open or that the mainnet binari
    are accounted, and token-account owner changes move the balance between wallets like a transfer.
 23. **Bootstrap without timelocks (deploy).** `initialize_global` sets the INITIAL keeper set and the INITIAL DBC config
    allow-list (≤ 8, each validated exactly like `execute_config` add): the initial keepers attest immediately
-   (`keeper_added_at = 0`, no 6 h freeze) and the initial configs register coins immediately (no 48 h timelock).
+   (`keeper_added_at = 0`, no 6 h freeze) and the initial configs register coins immediately (no config timelock).
    Only the program's upgrade authority can initialize, and it could replace the program anyway; the timelocks and
    freezes protect an already-running system, so every later `set_keepers` (6 h freeze for new keys) and config
-   change (48 h) keeps them. (Superseded by 25: the jobs keeper no longer shares a key with an
+   change (1 h since clarification 29) keeps them. (Superseded by 25: the jobs keeper no longer shares a key with an
    attestor; `initialize_global` also bootstraps the operators.)
 24. **Pre-graduation buyback guard = median of keeper samples (security-review L5).** The Coin keeps its last 5
    keeper pre-graduation samples (`pregrad_ring`, carved out of reserved bytes — Coin size unchanged). A pre-grad
@@ -232,8 +232,24 @@ decision; each pins down something the spec left open or that the mainnet binari
    (permissionless) pays coin-mint rewards into the coin's reward vault (they add to the reward pool) and any other
    mint into the platform treasury's ATA for it. Opening a reward needs the pool creator (DBC's pool authority, which never
    signs it) or a DAMM admin (UNVERIFIED: DAMM v2 access rules, not tested on the binary), so (b) is normally
-   idle. DBC partner pool-creation fees: none to claim — FUMPAD configs set `pool_creation_fee = 0` (`tests/vectors/dbc_config.json`; not a structural check, the admin sets it, 48 h timelocked).
-29. **Per-config fee policies + the first-coin launch config (user decision 2026-10-14; INTERFACE §5.9).** Every
+   idle. DBC partner pool-creation fees: none to claim — FUMPAD configs set `pool_creation_fee = 0` (`tests/vectors/dbc_config.json`; not a structural check, the admin sets it, timelocked — 1 h since clarification 29).
+29. **Timelocks 1 h routine / 6 h authority (C-TL; changes D15 + D24; user decision 2026-10-14).** The single 48 h
+   timelock is split by kind of change. **Routine (1 h):** `queue_params` → `execute_params` (`PARAMS_TIMELOCK_SECS`
+   = 3,600) and `queue_config` → `execute_config`, the DBC-config allow-list (`CONFIG_TIMELOCK_SECS` = 3,600).
+   **Authority (6 h):** `propose_admin` → `accept_admin`, which moves admin, `platform_treasury` and guardian
+   together (`ADMIN_TIMELOCK_SECS` = 21,600). Rationale: user decision (unlike 1–28, this clarification changes
+   decisions). Reward terms and the fee split stay snapshotted per coin (D14/M-1), so a params change still never
+   re-prices a live coin. Unchanged: pauses
+   (immediate, lapse after 7 days, D25), `set_keepers` / `set_operators` (immediate; new attestor keys frozen 6 h,
+   `KEEPER_ATTEST_FREEZE_SECS`), the ticket challenge window (default 6 h, bounds 1–48 h) and every guardian power
+   (`set_pause`, `cancel_params`, `cancel_config`, `cancel_admin`, `void_ticket`). Constants only: no account layout
+   or instruction change (`TimelockNotElapsed` drops "(48h)" from its message). Consequence (accepted,
+   audit/THREAT-MODEL.md): the guardian must react within 1 h / 6 h, so the watcher alerts (Telegram) on every
+   pending change (`ParamsQueued` / `ConfigQueued` / `AdminProposed` state, re-sent until executed or cancelled);
+   the recommended Squads time lock of the admin multisig (which also gates program upgrades) drops from ≥ 48 h to
+   6 h (services/MULTISIG.md). Note: with a 1 h params timelock `ticket_challenge_secs` can be lowered to its 1 h
+   floor within 1 h — the guardian's cancel window for that change is the same 1 h.
+30. **Per-config fee policies + the first-coin launch config (user decision 2026-10-14; INTERFACE §5.9).** Every
    allow-listed DBC config carries a fee policy in `Global.config_policies`, set by `initialize_global` (bootstrap, no
    timelock) or by `queue_config(config, add, policy)` → config timelock → `execute_config`; validated (shape, and a
    wallet that is none of fumpad's PDAs) and shown in `ConfigQueued` / `ConfigUpdated`. `register_coin` snapshots the

@@ -1,4 +1,4 @@
-//! Admin / governance. Roles (M-2): `admin` queues params/configs (48h), proposes authority changes (48h), sets
+//! Admin / governance. Roles (M-2): `admin` queues params/configs (1 h), proposes authority changes (6 h), sets
 //! keepers (attestors) and operators (jobs keys), pauses, migrates the layout; `guardian` can only stop things
 //! (pause, cancel_*, void_ticket); anyone executes a queued change after its timelock. Every instruction emits an
 //! event (L-3).
