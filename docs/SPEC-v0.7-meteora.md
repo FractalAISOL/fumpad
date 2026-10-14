@@ -233,4 +233,29 @@ decision; each pins down something the spec left open or that the mainnet binari
    mint into the platform treasury's ATA for it. Opening a reward needs the pool creator (DBC's pool authority, which never
    signs it) or a DAMM admin (UNVERIFIED: DAMM v2 access rules, not tested on the binary), so (b) is normally
    idle. DBC partner pool-creation fees: none to claim — FUMPAD configs set `pool_creation_fee = 0` (`tests/vectors/dbc_config.json`; not a structural check, the admin sets it, 48 h timelocked).
+29. **Per-config fee policies + the first-coin launch config (user decision 2026-10-14; INTERFACE §5.9).** Every
+   allow-listed DBC config carries a fee policy in `Global.config_policies`, set by `initialize_global` (bootstrap, no
+   timelock) or by `queue_config(config, add, policy)` → config timelock → `execute_config`; validated (shape, and a
+   wallet that is none of fumpad's PDAs) and shown in `ConfigQueued` / `ConfigUpdated`. `register_coin` snapshots the
+   slot's policy into the coin (`Coin.fee_policy_kind` + a 47-byte tail appended to the Coin account — no extra
+   account: the launch transaction has no byte to spare) and counts the coin against the policy's optional
+   `max_coins` (`Global.config_coins`), so removing or replacing the config later never changes an existing coin's
+   routing, and even a leaked launch co-signer can't launch a second coin on a `max_coins = 1` config
+   (`ConfigCoinLimit`). *Standard* policy = D32/D33 unchanged. *Wallet split* (kind 1): each claim splits
+   `buyback_share : wallet_share` between the coin's buyback balance and `wallet` (exact floor to the wallet, the
+   remainder to buyback; no platform, no creator); the launch-window claim goes 100% to the wallet; LP fees split the
+   same way (the shares are of what we claim, so the DAMM pool's fee and Meteora's cut need no special case). The
+   wallet is paid inside the claim (`fee_wallet` account); it must stay rent-exempt (`FeeWalletNotRentExempt`; fees
+   wait on Meteora until it is funded). The FIRST mainnet coin launches on a second config: fee scheduler 99% → 3%
+   linear over 25 × 1 slot (≈ 10 s; reduction 38,400,000, exact), 3% on the curve from slot 25, migrated DAMM v2 fee
+   300 bps `OnlyB`, curve / supply / leftover / locks identical to the standard config; policy {wallet split, buyback
+   100, wallet 140 (bps of volume: of FUMPAD's 2.4%, 1.0% → buyback, 1.4% → mainnet config `firstCoin.feeWallet` =
+   `7eXG…jFa3`), max_coins 1}. Only API-co-signed launches (`launch_signer`), only when the API runs with
+   `LAUNCH_FIRST_COIN=true`, and the app accepts that config only when the user chose it and the API returned it; right
+   after the first coin the admin removes the config (services/LAUNCH-DAY.md §5). No wallet exemptions exist on DBC:
+   the creator's launch-tx buy pays the config's min fee, 3% here. The launch-window overshoot (normal-rate fees
+   accrued between the end of the window and the first claim) goes to the wallet on this coin, as it goes to the pool
+   on standard coins (the keeper claims right after the window). Known edge: the buyback min-out allows 2% for the
+   venue fee (`BUYBACK_VENUE_FEE_ALLOWANCE_BPS`), below a 3% fee, so a full slice with spot near the top of the ±3% band
+   fails its min-out (fail-closed; the keeper retries later or smaller); at spot ≈ guard it passes (tested).
 

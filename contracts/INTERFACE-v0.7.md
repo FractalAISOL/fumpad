@@ -56,7 +56,9 @@ DBC event authority `8Ks12pbrD6PXxfty1hVQiE9sc289zgU1zHkvXhrSdriF`; DAMM v2 pool
 FUMPAD DBC configs: exact `create_config` instruction data for mainnet (85 SOL) and devnet (0.85 SOL) in
 `tests/vectors/dbc_config.json` (1% migration fee — DBC supports whole percents only; curve re-derived so the reward
 pool is exactly 80,000,000 tokens on a single-swap completion; extra swaps can only add rounding dust of a few base
-units on top).
+units on top). The same file has the one-off **first-coin config** (`first_coin_mainnet`, `first_coin_devnet`, §5.9):
+identical except the fee scheduler 99% → 3% linear over 25 × 1 slot (reduction 38,400,000) and
+`migrated_pool_fee_bps` 300.
 
 ## 2. Coin status machine
 
@@ -90,7 +92,7 @@ Notation: `(s)` signer, `(w)` writable, `[ev]` = trailing `event_authority`, `pr
 ### Admin / governance
 | Ix | Args | Accounts | Notes |
 |---|---|---|---|
-| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3], operators: Vec<Pubkey>` (0–2 keys; a Vec so the bootstrap's bundled create_config + init simulation fits 1,232 bytes) | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the 48h timelock**. Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `operators` (≤ 2 and distinct, else `InvalidParams`; none may be a keeper, else `KeeperOperatorOverlap`) are set at once. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper), `OperatorsSet` (if any operator) and one `ConfigUpdated { add: true }` per config |
+| `initialize_global` | `admin: Pubkey, platform_treasury: Pubkey, cluster_tag: u8, params: Params, keepers: [Pubkey; 3], operators: Vec<Pubkey>` (0–2 keys; a Vec so the bootstrap's bundled create_config + init simulation fits 1,232 bytes), **`policies: Vec<FeePolicy>`** (§5.9: `policies[i]` = fee policy of the i-th remaining config; shorter Vec = the rest standard; more policies than configs or an invalid one → `InvalidParams`) | payer (s,w; = program upgrade authority), global (w, init), program (fumpad), program_data, system_program, event_authority; **remaining = the initial DBC configs (0–8, read-only)** | guardian = admin. **Bootstrap (§8 changelog 2026-10-13 b):** `keepers` (non-default keys distinct, else `InvalidParams`; `Pubkey::default()` = empty slot) start with `keeper_added_at = 0` = **no 6h attest freeze**; each remaining account is validated exactly like `execute_config` add (§5.4; `InvalidConfig` / `WrongVenue` / `InvalidAccount`; duplicate → `InvalidParams`; > 8 → `ConfigListFull`) and allow-listed **without the 48h timelock**, each with its policy (validated like `queue_config`). Rationale: only the upgrade authority can initialize and it could replace the program anyway; every later `set_keepers` / `queue_config` keeps its freeze / timelock. `operators` (≤ 2 and distinct, else `InvalidParams`; none may be a keeper, else `KeeperOperatorOverlap`) are set at once. `cluster_tag`: 0 mainnet-beta, 1 devnet, 2 localnet/test (immutable; part of every attestation message). Events `GlobalInitialized`, then `KeepersSet { added_at: [0;3] }` (if any keeper), `OperatorsSet` (if any operator) and one `ConfigUpdated { add: true, policy }` per config |
 | `queue_params` | `params: Params` | admin (s), global (w) [ev] | 48h timelock (D15). `Params::is_valid`. Event `ParamsQueued` |
 | `execute_params` | — | caller (s), global (w) [ev] | permissionless after eta. Event `ParamsUpdated` |
 | `cancel_params` | — | authority (s; admin or guardian), global (w) [ev] | Event `ParamsCancelled` |
@@ -100,16 +102,16 @@ Notation: `(s)` signer, `(w)` writable, `[ev]` = trailing `event_authority`, `pr
 | `propose_admin` | `new_admin, platform_treasury, guardian: Pubkey` | admin (s), global (w) [ev] | 48h. Event `AdminProposed` |
 | `accept_admin` | — | new_admin (s; = pending_admin), global (w) [ev] | Event `AdminAccepted` |
 | `cancel_admin` | — | authority (s; admin or guardian), global (w) [ev] | Event `AdminProposalCancelled` |
-| `queue_config` | `config: Pubkey, add: bool` | admin (s), global (w), dbc_config (= `config`; DBC-owned `PoolConfig`, validated when `add`) [ev] | allow-list change, 48h (`CONFIG_TIMELOCK_SECS`). Replaces any pending config change. Validation §5.4. Event `ConfigQueued` |
-| `execute_config` | — | caller (s), global (w), dbc_config (= pending; re-validated on add) [ev] | permissionless after eta. Add: into the first empty slot of `Global.configs` (8 slots; `ConfigListFull`), duplicate → `InvalidParams`. Remove: clears the slot (registered coins keep working). Event `ConfigUpdated` |
+| `queue_config` | `config: Pubkey, add: bool, policy: FeePolicy` | admin (s), global (w), dbc_config (= `config`; DBC-owned `PoolConfig`, validated when `add`) [ev] | allow-list change, 48h (`CONFIG_TIMELOCK_SECS`). Replaces any pending config change. Validation §5.4; `policy` (§5.9) validated on add and stored as `pending_config_policy`; must be `FeePolicy::default()` on a removal (`InvalidParams`). To change a listed config's policy: remove, then add. Event `ConfigQueued` (+ `policy`) |
+| `execute_config` | — | caller (s), global (w), dbc_config (= pending; re-validated on add) [ev] | permissionless after eta. Add: into the first empty slot of `Global.configs` (8 slots; `ConfigListFull`) with `pending_config_policy` and `config_coins = 0`, duplicate → `InvalidParams`. Remove: clears the slot, its policy and count (registered coins keep working and keep their own snapshot). Event `ConfigUpdated` (+ `policy`: the new one, or the removed slot's) |
 | `cancel_config` | — | authority (s; admin or guardian), global (w) [ev] | Event `ConfigCancelled` |
-| `migrate_global` | — | admin (s,w), global (w, raw), system_program [ev] | layout-upgrade hook. On the current 1,044-byte layout: if `operators` is all default (a Global initialized before operators existed — those bytes were `reserved`) and `keepers[0]` is set, fills `operators[0] = keepers[0]` (the key that ran the jobs keeper; the ONE way a key can be both, until `set_operators` moves it) and emits `OperatorsSet`; otherwise a no-op. Any other length → `UnsupportedGlobalLayout`. Event `GlobalMigrated` |
+| `migrate_global` | — | admin (s,w), global (w, raw), system_program [ev] | layout-upgrade hook. **A 1,044-byte Global (before 2026-10-14) is grown in place to 1,491 bytes** (the admin pays the extra rent; every old byte kept, the new tail zero = every config standard, no coin counts, nothing pending; until this runs after the upgrade, every instruction loading Global fails). Then, on the current layout: if `operators` is all default (a Global initialized before operators existed — those bytes were `reserved`) and `keepers[0]` is set, fills `operators[0] = keepers[0]` (the key that ran the jobs keeper; the ONE way a key can be both, until `set_operators` moves it) and emits `OperatorsSet`; otherwise a no-op. Any other length → `UnsupportedGlobalLayout`. Event `GlobalMigrated` |
 
 ### Launch
 `register_coin()` — the 3rd instruction of the launch tx (`initialize_virtual_pool_with_token2022` → creator's
 top-level DBC `swap2` (gets the min fee) → `register_coin`).
 
-Accounts: creator (s,w; pays Coin + reward-vault rent), global, mint (Token-2022 mint = pool base mint), dbc_config,
+Accounts: creator (s,w; pays Coin + reward-vault rent), global (**w**: `config_coins`), mint (Token-2022 mint = pool base mint), dbc_config,
 dbc_pool, coin (w, init `["coin", mint]`), reward_pool (PDA), reward_vault (w; `ATA(reward_pool, mint,
 Token-2022)`, created idempotently), token_2022_program, associated_token_program, system_program, **launch_signer
 (s; optional — required iff `Global.params.launch_signer != default`, else pass the fumpad program id)** [ev].
@@ -117,10 +119,14 @@ Token-2022)`, created idempotently), token_2022_program, associated_token_progra
 Checks: not `PAUSE_LAUNCH`; launch binding: when `Global.params.launch_signer` is set, `launch_signer` must be that
 key and sign (`Unauthorized` otherwise) — the API co-signs every launch tx it builds, like the vanity mint; `dbc_pool` owned by DBC with the `VirtualPool` discriminator; `pool.base_mint == mint`,
 `pool.config == dbc_config`, `pool.creator == creator`; `pool.migration_progress == 0` (pre-bonding, not complete);
-`dbc_config ∈ Global.configs` and still passes the §5.4 structural checks. Snapshots into Coin: reward terms + fee
-split (from `Global.params`), `launch_slot = pool.activation_point`, `launch_window_slots` = DBC fee scheduler
-`number_of_period × period_frequency` (0 if no scheduler), `total_supply = config.pre_migration_token_supply`.
-Event `CoinRegistered`.
+`dbc_config ∈ Global.configs` and still passes the §5.4 structural checks; the slot's fee policy (§5.9) has
+`max_coins == 0 || config_coins[slot] < max_coins` (`ConfigCoinLimit`), then `config_coins[slot] += 1`. Snapshots
+into Coin: reward terms (from `Global.params`), `fee_policy_kind` = the slot policy's kind and — standard — the fee
+split from `Global.params`, or — non-standard — `fee_split = 0` and the whole policy in the account's **tail** (the
+Coin is created 593 instead of 546 bytes; §5.3), `launch_slot = pool.activation_point`, `launch_window_slots` = DBC fee
+scheduler `number_of_period × period_frequency` (0 if no scheduler), `total_supply =
+config.pre_migration_token_supply`. Event `CoinRegistered` (+ `fee_policy`). No extra account for the policy: a
+first-coin launch tx is exactly as large as a standard one.
 DBC 0.2.1 gives its min fee (`enable_first_swap_with_min_fee`) to ONE swap of the pool-creation tx only: further
 top-level swaps in the same tx pay the 99% scheduler fee (verified on the mainnet binary,
 `review_v07::verify_dbc_min_fee_goes_to_one_swap_per_launch_tx`), so `register_coin` doesn't introspect the tx.
@@ -155,13 +161,18 @@ curve (ExactIn overshoot reverts on DBC).
 Accounts: caller (s,w; pays the transient `fee_wsol` rent, refunded in the same ix), global, coin (w), mint,
 dbc_config, dbc_pool (w), dbc_base_vault (w), dbc_quote_vault (w), fee_claimer (w), fee_wsol (w), reward_vault (w;
 base-side destination, receives 0 in quote fee mode), wsol_mint, token_program (SPL), token_2022_program,
-system_program, dbc_pool_authority, dbc_event_authority, dbc_program [ev].
+system_program, dbc_pool_authority, dbc_event_authority, dbc_program, **fee_wallet (w; optional: required iff
+`coin.fee_policy_kind != 0` = the snapshot's `policy.wallet`, else pass the fumpad program id)** [ev].
 CPI `claim_trading_fee(u64::MAX, u64::MAX)` (exact pinned 14-account list) signed by `fee_claimer`; the claimed
 WSOL is unwrapped into the Coin account. Split: first claim (`launch_fees_settled == false`) requires
 `slot ≥ launch_slot + launch_window_slots` and sends **100% → `buyback_lamports`** (D33), then sets the flag; later
 claims split per `coin.fee_split` (default 50/30/20; platform and creator exact floors, rounding remainder → buyback).
-Zero claimed → `NothingToClaim` (the launch flag is still set when the window has passed, so call it once anyway).
-Event `FeesClaimed`.
+**Wallet-split coins (§5.9)**: the launch-window claim → 100% to the wallet; later claims → wallet
+`⌊claimed × wallet_share / (buyback_share + wallet_share)⌋`, buyback the rest, platform = creator = 0. The wallet's
+part goes `fee_claimer` → wallet directly (never through the Coin; lamport invariant unchanged); refused with
+`FeeWalletNotRentExempt` if it would leave the wallet below rent exemption, `FeeWalletRequired` without the
+account, `InvalidAccount` for another address. Zero claimed → `NothingToClaim` (the launch flag is still set when
+the window has passed, so call it once anyway). Event `FeesClaimed` (+ `to_wallet`, `fee_wallet`).
 
 `claim_lp_fees()` — DAMM v2 position fees (permissionless). Requires `Graduated` and `launch_fees_settled`.
 `damm_position` = **any** DAMM v2 position of `coin.damm_pool` whose NFT the `fee_claimer` PDA holds (normally
@@ -171,7 +182,8 @@ not enforced (REVIEW-v0.7 H-1: a third-party position handed to `fee_claimer` be
 Accounts: caller (s,w), global, coin (w), mint, damm_pool, damm_position (w), position_nft_account,
 damm_token_a_vault (w), damm_token_b_vault (w), fee_claimer (w), fee_wsol (w), reward_vault (w; token-a
 destination), wsol_mint, token_program, token_2022_program, system_program, damm_pool_authority,
-damm_event_authority, damm_program [ev]. CPI `claim_position_fee` signed by `fee_claimer`; split as above.
+damm_event_authority, damm_program, **fee_wallet (w; optional, as in `claim_fees`)** [ev]. CPI
+`claim_position_fee` signed by `fee_claimer`; split as above (wallet-split coins: the same shares of what we claim).
 Event `FeesClaimed`.
 
 `claim_unregistered_fees()` — DBC partner trading fees of a pool on a FUMPAD-shaped config whose base mint never
@@ -401,8 +413,8 @@ sell attestation tx (Ed25519 ix + `attest_sell`, keeper fee payer) is ≈ 990 by
 
 ## 5. Account layouts (Anchor accounts: 8-byte discriminator + borsh)
 
-Sizes incl. discriminator: Global 1,044 · Coin 546 · Position 315 · Ticket 276 · Consumed **98** · ClaimQueue 81,976 ·
-Observations 8,280 (unit test `state::size_tests::account_sizes`).
+Sizes incl. discriminator: Global **1,491** · Coin 546 (**593** with a fee-policy tail) · Position 315 · Ticket 276 ·
+Consumed **98** · ClaimQueue 81,976 · Observations 8,280 (unit test `state::size_tests::account_sizes`).
 
 ### 5.1 `Params` (borsh, in `Global.params` / `pending_params`)
 `fee_buyback_share_bps u16, fee_platform_share_bps u16, fee_creator_share_bps u16` (sum 10,000; default 5,000 /
@@ -421,9 +433,11 @@ changed like every param: `queue_params` → 48 h → `execute_params`, guardian
 `bump u8, admin Pubkey, platform_treasury Pubkey, guardian Pubkey, keepers [Pubkey;3], keeper_added_at [i64;3],
 cluster_tag u8, paused u8, pause_expires_at i64, params Params, pending_params Params, pending_eta i64,
 pending_admin Pubkey, pending_treasury Pubkey, pending_guardian Pubkey, pending_admin_eta i64, configs [Pubkey;8],
-pending_config Pubkey, pending_config_add u8, pending_config_eta i64, operators [Pubkey;2]` (1,044 bytes, unchanged:
-`Params` grew by 32 bytes twice and `operators` took the last 64 bytes of `reserved` at offset 980; **no reserved bytes
-remain** — the next Global change grows the account through `migrate_global`).
+pending_config Pubkey, pending_config_add u8, pending_config_eta i64, operators [Pubkey;2], config_policies
+[FeePolicy;8] (@1044, §5.9; same index as configs), config_coins [u32;8] (@1356; coins registered per slot since it was
+listed), pending_config_policy FeePolicy (@1388), reserved [u8;64] (@1427)` — **1,491 bytes** (was 1,044 until
+2026-10-14; `migrate_global` grows an older Global, the new bytes zero = standard). A 1,044-byte Global decodes with
+a zero tail in the SDK (`decodeGlobal`).
 Pause bits: `PAUSE_LAUNCH` 1, `PAUSE_TRADE` 2 (router buys, buybacks), `PAUSE_CLAIMS` 4, `PAUSE_GRADUATE` 8
 (`migrate_pool`, `graduate`), `PAUSE_ATTEST` 16.
 
@@ -438,10 +452,14 @@ min_hold_secs i64, rebuy_window_secs i64, claim_window_secs i64, max_open_ticket
 fee_split {buyback_bps u16, platform_bps u16, creator_bps u16}, attest_cursor i64, attest_tokens_total u64,
 attest_released_tokens u64, pregrad_sample_price_q64 u128, pregrad_sample_ts i64, migrator Pubkey,
 migrator_cost u64, migration_fee_lamports u64, leftover_tokens u64, pregrad_ring PregradRing {prices_q64 [u64;5],
-ts [u32;5], head u8, len u8} (62 bytes; prices saturate at u64::MAX, ts = unix seconds), reserved [u8;2]` (546 bytes
-incl. discriminator; the ring sits at offset 482 where `reserved [u8;64]` started).
-Lamport invariant: `lamports == rent_exempt_min + creator_fees_unclaimed + platform_fees_unclaimed +
-buyback_lamports` (tested).
+ts [u32;5], head u8, len u8} (62 bytes; prices saturate at u64::MAX, ts = unix seconds), fee_policy_kind u8 (@544;
+§5.9; 0 = standard), reserved [u8;1]` (546 bytes incl. discriminator; the ring sits at offset 482 where `reserved
+[u8;64]` started). **Fee-policy tail** (only when `fee_policy_kind != 0`; the account is 593 bytes): at offset 546,
+`CoinPolicyTail { policy FeePolicy (39), wallet_paid_lamports u64 }` — the slot's policy at `register_coin`, never
+changed afterwards except the paid counter; Anchor (de)serializes only the 546-byte prefix (SDK `decodeCoin` returns
+`feePolicy`, `walletPaidLamports`).
+Lamport invariant: `lamports == rent_exempt_min(account length) + creator_fees_unclaimed + platform_fees_unclaimed +
+buyback_lamports` (tested; a wallet-split coin's wallet share never enters the Coin).
 Rate cap (M-1: leaky bucket, defers, never rejects): `cap = max(1, total_supply × max_attest_tokens_per_hour_bps /
 10,000)` tokens per 3,600 s. `attest_sell`: `cursor = max(attest_cursor, now) + ⌈tokens × 3600 / cap⌉`,
 `effective_at = max(now, cursor − 3600)` (a full hour's cap is effective at once, the rest is spread at the cap
@@ -462,6 +480,19 @@ PDA`, `collect_fee_mode@232 == 0` (quote), `migration_option@233 == 1` (DAMM v2)
 locked vesting (`@296`, 40 B) all zero, `migrated_collect_fee_mode@360 == 0` (→ DAMM `OnlyB`),
 `pre_migration_token_supply@344 == post_migration_token_supply@352`. Numeric curve/fee values (threshold,
 `migration_fee_percentage@247`, base fee, migrated fee bps) are the admin's choice (timelocked).
+
+### 5.9 `FeePolicy` (per config slot, snapshotted per coin) — 39 bytes
+`kind u8, buyback_share u16, wallet_share u16, max_coins u16, wallet Pubkey`.
+- `kind 0` **standard**: D32/D33 as configured in `Params` (split → `Coin.fee_split`, launch window → buyback).
+  `buyback_share = wallet_share = 0`, `wallet = default`; `max_coins` allowed.
+- `kind 1` **wallet split**: of every claim, the wallet gets `⌊claimed × wallet_share / (buyback_share + wallet_share)⌋`,
+  the coin's buyback balance the rest; no platform, no creator; the launch-window claim → 100% wallet; LP fees the same.
+  `wallet != default` and none of fumpad's PDAs (global, fee_claimer, reward_pool, buyback, fee_wallet, event authority,
+  the program); `wallet_share > 0`; `buyback_share + wallet_share ≤ 10,000` (written as bps of volume).
+- `max_coins` (any kind): 0 = unlimited; else `register_coin` refuses (`ConfigCoinLimit`) once `config_coins[slot]`
+  reached it — the count restarts when the config is removed and added again.
+- Anything else → `InvalidParams`. The first-coin config's policy: `{1, 100, 140, 1, config firstCoin.feeWallet}` (of
+  FUMPAD's 2.4% of volume: 1.0% → buyback, 1.4% → wallet; SPEC Clarification 29).
 
 ### 5.5 `Position` — PDA `["position", mint, wallet]`
 `bump u8, wallet Pubkey, mint Pubkey, next_ticket_seq u64, open_tickets [Pubkey;5], open_count u8,
@@ -492,14 +523,16 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
   `OperatorsSet { operators [Pubkey;2], ts }`
 - `AdminProposed { admin, platform_treasury, guardian, eta, ts }`, `AdminAccepted { previous_admin, admin,
   platform_treasury, guardian, ts }`, `AdminProposalCancelled { authority, ts }`
-- `ConfigQueued { config, add bool, eta, ts }`, `ConfigUpdated { config, add bool, ts }`,
+- `ConfigQueued { config, add bool, eta, ts, policy FeePolicy }`, `ConfigUpdated { config, add bool, ts, policy FeePolicy }`,
   `ConfigCancelled { config, authority, ts }`, `GlobalMigrated { old_len u32, new_len u32, ts }`
-- `CoinRegistered { mint, creator, dbc_pool, dbc_config, launch_slot, launch_window_slots, ts }`
+- `CoinRegistered { mint, creator, dbc_pool, dbc_config, launch_slot, launch_window_slots, ts, fee_policy FeePolicy }`
 - `RoutedTrade { mint, trader, venue u8, is_buy bool, base_amount u64, quote_gross u64, fee u64,
   pre_sqrt_price u128, post_sqrt_price u128, slot u64, ts }` — buy: `quote_gross` = WSOL spent (fee included);
   sell: WSOL received + fee. `fee` = Meteora trading + protocol fee of the swap (from pool counters).
 - `CurveCompleted { mint, dbc_pool, ts }`
-- `FeesClaimed { mint, venue u8, claimed u64, to_buyback u64, to_platform u64, to_creator u64, launch_window bool, ts }`
+- `FeesClaimed { mint, venue u8, claimed u64, to_buyback u64, to_platform u64, to_creator u64, launch_window bool, ts,
+  to_wallet u64, fee_wallet Pubkey }` (`to_buyback + to_platform + to_creator + to_wallet == claimed`; standard coins
+  0 / default)
 - `FeesWithdrawn { mint, recipient, lamports, creator bool, ts }`
 - `UnregisteredFeesClaimed { mint, dbc_pool, dbc_config, claimed u64, platform_treasury, ts }`
 - `PositionRewardClaimed { mint, damm_pool, damm_position, reward_index u8, reward_mint, destination, amount u64,
@@ -537,9 +570,28 @@ keeper_sampled u8, _pad [u8;2], last_keeper_sample_ts i64, samples [{ts i64, fal
 · 6047 TriggerNotMet · 6048 QueueFull · 6049 WalletQueueLimit · 6050 QueueAccountRequired · 6051 NoEscrow ·
 6052 AutoClaimDisabled · 6053 TicketNotClosable · 6054 ConsumedNotClosable · 6055 PositionNotEmpty ·
 6056 LamportInvariant · 6057 RebuyOutOfWindow · 6058 PoolDisabled · **6059 TicketPriceBelowExecution ·
-6060 KeeperOperatorOverlap · 6061 PoolIsRegistered**.
+6060 KeeperOperatorOverlap · 6061 PoolIsRegistered** · **6062 ConfigCoinLimit · 6063 FeeWalletRequired ·
+6064 FeeWalletNotRentExempt**.
 
 ## 8. Changelog
+### 2026-10-14 — per-config fee policies + the first-coin launch config (services / app follow)
+1. **Global** 1,044 → 1,491 bytes: `config_policies [FeePolicy;8]`, `config_coins [u32;8]`, `pending_config_policy`,
+   `reserved [u8;64]` appended. `migrate_global` grows an existing Global (admin pays the rent difference) — run it
+   right after the program upgrade.
+2. `initialize_global` + trailing arg `policies: Vec<FeePolicy>`; `queue_config` + arg `policy: FeePolicy`;
+   `ConfigQueued` / `ConfigUpdated` + `policy`.
+3. `register_coin`: `global` is **writable**; enforces `max_coins` (`ConfigCoinLimit`); snapshots the policy
+   (`Coin.fee_policy_kind` from `reserved[0]`, + a 47-byte account tail for non-standard policies; Coin borsh layout
+   and its 546-byte length for standard coins unchanged). `CoinRegistered` + `fee_policy`. Account list unchanged.
+4. `claim_fees` / `claim_lp_fees`: + optional trailing account `fee_wallet` (w) before the event-CPI pair (program id
+   = None for standard coins); wallet-split routing; `FeesClaimed` + `to_wallet`, `fee_wallet`.
+5. Errors 6062 `ConfigCoinLimit`, 6063 `FeeWalletRequired`, 6064 `FeeWalletNotRentExempt`.
+6. First-coin config vectors `first_coin_mainnet` / `first_coin_devnet` in `tests/vectors/dbc_config.json`.
+SDK: `FeePolicy`, `STANDARD_FEE_POLICY`, `FEE_POLICY`, `configSlot`, `feePolicyProblems`, `walletSplit`,
+`GlobalAccount.configPolicies/configCoins/pendingConfigPolicy`, `CoinAccount.feePolicyKind/feePolicy/walletPaidLamports`,
+`initializeGlobalIx({ policies })`, `queueConfigIx(admin, config, add, policy?)`, `CoinRefs.feeWallet`,
+`firstCoinConfigParams`, `FIRST_COIN_*`.
+
 ### 2026-10-13 d — pre-audit fixes: operators, DAMM pool status, D12 price floor, stranded value (services follow)
 1. **Operators.** `Global.reserved [u8;64]` → `operators [Pubkey;2]` (same offset 980, Global still 1,044 bytes).
    `record_samples` keeper samples, `claim_for` and pre-graduation `execute_buyback` require an operator (were: a
