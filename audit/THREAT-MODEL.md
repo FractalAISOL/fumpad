@@ -20,6 +20,7 @@ DBC / DAMM pool. Test names refer to `contracts/tests/src` (LiteSVM) or `service
 | A10 | Launch co-signer key, vanity-mint secrets | API host / Postgres (encrypted) | register-coin co-signature |
 | A11 | User funds while trading through FUMPAD (router) and in the Privy embedded wallet | user token accounts | user-signed swaps |
 | A12 | Oracle integrity: keeper samples and their medians | `Observations`, `Coin.pregrad_ring` | gates claims and buybacks |
+| A13 | Fee routing of each coin: its fee policy (standard 50/30/20, or the first-coin config's wallet split → the special wallet `firstCoin.feeWallet`) | `Global.config_policies` (per allow-list slot) → snapshotted into `Coin.fee_policy_kind` + the Coin account's tail at `register_coin` | `claim_fees` / `claim_lp_fees` pay the wallet share straight to the snapshot's wallet |
 
 ## 2. Actors and capabilities
 
@@ -40,6 +41,7 @@ DBC / DAMM pool. Test names refer to `contracts/tests/src` (LiteSVM) or `service
 | **Admin compromise** (≥ 3 of 5 voters, or a single admin key on devnet) | queue params / configs / admin rotation (48 h), set keepers (immediate; new keys frozen 6 h), set operators (immediate), pause, void tickets, propose program upgrades (48 h Squads lock) | act before the guardian can cancel (params / config / admin); make new keepers attest within 6 h | 48 h on-chain timelocks + guardian cancel; Squads 48 h time lock on upgrades | **a program upgrade cannot be cancelled by the FUMPAD guardian**: it is visible for 48 h in Squads only; replacing the keeper set enables malicious attestations 6 h later (then the challenge window applies) |
 | **Guardian compromise** (2 of 3) | pause any subset (renewable every 7 d indefinitely), cancel any pending change, void any `Open` ticket inside its window, reopen markers | move funds, change params / keepers / admin, pause router sells or fee withdrawals | stop-only powers | can freeze claims indefinitely and censor tickets in their challenge window; the admin can replace the guardian (48 h proposal; the guardian itself can cancel that proposal → stalemate resolved only by a program upgrade) |
 | **Program upgrade authority** | replace the program | — | Squads 3-of-5 + 48 h time lock (mainnet plan); verifiable build planned (README §6) | total trust in the upgrade path; devnet authority is a single hot key |
+| **Special fee wallet** (`firstCoin.feeWallet`, external key; receives 1.4% of the first coin's volume + FUMPAD's share of its launch window) | receive lamports; drain itself (e.g. to 0 lamports) | receive anything from another coin; change the first coin's split; block the coin's buybacks / claims for good | the wallet is fixed per coin (snapshot in its own account); claims pay `fee_claimer` → wallet only the computed share; validation refuses fumpad PDAs as the wallet | if it is emptied below rent, the first coin's fee claims fail (`FeeWalletNotRentExempt`) until anyone funds it with ~0.001 SOL; the fees wait on Meteora meanwhile (keeper alerts) |
 
 ## 3. Invariants that must hold
 
@@ -47,7 +49,7 @@ On-chain (scope A). "Always" = after every successful instruction, for every coi
 
 | # | Invariant |
 |---|---|
-| I1 | **Coin lamports.** `Coin.lamports == rent_exempt_min(546 B) + creator_fees_unclaimed + platform_fees_unclaimed + buyback_lamports`. Withdrawals re-check it (`move_coin_lamports`, `LamportInvariant`). |
+| I1 | **Coin lamports.** `Coin.lamports == rent_exempt_min(account length: 546 B, or 593 B with a fee-policy tail) + creator_fees_unclaimed + platform_fees_unclaimed + buyback_lamports` (a wallet-split coin's wallet share never enters the Coin). Withdrawals re-check it (`move_coin_lamports`, `LamportInvariant`). |
 | I2 | **No cross-coin fund movement.** An instruction acting on coin X moves value only between: X's `Coin`, X's reward vault, escrows of X's tickets, X's DBC / DAMM pool and its vaults (incl. its DAMM reward vaults), the actor's own accounts, and the fixed destinations (`platform_treasury` and its ATAs, `coin.creator`, the ticket owner). `claim_unregistered_fees` touches only a pool with no `Coin` and pays only `platform_treasury`. Shared PDAs (`fee_claimer`, `fee_wsol`, `reward_pool`, `buyback`, `ATA(buyback, WSOL)`) never carry value from one coin's instruction to another's: `fee_wsol` exists only inside one ix; `fee_claimer` ends every ix with no added lamports; buyback spending is measured on the shared WSOL ATA and capped by the coin's own balance; `reward_pool` signs transfers only from `ATA(reward_pool, coin.mint)` of the coin being claimed. |
 | I3 | **Reward vault pays only tickets.** Every token leaving `ATA(reward_pool, mint)` goes to (a) a token account of `ticket.owner` (claim) / the owner's canonical ATA (`claim_for`, `process_queue`), or (b) `["escrow", ticket]`, for a ticket of that mint, in the amount `⌊tokens × claim_bps / 10,000⌋` at payment time, with amount ≤ `max_claim_pool_bps` of the vault balance (per-claim cap). Escrows pay only to an owner account (`withdraw_escrow` signed by the owner). |
 | I4 | **Claim preconditions.** A payout or queue entry requires: not `PAUSE_CLAIMS`; coin `Graduated`; ticket `Open` (or `Queued` for the crank); `now ≥ attested_at + ticket_challenge_secs`; `now ≤ sell_ts + claim_window` (except queued: never expire); keeper-sample median ≥ trigger × `sell_price_q64` with ≥ `oracle_min_samples` keeper samples in ≥ 5 of 6 buckets of the window; skip-ahead order (no older fitting entry waits); ≤ 2 queue entries per wallet per coin. |
@@ -68,6 +70,7 @@ On-chain (scope A). "Always" = after every successful instruction, for every coi
 | I19 | **Accounts fail closed.** Meteora accounts are read only after owner + discriminator + minimum length checks; unknown layouts revert. |
 | I20 | **Roles are disjoint.** No key is in both `Global.keepers` and `Global.operators` after any instruction except `migrate_global`'s one-time fill of a pre-operators Global (until `set_operators`); attestation submission / signatures need a keeper, keeper samples / `claim_for` / pre-grad buybacks need an operator. |
 | I21 | **Disabled pools.** No sample (keeper or fallback) is recorded from a DAMM v2 pool whose `pool_status ≠ 0`; no buyback or router swap runs on it. |
+| I22 | **Fee policy snapshot.** A coin's routing is fixed at `register_coin` from its config slot's policy (`fee_policy_kind` + the Coin's 47-byte tail): no later `queue_config` / `execute_config` (removal, re-add with another wallet) changes it. Wallet split: `to_buyback + to_wallet == claimed`, `to_wallet = ⌊claimed × wallet_share / (buyback_share + wallet_share)⌋`, platform = creator = 0, the launch-window claim 100% → wallet; the wallet share goes `fee_claimer` → the snapshot's wallet only (never through the Coin: I1 unchanged). `register_coin` refuses past the policy's `max_coins` (counted per slot since it was listed), whoever co-signs. A policy wallet is never a fumpad PDA. |
 
 Off-chain (scope B / C):
 
@@ -95,6 +98,7 @@ Off-chain (scope B / C):
 | G7 | All attestors and the watcher use the same Pyth Hermes source and API key | a wrong Hermes answer is agreed by all; affects only the $50 threshold, not amounts or price | accepted |
 | G8 | `cluster_tag` is any `u8` at `initialize_global` | a mainnet Global initialized with tag 1 would accept devnet-signed messages only if program ids were also equal (they differ) | accepted (documented runbook) |
 | G9 | A deferred ticket voided late may leave less than `max_attest_age` for its corrected re-attestation | honest seller may lose the corrected ticket | accepted (CONTRACTS.md) |
+| G10 | First-coin config (wallet-split policy, 2026-10-14): (a) while it is on the allow-list, any API-co-signed launch can use it — bounded on chain by `max_coins = 1` (a leaked launch co-signer can't add a second coin) and off chain by `LAUNCH_FIRST_COIN` (API) + the app accepting it only when the user chose it and the chain lists it as wallet-split; the admin removes it right after the first coin (LAUNCH-DAY §5; the removal is timelocked like any config change, `max_coins` covers the gap); re-adding it restarts the count (admin, timelocked). (b) The special wallet is an external key: emptied below rent it blocks that coin's fee claims until funded (fees wait on Meteora). (c) Its 3% fee exceeds the buyback min-out's 2% venue allowance: a full slice with spot near the top of the ±3% band reverts (fail-closed; liveness only). (d) The launch-window overshoot (normal-rate fees accrued between the window's end and the first claim) goes to the wallet instead of the pool for that coin | one coin; value routing as decided by the user | accepted (decision on record, SPEC Clarification 29) |
 
 ## 5. Accepted risks (decisions on record)
 
@@ -123,6 +127,9 @@ Off-chain (scope B / C):
 - **R6 — Guardian censorship.** The guardian can pause claims indefinitely (renewing every 7 days) and void tickets
   inside their window; chosen so incident response is fast.
 - **R7 — Wallet-based creator exclusion (D9)** and sybil sell / rebuy across wallets.
+- **R9 — The first coin's fee routing (user decision 2026-10-14).** One coin trades at 3% with FUMPAD's share split
+  1.0% (of volume) to its reward pool and 1.4% plus its launch-window share to an external wallet; no creator or
+  platform share. Fixed on chain per coin (I22); the config is one-launch-only (`max_coins`) and removed after it (G10).
 - **R8 — Rent rate** at deploy time UNVERIFIED; the 8% reward pool is exact for a single-swap completion and gains
   dust on real paths (≤ 1,000 base units in tests).
 

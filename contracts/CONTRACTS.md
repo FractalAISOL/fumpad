@@ -69,7 +69,9 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
   `register_coin` requires the pool's config on `Global.configs` (48h-timelocked allow-list; every config re-checked
   for the FUMPAD shape: fee claimer / leftover receiver = our PDAs, WSOL, Token-2022 6 dec, immutable authority, 100%
   partner permanent lock, Customizable DAMM v2 `OnlyB`, creator fee 0, fixed supply, slot activation), signer = pool
-  creator, pool not completed; it creates the reward vault ATA and snapshots reward terms + fee split. With
+  creator, pool not completed; it creates the reward vault ATA and snapshots reward terms + fee split (+ the config
+  slot's **fee policy**: kind in the Coin, a non-standard policy in a 47-byte tail of the Coin account; `max_coins`
+  enforced — 2026-10-14, section below). With
   `Params.launch_signer` set, the API's launch key must co-sign `register_coin` (off-chain review L1). DBC gives
   the min fee to one swap per pool-creation tx only (verified on the mainnet binary), so no tx introspection.
 - **DBC config** (`tests/vectors/dbc_config.json`): 1B supply, 85 SOL raise (devnet 0.85), 99% → 1.25% fee scheduler
@@ -84,7 +86,9 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
 - **Fees**: `claim_fees` (DBC partner fees) / `claim_lp_fees` (any `fee_claimer`-held position of the coin's DAMM v2
   pool — normally the DBC-created locked one; REVIEW-v0.7 H-1) signed by `fee_claimer` with
   pinned account lists, claimed into a transient WSOL PDA and unwrapped into the Coin. First DBC claim after the 8-slot
-  window → 100% buyback (D33); then 50/30/20 (platform + creator exact floors, remainder buyback).
+  window → 100% buyback (D33); then 50/30/20 (platform + creator exact floors, remainder buyback). Wallet-split coins
+  (the one-off first-coin config): launch window → 100% to the policy wallet, then buyback : wallet by the policy's
+  shares (1.0 / 1.4 of 2.4), paid to the wallet inside the claim (optional `fee_wallet` account).
 - **Roles** (2026-10-13 d): `Global.keepers` (3) = attestors only (sign + submit attestations); `Global.operators`
   (2) = the jobs keeper's key(s): keeper samples, `claim_for`, pre-grad buybacks. Disjoint on chain
   (`KeeperOperatorOverlap`); `set_operators` (admin, immediate); `migrate_global` fills `operators[0]` from
@@ -119,8 +123,8 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 | Account | Bytes | Rent (SOL) | Paid by |
 |---|---|---|---|
 | `fumpad.so` program data (`anchor build`, inliner flags) | 804,472 (+45) | ≈4.088 | deployer |
-| Global | 1,044 | 0.00595 | admin (init) |
-| Coin | 546 | 0.00342 | creator (`register_coin`) |
+| Global | 1,491 (was 1,044; `migrate_global` grows it) | 0.00822 | admin (init / migrate) |
+| Coin | 546 (593 with a fee-policy tail: first-coin config) | 0.00342 (0.00366) | creator (`register_coin`) |
 | Reward vault (Token-2022 ATA) | 170 | ≈0.00207 | creator (`register_coin`) |
 | Position | 315 | 0.00225 | attesting keeper |
 | Ticket | 276 | 0.00205 | attesting keeper |
@@ -131,11 +135,11 @@ Rent measured in LiteSVM 0.18 with the mainnet feature set (equal to `solana ren
 ## Compute units (worst cases, `cu_report`, mainnet binaries; ±2k run to run from PDA bumps)
 | Instruction | CU | Tx bytes | Compute budget |
 |---|---|---|---|
-| launch tx (DBC init + ATA + creator swap2 + `register_coin`) | 182k | 1,058 (+32 with a launch co-signer key, +64 its signature) | 300k |
+| launch tx (DBC init + ATA + creator swap2 + `register_coin`) | 182k | 1,058 (+32 with a launch co-signer key, +64 its signature; the first-coin config adds nothing: 1,154 co-signed, legacy) | 300k |
 | `buy` router DBC / DBC PartialFill completing the curve / DAMM v2 | 94k / 94k / 55k | — | default (200k) |
 | `sell` router DBC / DAMM v2 | 62k / 47k | — | default |
-| `claim_fees` (DBC) | 62k | — | default |
-| `claim_lp_fees` (DAMM v2) | 67k | — | default |
+| `claim_fees` (DBC) / wallet split (first-coin config) | 62k / 70k | — | default |
+| `claim_lp_fees` (DAMM v2) / wallet split | 67k / 74k | — | default |
 | `execute_buyback` DBC (pre-grad, 4-sample median, creates the WSOL ATA) / DAMM v2 (full 30-min median) | 115k / 90k | — | default |
 | `migrate_pool` (DBC migration CPI incl. DAMM v2 pool + lock) | 176k | 1,081 | set ≥ 400k |
 | `graduate` | 110k | 1,045 | set ≥ 200k |
@@ -196,9 +200,11 @@ everything else within noise.
 ## Deploy (v0.7, order matters — nothing is deployed yet)
 1. Deploy `fumpad` (devnet: id `5YMF…S9Fb`; **mainnet: its own fresh keypair + `declare_id!`** — never the devnet
    id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock — transfer it AFTER step 3, init needs the key).
-2. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair).
+2. Create the FUMPAD DBC configs with `create_config` using `tests/vectors/dbc_config.json` (new config keypairs): the
+   standard config and the one-off first-coin config (2026-10-14).
 3. `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params, keepers, operators)` from the
-   upgrade-authority key, with the DBC config as a remaining account. **Bootstrap:** the 3 keepers (separate
+   upgrade-authority key, with both DBC configs as remaining accounts and `policies = [standard, the first-coin
+   wallet-split policy]`. **Bootstrap:** the 3 keepers (separate
    infra/RPCs) attest at once (`keeper_added_at = 0`, no 6h freeze) and the config is allow-listed at once (no 48h
    timelock; validated like `execute_config` add) — only the upgrade authority can initialize and it could replace
    the program anyway. Every later `set_keepers` (6h freeze for new keys) and `queue_config` (48h) keeps its delay.
@@ -235,8 +241,13 @@ everything else within noise.
   re-attestation (the trade's age counts from `block_time`).
 - The 8% reward pool is exact for a single-swap completion; real paths add rounding dust on top (tests: ≤ 1,000 units).
 - Mainnet rent rate at deploy time (sizes table) — UNVERIFIED.
-- Global has no reserved bytes left after `operators`: the next Global field needs a `migrate_global` that grows the
-  account (the mechanism exists; admin pays the rent).
+- Global grew to 1,491 bytes (2026-10-14) and keeps 64 reserved bytes; a Global from before must be grown by
+  `migrate_global` right after the upgrade (every instruction loading Global fails until then).
+- First-coin config (wallet-split fee policy): its fee wallet is an external key FUMPAD doesn't control (it receives
+  1.4% of that coin's volume + the launch-window share); a claim refuses to leave it below rent exemption
+  (`FeeWalletNotRentExempt`: fund it). Its 3% fee exceeds the buyback's 2% venue-fee allowance: a full slice with
+  spot near the top of the ±3% band fails its min-out (fail-closed). Remove the config from the allow-list right after
+  the first coin (`max_coins = 1` already blocks a second coin on chain).
 - A disabled DAMM v2 pool stops samples, buybacks and router trades, but claims inside the first ≈ 10 min after the
   disable still use the samples taken while it traded (then `InsufficientSamples` until re-enabled).
 - An unregistered pool that graduates leaves its migration fee / surplus / 8% leftover / LP position unclaimed
@@ -268,6 +279,33 @@ Interface: `INTERFACE-v0.7.md` §8 2026-10-13 d. Tests: `tests/src/audit_prep_te
 **Devnet upgrade** (program data allocated 770,280 bytes): `solana program extend 5YMF… 40000` (≈ +0.28 SOL rent),
 `solana program deploy`, then the bootstrap's `operators` step (`migrate_global` + `set_operators([operator])` in ONE
 transaction, admin = deployer) — services/DEPLOY-v07.md §6. Existing Coins / tickets are unchanged.
+
+## Fee policies + the first-coin launch config (2026-10-14; SPEC Clarification 29, INTERFACE §5.9 / §8)
+Every allow-list slot carries a `FeePolicy {kind, buyback_share, wallet_share, max_coins, wallet}` (`Global.
+config_policies`, coins counted in `config_coins`), set by `initialize_global(.., policies)` or `queue_config(config,
+add, policy)` (timelocked like every config change; a removal carries none). `register_coin` snapshots it — the kind
+into `Coin.fee_policy_kind` (former `reserved[0]`), a non-standard policy into a 47-byte tail of the Coin account
+(created 593 instead of 546 bytes; `state/fee_policy.rs`; Anchor reads/writes only the 546-byte prefix) — so config
+changes never touch existing coins, and refuses past `max_coins` (`ConfigCoinLimit`; also against a leaked launch
+co-signer). Why a tail and not a PDA: the first-coin launch transaction with a first buy and the launch co-signer is
+1,202 bytes; a 33-byte account more overflows 1,232. Claims of a wallet-split coin take the optional `fee_wallet`
+(must be the snapshot's; `FeeWalletRequired` / `InvalidAccount`) and pay it from `fee_claimer` directly
+(`FeeWalletNotRentExempt` if it would stay below rent; the fees then wait on Meteora). `FeesClaimed` gained
+`to_wallet`, `fee_wallet`. Configs: `tests/vectors/dbc_config.json` `first_coin_mainnet` / `first_coin_devnet` (99% →
+3% linear over 25 × 1 slot, reduction 38,400,000; `migrated_pool_fee_bps` 300; everything else = the standard config).
+Tests: `tests/src/first_coin_tests.rs` (both configs side by side on the mainnet binaries: schedule incl. the
+creator's 3% min-fee buy, launch window → wallet, exact 1.0/2.4 + 1.4/2.4 split incl. rounding, LP fees after
+graduation + 8% leftover, buyback into the pool, snapshot survives removal + re-add with another wallet, `max_coins`
+vs the launch co-signer, wallet required / checked / rent-exempt, policy validation at queue + init, bootstrap with
+both configs), `audit_prep_tests::migrate_global_fills_operators_from_keeper_0` (1,044 → 1,491 growth),
+`math::fees::tests::wallet_split_first_coin`, `state::global::tests::fee_policy_shapes`. Program 804,472 →
+**830,256 bytes**.
+**Devnet upgrade** (no coin migration: existing Coins read `fee_policy_kind = 0` = standard, their accounts are
+untouched): `solana program show 5YMF…` → if its data length is below the new `.so`, `solana program extend 5YMF…
+<difference + headroom>`; `solana program deploy`; immediately `bootstrap-v07.ts --step config --yes` (creates the
+first-coin config) and `--step policies --yes` (`migrate_global` grows Global; then `queue_config(first-coin config,
+add, {1, 100, 140, max 1, first-coin-wallet})`), rerun `--step policies --yes` after the config timelock
+(`execute_config`), `--step fund --yes` (the fee wallet's rent), `--step verify`; services/DEPLOY-v07.md §11.
 
 ## Archive: v0.3–v0.6 notes (superseded by the v0.7 fresh layouts, D39 — kept for history only)
 ### v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)

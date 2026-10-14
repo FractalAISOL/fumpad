@@ -443,6 +443,41 @@ old key revoked last.
 Mainnet: same commands with `~/fumpad-keys/mainnet/…` and the mainnet Railway project linked. `curl -K <(…)` keeps the
 secret out of the process list and the terminal.
 
+## 11. Fee policies + the first-coin config — upgrading the existing devnet deployment (2026-10-14)
+
+The new program reads Global as 1,491 bytes; the devnet Global is 1,044 until `migrate_global` grows it, so every
+instruction that loads Global fails in between — run step 2 right after step 1. Coins need nothing (their
+`fee_policy_kind` byte was reserved = 0 = standard; their accounts keep 546 bytes).
+
+```sh
+# 0. build — contracts/ (the .so the tests ran on; keypair: cp ~/fumpad-keys/devnet/fumpad-v07-program-keypair.json target/deploy/fumpad-keypair.json)
+cd ~/fumpad/contracts && anchor build -p fumpad          # target/deploy/fumpad.so ≈ 830,256 bytes (+ whatever the timelock branch adds)
+set -a; . ~/fumpad-keys/devnet/rpc.env; set +a
+solana program show 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb --url "$RPC_URL"     # "Data Length"
+# 1. extend if Data Length < the new .so size (bytes = difference + ~10,000 headroom), then upgrade
+solana program extend 5YMFbHZsEaebs1Ac9P8bPe3nfh1oxbemVRcLBAcxS9Fb <bytes> --url "$RPC_URL" --keypair ~/.config/solana/id.json
+solana program deploy target/deploy/fumpad.so --program-id target/deploy/fumpad-keypair.json \
+  --upgrade-authority ~/.config/solana/id.json --keypair ~/.config/solana/id.json --url "$RPC_URL" --with-compute-unit-price 10000
+# 2. right away: grow Global (migrate_global, admin = deployer) — services/
+cd ~/fumpad/services
+npx tsx scripts/devnet/bootstrap-v07.ts --step keys                    # creates dbc-config-first-coin.json + first-coin-wallet.json
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --simulate
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # migrate_global (1,044 → 1,491; ≈ 0.0023 SOL rent)
+# 3. the first-coin config: create it, queue its add with the wallet-split policy, fund the fee wallet's rent
+npx tsx scripts/devnet/bootstrap-v07.ts --step config --yes            # create_config (first coin: 99% → 3% / 25 slots, 3% DAMM v2)
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # queue_config(first-coin config, add, {1, 100, 140, max 1, first-coin-wallet})
+npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes              # first-coin-wallet → 0.01 SOL
+# 4. after the config timelock (CONFIG_TIMELOCK_SECS): execute the add, verify
+npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # execute_config
+npx tsx scripts/devnet/bootstrap-v07.ts --step verify                  # Global 1,491 B, standard + first-coin configs, policies
+# 5. services (this branch merged): indexer (migration 011 runs at start), api, keeper, attestors, watcher; app redeploy
+for s in indexer api keeper attestor-1 attestor-2 attestor-3 watcher; do railway up --service $s --detach; done
+#    to try the first-coin launch on devnet: api LAUNCH_FIRST_COIN=true, then fumpad.vercel.app/launch?config=first-coin;
+#    afterwards: bootstrap-v07.ts --step first-coin-done --yes (queue the removal), rerun after the timelock (execute)
+```
+Until step 4 the API offers no first-coin config (`/v1/launch/options` → `firstCoin: null`; prepare `first_coin` → 409)
+and standard launches work as before.
+
 ## 10. Operators split — upgrading the existing devnet deployment (2026-10-13 d)
 
 The devnet Global was initialized before `Global.operators` existed (those 64 bytes were `reserved`, all zero) and its

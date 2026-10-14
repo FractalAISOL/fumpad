@@ -25,10 +25,10 @@ SPEND="--send --i-understand-this-spends-real-sol"
 | when | what | irreversible? |
 |---|---|---|
 | T−7 d … T−3 d | providers, keys, multisigs, build, rehearsal, Railway mainnet project (services stopped) | no |
-| **T−3 d (day 0)** | deploy program → DBC config → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
+| **T−3 d (day 0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
 | T−3 d … T−1 d | 48 h: voters approve `accept_admin` in Squads; services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
 | **T−1 d (day 2)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
-| **T0** | pre-flight re-check → open the app (prelaunch gate off) → first coin | — |
+| **T0** | pre-flight re-check → open the app (prelaunch gate off) → first coin on the first-coin config → remove that config | the first coin's 3% fee + routing: yes (snapshotted) |
 
 Opening the app only after the handover means no hot key holds admin power while users have money in.
 
@@ -145,8 +145,9 @@ Each `--send` prints a summary and asks you to type the phrase it shows (e.g. `p
 $B --step verify                                     # pre-check: everything missing is listed, nothing ✗ besides that
 $B --step program       $SPEND --so ~/fumpad/contracts/target/deploy/fumpad.so   # the §1.11 docker build (≈ 760 write txs; resumable, see §8)
 solana-verify get-program-hash -u "$(sed -n 's/^RPC_URL=//p' $K/rpc.env)" $FUMPAD_PROGRAM_ID   # must = H (§1.11); then §10 (verify + OtterSec) today, while the deployer is upgrade authority
-$B --step config        $SPEND                       # DBC create_config (mainnet vector bytes checked first)
-$B --step init          $SPEND                       # initialize_global: IRREVERSIBLE params/cluster_tag/keepers — read the summary
+$B --step config        $SPEND                       # DBC create_config ×2: standard + first-coin (vector bytes `mainnet` / `first_coin_mainnet` checked first)
+$B --step init          $SPEND                       # initialize_global: IRREVERSIBLE params/cluster_tag/keepers + both configs with their fee
+                                                     # policies (first coin: 1.0% buyback / 1.4% → firstCoin.feeWallet, max 1) — read the summary
 $B --step fund          $SPEND                       # operator 2 SOL, attestor-1/2/3 0.3 SOL
 $B --step propose-admin $SPEND                       # admin → admin vault, guardian → guardian vault (48 h)
 $B --step verify                                     # all ✓; "next: after <eta> … accept-admin"
@@ -185,9 +186,30 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
    vanity pool ≥ 20, `/v1/status` green.
 2. Prelaunch gate release (app/LAUNCH.md "Open the app"): Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` → redeploy →
    `curl -sI https://fumpad.app/launches` = `200`.
-3. **First coin**: the team launches through the app (Privy wallet, small first buy) → check in order: Solscan tx
-   (DBC init + swap + `register_coin`, launch-signer co-signed), API coin page, WS feed, trades indexed, then a
-   matured ≥ $50 sell → `TicketAttested` by 2 of 3 within minutes, watcher verdict `match`.
+3. **First coin, on the one-off first-coin config** (user decision 2026-10-14; SPEC Clarification 29): 3% fee
+   (99% → 3% over ~10 s, 3% after graduation too), of FUMPAD's 2.4%: 1.0% → its reward pool, 1.4% + FUMPAD's whole
+   launch-window share → `firstCoin.feeWallet` (`7eXG…jFa3`); no platform / creator share.
+   1. Before: `$B --step verify` shows the first-coin config allow-listed (`coins 0/1`, wallet = the config file's).
+      The fee wallet holds ≥ 0.001 SOL (claims refuse to leave it below rent exemption — `FeeWalletNotRentExempt`).
+   2. API: Railway `api` variable `LAUNCH_FIRST_COIN=true`, redeploy; `curl -s https://<api>/v1/launch/options` shows
+      `firstCoin` with that config and wallet.
+   3. Launch through the app at `https://fumpad.app/launch?config=first-coin` (Privy wallet, small first buy). The
+      review must show **Trading fee 3%, first-coin config** and the wallet; the app refuses to sign unless the chain
+      lists that config with the wallet-split policy and its fee is 3%.
+   4. Check in order: Solscan tx (DBC init on the first-coin config + swap + `register_coin`, launch-signer
+      co-signed), the Coin account is 593 bytes (policy tail), API coin page shows 3% and the wallet split, WS feed,
+      trades indexed; after ~10 s the keeper's first `claim_fees` pays the launch window to the wallet (`FeesClaimed`
+      `to_wallet = claimed`); later claims split 1.0 / 1.4; a matured ≥ $50 sell → `TicketAttested` by 2 of 3, watcher
+      `match`.
+   5. **Right after it (same hour)**: Railway `api` `LAUNCH_FIRST_COIN=false`, redeploy (the API stops offering it;
+      `max_coins = 1` already makes the program refuse a second coin, even with the launch co-signature). Then take the
+      config off the allow-list: `$B --step remove-first-coin-config $SPEND` — the admin is the admin vault by now, so
+      it creates the vault tx `queue_config(<first-coin config>, remove)` with the ops key (or
+      `$M propose $C --config $K/multisig/admin.json --member-key $K/ops.json --action remove-config --config <first-coin config> --yes`);
+      voters approve in the Squads app; execute it (`$M execute … --index <N> --yes`); after the config timelock
+      (`CONFIG_TIMELOCK_SECS`) rerun `$B --step remove-first-coin-config $SPEND` → `execute_config` (permissionless).
+      `$B --step verify`: "first-coin config … not allow-listed (removed)". The first coin keeps its 3% routing (its
+      snapshot is in its own account).
 4. Re-run `rpc-check … --l8-slot <first coin's launch slot>`.
 5. Announce.
 

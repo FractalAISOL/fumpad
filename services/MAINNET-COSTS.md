@@ -8,7 +8,8 @@ labelled **estimate** with a source where a vendor decides (RPC, Railway). No re
   shared Helius key, spaced requests). Mainnet rent is linear: **lamports = (128 + bytes) × 5,080** (checked for
   0 … 81,976 bytes). Note: a local `solana-test-validator` still charges 6,960 per byte (the old rate), so amounts
   measured in the rehearsal are ~37% above mainnet's for the rent part; below they are converted.
-- Sizes: `contracts/programs/fumpad/src/state/mod.rs` asserts (Global 1,044, Coin 546, Position 315, Ticket 276,
+- Sizes: `contracts/programs/fumpad/src/state/mod.rs` asserts (Global 1,491 since 2026-10-14, Coin 546 — 593 for the
+  first coin, whose fee policy is snapshotted in a tail — Position 315, Ticket 276,
   Consumed 98), keeper constants (Observations 8,280, ClaimQueue 81,976), DBC PoolConfig 1,048, the built .so.
 - Fees: base fee 5,000 lamports per signature. Priority fees: `getRecentPrioritizationFees` on mainnet (150 slots,
   2026-10-13) for DBC/DAMM v2 writable accounts: p50 0, p75 0, p90 0, max 10,002 (DBC) / 556,057 (DAMM v2)
@@ -34,8 +35,8 @@ labelled **estimate** with a source where a vendor decides (RPC, Railway). No re
 
 | account | bytes | SOL | payer |
 |---|---|---|---|
-| FUMPAD DBC config (`create_config`) | 1,048 | 0.005974 | deployer |
-| Global (`initialize_global`) | 1,044 | 0.005954 | deployer |
+| FUMPAD DBC configs (`create_config` ×2: standard + the one-off first-coin config) | 2 × 1,048 | 2 × 0.005974 | deployer |
+| Global (`initialize_global`) | 1,491 | 0.008225 | deployer |
 | admin Squads multisig (5 voters + ops key = 6 members; `132 + 33·n` bytes) | 330 | 0.002327 | deployer |
 | guardian Squads multisig (3 voters + ops key) | 264 | 0.001991 | deployer |
 | Squads multisig creation fee (`ProgramConfig.multisig_creation_fee`, mainnet, read 2026-10-13) | — | **0** | — |
