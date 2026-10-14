@@ -66,7 +66,7 @@ signatures, Ed25519 instruction data, consumed/position/ticket PDAs, USD from th
 ## v0.7 at a glance
 - **Launch** (SPEC §2): API-built tx = DBC `initialize_virtual_pool_with_token2022` (vanity mint signs) → creator ATA →
   creator's top-level DBC `swap2` (gets the min fee) → `register_coin`. Measured: **1,057 bytes**, 182k CU (incl. DBC).
-  `register_coin` requires the pool's config on `Global.configs` (48h-timelocked allow-list; every config re-checked
+  `register_coin` requires the pool's config on `Global.configs` (1 h-timelocked allow-list; every config re-checked
   for the FUMPAD shape: fee claimer / leftover receiver = our PDAs, WSOL, Token-2022 6 dec, immutable authority, 100%
   partner permanent lock, Customizable DAMM v2 `OnlyB`, creator fee 0, fixed supply, slot activation), signer = pool
   creator, pool not completed; it creates the reward vault ATA and snapshots reward terms + fee split. With
@@ -195,23 +195,28 @@ everything else within noise.
 
 ## Deploy (v0.7, order matters — nothing is deployed yet)
 1. Deploy `fumpad` (devnet: id `5YMF…S9Fb`; **mainnet: its own fresh keypair + `declare_id!`** — never the devnet
-   id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 48h time lock — transfer it AFTER step 3, init needs the key).
+   id; upgrade authority → Squads ≥ 3-of-5 with a ≥ 6 h time lock — transfer it AFTER step 3, init needs the key).
 2. Create the FUMPAD DBC config with `create_config` using `tests/vectors/dbc_config.json` (new config keypair).
 3. `initialize_global(admin, treasury, cluster_tag (0 mainnet / 1 devnet), params, keepers, operators)` from the
    upgrade-authority key, with the DBC config as a remaining account. **Bootstrap:** the 3 keepers (separate
-   infra/RPCs) attest at once (`keeper_added_at = 0`, no 6h freeze) and the config is allow-listed at once (no 48h
+   infra/RPCs) attest at once (`keeper_added_at = 0`, no 6h freeze) and the config is allow-listed at once (no 1 h
    timelock; validated like `execute_config` add) — only the upgrade authority can initialize and it could replace
-   the program anyway. Every later `set_keepers` (6h freeze for new keys) and `queue_config` (48h) keeps its delay.
+   the program anyway. Every later `set_keepers` (6h freeze for new keys) and `queue_config` (1 h) keeps its delay.
    `operators` = the jobs keeper's own hot key (never one of the 3 attestor keys; the program refuses an overlap).
-   Set `params.launch_signer` to the API's launch co-signer key (or queue it later: 48h) so only API-built launch txs
+   Set `params.launch_signer` to the API's launch co-signer key (or queue it later: 1 h) so only API-built launch txs
    register. Devnet: `services/scripts/devnet/bootstrap-v07.ts` does 2–3 (+ funding, verification); runbook
    `services/DEPLOY-v07.md`; rehearsed locally by `npm run bootstrap:rehearsal` (services/).
-4. `propose_admin(admin, treasury, guardian)` → 48h → `accept_admin` to hand the guardian to its own multisig.
+4. `propose_admin(admin, treasury, guardian)` → 6 h → `accept_admin` to hand the guardian to its own multisig.
 5. Open launches. Attestors (3 separate hosts / providers): attestations only (finalized txs). Jobs keeper (operator
    key): `claim_fees` right after each coin's 8-slot window, pre-grad samples + buybacks, `migrate_pool` + `graduate` + `init_observations` + 9 × `init_claim_queue`, post-grad samples,
    `claim_lp_fees`, buybacks, auto-claim, `process_queue`, `close_ticket`, `close_consumed`.
 
 ## Open risks (v0.7)
+- **Short timelocks (SPEC v0.7 clarification 29, 2026-10-14):** params and DBC-config allow-list changes wait 1 h
+  (`PARAMS_TIMELOCK_SECS` / `CONFIG_TIMELOCK_SECS` = 3,600), admin / treasury / guardian changes 6 h
+  (`ADMIN_TIMELOCK_SECS` = 21,600; was 48 h for all three). The guardian must cancel within that window: the
+  watcher alerts on Telegram while a change is pending (`services/keeper/src/watch/governance.ts`). Tests:
+  `admin_tests::{params,config,admin}_timelock_boundary_*`, `guardian_cancels_within_the_short_windows`.
 - Meteora's single upgrade authority can change DBC / DAMM v2 (fees, locks, layouts); DAMM v2 operators can disable
   a pool or change its fee (D38). fumpad fails closed on the layouts it reads (owner + discriminator + length); an
   account-list change needs a client update (router) or a program update (pinned PDA-signed lists).

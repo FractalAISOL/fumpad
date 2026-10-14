@@ -53,10 +53,13 @@ tokens from a per-coin reward pool.
 - **Keys.** The three attestor keys (`Global.keepers`) only attest. A separate **operator** key (`Global.operators`,
   the jobs keeper) takes keeper price samples, auto-claims and runs pre-graduation buybacks; the program refuses a
   key in both sets, and each attestor runs in its own cloud project / account with its own RPC provider.
-- **Governance.** Admin = Squads v4 multisig (3-of-5, 48 h Squads time lock; also program upgrade authority);
+- **Governance.** Admin = Squads v4 multisig (3-of-5, 6 h Squads time lock; also program upgrade authority);
   guardian = separate Squads multisig (2-of-3, no time lock) that can only pause, cancel pending changes and void
-  tickets in their challenge window. Params, the DBC-config allow-list and admin/treasury/guardian changes are 48 h
-  timelocked on chain. On devnet today all three roles are one key (see §6).
+  tickets in their challenge window. On-chain timelocks (SPEC v0.7 clarification 29, user decision 2026-10-14; were
+  48 h): params and the DBC-config allow-list **1 h**, admin/treasury/guardian **6 h** — so on mainnet a params change
+  takes ≥ 7 h end to end (6 h Squads + 1 h), an authority change ≥ 12 h. The guardian must react inside those
+  windows; the watcher alerts on Telegram while any change is pending. On devnet today all three roles are one key
+  (see §6).
 
 Accepted product risks (user decision D38): Meteora's upgrade authority can change DBC / DAMM v2; DAMM v2 operators
 can disable a pool or change its fee; Meteora takes 20% of trading fees.
@@ -68,7 +71,8 @@ can disable a pool or change its fee; Meteora takes 20% of trading fees.
 **Commit:** the head of this branch: `aa137a936518d89c9a2aba83cbf1e8f27208aa47` (`main`, 2026-10-13) + the
 deploy-config commit `13bfa7b` + the **pre-audit fixes** (PRIOR-REVIEWS §0: operators separate from attestors, DAMM
 v2 pool status, the D12 execution-price floor in `attest_sell`, `claim_unregistered_fees`, `claim_position_rewards`,
-error-code and two-coin tests). The numbers below are for that head.
+error-code and two-coin tests) + the 2026-10-14 timelock change (SPEC v0.7 clarification 29: 1 h params / config, 6 h
+admin; constant values only — line counts below not re-run for it). The numbers below are for that head.
 
 Line counts: `wc -l` (all lines) and "code" = lines that are neither blank nor comment-only (`//`, `///`, `//!`,
 `*`). Produced by the counting snippet in §2.4.
@@ -314,5 +318,5 @@ Mainnet will deploy the docker build only.
 branch (`services/scripts/mainnet/build-program.ts` performs exactly that substitution in a temp copy and checks
 the id is embedded), so the mainnet `.so` differs from the devnet one in the embedded id only. `initialize_global`
 from the upgrade-authority key with `cluster_tag = 0`, the bootstrap keepers (attestors), the operator (jobs key) and the DBC config, `launch_signer` set;
-then `propose_admin` → 48 h → `accept_admin` to the Squads vaults, then upgrade authority → admin vault
+then `propose_admin` → 6 h → `accept_admin` to the Squads vaults, then upgrade authority → admin vault
 (`services/MULTISIG.md` §4).

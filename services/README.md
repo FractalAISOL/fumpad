@@ -250,8 +250,10 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
 - **History (L8)**: coins launched before the RPC's `getFirstAvailableBlock` are refused (use an archive RPC);
   `RPC_HISTORY_CHECK=off` disables it.
 - **Watcher alerts** (L7): attestation mismatches (until the guardian voids), sells with a derived ticket that never
-  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues; re-alerted every
-  `WATCH_ALERT_COOLDOWN_MS` (30 min).
+  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues, and **every pending governance
+  change** (`gov:params:*` / `gov:config:*` / `gov:admin:*`: params diff, config add/remove, new admin / treasury /
+  guardian, eta — `keeper/src/watch/governance.ts`; the timelocks are 1 h / 6 h, SPEC v0.7 clarification 29, so the
+  guardian must cancel fast); re-alerted every `WATCH_ALERT_COOLDOWN_MS` (30 min) until resolved.
 
 ### Keeper board (per-keeper roles — the documented default, V7-M1)
 The three attestors share one Postgres for the signature board. Give each its own role so one compromised keeper
