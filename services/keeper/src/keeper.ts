@@ -282,6 +282,17 @@ export function feeWalletOf(coin: Pick<CoinAccount, "mint" | "feePolicyKind" | "
   return coin.feePolicy.wallet;
 }
 
+/**
+ * A post-window DBC claim_fees is due: pending partner fees ≥ `minLamports`, or — once the coin graduated — any
+ * pending fee at all. After graduation the curve takes no more trades, so its last fees (e.g. the completing buy's)
+ * would otherwise sit below the threshold on Meteora forever (live devnet 2026-10-14: 0.019 SOL left on the first
+ * coin's curve under the 0.05 SOL default).
+ */
+export function dbcFeeClaimDue(coin: Pick<CoinAccount, "launchFeesSettled" | "status">, dbc: { partnerQuoteFee: bigint } | null | undefined, minLamports: bigint): boolean {
+  if (!coin.launchFeesSettled || !dbc || dbc.partnerQuoteFee === 0n) return false;
+  return dbc.partnerQuoteFee >= minLamports || coin.status === "graduated";
+}
+
 const SKIP = (names: string[]) => new Set(names.map((n) => FUMPAD_ERROR[n]).filter((c): c is number => c !== undefined));
 
 interface JobHealth {
@@ -558,7 +569,7 @@ export class Keeper {
       const k = c.coin;
       const windowEnd = k.launchSlot + k.launchWindowSlots;
       const first = !k.launchFeesSettled && this.slot >= windowEnd;
-      const due = k.launchFeesSettled && c.dbc && c.dbc.partnerQuoteFee >= this.cfg.feesMinLamports && Date.now() - c.lastFeesAt > this.cfg.feesIntervalSecs * 1000;
+      const due = dbcFeeClaimDue(k, c.dbc, this.cfg.feesMinLamports) && Date.now() - c.lastFeesAt > this.cfg.feesIntervalSecs * 1000;
       if (first || due) {
         n += await this.guard(`fees:${k.mint.toBase58()}`, async () => {
           c.lastFeesAt = Date.now();

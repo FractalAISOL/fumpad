@@ -43,6 +43,14 @@ export interface RpcSourceOpts {
 }
 
 /**
+ * Signatures the fumpad pipeline has already ingested. Excludes rows only the Meteora bridge wrote (kind 'meteora'):
+ * the bridge stores the swap of a tx that ALSO carries fumpad events (the launch tx's first buy + CoinRegistered, a
+ * routed trade's RoutedTrade) and, when its poller wins the race, used to make this pipeline skip those events for
+ * good (live devnet 2026-10-14: the first coin's CoinRegistered was never applied → no coins row, API 404).
+ */
+export const KNOWN_FUMPAD_TXS = "SELECT signature FROM transactions WHERE signature = ANY($1) AND kind <> 'meteora'";
+
+/**
  * Where a cursor may move after applying `sigs` (oldest first): the newest signature with no
  * still-blocking missing signature at or before it. null = don't move.
  */
@@ -183,8 +191,10 @@ export class RpcSource {
    * couldn't be fetched are returned (and queued for retry).
    */
   async applySignatures(sigs: ConfirmedSignatureInfo[], source: Source): Promise<{ applied: number; missing: string[] }> {
+    // A row the Meteora bridge wrote first (kind 'meteora': the swap of a launch / routed trade) is not "known" here:
+    // its fumpad events (CoinRegistered, RoutedTrade, …) are still to be applied (Ingestor.ingest handles that row).
     const known = new Set(
-      (await this.db.query<{ signature: string }>("SELECT signature FROM transactions WHERE signature = ANY($1)", [sigs.map((s) => s.signature)])).rows.map((r) => r.signature),
+      (await this.db.query<{ signature: string }>(KNOWN_FUMPAD_TXS, [sigs.map((s) => s.signature)])).rows.map((r) => r.signature),
     );
     for (const k of known) this.missing.delete(k);
     const todo = sigs.filter((s) => !known.has(s.signature));
@@ -241,7 +251,7 @@ export class RpcSource {
       while (this.hints.size) {
         const batch = [...this.hints].slice(0, 20);
         for (const s of batch) this.hints.delete(s);
-        const known = new Set((await this.db.query<{ signature: string }>("SELECT signature FROM transactions WHERE signature = ANY($1)", [batch])).rows.map((r) => r.signature));
+        const known = new Set((await this.db.query<{ signature: string }>(KNOWN_FUMPAD_TXS, [batch])).rows.map((r) => r.signature));
         const txs = await Promise.all(batch.filter((s) => !known.has(s)).map(async (s) => [s, await this.fetchTx(s, 2)] as const));
         for (const [sig, tx] of txs) {
           if (!tx) continue; // not visible to our RPC yet: the poller will get it

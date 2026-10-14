@@ -52,3 +52,18 @@ describe("keeper fee claims: policy wallet", () => {
     expect(() => feeWalletOf({ mint: k(), feePolicyKind: FEE_POLICY.walletSplit, feePolicy: undefined })).toThrow(/fee policy snapshot/);
   });
 });
+
+describe("keeper DBC fee claims: when due", () => {
+  it("threshold on the curve; after graduation any leftover (the curve takes no more trades)", async () => {
+    const { dbcFeeClaimDue } = await import("../src/keeper.js");
+    const min = 50_000_000n;
+    const curve = { launchFeesSettled: true, status: "curve" as const };
+    const grad = { launchFeesSettled: true, status: "graduated" as const };
+    expect(dbcFeeClaimDue(curve, { partnerQuoteFee: 19_027_000n }, min)).toBe(false);
+    expect(dbcFeeClaimDue(curve, { partnerQuoteFee: min }, min)).toBe(true);
+    expect(dbcFeeClaimDue(grad, { partnerQuoteFee: 19_027_000n }, min)).toBe(true);
+    expect(dbcFeeClaimDue(grad, { partnerQuoteFee: 0n }, min)).toBe(false);
+    expect(dbcFeeClaimDue({ launchFeesSettled: false, status: "curve" }, { partnerQuoteFee: min }, min)).toBe(false);
+    expect(dbcFeeClaimDue(grad, null, min)).toBe(false);
+  });
+});
