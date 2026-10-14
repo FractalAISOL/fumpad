@@ -11,7 +11,9 @@ import s from "./Doc.module.css";
 /** Protocol constants that are not `Global.params` (fixed in the program, docs/SPEC-v0.7-meteora.md). */
 const REFERENCE_WINDOW_SECS = 600;
 const MAX_QUEUED_PER_WALLET = 2;
-const TIMELOCK_HOURS = 48;
+/** SPEC v0.7 C-TL: params / DBC-config changes wait 1 h; admin / treasury / guardian changes wait 6 h. */
+const TIMELOCK_HOURS = 1;
+const ADMIN_TIMELOCK_HOURS = 6;
 const SLOT_SECS = 0.4;
 /** D31: attestations need 2 of the 3 keepers. */
 const KEEPERS = 3;
@@ -277,8 +279,8 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
             <b>Pool cap.</b> One payout can take at most {maxClaimPct}% of a pool, so one big claim can&apos;t drain it.
           </li>
           <li>
-            <b>Slow rule changes.</b> Protocol parameter changes wait {TIMELOCK_HOURS} hours before they apply, and the fee split and reward terms are fixed per
-            coin at launch.
+            <b>Delayed rule changes.</b> Protocol parameter changes wait {TIMELOCK_HOURS} hour before they apply (admin key changes wait {ADMIN_TIMELOCK_HOURS}{" "}
+            hours), and the fee split and reward terms are fixed per coin at launch.
           </li>
         </ul>
       </DocSection>
@@ -322,7 +324,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
           </Faq>
           <Faq q="Can FUMPAD change the rules on my coin?">
             <p>
-              The fee split and reward terms are fixed per coin at launch. Other parameter changes wait {TIMELOCK_HOURS} hours before they apply. Locked
+              The fee split and reward terms are fixed per coin at launch. Other parameter changes wait {TIMELOCK_HOURS} hour before they apply. Locked
               liquidity can&apos;t be withdrawn by anyone. FUMPAD can pause launches, buys through its app, attestations or claims in an emergency; selling
               on Meteora is never paused by FUMPAD. Meteora controls its own programs and pools, as the <Link href="/risk#meteora">risk page</Link>{" "}
               explains.

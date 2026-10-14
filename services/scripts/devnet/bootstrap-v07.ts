@@ -330,7 +330,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
   const expectedKeepers = () => [keys.pub("attestor-1"), keys.pub("attestor-2"), keys.pub("attestor-3")];
   const expectedParams = () => bootstrapParams(keys.pub("launch-signer"));
   if (o.steps.includes("init")) {
-    log("\n▶ init (initialize_global: bootstrap keepers attestor-1/2/3 with no 6 h freeze, operators [operator], bootstrap config with no 48 h timelock)");
+    log("\n▶ init (initialize_global: bootstrap keepers attestor-1/2/3 with no 6 h freeze, operators [operator], bootstrap config with no 1 h config timelock)");
     const params = expectedParams();
     const bad = paramsProblems(params);
     if (bad.length) throw new Error(`bootstrap params invalid: ${bad.join("; ")}`);
@@ -453,7 +453,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       checks.push(["keepers = attestor-1/2/3", same(g.keepers, ks)]);
       checks.push(["operators = [operator] (the jobs key), disjoint from the attestors", g.operators[0].equals(keys.pub("operator")) && g.operators.slice(1).every((k) => k.equals(PublicKey.default)) && !ks.some((k) => g.operators.some((x) => x.equals(k)))]);
       checks.push(["bootstrap keepers: keeper_added_at = 0 (no 6 h freeze), all 3 active now", g.keeperAddedAt.every((t) => t === 0n) && activeKeepers(g, now).length === 3, g.keeperAddedAt.join(",")]);
-      checks.push(["configs = [FUMPAD DBC config] (no 48 h timelock)", keys.has("dbc-config") && g.configs[0].equals(config()) && g.configs.slice(1).every((c) => c.equals(PublicKey.default)) && g.configs.length === MAX_CONFIGS]);
+      checks.push(["configs = [FUMPAD DBC config] (no 1 h config timelock)", keys.has("dbc-config") && g.configs[0].equals(config()) && g.configs.slice(1).every((c) => c.equals(PublicKey.default)) && g.configs.length === MAX_CONFIGS]);
       checks.push(["nothing pending (params / config / admin), not paused", g.pendingEta === 0n && g.pendingConfigEta === 0n && g.pendingAdminEta === 0n && g.paused === 0]);
       const pd = paramsDiff(g.params, expectedParams());
       checks.push(["params = devnet bootstrap params (launch_signer = launch-signer)", pd.length === 0, pd.join("; ") || undefined]);

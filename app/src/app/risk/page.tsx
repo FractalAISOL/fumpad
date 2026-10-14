@@ -57,7 +57,8 @@ export default function RiskPage() {
       <DocSection id="contracts" title="Smart-contract risk">
         <p>
           FUMPAD&apos;s contracts may contain bugs that lose or lock funds. Reviews and tests reduce that risk; they don&apos;t remove it. The FUMPAD program
-          is upgradeable by its admin, under a timelock for parameter changes. Trading, the bonding curve and the locked liquidity run on Meteora&apos;s
+          is upgradeable by its admin. Parameter changes wait 1 hour and changes to the admin keys wait 6 hours before they apply, so
+          the rules can change at short notice. Trading, the bonding curve and the locked liquidity run on Meteora&apos;s
           programs, which FUMPAD doesn&apos;t control (next section).
         </p>
       </DocSection>

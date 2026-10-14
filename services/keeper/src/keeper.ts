@@ -25,7 +25,7 @@
  *            the claim window (→ Expired); close_consumed for this keeper's markers older than 7 days
  *            whose ticket is gone.
  *  platform  withdraw_platform_fees above a threshold.  params  execute_params / execute_config after
- *            their 48 h timelocks.
+ *            their timelocks (1 h).
  * Budget (M-7): per-tx priority cap, daily spend budget (essential jobs only once exceeded), low-balance
  * alarm. Single instance per key (L-10): Postgres advisory lock when DATABASE_URL is set.
  */
