@@ -16,6 +16,9 @@ import {
   type DbcPoolConfig,
   decodeCoin,
   decodeDammPool,
+  dbcFeeNumerator,
+  FEE_POLICY,
+  type FeePolicy,
   decodeDbcConfig,
   decodeDbcPool,
   decodeGlobal,
@@ -47,7 +50,6 @@ import type { Side, TradeQuote } from "./generated/app-types.js";
 const tok = (v: bigint) => Number(v) / 1e6;
 const lam = (v: bigint) => Number(v) / 1e9;
 const px = (q: bigint) => q64ToSolPerToken(q);
-const NORMAL_FEE_NUMERATOR = 12_500_000n;
 
 export class ChainReader {
   constructor(
@@ -84,6 +86,11 @@ export class ChainReader {
       const a = await this.conn.getAccountInfo(coinPda(mint));
       return a ? decodeCoin(new Uint8Array(a.data)) : null;
     });
+  }
+
+  /** A wallet-split coin's fee policy snapshot (INTERFACE §5.9: the Coin account's tail), else null. */
+  private feePolicy(coin: CoinAccount): FeePolicy | null {
+    return coin.feePolicyKind === FEE_POLICY.standard ? null : (coin.feePolicy ?? null);
   }
 
   private dbcConfig(config: PublicKey): Promise<DbcPoolConfig> {
@@ -155,15 +162,25 @@ export class ChainReader {
     const sqrtBefore = graduated ? damm!.sqrtPrice : dbc!.sqrtPrice;
     const spotBefore = priceQ64FromSqrt(sqrtBefore);
     const amt = Math.max(0, args.amount || 0);
+    const policy = this.feePolicy(coin);
     const split = (q: SwapQuote) => {
+      // Wallet-split coins (first-coin config): FUMPAD's share goes buyback : wallet; the wallet part is reported as
+      // `feePlatformSol` (not the pool, not the creator). Standard coins: the coin's 50/30/20 snapshot.
+      if (policy) {
+        const wallet = (q.tradingFee * BigInt(policy.walletShare)) / BigInt(policy.buybackShare + policy.walletShare);
+        return { feeSol: lam(q.fee), feePoolSol: lam(q.tradingFee - wallet), feePlatformSol: lam(wallet), feeCreatorSol: 0, venueFeeSol: lam(q.protocolFee) };
+      }
       const s = coin.feeSplit;
       const platform = (q.tradingFee * BigInt(s.platformBps)) / BPS_DENOM;
       const creator = (q.tradingFee * BigInt(s.creatorBps)) / BPS_DENOM;
       return { feeSol: lam(q.fee), feePoolSol: lam(q.tradingFee - platform - creator), feePlatformSol: lam(platform), feeCreatorSol: lam(creator), venueFeeSol: lam(q.protocolFee) };
     };
+    // The coin's own normal fee = its config's scheduler floor (1.25% standard, 3% first-coin config): anything above
+    // it is the D33 launch-window fee.
+    const normalNum = dbcFeeNumerator(cfg, { activationPoint: 0n }, 0n, true);
     const snipe = (q: SwapQuote, feeBase: bigint) =>
-      !graduated && q.feeNumerator > NORMAL_FEE_NUMERATOR
-        ? { snipeTaxSol: lam(q.fee - (feeBase * NORMAL_FEE_NUMERATOR) / 1_000_000_000n), snipeTaxBps: Number(q.feeNumerator / 100_000n) }
+      !graduated && q.feeNumerator > normalNum
+        ? { snipeTaxSol: lam(q.fee - (feeBase * normalNum) / 1_000_000_000n), snipeTaxBps: Number(q.feeNumerator / 100_000n) }
         : {};
     const fail = (e: unknown) => Object.assign(new Error(String((e as Error).message ?? e)), { statusCode: 422 });
     const wallet = args.wallet ? new PublicKey(args.wallet) : null;

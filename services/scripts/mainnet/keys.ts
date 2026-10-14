@@ -9,6 +9,8 @@
  *                              cranks); never an attestor
  *   launch-signer.json         Params.launch_signer (the API's launch co-signer)
  *   dbc-config.json            address of the FUMPAD DBC config account (signs its creation only)
+ *   dbc-config-first-coin.json address of the one-off first-coin DBC config (99% → 3% / 25 slots, 3% DAMM v2;
+ *                              INTERFACE §5.9), allow-listed with the wallet-split policy (config `firstCoin.feeWallet`)
  *   fumpad-program-keypair.json  the MAINNET program id: back it up OFFLINE (it only matters until the first deploy,
  *                              but a lost keypair before that = a new id and a rebuild)
  * NOT generated (public keys in the config file; the deployer keypair is provided by you): admin, guardian,
@@ -20,7 +22,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { Keypair, PublicKey } from "@solana/web3.js";
 
-export const HOT_KEYS = ["attestor-1", "attestor-2", "attestor-3", "operator", "launch-signer", "dbc-config", "fumpad-program-keypair"] as const;
+export const HOT_KEYS = ["attestor-1", "attestor-2", "attestor-3", "operator", "launch-signer", "dbc-config", "dbc-config-first-coin", "fumpad-program-keypair"] as const;
 /** The hot keys `--step fund` tops up (in this order). */
 export const FUNDED_KEYS = ["operator", "attestor-1", "attestor-2", "attestor-3"] as const;
 export type FundedKey = (typeof FUNDED_KEYS)[number];
@@ -60,6 +62,12 @@ export interface MainnetConfig {
   budgetSol?: number;
   /** extra program-data bytes reserved at deploy (`--max-len` = .so + this; default 0; MULTISIG.md: extend later) */
   programHeadroomBytes?: number;
+  /**
+   * The one-off first-coin launch config (user decision 2026-10-14, INTERFACE §5.9): `feeWallet` receives 1.4% of the
+   * first coin's volume and FUMPAD's whole launch-window share; 1.0% → its buyback. Required: `config` / `init`
+   * allow-list it next to the standard config. `maxCoins` default 1. Other fields are notes.
+   */
+  firstCoin?: { feeWallet: string; maxCoins?: number; [note: string]: unknown };
 }
 
 /** The operator (jobs keeper) carries the graduation-setup float; attestors only ticket / marker rent. */

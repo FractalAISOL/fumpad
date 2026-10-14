@@ -218,6 +218,11 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
         ) : (
           <p>Snipe protection is switched off for new launches right now: trades pay only the {fee}% fee from the first slot.</p>
         )}
+        <p>
+          <b>One exception:</b> FUMPAD&apos;s first coin launched on a one-off config that charges 3% per trade, before and after graduation (99% falling to
+          3% over its first ~10 s). Meteora keeps a fifth; of FUMPAD&apos;s 2.4%, 1% buys the coin into its reward pool and 1.4% goes to a designated wallet,
+          which also gets FUMPAD&apos;s share of that coin&apos;s launch-window fees. That config takes one coin only and leaves the allow-list after it. Each coin&apos;s page shows its own fee.
+        </p>
       </DocSection>
 
       <DocSection id="graduation" title="Graduation">

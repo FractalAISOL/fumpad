@@ -13,7 +13,8 @@
  *   extend-program         grow the program data (unchecked ExtendProgram: any payer, ≥ 10,240 bytes)
  *
  * Actions (`--action`): accept-admin · set-pause --bits <0..31> · cancel-params · cancel-admin ·
- *   propose-admin --new-admin <pk> --treasury <pk> --guardian <pk> · upgrade --buffer <pk> --spill <pk>
+ *   propose-admin --new-admin <pk> --treasury <pk> --guardian <pk> · upgrade --buffer <pk> --spill <pk> ·
+ *   remove-config --config <pk> (queue_config remove: the first-coin config after the first coin, LAUNCH-DAY.md)
  *   (no "extend": the loader refuses it from a vault CPI; use the `extend-program` command, permissionless).
  *
  * Every write simulates first and only sends with `--yes`. `--cluster <mainnet|devnet|local>` must match the
@@ -52,6 +53,7 @@ import {
   PAUSE_ALL,
   programDataPda,
   proposeAdminIx,
+  queueConfigIx,
   setPauseIx,
 } from "@fumpad/sdk";
 
@@ -364,6 +366,8 @@ export type Action =
   | { kind: "cancel-admin" }
   | { kind: "propose-admin"; newAdmin: PublicKey; treasury: PublicKey; guardian: PublicKey }
   | { kind: "upgrade"; buffer: PublicKey; spill: PublicKey }
+  /** queue_config(config, remove) — e.g. the first-coin config right after the first coin (LAUNCH-DAY.md) */
+  | { kind: "remove-config"; config: PublicKey }
   | { kind: "custom"; name: string; ixs: (vault: PublicKey) => TransactionInstruction[] };
 
 export function actionIxs(a: Action, vault: PublicKey): TransactionInstruction[] {
@@ -381,6 +385,8 @@ export function actionIxs(a: Action, vault: PublicKey): TransactionInstruction[]
       return [proposeAdminIx(vault, a.newAdmin, a.treasury, a.guardian)];
     case "upgrade":
       return [upgradeIx({ buffer: a.buffer, spill: a.spill, authority: vault })];
+    case "remove-config":
+      return [queueConfigIx(vault, a.config, false)];
     case "custom":
       return a.ixs(vault);
   }
@@ -504,8 +510,10 @@ function parseAction(args: ReturnType<typeof parseArgs>): Action {
       return { kind: "propose-admin", newAdmin: pk("new-admin"), treasury: pk("treasury"), guardian: pk("guardian") };
     case "upgrade":
       return { kind: "upgrade", buffer: pk("buffer"), spill: pk("spill") };
+    case "remove-config":
+      return { kind: "remove-config", config: pk("config") };
     default:
-      throw new Error("unknown --action (accept-admin | set-pause | cancel-params | cancel-admin | propose-admin | upgrade)");
+      throw new Error("unknown --action (accept-admin | set-pause | cancel-params | cancel-admin | propose-admin | upgrade | remove-config)");
   }
 }
 

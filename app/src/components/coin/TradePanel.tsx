@@ -10,6 +10,7 @@ import { useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 import { minOutFromQuote } from "@/chain/build";
+import { coinFeeView } from "@/data/fees";
 
 /** Solana's target slot time. */
 const SLOT_SECS = 0.4;
@@ -94,8 +95,10 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
   const files = side === "sell" && t?.files;
   // D33: a trade in the launch window pays the DBC scheduler's fee (quoted at the current slot), buys and sells alike.
   const snipe = quote?.snipeTaxSol && quote.snipeTaxBps ? { sol: quote.snipeTaxSol, pct: quote.snipeTaxBps / 100 } : null;
-  const snipeWait = snipe ? snipeWaitSecs(quote!.snipeTaxBps!, params) : 0;
-  const feePct = snipe ? snipe.pct : params.feeBps / 100;
+  // The coin's own fee schedule (a first-coin config coin trades at 3%; INTERFACE §5.9), never the protocol default.
+  const fees = coinFeeView(params, coin);
+  const snipeWait = snipe ? snipeWaitSecs(quote!.snipeTaxBps!, fees) : 0;
+  const feePct = snipe ? snipe.pct : fees.feeBps / 100;
   const completes = side === "buy" && !!quote?.partialFill;
 
   const submit = async () => {
@@ -278,9 +281,9 @@ export function TradePanel({ coin, myTicket }: { coin: CoinDetail; myTicket?: Ti
         <p className={s.snipe} role="status">
           <b>Snipe protection:</b> this {side} pays a <span className={cx("num", s.snipePct)}>{f.fixed(snipe.pct, 0)}%</span> fee — wait ~{snipeWait} s.
           <small>
-            Trades in the first {f.int(params.snipeWindowSlots)} slots after launch pay up to {f.fixed(params.snipeStartBps / 100, 0)}%, falling to{" "}
-            {f.fixed(params.feeBps / 100, 2)}% in about {f.fixed(Math.max(1, params.snipeWindowSlots) * SLOT_SECS, 1)} s. FUMPAD&apos;s share goes to $
-            {coin.symbol}&apos;s reward pool.
+            Trades in the first {f.int(fees.snipeWindowSlots)} slots after launch pay up to {f.fixed(fees.snipeStartBps / 100, 0)}%, falling to{" "}
+            {f.fixed(fees.feeBps / 100, 2)}% in about {f.fixed(Math.max(1, fees.snipeWindowSlots) * SLOT_SECS, 1)} s. FUMPAD&apos;s share goes to{" "}
+            {fees.wallet ? "a designated wallet (this coin's first-coin fee policy)" : <>${coin.symbol}&apos;s reward pool</>}.
           </small>
         </p>
       )}

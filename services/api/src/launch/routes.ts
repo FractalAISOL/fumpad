@@ -213,7 +213,6 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
           minTokensOut,
           priorityMicroLamports: p.priority > 0 ? p.priority : undefined,
           launchSigner: launchSigner?.publicKey,
-          feePolicy: slot.policy.kind !== FEE_POLICY.standard,
         });
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
         const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message();

@@ -140,17 +140,19 @@ export interface CoinAccount {
   leftoverTokens: bigint;
   /** L5: last PREGRAD_RING_LEN keeper pre-grad samples (see `pregradMedianQ64`). */
   pregradRing: PregradRing;
-  /** Fee policy kind snapshotted at registration (`FEE_POLICY`); non-zero → details in `CoinFeePolicy` (`feePolicyPda`), `feeSplit` unused (zero). */
+  /** Fee policy kind snapshotted at registration (`FEE_POLICY`); non-zero → `feePolicy` (the account's tail) holds it and `feeSplit` is unused (zero). */
   feePolicyKind: number;
+  /**
+   * Wallet-split coins only: the policy snapshotted at `register_coin` — the tail appended to the Coin account
+   * (`COIN_POLICY_TAIL_OFFSET`, 47 bytes: FeePolicy 39 + wallet_paid u64) — and what it has paid the wallet so far.
+   */
+  feePolicy?: FeePolicy;
+  walletPaidLamports?: bigint;
 }
 
-export interface CoinFeePolicyAccount {
-  bump: number;
-  mint: PublicKey;
-  dbcConfig: PublicKey;
-  policy: FeePolicy;
-  walletPaidLamports: bigint;
-}
+/** Offset of a wallet-split coin's policy tail (= the standard Coin account length) and its length. */
+export const COIN_ACCOUNT_LEN = 546;
+export const COIN_POLICY_TAIL_LEN = 47;
 
 /** L5: ring of keeper pre-graduation DBC spot samples (prices Q64.64 saturated to u64; ts unix seconds). */
 export interface PregradRing {
@@ -213,7 +215,20 @@ const strip = <T>(o: T & { reserved?: unknown }): T => {
   return o;
 };
 
+/** Global account length (with discriminator) since the fee policies (2026-10-14); the previous layout was 1,044 bytes. */
+export const GLOBAL_ACCOUNT_LEN = 1_491;
+export const GLOBAL_ACCOUNT_LEN_V1 = 1_044;
+
+/**
+ * Decode Global. A pre-fee-policy Global (1,044 bytes, before `migrate_global` grew it) decodes with its new tail read
+ * as zero — standard policies, no coin counts, nothing pending — exactly what `migrate_global` writes.
+ */
 export function decodeGlobal(data: Uint8Array): GlobalAccount {
+  if (data.length === GLOBAL_ACCOUNT_LEN_V1) {
+    const grown = new Uint8Array(GLOBAL_ACCOUNT_LEN);
+    grown.set(data);
+    data = grown;
+  }
   const g = decode<Record<string, unknown>>("Global", data);
   return strip({
     ...(g as unknown as GlobalAccount),
@@ -221,13 +236,22 @@ export function decodeGlobal(data: Uint8Array): GlobalAccount {
     pendingParams: paramsFromIdl(g.pendingParams as Record<string, unknown>),
   });
 }
-export const decodeCoin = (data: Uint8Array): CoinAccount => strip(decode<CoinAccount>("Coin", data));
-export const decodeCoinFeePolicy = (data: Uint8Array): CoinFeePolicyAccount => strip(decode<CoinFeePolicyAccount>("CoinFeePolicy", data));
+/** Decode a Coin (+ its fee-policy tail when `feePolicyKind != 0`: kind u8, buyback u16, wallet u16, max u16, wallet, paid u64). */
+export function decodeCoin(data: Uint8Array): CoinAccount {
+  const c = strip(decode<CoinAccount>("Coin", data));
+  if (c.feePolicyKind && data.length >= COIN_ACCOUNT_LEN + COIN_POLICY_TAIL_LEN) {
+    const o = COIN_ACCOUNT_LEN;
+    const v = new DataView(data.buffer, data.byteOffset + o, COIN_POLICY_TAIL_LEN);
+    c.feePolicy = { kind: data[o], buybackShare: v.getUint16(1, true), walletShare: v.getUint16(3, true), maxCoins: v.getUint16(5, true), wallet: new PublicKey(data.subarray(o + 7, o + 39)) };
+    c.walletPaidLamports = v.getBigUint64(39, true);
+  }
+  return c;
+}
 export const decodePosition = (data: Uint8Array): PositionAccount => strip(decode<PositionAccount>("Position", data));
 export const decodeTicket = (data: Uint8Array): TicketAccount => strip(decode<TicketAccount>("Ticket", data));
 export const decodeConsumed = (data: Uint8Array): ConsumedAccount => decode<ConsumedAccount>("Consumed", data);
 
-export function accountDiscriminator(name: "Global" | "Coin" | "CoinFeePolicy" | "Position" | "Ticket" | "Consumed" | "Observations" | "ClaimQueue"): Uint8Array {
+export function accountDiscriminator(name: "Global" | "Coin" | "Position" | "Ticket" | "Consumed" | "Observations" | "ClaimQueue"): Uint8Array {
   const a = (FUMPAD_IDL as unknown as { accounts: { name: string; discriminator: number[] }[] }).accounts.find((x) => x.name === name);
   if (!a) throw new Error(`no account ${name}`);
   return Uint8Array.from(a.discriminator);

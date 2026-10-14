@@ -24,6 +24,7 @@ import {
   DAMM_V2_PROGRAM_ID,
   DBC_PROGRAM_ID,
   DEFAULT_PARAMS,
+  type FeePolicy,
   FUMPAD_PROGRAM_ID,
   fumpadCoder,
   globalPda,
@@ -34,6 +35,7 @@ import {
   paramsToIdl,
   PYTH_RECEIVER_PROGRAM_ID,
   PYTH_SOL_USD_ACCOUNT,
+  STANDARD_FEE_POLICY,
 } from "@fumpad/sdk";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -87,6 +89,8 @@ export interface GlobalPreload {
   operators: PublicKey[];
   params: Params;
   configs: PublicKey[];
+  /** Fee policy of `configs[i]` (INTERFACE §5.9); missing = standard. */
+  policies?: FeePolicy[];
 }
 
 export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
@@ -96,7 +100,9 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
   while (configs.length < MAX_CONFIGS) configs.push(PublicKey.default);
   const operators = [...g.operators];
   while (operators.length < MAX_OPERATORS) operators.push(PublicKey.default);
-  // Encode with the borsh layout directly: Anchor coders cap their buffer at 1000 bytes (Global is 1044).
+  const pol = (p: FeePolicy = STANDARD_FEE_POLICY) => ({ kind: p.kind, buyback_share: p.buybackShare, wallet_share: p.walletShare, max_coins: p.maxCoins, wallet: p.wallet });
+  const policies = configs.map((_, i) => pol(g.policies?.[i]));
+  // Encode with the borsh layout directly: Anchor coders cap their buffer at 1000 bytes (Global is 1,491).
   const layout = (fumpadCoder().types as unknown as { typeLayouts: Map<string, { encode(v: unknown, b: Buffer): number }> }).typeLayouts.get("Global")!;
   const buf = Buffer.alloc(4096);
   const len = layout.encode({
@@ -121,6 +127,10 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
     pending_config_add: 0,
     pending_config_eta: bn(0n),
     operators,
+    config_policies: policies,
+    config_coins: Array(MAX_CONFIGS).fill(0),
+    pending_config_policy: pol(),
+    reserved: Array(64).fill(0),
   }, buf);
   const data = Buffer.concat([Buffer.from(accountDiscriminator("Global")), buf.subarray(0, len)]);
   mkdirSync(LOCAL, { recursive: true });

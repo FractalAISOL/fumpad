@@ -27,7 +27,7 @@ import type { SilentPolicy } from "./allowlist";
 import { type BuiltTx, type PreparedTrade, buildClaimTx, prepareBuy, prepareSell, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient } from "./build";
 import { getConnection } from "./connection";
 import { txErrorMessage as programErrorMessage } from "./errors";
-import { type PrepareArgs, prepareLaunchSigned, sendBuilt as sendBuiltTx, signAndSendLaunch } from "./flow";
+import { type LaunchConfigInfo, type PrepareArgs, prepareLaunchSigned, sendBuilt as sendBuiltTx, signAndSendLaunch } from "./flow";
 import { instantDecision, lamportsSol, simulateSpend, worstCaseSpend } from "./limits";
 import { VANITY_SUFFIX } from "./program";
 import type { FumpadSigner } from "./signer";
@@ -73,6 +73,10 @@ export interface LaunchArgs {
   /** Metadata JSON URI (image + description), uploaded before the transaction. */
   uri: string;
   initialBuySol: number;
+  /** The one-off first-coin launch config (3% fee; contracts INTERFACE §5.9). Only the API decides if it is offered. */
+  launchConfig?: "first_coin";
+  /** The trading fee (bps) the review step shows; the launch must carry exactly this fee. */
+  expectedFeeBps?: number;
 }
 
 /**
@@ -89,6 +93,8 @@ export interface PreparedLaunch {
   /** base64 v0 transaction (live only). */
   transaction?: string;
   lastValidBlockHeight?: number;
+  /** The config (and its real fees) the API prepared the launch on (live only; re-checked on chain before signing). */
+  config?: LaunchConfigInfo;
 }
 
 export interface AutoClaimArgs {
@@ -130,6 +136,8 @@ const prepareArgs = (a: LaunchArgs): PrepareArgs => ({
   symbol: a.symbol,
   uri: a.uri,
   initialBuyLamports: a.initialBuySol > 0 ? solToLamports(a.initialBuySol) : BigInt(0),
+  launchConfig: a.launchConfig,
+  expectedFeeBps: a.expectedFeeBps,
 });
 
 /** Program errors (preflight / confirmation) → one sentence (FUMPAD's own codes, or Meteora's swap failures). */
@@ -406,7 +414,7 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
         const r = await prepareSigned(signer!, args);
         setLaunchStep(null);
         setStatus("idle");
-        return { mint: r.mint, suffix: r.suffix, simulated: false, args, preparedAt: Date.now(), transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight };
+        return { mint: r.mint, suffix: r.suffix, simulated: false, args, preparedAt: Date.now(), transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, config: r.config };
       } catch (e) {
         setLaunchStep(null);
         setStatus("error");
@@ -446,11 +454,12 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           // (the signed ownership message is reused while it is fresh, else signed again).
           const r = await prepareSigned(s, p.args);
           if (r.mint !== p.mint) throw new Error("The launch address changed. Review it again before launching.");
-          p = { ...p, transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, preparedAt: Date.now() };
+          if ((r.config?.dbcConfig ?? "") !== (p.config?.dbcConfig ?? "")) throw new Error("The launch config changed. Review it again before launching.");
+          p = { ...p, transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, preparedAt: Date.now(), config: r.config };
         }
         let spend = BigInt(0);
         const { signature } = await signAndSendLaunch(
-          { mint: p.mint, suffix: p.suffix, transaction: p.transaction!, lastValidBlockHeight: p.lastValidBlockHeight! },
+          { mint: p.mint, suffix: p.suffix, transaction: p.transaction!, lastValidBlockHeight: p.lastValidBlockHeight!, config: p.config },
           prepareArgs(p.args),
           {
             connection,

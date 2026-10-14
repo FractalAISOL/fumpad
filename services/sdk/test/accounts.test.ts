@@ -58,6 +58,10 @@ describe("account decoders", () => {
     expect(feePolicyProblems(slot.policy)).toEqual([]);
     expect(g.pendingConfigPolicy.kind).toBe(0);
     expect(configSlot(g, k())).toBeNull();
+    // A pre-fee-policy Global (1,044 bytes, before migrate_global) decodes with a standard tail.
+    const old = decodeGlobal(Buffer.concat([Buffer.from(accountDiscriminator("Global")), buf.subarray(0, 1036)]));
+    expect(old.configs[0].equals(cfg)).toBe(true);
+    expect(old.configPolicies.every((p) => p.kind === 0) && old.configCoins.every((n) => n === 0)).toBe(true);
   });
 
   it("wallet split: exact floors to the wallet, remainder to buyback (1.0 / 1.4 of 2.4)", () => {

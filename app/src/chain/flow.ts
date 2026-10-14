@@ -31,6 +31,21 @@ export interface PrepareArgs {
   uri: string;
   /** The creator's first buy, lamports (fee included); 0 = none. */
   initialBuyLamports: bigint;
+  /** "first_coin": the one-off first-coin launch config (3% fee, contracts INTERFACE §5.9); default the standard one. */
+  launchConfig?: "first_coin";
+  /** The trading fee (bps) the review step showed: the launch is refused unless its config has exactly this fee. */
+  expectedFeeBps?: number;
+}
+
+/** The config the API prepared the launch on, with its fees (POST /v1/launch/prepare `config`). */
+export interface LaunchConfigInfo {
+  kind: "standard" | "first_coin";
+  dbcConfig: string;
+  feeBps: number;
+  snipeStartBps: number;
+  snipeWindowSlots: number;
+  migratedPoolFeeBps: number;
+  feePolicy: { kind: number; buybackShareBps: number; walletShareBps: number; wallet: string | null; maxCoins: number; coinsRegistered: number };
 }
 
 export interface PrepareResult {
@@ -39,6 +54,8 @@ export interface PrepareResult {
   transaction: string;
   lastValidBlockHeight: number;
   suffix: string;
+  /** Absent from older APIs. */
+  config?: LaunchConfigInfo;
 }
 
 /** The prepare body (M-2: with the creator's signed ownership message). */
@@ -50,6 +67,7 @@ export function prepareBody(creator: PublicKey, args: PrepareArgs, auth: LaunchA
     uri: args.uri,
     initialBuyLamports: args.initialBuyLamports > BigInt(0) ? args.initialBuyLamports.toString() : undefined,
     slippageBps: LAUNCH_SLIPPAGE_BPS,
+    ...(args.launchConfig ? { launchConfig: args.launchConfig } : {}),
     auth,
   };
 }
@@ -164,6 +182,8 @@ export interface PreparedTx {
   suffix: string;
   transaction: string;
   lastValidBlockHeight: number;
+  /** What the API says it prepared (re-checked on chain before signing). */
+  config?: LaunchConfigInfo;
 }
 
 /**
@@ -181,10 +201,28 @@ export async function signAndSendLaunch(
   const tx = VersionedTransaction.deserialize(Uint8Array.from(atob(p.transaction), (ch) => ch.charCodeAt(0)));
   // §8.1: the launch co-signer the program requires, from the chain's Global (not from the API).
   const launchSigner = await o.client.launchSigner();
+  // §5.9: the first-coin config only when the user chose it AND the API says it prepared it (checked on chain next).
+  let firstCoinConfig: string | undefined;
+  if (args.launchConfig === "first_coin") {
+    if (p.config?.kind !== "first_coin") throw new Error("Refusing to sign: the API didn't prepare the first-coin launch config you chose.");
+    firstCoinConfig = p.config.dbcConfig;
+  }
   await checkLaunchBinding(
     tx,
-    { wallet: s.publicKey, mint: p.mint, suffix: p.suffix, name: args.name, symbol: args.symbol, uri: args.uri, initialBuyLamports: args.initialBuyLamports, launchSigner },
+    {
+      wallet: s.publicKey,
+      mint: p.mint,
+      suffix: p.suffix,
+      name: args.name,
+      symbol: args.symbol,
+      uri: args.uri,
+      initialBuyLamports: args.initialBuyLamports,
+      launchSigner,
+      firstCoinConfig,
+      expectedFeeBps: args.expectedFeeBps,
+    },
     (config) => o.client.dbcConfig(config),
+    (config) => o.client.configPolicy(config),
   );
   await o.beforeSign?.(tx);
   o.onSigning?.();

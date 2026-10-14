@@ -28,6 +28,7 @@ import {
   type CoinRefs,
   coinAta,
   coinPda,
+  configSlot,
   computeBudgetIxs,
   createAtaIdempotentIx,
   DAMM_V2_PROGRAM_ID,
@@ -275,6 +276,22 @@ export class FumpadClient {
       throw new LayoutError("settings");
     }
     return k && !k.equals(PublicKey.default) ? k.toBase58() : undefined;
+  }
+
+  /**
+   * A DBC config's fee policy on FUMPAD's allow-list (contracts INTERFACE §5.9), from the chain's Global; null when the
+   * config isn't allow-listed. kind 0 = standard, 1 = wallet split (the one-off first-coin config).
+   */
+  async configPolicy(config: PublicKey): Promise<{ kind: number; wallet: string } | null> {
+    const info = await this.connection.getAccountInfo(globalPda(), this.commitment);
+    if (!info || !info.owner.equals(FUMPAD_PROGRAM_ID)) throw new Error("Couldn't read FUMPAD's settings.");
+    let slot: ReturnType<typeof configSlot>;
+    try {
+      slot = configSlot(decodeGlobal(new Uint8Array(info.data)), config);
+    } catch {
+      throw new LayoutError("settings");
+    }
+    return slot ? { kind: slot.policy.kind, wallet: slot.policy.wallet.toBase58() } : null;
   }
 
   /** A FUMPAD DBC config (for the launch's first-buy check). */

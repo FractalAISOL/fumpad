@@ -93,6 +93,23 @@ describe("checkLaunchBinding", () => {
     assert.equal(withBuy.firstBuy?.amountIn, BUDGET);
   });
 
+  it("first-coin config (INTERFACE §5.9): only when the user chose it and the chain lists it as non-standard; the shown fee must be the config's", async () => {
+    const k = vanityKeypair();
+    const std = async () => ({ kind: 0, wallet: "11111111111111111111111111111111" });
+    const special = async () => ({ kind: 1, wallet: Keypair.generate().publicKey.toBase58() });
+    // standard config, standard intent: fine (fee 1.25% = the devnet config's floor)
+    await checkLaunchBinding(launch(k), { ...intentFor(k), expectedFeeBps: 125 }, readCurve, std);
+    // a compromised API slips the launch onto the first-coin config: refused unless the user chose exactly it
+    await refused(checkLaunchBinding(launch(k), intentFor(k), readCurve, special), /first-coin config/);
+    await refused(checkLaunchBinding(launch(k), { ...intentFor(k), firstCoinConfig: Keypair.generate().publicKey.toBase58() }, readCurve, special), /first-coin config/);
+    await checkLaunchBinding(launch(k), { ...intentFor(k), firstCoinConfig: config.toBase58() }, readCurve, special);
+    // the user chose the first-coin config but the launch is on a standard one, or not allow-listed at all
+    await refused(checkLaunchBinding(launch(k), { ...intentFor(k), firstCoinConfig: config.toBase58() }, readCurve, std), /isn't the first-coin/);
+    await refused(checkLaunchBinding(launch(k), intentFor(k), readCurve, async () => null), /allow-list/);
+    // the fee shown must be the config's real fee
+    await refused(checkLaunchBinding(launch(k), { ...intentFor(k), expectedFeeBps: 300 }, readCurve, std), /fee differs/);
+  });
+
   it("refuses other metadata than what the user entered", async () => {
     const k = vanityKeypair();
     await refused(checkLaunchBinding(launch(k, { name: "Pigeon2" }), intentFor(k), readCurve), /metadata/);

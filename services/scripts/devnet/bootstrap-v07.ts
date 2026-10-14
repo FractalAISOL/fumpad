@@ -8,10 +8,17 @@
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step config --yes         # create the FUMPAD DBC config
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step init --yes           # initialize_global (bootstrap keepers, operator, config)
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step operators --yes      # existing Global: migrate_global + set_operators
+ *   npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes       # existing Global (pre-2026-10-14): grow it (migrate_global),
+ *                                                                         # then queue → (timelock) → execute the first-coin config add
+ *   npx tsx scripts/devnet/bootstrap-v07.ts --step first-coin-done --yes  # after the first coin: queue → (timelock) → execute its removal
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes           # top up wallets (plan printed first)
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step verify               # read back Global/config/balances, checklist
  *
- * Steps: keys | config | init | operators | fund | verify | all (= keys, config, init, operators, fund, verify).
+ * Steps: keys | config | init | operators | policies | fund | verify | first-coin-done
+ *   all = keys, config, init, operators, policies, fund, verify (first-coin-done only on its own, after the first coin).
+ * Configs (INTERFACE §5.9): `dbc-config` = the standard config (99% → 1.25% / 8 slots), `dbc-config-first-coin` = the
+ *   one-off first-coin config (99% → 3% / 25 slots, 3% DAMM v2) allow-listed with the wallet-split policy {buyback 100,
+ *   wallet 140 (bps of volume), max_coins 1, wallet = `first-coin-wallet`} (mainnet: config firstCoin.feeWallet).
  * Modes: (none) plan · --simulate (simulateTransaction, sigVerify on) · --yes (send). --simulate of `init` while the
  *   config doesn't exist yet simulates create_config + initialize_global in ONE transaction.
  * Options: --cluster devnet|local (local = rehearsal on solana-test-validator, scripts/local/bootstrap-rehearsal.ts),
@@ -54,10 +61,21 @@ import {
   DBC_POOL_AUTHORITY,
   DBC_PROGRAM_ID,
   type DbcConfigParameters,
+  configSlot,
   dbcCreateConfigIx,
   decodeDbcConfig,
   decodeGlobal,
   DEFAULT_PARAMS,
+  executeConfigIx,
+  FEE_POLICY,
+  type FeePolicy,
+  feePolicyProblems,
+  FIRST_COIN_FEE_BPS,
+  FIRST_COIN_PERIODS,
+  FIRST_COIN_REDUCTION,
+  firstCoinConfigParams,
+  queueConfigIx,
+  STANDARD_FEE_POLICY,
   feeClaimerPda,
   FUMPAD_PROGRAM_ID,
   fumpadConfigParams,
@@ -87,11 +105,21 @@ const sol = (l: bigint | number) => (Number(l) / LAMPORTS_PER_SOL).toFixed(4);
 
 export type Cluster = "devnet" | "local";
 export type Mode = "plan" | "simulate" | "send";
-export type Step = "keys" | "config" | "init" | "operators" | "fund" | "verify";
-export const STEPS: Step[] = ["keys", "config", "init", "operators", "fund", "verify"];
+export type Step = "keys" | "config" | "init" | "operators" | "policies" | "fund" | "verify" | "first-coin-done";
+export const STEPS: Step[] = ["keys", "config", "init", "operators", "policies", "fund", "verify", "first-coin-done"];
+/** `--step all`: everything but `first-coin-done` (that one runs after the first coin launched). */
+export const ALL_STEPS: Step[] = ["keys", "config", "init", "operators", "policies", "fund", "verify"];
 
-/** Keypairs the bootstrap owns (keys dir, mode 600). `dbc-config` = the FUMPAD DBC config account's keypair. */
-export const KEY_NAMES = ["attestor-1", "attestor-2", "attestor-3", "operator", "launch-signer", "treasury", "guardian", "creator", "alice", "bob", "whale", "dbc-config"] as const;
+/** Global account length since the fee policies (2026-10-14); a 1,044-byte Global is the previous layout. */
+export const GLOBAL_LEN = 1_491;
+export const GLOBAL_LEN_V1 = 1_044;
+
+/**
+ * Keypairs the bootstrap owns (keys dir, mode 600). `dbc-config` / `dbc-config-first-coin` = the standard / first-coin
+ * DBC config accounts' keypairs; `first-coin-wallet` = devnet's stand-in for the first coin's fee wallet (mainnet:
+ * config firstCoin.feeWallet, never a hot key).
+ */
+export const KEY_NAMES = ["attestor-1", "attestor-2", "attestor-3", "operator", "launch-signer", "treasury", "guardian", "creator", "alice", "bob", "whale", "dbc-config", "dbc-config-first-coin", "first-coin-wallet"] as const;
 export type KeyName = (typeof KEY_NAMES)[number];
 
 /**
@@ -110,7 +138,19 @@ export const FUND_TARGETS: Partial<Record<KeyName, bigint>> = {
   alice: (SOL * 4n) / 10n,
   bob: (SOL * 4n) / 10n,
   whale: (SOL * 12n) / 10n,
+  // a fee wallet must stay rent-exempt to receive claims (claim_fees refuses otherwise: FeeWalletNotRentExempt)
+  "first-coin-wallet": SOL / 100n,
 };
+
+/** The first-coin config's fee policy (user decision 2026-10-14): of FUMPAD's 2.4%, 1.0% → buyback, 1.4% → `wallet`; one coin. */
+export function firstCoinPolicy(wallet: PublicKey): FeePolicy {
+  return { kind: FEE_POLICY.walletSplit, buybackShare: 100, walletShare: 140, maxCoins: 1, wallet };
+}
+
+/** Why a first-coin DBC config isn't the expected one: every standard check with the first-coin fee numbers. */
+export function firstCoinConfigProblems(owner: PublicKey | null, d: Uint8Array | null, expect: DbcConfigParameters): string[] {
+  return configProblems(owner, d, expect, { periods: FIRST_COIN_PERIODS, reduction: FIRST_COIN_REDUCTION, label: "99% → 3% over 25 × 1 slot" });
+}
 
 /** Global params for devnet: inside `Params::is_valid` bounds, test-friendly; everything else = mainnet defaults. */
 export function bootstrapParams(launchSigner: PublicKey): Params {
@@ -174,7 +214,12 @@ class Keys {
 }
 
 /** Why a DBC config account isn't the expected FUMPAD config (INTERFACE §5.4 structure + our numeric choices). */
-export function configProblems(owner: PublicKey | null, d: Uint8Array | null, expect: DbcConfigParameters): string[] {
+export function configProblems(
+  owner: PublicKey | null,
+  d: Uint8Array | null,
+  expect: DbcConfigParameters,
+  fees: { periods: number; reduction: bigint; label: string } = { periods: SNIPE_PERIODS, reduction: SNIPE_REDUCTION, label: `99% → 1.25% over ${SNIPE_PERIODS} × 1 slot` },
+): string[] {
   if (!d || !owner) return ["config account missing"];
   const out: string[] = [];
   if (!owner.equals(DBC_PROGRAM_ID)) out.push(`owner ${owner.toBase58()} is not DBC`);
@@ -209,8 +254,8 @@ export function configProblems(owner: PublicKey | null, d: Uint8Array | null, ex
     [`migration_quote_threshold ${sol(expect.migrationQuoteThreshold)} SOL`, c.migrationQuoteThreshold === expect.migrationQuoteThreshold],
     [`migration_fee_percentage ${expect.migrationFeePercentage}%`, c.migrationFeePercentage === expect.migrationFeePercentage],
     [
-      `fee scheduler 99% → 1.25% over ${SNIPE_PERIODS} × 1 slot`,
-      c.baseFee.cliffFeeNumerator === SNIPE_CLIFF_FEE_NUMERATOR && c.baseFee.numberOfPeriod === SNIPE_PERIODS && c.baseFee.periodFrequency === 1n && c.baseFee.reductionFactor === SNIPE_REDUCTION && c.baseFee.baseFeeMode === 0,
+      `fee scheduler ${fees.label}`,
+      c.baseFee.cliffFeeNumerator === SNIPE_CLIFF_FEE_NUMERATOR && c.baseFee.numberOfPeriod === fees.periods && c.baseFee.periodFrequency === 1n && c.baseFee.reductionFactor === fees.reduction && c.baseFee.baseFeeMode === 0,
     ],
     [`migrated pool fee ${expect.migratedPoolFeeBps} bps`, c.migratedPoolFeeBps === expect.migratedPoolFeeBps],
     ["enable_first_swap_with_min_fee", c.enableFirstSwapWithMinFee === 1],
@@ -296,32 +341,46 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
   }
 
   const config = () => keys.pub("dbc-config");
-  const readConfig = async () => {
-    const a = await conn.getAccountInfo(config(), "confirmed");
+  const firstConfig = () => keys.pub("dbc-config-first-coin");
+  const expectFirst = firstCoinConfigParams("devnet");
+  const policy = () => firstCoinPolicy(keys.pub("first-coin-wallet"));
+  const readAcc = async (k: PublicKey) => {
+    const a = await conn.getAccountInfo(k, "confirmed");
     return a ? { owner: a.owner, data: new Uint8Array(a.data) } : null;
   };
+  const readConfig = () => readAcc(config());
   const createConfigIx = () => dbcCreateConfigIx({ config: config(), payer: deployer.publicKey, params: expectConfig });
+  const createFirstIx = () => dbcCreateConfigIx({ config: firstConfig(), payer: deployer.publicKey, params: expectFirst });
+  /** [standard, first-coin]: key name, address, expected params, checker, label. */
+  const CONFIGS = () =>
+    [
+      { name: "dbc-config" as const, key: config(), expect: expectConfig, problems: configProblems, ix: createConfigIx, label: `standard: 99% → 1.25% over ${SNIPE_PERIODS} slots, ${expectConfig.migratedPoolFeeBps} bps DAMM v2` },
+      { name: "dbc-config-first-coin" as const, key: firstConfig(), expect: expectFirst, problems: firstCoinConfigProblems, ix: createFirstIx, label: `first coin: 99% → 3% over ${FIRST_COIN_PERIODS} slots, ${FIRST_COIN_FEE_BPS} bps DAMM v2` },
+    ] as const;
 
   // ── config ──────────────────────────────────────────────────────────────
   if (o.steps.includes("config")) {
-    log(`\n▶ config (DBC create_config, devnet curve: ${sol(expectConfig.migrationQuoteThreshold)} SOL raise, migration fee ${expectConfig.migrationFeePercentage}%, 99% → 1.25% over ${SNIPE_PERIODS} slots)`);
-    log(`  config ${config().toBase58()} · fee_claimer ${feeClaimerPda().toBase58()} · leftover_receiver ${rewardPoolPda().toBase58()}`);
-    const cur = await readConfig();
-    if (cur) {
-      const p = configProblems(cur.owner, cur.data, expectConfig);
-      log(p.length ? `  EXISTS but wrong: ${p.join("; ")}` : "  exists and matches (skip)");
-      if (p.length) failures.push(`config: ${p.join("; ")}`);
-    } else {
-      const r = await execute("create_config", [createConfigIx()], [keys.get("dbc-config")], [config()]);
+    log(`\n▶ config (DBC create_config ×2, devnet curve: ${sol(expectConfig.migrationQuoteThreshold)} SOL raise, migration fee ${expectConfig.migrationFeePercentage}%; the standard + the first-coin config)`);
+    log(`  fee_claimer ${feeClaimerPda().toBase58()} · leftover_receiver ${rewardPoolPda().toBase58()}`);
+    for (const c of CONFIGS()) {
+      log(`  ${c.name} ${c.key.toBase58()} (${c.label})`);
+      const cur = await readAcc(c.key);
+      if (cur) {
+        const p = c.problems(cur.owner, cur.data, c.expect);
+        log(p.length ? `  EXISTS but wrong: ${p.join("; ")}` : "  exists and matches (skip)");
+        if (p.length) failures.push(`${c.name}: ${p.join("; ")}`);
+        continue;
+      }
+      const r = await execute(`create_config (${c.name})`, [c.ix()], [keys.get(c.name)], [c.key]);
       if (o.mode === "simulate" && r.ok) {
-        const p = configProblems(r.accounts[0]?.owner ?? null, r.accounts[0]?.data ?? null, expectConfig);
+        const p = c.problems(r.accounts[0]?.owner ?? null, r.accounts[0]?.data ?? null, c.expect);
         log(p.length ? `  simulated config FAILS §5.4: ${p.join("; ")}` : "  simulated config passes every §5.4 check (what initialize_global validates)");
-        if (p.length) failures.push(`simulated config: ${p.join("; ")}`);
+        if (p.length) failures.push(`simulated ${c.name}: ${p.join("; ")}`);
       }
       if (o.mode === "send") {
-        const after = await readConfig();
-        const p = configProblems(after?.owner ?? null, after?.data ?? null, expectConfig);
-        if (p.length) failures.push(`config after create: ${p.join("; ")}`);
+        const after = await readAcc(c.key);
+        const p = c.problems(after?.owner ?? null, after?.data ?? null, c.expect);
+        if (p.length) failures.push(`${c.name} after create: ${p.join("; ")}`);
       }
     }
   }
@@ -330,7 +389,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
   const expectedKeepers = () => [keys.pub("attestor-1"), keys.pub("attestor-2"), keys.pub("attestor-3")];
   const expectedParams = () => bootstrapParams(keys.pub("launch-signer"));
   if (o.steps.includes("init")) {
-    log("\n▶ init (initialize_global: bootstrap keepers attestor-1/2/3 with no 6 h freeze, operators [operator], bootstrap config with no 48 h timelock)");
+    log("\n▶ init (initialize_global: bootstrap keepers attestor-1/2/3 with no 6 h freeze, operators [operator], configs [standard, first-coin + its wallet-split policy] with no timelock)");
     const params = expectedParams();
     const bad = paramsProblems(params);
     if (bad.length) throw new Error(`bootstrap params invalid: ${bad.join("; ")}`);
@@ -346,13 +405,25 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       failures.push(`upgrade authority ${prog.authority?.toBase58() ?? "none"} ≠ deployer`);
       log(`  REFUSING: upgrade authority ${prog.authority?.toBase58() ?? "none"} is not the deployer (initialize_global would fail Unauthorized)`);
     } else {
-      const initIx = initializeGlobalIx({ payer: deployer.publicKey, admin: deployer.publicKey, platformTreasury: keys.pub("treasury"), clusterTag: tag, params, keepers: expectedKeepers(), operators: [keys.pub("operator")], configs: [config()] });
-      const cfg = await readConfig();
-      if (!cfg && o.mode === "send") {
-        failures.push("config missing: run --step config --yes first");
-        log("  config missing: run --step config --yes first");
-      } else if (!cfg) {
-        await execute("create_config + initialize_global (bundled for simulation)", [createConfigIx(), initIx], [keys.get("dbc-config")], [globalPda()], 0);
+      const pp = feePolicyProblems(policy());
+      if (pp.length) throw new Error(`first-coin policy invalid: ${pp.join("; ")}`);
+      log(`  first-coin policy: buyback ${policy().buybackShare} / wallet ${policy().walletShare} bps of volume, max_coins ${policy().maxCoins}, wallet ${policy().wallet.toBase58()}`);
+      const initIx = initializeGlobalIx({
+        payer: deployer.publicKey,
+        admin: deployer.publicKey,
+        platformTreasury: keys.pub("treasury"),
+        clusterTag: tag,
+        params,
+        keepers: expectedKeepers(),
+        operators: [keys.pub("operator")],
+        configs: [config(), firstConfig()],
+        policies: [STANDARD_FEE_POLICY, policy()],
+      });
+      const [cfg, cfgFirst] = [await readConfig(), await readAcc(firstConfig())];
+      if (!cfg || !cfgFirst) {
+        // Two create_config + initialize_global exceed 1,232 bytes: init can only be simulated once both configs exist.
+        log("  config(s) missing: run --step config --yes first (initialize_global needs both configs on chain to simulate)");
+        if (o.mode === "send") failures.push("config(s) missing: run --step config --yes first");
       } else {
         await execute("initialize_global", [initIx], [], [globalPda()]);
       }
@@ -387,6 +458,61 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
     }
   }
 
+  // ── policies (a Global from before the fee policies: grow it, then allow-list the first-coin config) ──────
+  // Timelocked like every later config change (CONFIG_TIMELOCK_SECS): queue now, execute once the eta passed (rerun).
+  const configChange = async (what: "add" | "remove") => {
+    const ga = await conn.getAccountInfo(globalPda(), "confirmed");
+    if (!ga) return log("  no Global yet: run --step init (it allow-lists both configs with their policies)");
+    if (ga.data.length !== GLOBAL_LEN) return log(`  Global is ${ga.data.length} bytes (the pre-policy layout): run --step policies first (migrate_global)`);
+    const g = decodeGlobal(new Uint8Array(ga.data));
+    const slot = configSlot(g, firstConfig());
+    const done = what === "add" ? !!slot : !slot;
+    if (done) {
+      log(what === "add" ? `  first-coin config allow-listed: policy kind ${slot!.policy.kind}, wallet ${slot!.policy.wallet.toBase58()}, coins ${slot!.coins}/${slot!.policy.maxCoins || "∞"} (skip)` : "  first-coin config is not on the allow-list (skip)");
+      return;
+    }
+    if (!g.admin.equals(deployer.publicKey)) {
+      failures.push(`${what} first-coin config: the admin is not the deployer (the admin multisig must queue it)`);
+      return log(`  REFUSING: admin ${g.admin.toBase58()} is not the deployer`);
+    }
+    const now = BigInt(Math.floor(Date.now() / 1000));
+    const pendingThis = g.pendingConfigEta !== 0n && g.pendingConfig.equals(firstConfig()) && (g.pendingConfigAdd === 1) === (what === "add");
+    if (pendingThis && now >= g.pendingConfigEta) {
+      await execute(`execute_config (${what} first-coin config)`, [executeConfigIx(deployer.publicKey, firstConfig())], [], [globalPda()]);
+    } else if (pendingThis) {
+      log(`  queued; executable after ${new Date(Number(g.pendingConfigEta) * 1000).toISOString()} (rerun this step then)`);
+    } else if (g.pendingConfigEta !== 0n) {
+      failures.push(`another config change is pending (${g.pendingConfig.toBase58()}): cancel or execute it first`);
+    } else {
+      const cfgFirst = await readAcc(firstConfig());
+      if (what === "add" && !cfgFirst) return log("  first-coin config account missing: run --step config --yes first");
+      await execute(`queue_config (${what} first-coin config${what === "add" ? " + wallet-split policy" : ""})`, [queueConfigIx(deployer.publicKey, firstConfig(), what === "add", what === "add" ? policy() : STANDARD_FEE_POLICY)], [], [globalPda()]);
+    }
+  };
+  if (o.steps.includes("policies")) {
+    log("\n▶ policies (Global 1,044 → 1,491 bytes via migrate_global; then queue → timelock → execute the first-coin config add)");
+    const ga = await conn.getAccountInfo(globalPda(), "confirmed");
+    if (!ga) log("  no Global yet: run --step init");
+    else if (ga.data.length === GLOBAL_LEN_V1) {
+      const g = decodeGlobal(new Uint8Array(ga.data)); // a 1,044-byte Global decodes with a zero tail
+      if (!g.admin.equals(deployer.publicKey)) {
+        failures.push("policies: the admin is not the deployer (the admin multisig must run migrate_global)");
+        log(`  REFUSING: admin ${g.admin.toBase58()} is not the deployer`);
+      } else {
+        log(`  Global is ${GLOBAL_LEN_V1} bytes: migrate_global grows it (admin pays ${sol(BigInt(await conn.getMinimumBalanceForRentExemption(GLOBAL_LEN)) - BigInt(ga.lamports))} SOL rent)`);
+        await execute("migrate_global (grow to the fee-policy layout)", [migrateGlobalIx(deployer.publicKey)], [], [globalPda()]);
+      }
+    } else if (ga.data.length !== GLOBAL_LEN) failures.push(`policies: unexpected Global length ${ga.data.length}`);
+    if (o.mode === "send" || (await conn.getAccountInfo(globalPda(), "confirmed"))?.data.length === GLOBAL_LEN) await configChange("add");
+    else log("  (the first-coin config add follows once migrate_global landed: rerun with --yes)");
+  }
+
+  // ── first-coin-done (right after the first coin launched: take its config off the allow-list) ───────────
+  if (o.steps.includes("first-coin-done")) {
+    log("\n▶ first-coin-done (queue → timelock → execute the first-coin config REMOVAL; the launched coin keeps its policy snapshot)");
+    await configChange("remove");
+  }
+
   // ── fund ────────────────────────────────────────────────────────────────
   if (o.steps.includes("fund")) {
     log(`\n▶ fund (from the deployer; budget ${sol(o.budgetLamports)} SOL committed incl. program rent)`);
@@ -394,7 +520,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
     const soLen = existsSync(SO_PATH) ? readFileSync(SO_PATH).length : 0;
     const programRent = prog.deployed ? prog.programDataLamports : BigInt(await conn.getMinimumBalanceForRentExemption(45 + soLen));
     const configRent = BigInt(await conn.getMinimumBalanceForRentExemption(1048));
-    const globalRent = BigInt(await conn.getMinimumBalanceForRentExemption(1044));
+    const globalRent = BigInt(await conn.getMinimumBalanceForRentExemption(GLOBAL_LEN)) + BigInt(await conn.getMinimumBalanceForRentExemption(1048));
     const rows: { name: KeyName; to: PublicKey; have: bigint; target: bigint; topUp: bigint }[] = [];
     for (const [name, target] of Object.entries(FUND_TARGETS) as [KeyName, bigint][]) {
       const to = keys.pub(name);
@@ -437,9 +563,11 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
     checks.push(["Meteora DBC + DAMM v2 programs present", !!dbc?.executable && !!damm?.executable]);
     checks.push([`DAMM v2 migration config ${DAMM_V2_MIGRATION_CONFIG.toBase58().slice(0, 8)}… exists`, !!mcfg && mcfg.owner.equals(DAMM_V2_PROGRAM_ID)]);
     checks.push(["DBC pool authority holds flash rent (≥ 0.05 SOL)", BigInt(flash) >= SOL / 20n, `${sol(flash)} SOL`]);
-    const cfg = keys.has("dbc-config") ? await readConfig() : null;
-    const cp = configProblems(cfg?.owner ?? null, cfg?.data ?? null, expectConfig);
-    checks.push([`DBC config ${keys.has("dbc-config") ? config().toBase58() : "?"} passes §5.4 + devnet curve`, cp.length === 0, cp.join("; ") || undefined]);
+    for (const c of keys.has("dbc-config-first-coin") ? CONFIGS() : CONFIGS().slice(0, 1)) {
+      const a = await readAcc(c.key);
+      const cp = c.problems(a?.owner ?? null, a?.data ?? null, c.expect);
+      checks.push([`DBC config ${c.name} ${c.key.toBase58()} passes §5.4 + devnet curve (${c.label})`, cp.length === 0, cp.join("; ") || undefined]);
+    }
     const ga = await conn.getAccountInfo(globalPda(), "confirmed");
     checks.push([`Global ${globalPda().toBase58()} initialized`, !!ga]);
     if (ga) {
@@ -453,8 +581,20 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       checks.push(["keepers = attestor-1/2/3", same(g.keepers, ks)]);
       checks.push(["operators = [operator] (the jobs key), disjoint from the attestors", g.operators[0].equals(keys.pub("operator")) && g.operators.slice(1).every((k) => k.equals(PublicKey.default)) && !ks.some((k) => g.operators.some((x) => x.equals(k)))]);
       checks.push(["bootstrap keepers: keeper_added_at = 0 (no 6 h freeze), all 3 active now", g.keeperAddedAt.every((t) => t === 0n) && activeKeepers(g, now).length === 3, g.keeperAddedAt.join(",")]);
-      checks.push(["configs = [FUMPAD DBC config] (no 48 h timelock)", keys.has("dbc-config") && g.configs[0].equals(config()) && g.configs.slice(1).every((c) => c.equals(PublicKey.default)) && g.configs.length === MAX_CONFIGS]);
-      checks.push(["nothing pending (params / config / admin), not paused", g.pendingEta === 0n && g.pendingConfigEta === 0n && g.pendingAdminEta === 0n && g.paused === 0]);
+      checks.push([`Global is the fee-policy layout (${GLOBAL_LEN} bytes)`, ga.data.length === GLOBAL_LEN, `${ga.data.length} bytes`]);
+      const std = configSlot(g, config());
+      checks.push(["configs[0] = the standard DBC config, standard fee policy", !!std && std.index === 0 && std.policy.kind === FEE_POLICY.standard && g.configs.length === MAX_CONFIGS]);
+      const first = keys.has("dbc-config-first-coin") ? configSlot(g, firstConfig()) : null;
+      const want = keys.has("first-coin-wallet") ? policy() : null;
+      const samePolicy = !!first && !!want && first.policy.kind === want.kind && first.policy.buybackShare === want.buybackShare && first.policy.walletShare === want.walletShare && first.policy.maxCoins === want.maxCoins && first.policy.wallet.equals(want.wallet);
+      checks.push([
+        "first-coin config allow-listed with the wallet-split policy {100, 140, max 1, first-coin-wallet} (or already removed after the first coin: --step first-coin-done)",
+        samePolicy || (!first && keys.has("dbc-config-first-coin")),
+        first ? `coins ${first.coins}/${first.policy.maxCoins}` : "not allow-listed",
+      ]);
+      checks.push(["only those configs", g.configs.filter((c) => !c.equals(PublicKey.default)).length === (first ? 2 : 1)]);
+      checks.push(["nothing pending (params / admin), not paused", g.pendingEta === 0n && g.pendingAdminEta === 0n && g.paused === 0]);
+      if (g.pendingConfigEta !== 0n) checks.push([`config change pending (${g.pendingConfig.toBase58()} ${g.pendingConfigAdd ? "add" : "remove"}, eta ${new Date(Number(g.pendingConfigEta) * 1000).toISOString()}): rerun policies / first-coin-done after it`, true]);
       const pd = paramsDiff(g.params, expectedParams());
       checks.push(["params = devnet bootstrap params (launch_signer = launch-signer)", pd.length === 0, pd.join("; ") || undefined]);
     }
@@ -495,8 +635,8 @@ function parseArgs(argv: string[]) {
   const cluster = (get("--cluster") ?? "devnet") as Cluster;
   if (cluster !== "devnet" && cluster !== "local") throw new Error("--cluster devnet|local");
   const stepArg = get("--step") ?? "verify";
-  const steps = stepArg === "all" ? STEPS : stepArg.split(",").map((s) => s.trim() as Step);
-  for (const s of steps) if (!STEPS.includes(s)) throw new Error(`unknown step ${s} (keys|config|init|operators|fund|verify|all)`);
+  const steps = stepArg === "all" ? ALL_STEPS : stepArg.split(",").map((s) => s.trim() as Step);
+  for (const s of steps) if (!STEPS.includes(s)) throw new Error(`unknown step ${s} (keys|config|init|operators|policies|fund|verify|first-coin-done|all)`);
   const simulate = argv.includes("--simulate");
   const yes = argv.includes("--yes");
   if (simulate && yes) throw new Error("--simulate and --yes are exclusive");

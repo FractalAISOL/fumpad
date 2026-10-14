@@ -75,6 +75,15 @@ export function LaunchView() {
   const [review, setReview] = useState(false);
   const [done, setDone] = useState<{ symbol: string; mint: string; suffix: string } | null>(null);
   const [prepared, setPrepared] = useState<PreparedLaunch | null>(null);
+  /**
+   * `?config=first-coin`: ask the API for the one-off first-coin launch config (3% fee, contracts INTERFACE §5.9). The
+   * API decides whether it is offered (server flag + on-chain allow-list); the review step then shows its real fee.
+   */
+  const [firstCoin, setFirstCoin] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from the URL on the client
+    setFirstCoin(new URLSearchParams(window.location.search).get("config") === "first-coin");
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgId = useId();
 
@@ -119,15 +128,21 @@ export function LaunchView() {
 
   // D18 step 1: reserve the coin's `…fmbL` address (server-side vanity mint) for the review.
   const openReview = async () => {
-    const p = await tx.prepareLaunch({ name, symbol, uri: "ipfs://pending", initialBuySol: firstBuy });
+    const p = await tx.prepareLaunch({ name, symbol, uri: "ipfs://pending", initialBuySol: firstBuy, ...(firstCoin ? { launchConfig: "first_coin" as const } : {}) });
     if (!p) {
       toast(tx.error ?? "Couldn't prepare the launch. Nothing was charged.");
       tx.reset();
       return;
     }
-    setPrepared(p);
+    // The fee shown in the review is the prepared config's real fee; signing then checks it against the chain.
+    const fee = p.config?.feeBps ?? PARAMS.feeBps;
+    setPrepared({ ...p, args: { ...p.args, expectedFeeBps: p.simulated ? undefined : fee } });
     setReview(true);
   };
+  /** The prepared launch's config fees (the one-off first-coin config: 3%, its own split), else the protocol's. */
+  const cfgFee = prepared?.config;
+  const reviewFeePct = f.fixed((cfgFee?.feeBps ?? PARAMS.feeBps) / 100, (cfgFee?.feeBps ?? PARAMS.feeBps) % 100 ? 2 : 0);
+  const firstCoinReview = cfgFee?.kind === "first_coin" ? cfgFee : null;
   const closeReview = () => {
     setReview(false);
     setPrepared(null);
@@ -427,11 +442,21 @@ export function LaunchView() {
           </div>
         </div>
         {prepared && <MintAddress mint={prepared.mint} suffix={prepared.suffix} />}
+        {firstCoinReview && (
+          <p className={s.hint} role="note">
+            <b>First-coin launch config.</b> Every trade of ${symbol} pays a <b className="num">{reviewFeePct}%</b> fee, on any app, before and after
+            graduation (the first ~{f.fixed(firstCoinReview.snipeWindowSlots * 0.4, 0)} s fall from {f.fixed(firstCoinReview.snipeStartBps / 100, 0)}% to{" "}
+            {reviewFeePct}%). Meteora keeps a fifth; of FUMPAD&apos;s {f.fixed(((firstCoinReview.feePolicy.buybackShareBps + firstCoinReview.feePolicy.walletShareBps) / 100), 1)}%,{" "}
+            {f.fixed(firstCoinReview.feePolicy.buybackShareBps / 100, 1)}% buys ${symbol} into its reward pool and {f.fixed(firstCoinReview.feePolicy.walletShareBps / 100, 1)}%
+            (plus FUMPAD&apos;s whole launch-window share) goes to {firstCoinReview.feePolicy.wallet ? f.shortAddr(firstCoinReview.feePolicy.wallet) : "a designated wallet"}. No creator share.
+          </p>
+        )}
         <KV
           rows={[
             { k: "First buy", v: firstBuy > 0 ? <span className="num">{f.sol(firstBuy)} SOL</span> : <span className="muted">None</span> },
             ...(firstBuy > 0 ? [{ k: "You receive", v: <Tokens value={firstTokens} symbol={symbol} /> }] : []),
-            ...(firstBuy > 0 && snipeOn ? [{ k: "Fee on your buy", v: <span className="num">{feePct}%, first in line</span> }] : []),
+            { k: "Trading fee", v: <span className="num">{reviewFeePct}%{firstCoinReview ? ", first-coin config" : ""}</span> },
+            ...(firstBuy > 0 && snipeOn ? [{ k: "Fee on your buy", v: <span className="num">{reviewFeePct}%, first in line</span> }] : []),
             { k: "Network rent", v: <span className="num">≈ 0.02 SOL</span> },
             { k: "Total", v: <span className="num">{f.sol(firstBuy + 0.02)} SOL</span> },
           ]}

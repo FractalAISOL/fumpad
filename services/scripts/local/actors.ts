@@ -14,6 +14,7 @@ import {
   dbcSellIx,
   DEFAULT_PARAMS,
   decodeTokenAccount,
+  firstCoinConfigParams,
   fumpadConfigParams,
   type Params,
   routerBuyIx,
@@ -58,8 +59,9 @@ export async function send(conn: Connection, payer: Keypair, ixs: TransactionIns
 }
 
 /** DBC create_config with the FUMPAD devnet curve (0.85 SOL raise) at `config` (fresh keypair). */
-export async function createFumpadConfig(conn: Connection, admin: Keypair, config: Keypair) {
-  return send(conn, admin, [dbcCreateConfigIx({ config: config.publicKey, payer: admin.publicKey, params: fumpadConfigParams("devnet") })], [config]);
+export async function createFumpadConfig(conn: Connection, admin: Keypair, config: Keypair, kind: "standard" | "first_coin" = "standard") {
+  const params = kind === "first_coin" ? firstCoinConfigParams("devnet") : fumpadConfigParams("devnet");
+  return send(conn, admin, [dbcCreateConfigIx({ config: config.publicKey, payer: admin.publicKey, params })], [config]);
 }
 
 export const tokenBalance = async (conn: Connection, owner: PublicKey, mint: PublicKey) => {

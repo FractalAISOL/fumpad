@@ -55,8 +55,7 @@ export const ticketPda = (mint: PublicKey, wallet: PublicKey, seq: bigint | numb
 export const claimQueuePda = (mint: PublicKey) => f([SEEDS.claimQueue, mint.toBytes()]);
 export const observationsPda = (mint: PublicKey) => f([SEEDS.observations, mint.toBytes()]);
 export const escrowPda = (ticket: PublicKey) => f([SEEDS.escrow, ticket.toBytes()]);
-/** A wallet-split coin's fee-policy snapshot (`CoinFeePolicy`), created by `register_coin`. */
-export const feePolicyPda = (mint: PublicKey) => f([SEEDS.feePolicy, mint.toBytes()]);
+
 /** Replay marker of an attested sell: ["consumed", sha256(signature 64 B), ix_key u32 LE]. */
 export const consumedSellPda = (signature: Uint8Array, ixKey: number) => f([SEEDS.consumed, sha256(signature), u32Le(ixKey)]);
 /** Replay marker of one rebuy debit: ["consumed", sha256(signature), ix_key LE, ticket]. */

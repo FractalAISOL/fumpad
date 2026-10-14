@@ -107,7 +107,6 @@ export const SEEDS = {
   feeWsol: enc("fee_wsol"),
   rewardPool: enc("reward_pool"),
   buyback: enc("buyback"),
-  feePolicy: enc("fee_policy"),
   eventAuthority: enc("__event_authority"),
 } as const;
 

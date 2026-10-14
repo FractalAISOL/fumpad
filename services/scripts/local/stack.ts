@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 import { Connection, Keypair, LAMPORTS_PER_SOL, type PublicKey } from "@solana/web3.js";
 
-import { type ClusterName, DBC_POOL_AUTHORITY } from "@fumpad/sdk";
+import { type ClusterName, DBC_POOL_AUTHORITY, FEE_POLICY, STANDARD_FEE_POLICY } from "@fumpad/sdk";
 import { createPool, migrate } from "@fumpad/indexer";
 
 import { airdrop, createFumpadConfig, LOCAL_PARAMS, transferSol } from "./actors.js";
@@ -32,6 +32,8 @@ export interface ExistingChain {
   operatorKeyPath: string;
   launchKey: Keypair;
   config: PublicKey;
+  /** The first-coin config + its policy wallet, when the bootstrap allow-listed one (the API then offers it). */
+  firstCoin?: { config: PublicKey; wallet: PublicKey };
   /** its Global.cluster_tag (FUMPAD_CLUSTER for every service) */
   cluster: ClusterName;
   /** price the attestors / watcher / API use (PYTH_SOURCE=constant) */
@@ -60,6 +62,8 @@ export interface Stack {
   /** the jobs keeper's key (Global.operators[0]) */
   operator: Keypair;
   config: { publicKey: PublicKey };
+  /** The one-off first-coin config (slot 1, wallet-split policy, max_coins 1) and its fee wallet; the API offers it (LAUNCH_FIRST_COIN). */
+  firstCoin?: { config: PublicKey; wallet: PublicKey };
   /** The API's launch key = `Params.launch_signer` (off-chain review L1): the API co-signs every launch. */
   launchKey: Keypair;
   api: string;
@@ -112,6 +116,8 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
     let keeperPaths: string[];
     let operatorPath: string;
     let config: { publicKey: PublicKey };
+    /** The first-coin config (3%, wallet-split policy, max_coins 1) and its fee wallet, when this chain has one. */
+    let firstCoin: { config: PublicKey; wallet: PublicKey } | undefined;
     let launchKey: Keypair;
     const usd = String(opts.chain?.solUsd ?? 150);
     if (opts.chain) {
@@ -120,6 +126,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       keepers = keeperPaths.map(readKeypairFile);
       operatorPath = opts.chain.operatorKeyPath;
       config = { publicKey: opts.chain.config };
+      firstCoin = opts.chain.firstCoin;
       launchKey = opts.chain.launchKey;
       log("✓ chain: existing (bootstrapped) validator, its Global and config");
     } else {
@@ -136,13 +143,24 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       // Launch binding (off-chain review L1): only API-built launches (co-signed by its launch key) register.
       launchKey = Keypair.generate();
       const params = { ...LOCAL_PARAMS, launchSigner: launchKey.publicKey };
-      v = await startValidator({ rpcPort, upgradeAuthority: auth, global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), operators: [operator.publicKey], params, configs: [cfg.publicKey] } });
+      // The one-off first-coin config (INTERFACE §5.9) in slot 1: 3%, its FUMPAD share 1.0 buyback / 1.4 a wallet.
+      const firstCfg = Keypair.generate();
+      const feeWallet = Keypair.generate().publicKey;
+      firstCoin = { config: firstCfg.publicKey, wallet: feeWallet };
+      const firstPolicy = { kind: FEE_POLICY.walletSplit, buybackShare: 100, walletShare: 140, maxCoins: 1, wallet: feeWallet };
+      v = await startValidator({
+        rpcPort,
+        upgradeAuthority: auth,
+        global: { admin: admin.publicKey, platformTreasury: treasury.publicKey, keepers: keepers.map((k) => k.publicKey), operators: [operator.publicKey], params, configs: [cfg.publicKey, firstCfg.publicKey], policies: [STANDARD_FEE_POLICY, firstPolicy] },
+      });
       const c0 = new Connection(v.rpcUrl, "confirmed");
       for (const k of [auth, admin, operator, ...keepers]) await airdrop(c0, k.publicKey, 20);
       // DBC's pool authority fronts the migration's flash rent (mainnet: Meteora keeps it funded).
       await transferSol(c0, admin, DBC_POOL_AUTHORITY, 10n * SOL);
       await createFumpadConfig(c0, admin, cfg);
-      log("✓ chain ready: Global seeded (local windows, 3 attestors + 1 operator, FUMPAD DBC config allow-listed), config created");
+      await createFumpadConfig(c0, admin, firstCfg, "first_coin");
+      await airdrop(c0, feeWallet, 1); // a fee wallet must stay rent-exempt to receive claims
+      log("✓ chain ready: Global seeded (local windows, 3 attestors + 1 operator, standard + first-coin configs allow-listed), configs created");
     }
     const conn = new Connection(v.rpcUrl, "confirmed");
 
@@ -164,7 +182,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }),
     );
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${ports.indexer}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5" }));
+    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false" }));
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
@@ -229,7 +247,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }
       return dir;
     };
-    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, launchKey, api, ports, ssrSecret, get, dumpLogs, stop };
+    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, firstCoin, launchKey, api, ports, ssrSecret, get, dumpLogs, stop };
   } catch (e) {
     const dir = join(LOCAL, "stack-logs");
     mkdirSync(dir, { recursive: true });

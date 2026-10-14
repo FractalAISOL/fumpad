@@ -17,5 +17,9 @@
   "computeUnitPriceMicroLamports": 20000,
   "fund": { "operator": 2, "attestor-1": 0.3, "attestor-2": 0.3, "attestor-3": 0.3 },
   "budgetSol": 12,
-  "programHeadroomBytes": 0
+  "programHeadroomBytes": 0,
+  "firstCoin": {
+    "feeWallet": "<FIRST_COIN_FEE_WALLET: receives 1.4% of the first coin's volume + FUMPAD's launch-window share>",
+    "maxCoins": 1
+  }
 }

@@ -7,14 +7,20 @@
  *   program            deploy fumpad.so (built for this id by build-program.ts) with the deployer as upgrade authority
  *   config             DBC create_config, MAINNET values (85 SOL, D17 curve, 1% migration fee, 99% → 1.25% / 8 slots);
  *                      the instruction bytes must equal contracts/tests/vectors/dbc_config.json `mainnet`
+ *                      + the first-coin config (99% → 3% / 25 slots, 3% DAMM v2; vector `first_coin_mainnet`)
  *   init               initialize_global: cluster_tag 0, Params = defaults + launch_signer, keepers attestor-1/2/3
  *                      (no 6 h freeze), operators [operator] (the jobs keeper's key, never an attestor), configs [the
- *                      DBC config] (no 48 h timelock), admin = guardian = deployer, platform_treasury = config `treasury`
+ *                      standard config, the first-coin config + its wallet-split policy {1.0% buyback, 1.4% config
+ *                      firstCoin.feeWallet, max_coins 1}] (no timelock), admin = guardian = deployer, platform_treasury
+ *                      = config `treasury`
  *   fund               top up operator + attestor-1/2/3 from the deployer
  *   propose-admin      propose_admin(new admin = admin vault, treasury, guardian vault) by the deployer (48 h)
  *   accept-admin       admin multisig vault tx `accept_admin`: create it (ops key), report approvals, execute once both
  *                      the 48 h FUMPAD eta and the Squads time lock have passed (voters approve in the Squads app)
  *   upgrade-authority  BPF loader authority deployer → admin vault; refused until Global.admin = admin vault
+ *   remove-first-coin-config  right after the first coin launched: queue_config(first-coin config, remove) by the admin
+ *                      (deployer before the handover; else an admin-multisig vault tx by the ops key, voters approve),
+ *                      then execute_config once the config timelock passed (rerun; permissionless)
  *   verify             read-only checklist + "next action"
  * Modes: plan (default; builds + prints, reads the chain) · simulate (simulateTransaction, sigVerify on) · send
  * (each step asks `confirm` with a typed phrase first).
@@ -47,11 +53,20 @@ import {
   DAMM_V2_PROGRAM_ID,
   DBC_POOL_AUTHORITY,
   DBC_PROGRAM_ID,
+  configSlot,
   dbcCreateConfigIx,
   decodeGlobal,
   DEFAULT_PARAMS,
   encodeDbcConfigParameters,
+  executeConfigIx,
+  FEE_POLICY,
+  type FeePolicy,
+  feePolicyProblems,
   feeClaimerPda,
+  firstCoinConfigParams,
+  GLOBAL_ACCOUNT_LEN,
+  queueConfigIx,
+  STANDARD_FEE_POLICY,
   FUMPAD_PROGRAM_ID,
   fumpadConfigParams,
   globalPda,
@@ -65,7 +80,7 @@ import {
   TIMELOCK_SECS,
 } from "@fumpad/sdk";
 
-import { configProblems, paramsDiff } from "../devnet/bootstrap-v07.js";
+import { configProblems, firstCoinConfigProblems, firstCoinPolicy, paramsDiff } from "../devnet/bootstrap-v07.js";
 import { GENESIS, redactText } from "../ops/common.js";
 import { executeVaultTx, proposalState, proposeVaultTx, readMultisig, setUpgradeAuthorityIx, SQUADS_PROGRAM_ID, vaultPdaOf } from "../ops/multisig.js";
 import { committedMainnetId } from "./build-program.js";
@@ -74,7 +89,7 @@ import { DEFAULT_FUND_SOL, ensureHotKeys, type FundedKey, type HotKey, keyPath, 
 
 export type MainnetCluster = "mainnet" | "local-fork";
 export type Mode = "plan" | "simulate" | "send";
-export const STEPS = ["keys", "program", "config", "init", "fund", "propose-admin", "accept-admin", "upgrade-authority", "verify"] as const;
+export const STEPS = ["keys", "program", "config", "init", "fund", "propose-admin", "accept-admin", "upgrade-authority", "verify", "remove-first-coin-config"] as const;
 export type Step = (typeof STEPS)[number];
 /** `all` = everything that can happen on day 0 (the handover's accept + upgrade authority need 48 h + approvals). */
 export const DAY0_STEPS: Step[] = ["keys", "program", "config", "init", "fund", "propose-admin", "verify"];
@@ -119,12 +134,14 @@ export function mainnetParams(launchSigner: PublicKey): Params {
   return { ...DEFAULT_PARAMS, launchSigner };
 }
 
-/** create_config instruction data must equal the committed mainnet vector byte for byte. */
-export function configBytesProblem(): string | null {
-  const v = JSON.parse(readFileSync(VECTORS, "utf8")) as { mainnet: { create_config_data_hex: string } };
-  const ix = dbcCreateConfigIx({ config: PublicKey.default, payer: PublicKey.default, params: fumpadConfigParams("mainnet") });
+/** create_config instruction data must equal the committed mainnet vector byte for byte (standard, then first coin). */
+export function configBytesProblem(which: "mainnet" | "first_coin_mainnet" = "mainnet"): string | null {
+  const v = JSON.parse(readFileSync(VECTORS, "utf8")) as Record<string, { create_config_data_hex: string }>;
+  const params = which === "mainnet" ? fumpadConfigParams("mainnet") : firstCoinConfigParams("mainnet");
+  const ix = dbcCreateConfigIx({ config: PublicKey.default, payer: PublicKey.default, params });
   const got = hex(ix.data);
-  return got === v.mainnet.create_config_data_hex ? null : `create_config data ${got.slice(0, 24)}… ≠ vector ${v.mainnet.create_config_data_hex.slice(0, 24)}… (contracts/tests/vectors/dbc_config.json mainnet)`;
+  const want = v[which]?.create_config_data_hex ?? "";
+  return got === want ? null : `create_config data ${got.slice(0, 24)}… ≠ vector ${want.slice(0, 24)}… (contracts/tests/vectors/dbc_config.json ${which})`;
 }
 
 /** ProgramData: tag u32 = 3 | slot u64 | Option<authority> | ELF. */
@@ -223,6 +240,13 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
   const treasury = new PublicKey(cfg.treasury);
   const upParty = cfg.upgradeAuthority ?? cfg.admin;
   const configKey = hot("dbc-config");
+  const firstKey = hot("dbc-config-first-coin");
+  if (!cfg.firstCoin?.feeWallet) throw new Error("config firstCoin.feeWallet missing: the first-coin launch config's fee wallet (INTERFACE §5.9; see mainnet-config.example.json)");
+  const firstWallet = new PublicKey(cfg.firstCoin.feeWallet);
+  const firstPolicy: FeePolicy = { ...firstCoinPolicy(firstWallet), maxCoins: cfg.firstCoin.maxCoins ?? 1 };
+  const fpp = feePolicyProblems(firstPolicy);
+  if (fpp.length) throw new Error(`firstCoin policy invalid: ${fpp.join("; ")}`);
+  const expectFirst = firstCoinConfigParams("mainnet");
   const keepers = [hot("attestor-1").publicKey, hot("attestor-2").publicKey, hot("attestor-3").publicKey];
   const operator = hot("operator").publicKey;
   const launchSigner = hot("launch-signer").publicKey;
@@ -238,6 +262,8 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     "attestor-3": keepers[2].toBase58(),
     "launch-signer": launchSigner.toBase58(),
     "dbc-config": configKey.publicKey.toBase58(),
+    "dbc-config-first-coin": firstKey.publicKey.toBase58(),
+    "first-coin fee wallet (config)": firstWallet.toBase58(),
     admin: admin.toBase58(),
     guardian: guardian.toBase58(),
     treasury: treasury.toBase58(),
@@ -363,47 +389,56 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     }
   }
 
-  const readConfig = async () => {
-    const a = await conn.getAccountInfo(configKey.publicKey, "confirmed");
+  const readAcc = async (k: PublicKey) => {
+    const a = await conn.getAccountInfo(k, "confirmed");
     return a ? { owner: a.owner, data: new Uint8Array(a.data) } : null;
   };
-  const createConfigIx = () => dbcCreateConfigIx({ config: configKey.publicKey, payer: deployer.publicKey, params: expectConfig });
+  const readConfig = () => readAcc(configKey.publicKey);
+  /** [standard, first coin]: keypair, expected params, checker, vector, label. */
+  const CONFIGS = [
+    { key: configKey, expect: expectConfig, problems: configProblems, vector: "mainnet" as const, label: "standard: 99% → 1.25% over 8 slots, 1.25% DAMM v2" },
+    { key: firstKey, expect: expectFirst, problems: firstCoinConfigProblems, vector: "first_coin_mainnet" as const, label: "first coin: 99% → 3% over 25 slots, 3% DAMM v2" },
+  ];
 
   // ── config ───────────────────────────────────────────────────────────────
   if (o.steps.includes("config")) {
-    say(`\n▶ config (DBC create_config, MAINNET: ${sol(expectConfig.migrationQuoteThreshold)} SOL threshold, migration fee ${expectConfig.migrationFeePercentage}%, 99% → 1.25% over 8 slots, D17 curve)`);
-    const vb = configBytesProblem();
-    if (vb) failures.push(vb);
-    else say(`  ✓ create_config data = contracts/tests/vectors/dbc_config.json mainnet vector (${encodeDbcConfigParameters(expectConfig).length + 8} B)`);
-    say(`  config ${configKey.publicKey.toBase58()} · fee_claimer ${feeClaimerPda().toBase58()} · leftover_receiver ${rewardPoolPda().toBase58()} · rent ${sol(await conn.getMinimumBalanceForRentExemption(1048))} SOL`);
-    const cur = await readConfig();
-    if (cur) {
-      const p = configProblems(cur.owner, cur.data, expectConfig);
-      say(p.length ? `  EXISTS but wrong: ${p.join("; ")}` : "  exists and passes every §5.4 check + mainnet numbers (skip)");
-      if (p.length) failures.push(`config: ${p.join("; ")}`);
-    } else if (!vb) {
-      if (o.mode === "send") await gate("config", [`DBC create_config at ${configKey.publicKey.toBase58()} (mainnet vector bytes)`, `payer ${deployer.publicKey.toBase58()}`]);
-      const r = await track("config", () => exec("config", "create_config", [createConfigIx()], [configKey], [configKey.publicKey]));
-      if (o.mode === "simulate" && r.ok) {
-        const p = configProblems(r.accounts[0]?.owner ?? null, r.accounts[0]?.data ?? null, expectConfig);
-        say(p.length ? `  simulated config FAILS: ${p.join("; ")}` : "  simulated config passes every §5.4 check + mainnet numbers");
-        if (p.length) failures.push(`simulated config: ${p.join("; ")}`);
-      }
-      if (o.mode === "send") {
-        const after = await readConfig();
-        const p = configProblems(after?.owner ?? null, after?.data ?? null, expectConfig);
-        if (p.length) failures.push(`config after create: ${p.join("; ")}`);
+    say(`\n▶ config (DBC create_config ×2, MAINNET: ${sol(expectConfig.migrationQuoteThreshold)} SOL threshold, migration fee ${expectConfig.migrationFeePercentage}%, D17 curve; the standard + the first-coin config)`);
+    say(`  fee_claimer ${feeClaimerPda().toBase58()} · leftover_receiver ${rewardPoolPda().toBase58()} · rent ${sol(await conn.getMinimumBalanceForRentExemption(1048))} SOL each`);
+    for (const c of CONFIGS) {
+      const vb = configBytesProblem(c.vector);
+      if (vb) failures.push(vb);
+      else say(`  ✓ ${c.label}: create_config data = contracts/tests/vectors/dbc_config.json ${c.vector} (${encodeDbcConfigParameters(c.expect).length + 8} B)`);
+      say(`  config ${c.key.publicKey.toBase58()}`);
+      const cur = await readAcc(c.key.publicKey);
+      if (cur) {
+        const p = c.problems(cur.owner, cur.data, c.expect);
+        say(p.length ? `  EXISTS but wrong: ${p.join("; ")}` : "  exists and passes every §5.4 check + mainnet numbers (skip)");
+        if (p.length) failures.push(`config ${c.vector}: ${p.join("; ")}`);
+      } else if (!vb) {
+        if (o.mode === "send") await gate("config", [`DBC create_config at ${c.key.publicKey.toBase58()} (${c.vector} vector bytes)`, `payer ${deployer.publicKey.toBase58()}`]);
+        const r = await track("config", () => exec("config", `create_config (${c.vector})`, [dbcCreateConfigIx({ config: c.key.publicKey, payer: deployer.publicKey, params: c.expect })], [c.key], [c.key.publicKey]));
+        if (o.mode === "simulate" && r.ok) {
+          const p = c.problems(r.accounts[0]?.owner ?? null, r.accounts[0]?.data ?? null, c.expect);
+          say(p.length ? `  simulated config FAILS: ${p.join("; ")}` : "  simulated config passes every §5.4 check + mainnet numbers");
+          if (p.length) failures.push(`simulated config ${c.vector}: ${p.join("; ")}`);
+        }
+        if (o.mode === "send") {
+          const after = await readAcc(c.key.publicKey);
+          const p = c.problems(after?.owner ?? null, after?.data ?? null, c.expect);
+          if (p.length) failures.push(`config ${c.vector} after create: ${p.join("; ")}`);
+        }
       }
     }
   }
 
   // ── init ─────────────────────────────────────────────────────────────────
   if (o.steps.includes("init")) {
-    say("\n▶ init (initialize_global: cluster_tag 0, default Params + launch_signer, keepers attestor-1/2/3, operators [operator], configs [DBC config])");
+    say("\n▶ init (initialize_global: cluster_tag 0, default Params + launch_signer, keepers attestor-1/2/3, operators [operator], configs [standard, first coin + wallet-split policy])");
+    say(`  first-coin policy: of FUMPAD's 2.4%, ${firstPolicy.buybackShare / 100}% → buyback, ${firstPolicy.walletShare / 100}% → ${firstWallet.toBase58()} (+ the whole launch-window share), max_coins ${firstPolicy.maxCoins}`);
     const bad = paramsProblems(params);
     if (bad.length) throw new Error(`mainnet params invalid: ${bad.join("; ")}`);
     say(`  params: min sell $${Number(params.minSellUsdCents) / 100}, hold ${params.minHoldSecs}s, challenge ${params.ticketChallengeSecs}s, oracle ${params.oracleWindowSecs}s / ${params.oracleMinSamples} samples (spacing ${params.oracleMinSpacingSecs}s), claim window ${Number(params.claimWindowSecs) / 86_400} d, rebuy ${Number(params.rebuyWindowSecs) / 86_400} d, fees ${params.feeBuybackShareBps}/${params.feePlatformShareBps}/${params.feeCreatorShareBps} bps, trigger ${params.triggerMultipleBps / 10_000}x, claim ${params.claimBps / 100}%, launch_signer ${launchSigner.toBase58()}`);
-    say(`  admin = guardian = deployer until the handover · treasury ${treasury.toBase58()} · Global rent ${sol(await conn.getMinimumBalanceForRentExemption(1044))} SOL`);
+    say(`  admin = guardian = deployer until the handover · treasury ${treasury.toBase58()} · Global rent ${sol(await conn.getMinimumBalanceForRentExemption(GLOBAL_ACCOUNT_LEN))} SOL`);
     const prog = await programState(conn);
     if (await conn.getAccountInfo(globalPda(), "confirmed")) say("  Global exists (skip; see verify)");
     else if (!prog.deployed) {
@@ -412,12 +447,24 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     } else if (!prog.authority?.equals(deployer.publicKey)) {
       failures.push(`init: upgrade authority ${prog.authority?.toBase58() ?? "none"} ≠ deployer (initialize_global would fail)`);
     } else {
-      const initIx = initializeGlobalIx({ payer: deployer.publicKey, admin: deployer.publicKey, platformTreasury: treasury, clusterTag: CLUSTER_TAG.mainnet, params, keepers, operators: [operator], configs: [configKey.publicKey] });
-      const cfgAcc = await readConfig();
-      if (!cfgAcc && o.mode === "send") failures.push("init: config missing (run --step config first)");
-      else if (!cfgAcc) await exec("init", "create_config + initialize_global (bundled for simulation only)", [createConfigIx(), initIx], [configKey], [globalPda()], 0);
-      else {
-        if (o.mode === "send") await gate("init", ["initialize_global (irreversible: cluster_tag, keepers, params, config)", `keepers ${keepers.map((k) => k.toBase58()).join(", ")} · operator ${operator.toBase58()}`, `launch_signer ${launchSigner.toBase58()} · treasury ${treasury.toBase58()}`]);
+      const initIx = initializeGlobalIx({
+        payer: deployer.publicKey,
+        admin: deployer.publicKey,
+        platformTreasury: treasury,
+        clusterTag: CLUSTER_TAG.mainnet,
+        params,
+        keepers,
+        operators: [operator],
+        configs: [configKey.publicKey, firstKey.publicKey],
+        policies: [STANDARD_FEE_POLICY, firstPolicy],
+      });
+      const [a1, a2] = [await readConfig(), await readAcc(firstKey.publicKey)];
+      if (!a1 || !a2) {
+        // Two create_config + initialize_global exceed 1,232 bytes: init is simulated once both configs exist.
+        say("  config(s) missing: run --step config first (initialize_global needs both configs on chain to simulate)");
+        if (o.mode === "send") failures.push("init: config(s) missing (run --step config first)");
+      } else {
+        if (o.mode === "send") await gate("init", ["initialize_global (irreversible: cluster_tag, keepers, params, configs + policies)", `keepers ${keepers.map((k) => k.toBase58()).join(", ")} · operator ${operator.toBase58()}`, `launch_signer ${launchSigner.toBase58()} · treasury ${treasury.toBase58()}`, `first-coin config ${firstKey.publicKey.toBase58()} → wallet ${firstWallet.toBase58()} (1.0% buyback / 1.4% wallet, max ${firstPolicy.maxCoins})`]);
         await track("init", () => exec("init", "initialize_global", [initIx], [], [globalPda()]));
       }
     }
@@ -438,7 +485,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     const topUps = rows.reduce((s, r) => s + r.topUp, 0n);
     for (const r of rows) say(`  ${r.name.padEnd(11)} ${r.to.toBase58().padEnd(44)} has ${sol(r.have)} target ${sol(r.target)} top-up ${sol(r.topUp)}`);
     const prog = await programState(conn);
-    const committed = prog.programDataLamports + BigInt(await conn.getMinimumBalanceForRentExemption(1048)) + BigInt(await conn.getMinimumBalanceForRentExemption(1044)) + rows.reduce((s, r) => s + (r.have > r.target ? r.have : r.target), 0n);
+    const committed = prog.programDataLamports + 2n * BigInt(await conn.getMinimumBalanceForRentExemption(1048)) + BigInt(await conn.getMinimumBalanceForRentExemption(GLOBAL_ACCOUNT_LEN)) + rows.reduce((s, r) => s + (r.have > r.target ? r.have : r.target), 0n);
     say(`  top-ups ${sol(topUps)} SOL · committed (program data + config + Global + keeper balances) ${sol(committed)} SOL · budget ${sol(budget)} SOL`);
     if (committed > budget) failures.push(`fund: committed ${sol(committed)} > budget ${sol(budget)} SOL (config budgetSol)`);
     else if (topUps === 0n) say("  every keeper at or above target (skip)");
@@ -580,11 +627,13 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     }
     checks.push([`DAMM v2 migration config ${DAMM_V2_MIGRATION_CONFIG.toBase58().slice(0, 8)}… exists`, !!mcfg && mcfg.owner.equals(DAMM_V2_PROGRAM_ID)]);
     checks.push(["DBC pool authority holds flash rent (≥ 0.05 SOL)", BigInt(flash) >= SOL / 20n, `${sol(flash)} SOL`]);
-    const vb = configBytesProblem();
-    checks.push(["create_config bytes = mainnet vector", !vb, vb ?? undefined]);
-    const cfgAcc = await readConfig();
-    const cp = configProblems(cfgAcc?.owner ?? null, cfgAcc?.data ?? null, expectConfig);
-    checks.push([`DBC config ${configKey.publicKey.toBase58()} passes §5.4 + mainnet numbers`, cp.length === 0, cp.join("; ") || undefined]);
+    for (const c of CONFIGS) {
+      const vb = configBytesProblem(c.vector);
+      checks.push([`create_config bytes = ${c.vector} vector`, !vb, vb ?? undefined]);
+      const acc = await readAcc(c.key.publicKey);
+      const cp = c.problems(acc?.owner ?? null, acc?.data ?? null, c.expect);
+      checks.push([`DBC config ${c.key.publicKey.toBase58()} (${c.label}) passes §5.4 + mainnet numbers`, cp.length === 0, cp.join("; ") || undefined]);
+    }
     checks.push([`Global ${globalPda().toBase58()} initialized`, !!g]);
     if (g) {
       const now = BigInt(await chainNow());
@@ -592,11 +641,22 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
       checks.push(["cluster_tag 0 (mainnet)", g.clusterTag === CLUSTER_TAG.mainnet, String(g.clusterTag)]);
       checks.push(["keepers = attestor-1/2/3, keeper_added_at = 0, all 3 active", same(g.keepers, keepers) && g.keeperAddedAt.every((t) => t === 0n) && activeKeepers(g, now).length === 3]);
       checks.push(["operators = [operator] (jobs key), disjoint from the attestors", same(g.operators, [operator, PublicKey.default]) && !keepers.some((k) => k.equals(operator))]);
-      checks.push(["configs = [the DBC config]", g.configs[0].equals(configKey.publicKey) && g.configs.slice(1).every((c) => c.equals(PublicKey.default)) && g.configs.length === MAX_CONFIGS]);
+      const std = configSlot(g, configKey.publicKey);
+      const first = configSlot(g, firstKey.publicKey);
+      const fp = first?.policy;
+      checks.push(["configs[0] = the standard config, standard fee policy", !!std && std.index === 0 && std.policy.kind === FEE_POLICY.standard && g.configs.length === MAX_CONFIGS]);
+      checks.push([
+        `first-coin config allow-listed: wallet-split {buyback ${firstPolicy.buybackShare}, wallet ${firstPolicy.walletShare}, max ${firstPolicy.maxCoins}} → ${firstWallet.toBase58()} (or removed after the first coin)`,
+        first ? !!fp && fp.kind === FEE_POLICY.walletSplit && fp.buybackShare === firstPolicy.buybackShare && fp.walletShare === firstPolicy.walletShare && fp.maxCoins === firstPolicy.maxCoins && fp.wallet.equals(firstWallet) : true,
+        first ? `coins ${first.coins}/${fp?.maxCoins}` : "not allow-listed (removed)",
+      ]);
+      if (first && first.coins >= (fp?.maxCoins || Infinity)) next.push("the first coin launched: --step remove-first-coin-config (LAUNCH-DAY.md)");
+      checks.push(["only those configs", g.configs.filter((c) => !c.equals(PublicKey.default)).length === (first ? 2 : 1)]);
       const pd = paramsDiff(g.params, params);
       checks.push(["params = mainnet defaults + launch_signer (field by field)", pd.length === 0, pd.join("; ") || undefined]);
       checks.push(["platform_treasury = config treasury", g.platformTreasury.equals(treasury), g.platformTreasury.toBase58()]);
-      checks.push(["not paused, no params/config change pending", g.paused === 0 && g.pendingEta === 0n && g.pendingConfigEta === 0n]);
+      checks.push(["not paused, no params change pending", g.paused === 0 && g.pendingEta === 0n]);
+      if (g.pendingConfigEta !== 0n) next.push(`config change pending (${g.pendingConfig.toBase58()} ${g.pendingConfigAdd ? "add" : "remove"}): --step remove-first-coin-config after ${new Date(Number(g.pendingConfigEta) * 1000).toISOString()}`);
       if (handedOver) {
         checks.push(["admin = admin vault, guardian = guardian vault, nothing pending", g.guardian.equals(guardian) && g.pendingAdminEta === 0n]);
         if (!prog.authority?.equals(finalAuth)) next.push("run --step upgrade-authority (the admin vault has proven it executes)");
@@ -624,6 +684,42 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
       if (!ok) failures.push(what);
     }
     if (prog.authority?.equals(finalAuth) && handedOver) say("  ✓ governance handover complete: admin, guardian and upgrade authority are the configured parties");
+  }
+
+  // ── remove-first-coin-config (LAUNCH-DAY.md: right after the first coin) ────────────────────────────────
+  if (o.steps.includes("remove-first-coin-config")) {
+    say("\n▶ remove-first-coin-config (queue_config remove by the admin → config timelock → execute_config; the launched coin keeps its policy snapshot)");
+    const g = await globalNow();
+    const slot = g ? configSlot(g, firstKey.publicKey) : null;
+    const now = BigInt(await chainNow());
+    const pending = !!g && g.pendingConfigEta !== 0n && g.pendingConfig.equals(firstKey.publicKey) && g.pendingConfigAdd === 0;
+    if (!g) failures.push("remove-first-coin-config: no Global");
+    else if (!slot) say("  the first-coin config is not on the allow-list (done)");
+    else if (pending && now >= g.pendingConfigEta) {
+      if (o.mode === "send") await gate("remove-first-coin-config", [`execute_config: remove ${firstKey.publicKey.toBase58()} from the allow-list (permissionless after the eta)`]);
+      await track("remove-first-coin-config", () => exec("remove-first-coin-config", "execute_config (remove first-coin config)", [executeConfigIx(deployer.publicKey, firstKey.publicKey)], [], [globalPda()]));
+    } else if (pending) {
+      next.push(`rerun --step remove-first-coin-config after ${new Date(Number(g.pendingConfigEta) * 1000).toISOString()} (config timelock)`);
+      say(`  removal queued; executable after ${new Date(Number(g.pendingConfigEta) * 1000).toISOString()}`);
+    } else if (g.pendingConfigEta !== 0n) failures.push(`remove-first-coin-config: another config change is pending (${g.pendingConfig.toBase58()})`);
+    else {
+      if (slot.coins === 0) warnings.push("no coin registered on the first-coin config yet: removing it means the first coin can't launch on it");
+      const ix = (admin_: PublicKey) => queueConfigIx(admin_, firstKey.publicKey, false);
+      if (g.admin.equals(deployer.publicKey)) {
+        if (o.mode === "send") await gate("remove-first-coin-config", [`queue_config(${firstKey.publicKey.toBase58()}, remove) by the deployer (admin before the handover)`]);
+        await track("remove-first-coin-config", () => exec("remove-first-coin-config", "queue_config (remove first-coin config)", [ix(deployer.publicKey)], [], [globalPda()]));
+      } else if (cfg.admin.kind === "squads" && g.admin.equals(admin)) {
+        const ms = new PublicKey(cfg.admin.multisig!);
+        const ops = cfg.opsKeypair ? readKeypairFile(rel(cfg.opsKeypair)) : null;
+        if (!ops) next.push(`propose it on the admin multisig: npx tsx scripts/ops/multisig.ts propose --multisig ${ms.toBase58()} --action remove-config --config ${firstKey.publicKey.toBase58()} (or the Squads app), voters approve, execute; then rerun this step`);
+        else if (o.mode === "plan") say(`  PLAN admin-multisig vault tx queue_config(remove ${firstKey.publicKey.toBase58()}) by the ops key`);
+        else {
+          if (o.mode === "send") await gate("remove-first-coin-config", [`create admin-multisig vault tx queue_config(${firstKey.publicKey.toBase58()}, remove) (creator = ops key ${ops.publicKey.toBase58()})`]);
+          const index = await proposeVaultTx(conn, ms, ops, { kind: "custom", name: "queue_config(remove first-coin config)", ixs: (vault) => [ix(vault)] }, o.mode === "send" ? "send" : "simulate", say);
+          next.push(`voters approve admin multisig tx #${index}, then execute it (Squads app or multisig.ts execute); rerun this step after the config timelock`);
+        }
+      } else next.push(`the admin (${g.admin.toBase58()}) queues queue_config(${firstKey.publicKey.toBase58()}, remove)`);
+    }
   }
 
   for (const w of [...new Set(warnings)]) say(`  ! ${w}`);

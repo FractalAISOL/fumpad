@@ -153,6 +153,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
       opsKeypair: "ops.json",
       computeUnitPriceMicroLamports: 20_000,
       budgetSol: 20, // local rent is ~37% above mainnet's: the mainnet budget doesn't fit here
+      firstCoin: { feeWallet: kp("treasury").publicKey.toBase58(), maxCoins: 1 }, // any funded address will do here
     };
     const configPath = join(K, "bootstrap.json");
     writeFileSync(configPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });

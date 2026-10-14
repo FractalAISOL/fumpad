@@ -52,6 +52,7 @@ import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 import { TradePanel } from "./TradePanel";
+import { coinFeeView } from "@/data/fees";
 import { hasLookalikeChars } from "./ident";
 import { MintTag } from "./MintTag";
 
@@ -481,7 +482,7 @@ export function CoinView({
                       <span className={s.who}>
                         <Address address={t.wallet} you={t.wallet === address} />
                         {t.snipeTaxSol !== undefined && t.snipeTaxBps !== undefined ? (
-                          <span title={`Traded in the launch window: a ${f.fixed(t.snipeTaxBps / 100, 1)}% fee instead of ${f.fixed(params.feeBps / 100, 2)}%. FUMPAD's share goes to the reward pool.`}>
+                          <span title={`Traded in the launch window: a ${f.fixed(t.snipeTaxBps / 100, 1)}% fee instead of ${f.fixed(coinFeeView(params, coin).feeBps / 100, 2)}%. FUMPAD's share goes to ${coin.fees?.policy === "wallet_split" ? "a designated wallet" : "the reward pool"}.`}>
                             <Badge tone="muted" className={s.taxTag}>
                               snipe fee {f.fixed(t.snipeTaxBps / 100, 0)}%
                             </Badge>
@@ -562,7 +563,7 @@ export function CoinView({
                       : []),
                   ]}
                 />
-                <FeeSplit params={params} />
+                <FeeSplit params={params} coin={coin} />
               </PanelBody>
               <PanelNote>
                 The liquidity is a Meteora DAMM v2 position owned by FUMPAD&apos;s fee claimer, 100% permanently locked: nobody can withdraw it, including us. Its fees
@@ -590,7 +591,7 @@ export function CoinView({
                       : []),
                   ]}
                 />
-                <FeeSplit params={params} />
+                <FeeSplit params={params} coin={coin} />
               </PanelBody>
             </Panel>
           )}
@@ -619,24 +620,25 @@ export function CoinView({
 
 /**
  * Where each trade fee goes (D32): Meteora keeps its protocol share, FUMPAD's share splits
- * 50 / 30 / 20 (the bar), whichever app the trade came from.
+ * 50 / 30 / 20 (the bar), whichever app the trade came from. The coin's OWN fee and split (`coinFeeView`): the
+ * one-off first-coin config trades at 3% and splits FUMPAD's share pool / a designated wallet (INTERFACE §5.9).
  */
-function FeeSplit({ params }: { params: ProtocolParams }) {
+function FeeSplit({ params, coin }: { params: ProtocolParams; coin: CoinDetail }) {
   const pct = (bps: number) => f.fixed(bps / 100, bps % 100 ? 2 : 0);
-  const ours = (params.feeBps * (10_000 - params.venueFeeShareBps)) / 10_000;
+  const v = coinFeeView(params, coin);
+  const ours = (v.feeBps * (10_000 - v.venueFeeShareBps)) / 10_000;
   return (
     <>
       <p className={s.splitLabel}>
-        Of each {pct(params.feeBps)}% trade fee, on any app, Meteora keeps {pct(params.feeBps - ours)}%. FUMPAD&apos;s {pct(ours)}% goes:
+        Of each {pct(v.feeBps)}% trade fee, on any app, Meteora keeps {pct(v.feeBps - ours)}%. FUMPAD&apos;s {pct(ours)}% goes:
       </p>
-      <SplitBar
-        label="Fee split"
-        parts={[
-          { label: "pool", share: params.feePoolShareBps / 100 },
-          { label: "FUMPAD", share: params.feePlatformShareBps / 100 },
-          { label: "creator", share: params.feeCreatorShareBps / 100 },
-        ]}
-      />
+      <SplitBar label="Fee split" parts={v.parts} />
+      {v.wallet && (
+        <p className={s.splitLabel}>
+          First-coin launch config: {f.fixed(v.wallet.poolPctOfVolume, 1)}% of volume buys ${coin.symbol} into its reward pool, {f.fixed(v.wallet.walletPctOfVolume, 1)}% goes to{" "}
+          {f.shortAddr(v.wallet.address)} (plus FUMPAD&apos;s launch-window share). No creator share.
+        </p>
+      )}
     </>
   );
 }

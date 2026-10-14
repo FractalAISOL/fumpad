@@ -12,11 +12,18 @@
  * the reward vault holds the 8% leftover → keeper samples build a median → tickets past their challenge
  * window are auto-claimed → third-party DAMM v2 trades → the watcher re-derives every attestation (all
  * match) → API checks. Exits non-zero on any failed check.
+ *
+ * First-coin launch config (INTERFACE §5.9, when the stack allow-lists one — the generated local chain does): a second
+ * launch through /v1/launch/prepare with `launchConfig: "first_coin"` registers on the 3% config with the wallet-split
+ * policy snapshotted; a second first-coin prepare is refused (max_coins 1); the keeper's fee claims pay its launch
+ * window 100% to the fee wallet and later fees 1.0 buyback / 1.4 wallet; the API shows the coin's real 3% fee.
  */
 import { Keypair, LAMPORTS_PER_SOL, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 
 import {
   SNIPE_PERIODS,
+  FIRST_COIN_PERIODS,
+  walletSplit,
   type CoinRefs,
   confirmSignature,
   decodeCoin,
@@ -133,6 +140,63 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     const creatorTokens = await tokenBalance(conn, creator.publicKey, mint);
     check("creator's first buy got the min fee (1.25%), not the 99% launch-window fee", creatorTokens > 0n, `${creatorTokens} base units`);
 
+    // ── first-coin launch config (one-off: 3%, FUMPAD's share 1.0 buyback / 1.4 a fee wallet) ─────────────
+    let FC = "";
+    let fcWalletBefore = 0n;
+    if (stack.firstCoin) {
+      const fc = stack.firstCoin;
+      const founder = Keypair.generate();
+      await airdrop(conn, founder.publicKey, 5);
+      fcWalletBefore = BigInt(await conn.getBalance(fc.wallet, "confirmed"));
+      const opts = await get<{ firstCoin: { dbcConfig: string; wallet: string } | null }>("/v1/launch/options");
+      await waitFor("grinder: a second …fmbL mint", async () => {
+        const h = await get<{ vanityPool: { available: number } | null }>("/health");
+        return h.vanityPool && h.vanityPool.available > 0;
+      }, 600_000, 2_000);
+      const prepareFirst = (who: Keypair, symbol: string) =>
+        fetch(`${api}/v1/launch/prepare`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            creator: who.publicKey.toBase58(),
+            name: "First Coin",
+            symbol,
+            uri: "https://fumpad.fun/m/first.json",
+            initialBuyLamports: String(SOL / 20n),
+            launchConfig: "first_coin",
+            auth: signLaunchAuth(who.secretKey, { creator: who.publicKey.toBase58(), symbol }),
+          }),
+        });
+      const pr = await prepareFirst(founder, "FIRST");
+      if (!pr.ok) throw new Error(`first-coin prepare → ${pr.status} ${await pr.text()}`);
+      const pf = (await pr.json()) as { mint: string; transaction: string; lastValidBlockHeight: number; config: { kind: string; dbcConfig: string; feeBps: number; snipeWindowSlots: number; migratedPoolFeeBps: number; feePolicy: { wallet: string | null } } };
+      const ftx = VersionedTransaction.deserialize(Buffer.from(pf.transaction, "base64"));
+      ftx.sign([founder]);
+      const fraw = ftx.serialize();
+      const fsig = await conn.sendRawTransaction(fraw, { maxRetries: 0 });
+      await confirmSignature(conn, fsig, pf.lastValidBlockHeight, "confirmed", fraw);
+      FC = pf.mint;
+      const fmint = new PublicKey(FC);
+      const fcoin = decodeCoin(new Uint8Array((await conn.getAccountInfo(coinPda(fmint)))!.data));
+      const snap = { policy: fcoin.feePolicy! };
+      check(
+        "first-coin launch: offered by the API, prepared on the 3% config (99% → 3% over 25 slots, 3% DAMM v2), registered with the wallet-split policy snapshotted",
+        opts.firstCoin?.dbcConfig === fc.config.toBase58() &&
+          pf.config.kind === "first_coin" && pf.config.dbcConfig === fc.config.toBase58() && pf.config.feeBps === 300 && pf.config.snipeWindowSlots === FIRST_COIN_PERIODS && pf.config.migratedPoolFeeBps === 300 &&
+          pf.config.feePolicy.wallet === fc.wallet.toBase58() &&
+          fcoin.dbcConfig.equals(fc.config) && fcoin.feePolicyKind === 1 && !!snap.policy && snap.policy.wallet.equals(fc.wallet) && snap.policy.buybackShare === 100 && snap.policy.walletShare === 140,
+        FC,
+      );
+      await sleep(12_000); // the API caches Global for 10 s: let it see the registration (the program refuses a 2nd coin anyway)
+      const again = await prepareFirst(dave, "AGAIN"); // a funded wallet: only the config's availability can refuse it
+      check("first-coin config is one launch only (max_coins 1): the next first_coin prepare is refused", again.status === 409, `${again.status} ${again.status === 409 ? "" : await again.text()}`);
+      // a trade after its 25-slot window: 3% fee, of which FUMPAD's 2.4% splits 1.0 / 1.4
+      const fslot = (await conn.getTransaction(fsig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }))!.slot;
+      await waitFor("first coin's launch window over", async () => ((await conn.getSlot("confirmed")) > fslot + FIRST_COIN_PERIODS + 2 ? true : null), 60_000);
+      await directDbcBuy(conn, founder, { mint: fmint, dbcConfig: fc.config, dbcPool: fcoin.dbcPool }, SOL / 5n);
+      log("✓ first coin launched (3% config) and traded after its window");
+    }
+
     // ── curve trades: third-party direct + FUMPAD router ─────────────────────
     // Third parties trade after the launch window: inside it the DBC fee scheduler charges up to 99% (D33),
     // which would shrink every position below the $5 ticket minimum.
@@ -217,13 +281,40 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
       return Number(r[0].n) > 0 ? r[0] : null;
     }, 120_000, 3_000);
     check("keeper claimed fees (launch window first) and the indexer recorded them", Number(fees.n) > 0, `fee claims ${fees.n}, buybacks ${fees.b}`);
+    if (stack.firstCoin && FC) {
+      const fc = stack.firstCoin;
+      type Claim = { claimed: string; to_buyback: string; to_platform: string; to_creator: string; to_wallet: string; fee_wallet: string | null; launch_window: boolean };
+      const fcClaims = await waitFor("first coin: launch-window + normal fee claims indexed", async () => {
+        const r = await rows<Claim>(pg.url, `SELECT claimed, to_buyback, to_platform, to_creator, to_wallet, fee_wallet, launch_window FROM fee_claims WHERE mint = '${FC}' ORDER BY ts, idx`);
+        return r.some((x) => x.launch_window) && r.some((x) => !x.launch_window) ? r : null;
+      }, 120_000, 3_000);
+      const lw = fcClaims.find((x) => x.launch_window)!;
+      const normal = fcClaims.filter((x) => !x.launch_window);
+      const splitOk = normal.every((x) => {
+        const s = walletSplit(BigInt(x.claimed), { buybackShare: 100, walletShare: 140 });
+        return BigInt(x.to_wallet) === s.wallet && BigInt(x.to_buyback) === s.buyback && x.to_platform === "0" && x.to_creator === "0" && x.fee_wallet === fc.wallet.toBase58();
+      });
+      const paid = fcClaims.reduce((s, x) => s + BigInt(x.to_wallet), 0n);
+      const walletNow = BigInt(await conn.getBalance(fc.wallet, "confirmed"));
+      check(
+        "first coin fees: launch window 100% → the fee wallet, later claims exactly 1.0/2.4 buyback + 1.4/2.4 wallet, nothing to platform/creator; the wallet received every lamport",
+        BigInt(lw.claimed) > 0n && lw.to_wallet === lw.claimed && lw.to_buyback === "0" && splitOk && walletNow - fcWalletBefore === paid,
+        `${fcClaims.length} claims, wallet +${paid}`,
+      );
+      const fd = await get<{ fees?: { feeBps: number; migratedFeeBps: number; policy: string; wallet?: string; poolShareBps?: number; walletShareBps?: number } }>(`/v1/coins/by-mint/${FC}`);
+      check(
+        "API: the first coin shows its real fee (3% curve / 3% DAMM v2) and the wallet split",
+        fd.fees?.feeBps === 300 && fd.fees.migratedFeeBps === 300 && fd.fees.policy === "wallet_split" && fd.fees.wallet === fc.wallet.toBase58() && fd.fees.poolShareBps === 100 && fd.fees.walletShareBps === 140,
+        JSON.stringify(fd.fees),
+      );
+    }
 
     // ── indexer + API ────────────────────────────────────────────────────────
     const detail = await waitFor("API coin detail graduated", async () => {
-      const c = await get<{ status: string; dammPool?: string; trades24h: number }>(`/v1/coins/by-mint/${M}`);
+      const c = await get<{ status: string; dammPool?: string; trades24h: number; fees?: { feeBps: number; policy: string } }>(`/v1/coins/by-mint/${M}`);
       return c.status === "graduated" ? c : null;
     }, 60_000, 2_000);
-    check("API: graduated coin with its DAMM v2 pool", detail.dammPool === grad.dammPool.toBase58());
+    check("API: graduated coin with its DAMM v2 pool (standard 1.25% fee policy)", detail.dammPool === grad.dammPool.toBase58() && detail.fees?.feeBps === 125 && detail.fees.policy === "standard");
     const trades = await get<{ venue?: string; app?: string; wallet: string }[]>(`/v1/coins/${M}/trades?limit=100`);
     const venues = new Set(trades.map((t) => t.venue));
     check("API trades: every app on both venues (DBC + DAMM v2), router trades labeled", venues.has("dbc") && venues.has("damm") && trades.some((t) => t.app === "fumpad"), `${trades.length} trades`);

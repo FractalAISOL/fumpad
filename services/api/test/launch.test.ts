@@ -90,9 +90,9 @@ describe("app/src/chain stays in sync with the v0.7 program", () => {
     expect(readFileSync(chainDir + "program.ts", "utf8")).toContain("VANITY_SUFFIX = FUMPAD_VANITY_SUFFIX");
     expect(FUMPAD_VANITY_SUFFIX).toBe("fmbL");
     expect(idlInstruction(FUMPAD_IDL, "set_auto_claim").accounts.map((a) => a.name)).toEqual(["wallet", "position", "event_authority", "program"]);
-    // 14 since INTERFACE §8.1 (optional launch_signer), 15 since §8 2026-10-14 (optional fee_policy): the app's
-    // allow-list rebuilds register_coin with the SDK and must follow
-    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(15);
+    // 14 since INTERFACE §8.1 (optional launch_signer); unchanged by the fee policies (the snapshot lives in the Coin
+    // account itself): the app's allow-list rebuilds register_coin with the SDK and must follow
+    expect(idlInstruction(FUMPAD_IDL, "register_coin").accounts.length).toBe(14);
   });
 });
 

@@ -21,8 +21,11 @@
  *     transaction's own DBC config (read from chain, not from the API), within our slippage
  *     (quoted with the SDK's DBC math, the same function the API uses).
  *
- * The config itself needn't be trusted here: `register_coin` fails the whole transaction unless
- * it is on FUMPAD's on-chain allow-list (`Global.configs`).
+ * The config: `register_coin` fails the whole transaction unless it is on FUMPAD's on-chain allow-list
+ * (`Global.configs`), but the allow-list also holds the one-off first-coin config (3% fee, FUMPAD's share split with
+ * a designated wallet, contracts INTERFACE §5.9). So the config's fee policy is read from chain (`readPolicy`): a
+ * non-standard one is accepted only when the user chose the first-coin launch AND the API returned that config; and
+ * the fee the user was shown must be the config's real fee (its scheduler floor, read from chain).
  *
  * No React, no `@/` imports: unit-tested by `launch.test.ts` with `npm test`.
  */
@@ -78,7 +81,20 @@ export interface LaunchIntent {
   initialBuyLamports: bigint;
   /** `Params.launch_signer` read from chain (INTERFACE-v0.7 §8.1), when configured. */
   launchSigner?: string;
+  /**
+   * The first-coin config (base58) when the user chose the first-coin launch and the API prepared it: the only
+   * non-standard config this launch may use. Unset: only a standard-policy config is accepted.
+   */
+  firstCoinConfig?: string;
+  /** The trading fee (bps) the review step showed; the launch's config must have exactly this fee. */
+  expectedFeeBps?: number;
 }
+
+/** A config's allow-list fee policy as read from chain (`Global.config_policies`); null = not allow-listed. */
+export type ConfigPolicyReader = (config: PublicKey) => Promise<{ kind: number; wallet: string } | null>;
+
+/** The config's normal trading fee, bps: its fee scheduler's floor (what the creator's first buy and every later trade pay). */
+export const configFeeBps = (cfg: Pick<DbcPoolConfig, "baseFee">) => Number((cfg.baseFee.cliffFeeNumerator - cfg.baseFee.reductionFactor * BigInt(cfg.baseFee.numberOfPeriod)) / BigInt(100_000));
 
 class LaunchRefused extends Error {
   constructor(why: string) {
@@ -99,11 +115,36 @@ export async function checkLaunchBinding(
   tx: VersionedTransaction,
   intent: LaunchIntent,
   readCurve: (config: PublicKey) => Promise<DbcPoolConfig>,
+  readPolicy?: ConfigPolicyReader,
 ): Promise<LaunchShape> {
   // Shape, accounts, signers (the mint's signature verified), summed SOL ≤ the amount typed.
   const shape = checkPreparedLaunch(tx, intent.wallet, intent.mint, intent.suffix, intent.initialBuyLamports, intent.launchSigner);
   if (shape.name !== intent.name || shape.symbol !== intent.symbol || shape.uri !== intent.uri)
     refuse("the coin's name, symbol or metadata differ from what you entered");
+
+  // The config's fee policy, from chain: a non-standard one (the first-coin config) only when the user chose it.
+  if (readPolicy) {
+    let pol: Awaited<ReturnType<ConfigPolicyReader>>;
+    try {
+      pol = await readPolicy(shape.config);
+    } catch {
+      return refuse("couldn't read FUMPAD's launch configs to check this launch");
+    }
+    if (!pol) refuse("it launches on a config that isn't on FUMPAD's allow-list");
+    const special = pol!.kind !== 0;
+    if (special && intent.firstCoinConfig !== shape.config.toBase58())
+      refuse("it launches on the one-off first-coin config (3% fee, part of FUMPAD's share to a designated wallet), which you didn't choose");
+    if (!special && intent.firstCoinConfig) refuse("it isn't the first-coin launch config you chose");
+  } else if (intent.firstCoinConfig) refuse("couldn't check the first-coin launch config");
+  if (intent.expectedFeeBps !== undefined) {
+    let cfg: DbcPoolConfig;
+    try {
+      cfg = await readCurve(shape.config);
+    } catch {
+      return refuse("couldn't read the launch's curve to check its fee");
+    }
+    if (configFeeBps(cfg) !== intent.expectedFeeBps) refuse("the coin's trading fee differs from the one shown");
+  }
 
   const wantBuy = intent.initialBuyLamports > BigInt(0);
   if (!wantBuy) {

@@ -314,6 +314,7 @@ local validator.
 | `RPC_HISTORY_CHECK` (on) | attestor, watcher | `off` disables the L8 first-available-block check |
 | `WATCH_ALERT_COOLDOWN_MS` (30 min) | watcher | re-alert interval per item |
 | `LAUNCH_SIGNER_KEY` | api | **sealed**; 64-byte secret (base58 or JSON array) whose pubkey is `Params.launch_signer`; co-signs `register_coin` (L1). Separate from `MINT_POOL_KEY` |
+| `LAUNCH_FIRST_COIN` | api | `true` = `POST /v1/launch/prepare` accepts `launchConfig: "first_coin"` (the one-off first-coin DBC config: 3% fee, wallet-split fee policy, contracts INTERFACE §5.9) and `/v1/launch/options` advertises it while it is allow-listed with launches left. Default off; on only for the first coin, then off again (LAUNCH-DAY.md §5) |
 | `POOL_TARGET` (200), `GRINDER_THREADS` (cores), `POOL_POLL_SECS` (30) | grinder | |
 | `DATABASE_SSL` (`prefer`), `DATABASE_SSL_ROOT_CERT` | grinder | `disable` / `prefer` / `require` (TLS, cert unverified: Railway's self-signed Postgres) / `verify-full` (+ CA bundle) |
 | `PORT` | indexer, api, keeper | health (indexer/keeper; indexer also serves `/helius` when enabled) / HTTP (api) |

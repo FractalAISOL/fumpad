@@ -1,62 +1,54 @@
 /**
  * Wallet-split fee policy (first-coin config, INTERFACE §5.9): the jobs keeper's fee claims pass the coin's policy
- * wallet, read once from its `CoinFeePolicy` snapshot; standard coins pass none.
+ * wallet, read from the Coin account's policy tail; standard coins pass none.
  */
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { bn, claimFeesIx, type CoinAccount, FEE_POLICY, feePolicyPda, FUMPAD_PROGRAM_ID, fumpadCoder } from "@fumpad/sdk";
+import { accountDiscriminator, claimFeesIx, COIN_ACCOUNT_LEN, COIN_POLICY_TAIL_LEN, decodeCoin, FEE_POLICY, FUMPAD_PROGRAM_ID } from "@fumpad/sdk";
 
-import { Keeper } from "../src/keeper.js";
+import { feeWalletOf } from "../src/keeper.js";
 
 const k = () => Keypair.generate().publicKey;
 
-async function snapshotData(mint: PublicKey, wallet: PublicKey): Promise<Buffer> {
-  return fumpadCoder().accounts.encode("CoinFeePolicy", {
-    bump: 255,
-    mint,
-    dbc_config: k(),
-    policy: { kind: FEE_POLICY.walletSplit, buyback_share: 100, wallet_share: 140, max_coins: 1, wallet },
-    wallet_paid_lamports: bn(0n),
-    reserved: Array(32).fill(0),
-  });
+/** A Coin account with the given fee-policy kind byte (offset 544) and, for a wallet split, its 47-byte tail. */
+function coinData(mint: PublicKey, wallet: PublicKey | null): Uint8Array {
+  const d = new Uint8Array(COIN_ACCOUNT_LEN + (wallet ? COIN_POLICY_TAIL_LEN : 0));
+  d.set(accountDiscriminator("Coin"), 0);
+  d.set(mint.toBytes(), 8 + 1 + 1 + 1); // bump, status, launch_fees_settled, then mint
+  if (wallet) {
+    d[COIN_ACCOUNT_LEN - 2] = FEE_POLICY.walletSplit; // fee_policy_kind (before reserved [u8; 1])
+    const o = COIN_ACCOUNT_LEN;
+    const v = new DataView(d.buffer, o);
+    d[o] = FEE_POLICY.walletSplit;
+    v.setUint16(1, 100, true);
+    v.setUint16(3, 140, true);
+    v.setUint16(5, 1, true);
+    d.set(wallet.toBytes(), o + 7);
+    v.setBigUint64(39, 123n, true);
+  }
+  return d;
 }
 
 describe("keeper fee claims: policy wallet", () => {
-  it("standard coin → no wallet; wallet-split coin → the snapshot's wallet (read once, cached)", async () => {
+  it("standard coin → no wallet; wallet-split coin → the snapshot's wallet from the Coin's tail", () => {
     const mint = k();
     const wallet = k();
-    const data = await snapshotData(mint, wallet);
-    let reads = 0;
-    const self = {
-      conn: {
-        getAccountInfo: async (key: PublicKey) => {
-          reads++;
-          expect(key.equals(feePolicyPda(mint))).toBe(true);
-          return { owner: FUMPAD_PROGRAM_ID, data };
-        },
-      },
-    };
-    const feeWalletOf = Keeper.prototype.feeWalletOf;
-    const std = { coin: { mint, feePolicyKind: FEE_POLICY.standard } as CoinAccount } as Parameters<typeof feeWalletOf>[0];
-    expect(await feeWalletOf.call(self as unknown as Keeper, std)).toBeNull();
-    expect(reads).toBe(0);
-    const special = { coin: { mint, feePolicyKind: FEE_POLICY.walletSplit } as CoinAccount } as Parameters<typeof feeWalletOf>[0];
-    expect((await feeWalletOf.call(self as unknown as Keeper, special))!.equals(wallet)).toBe(true);
-    expect((await feeWalletOf.call(self as unknown as Keeper, special))!.equals(wallet)).toBe(true);
-    expect(reads).toBe(1);
-    // The claim carries the policy PDA + the wallet (writable) right before the event-CPI pair.
+    const std = decodeCoin(coinData(mint, null));
+    expect(std.feePolicyKind).toBe(0);
+    expect(feeWalletOf(std)).toBeNull();
+    const special = decodeCoin(coinData(mint, wallet));
+    expect(special.feePolicyKind).toBe(FEE_POLICY.walletSplit);
+    expect(special.feePolicy).toMatchObject({ kind: 1, buybackShare: 100, walletShare: 140, maxCoins: 1 });
+    expect(special.walletPaidLamports).toBe(123n);
+    expect(feeWalletOf(special)!.equals(wallet)).toBe(true);
+    // The claim carries the wallet (writable) right before the event-CPI pair; standard: the program id (None).
     const ix = claimFeesIx(k(), { mint, dbcConfig: k(), feeWallet: wallet });
     const n = ix.keys.length;
-    expect(ix.keys[n - 4].pubkey.equals(feePolicyPda(mint))).toBe(true);
     expect(ix.keys[n - 3].pubkey.equals(wallet) && ix.keys[n - 3].isWritable).toBe(true);
-    // Standard: both optional accounts are the program id (None).
-    const std2 = claimFeesIx(k(), { mint, dbcConfig: k() });
-    expect(std2.keys[n - 4].pubkey.equals(FUMPAD_PROGRAM_ID) && std2.keys[n - 3].pubkey.equals(FUMPAD_PROGRAM_ID)).toBe(true);
+    expect(claimFeesIx(k(), { mint, dbcConfig: k() }).keys[n - 3].pubkey.equals(FUMPAD_PROGRAM_ID)).toBe(true);
   });
-  it("a missing snapshot is an error (never claims without the wallet)", async () => {
-    const self = { conn: { getAccountInfo: async () => null } };
-    const c = { coin: { mint: k(), feePolicyKind: FEE_POLICY.walletSplit } as CoinAccount } as Parameters<typeof Keeper.prototype.feeWalletOf>[0];
-    await expect(Keeper.prototype.feeWalletOf.call(self as unknown as Keeper, c)).rejects.toThrow(/fee policy snapshot/);
+  it("a wallet-split coin without its tail is an error (never claims without the wallet)", () => {
+    expect(() => feeWalletOf({ mint: k(), feePolicyKind: FEE_POLICY.walletSplit, feePolicy: undefined })).toThrow(/fee policy snapshot/);
   });
 });
