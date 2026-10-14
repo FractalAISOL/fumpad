@@ -241,8 +241,8 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 
 ## 9. Rehearsal (what was proven locally)
 
-`npm run mainnet:rehearsal` (≈ 16 min; `scripts/mainnet/rehearsal.ts`). **Result 2026-10-13: 37/37 ✓** (mainnet
-read at slot 456,589,591 with 23 read-only requests; DBC, DAMM v2 and Squads v4 on mainnet = the fixtures every test
+`npm run mainnet:rehearsal` (≈ 16 min; `scripts/mainnet/rehearsal.ts`). **Result 2026-10-14 (1 h / 6 h timelocks, 6 h Squads
+lock): 37/37 ✓ in 854 s** (2026-10-13 with 48 h: 37/37; mainnet read at slot 456,668,770 with 23 read-only requests; DBC, DAMM v2 and Squads v4 on mainnet = the fixtures every test
 suite runs; manifest committed as `scripts/mainnet/tested-programs.json`). Other stacks on the machine: set
 `FUMPAD_RPC_PORT`, `FUMPAD_API_PORT`, `FUMPAD_GOSSIP_PORT`, `FUMPAD_PG_PORT`. It reads mainnet only through `get*` calls (spaced, rate-limit aware), builds a validator with the
 exact mainnet DBC / DAMM v2 / Squads v4 / Token-2022 / Pyth-receiver bytes, the DAMM v2 migration config, Squads

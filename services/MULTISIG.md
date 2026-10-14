@@ -173,18 +173,18 @@ MB of rent). Simplest: extend with headroom (e.g. +200 KB) once, right before st
 A solana-test-validator with FUMPAD v0.7 (`contracts/target/deploy/fumpad.so`; build it with the devnet program
 keypair copied to `contracts/target/deploy/fumpad-keypair.json`, git-ignored), the mainnet Squads v4 program +
 ProgramConfig, generated member keys (`services/.local/multisig`, wiped each run), the real `initialize_global`
-(admin = guardian = upgrade authority = "deployer", like mainnet after bootstrap). Result 2026-10-13: **33/33 ✓**.
+(admin = guardian = upgrade authority = "deployer", like mainnet after bootstrap). Result 2026-10-14 (1 h / 6 h timelocks, 6 h Squads lock): **33/33 ✓** (2026-10-13 with 48 h: 33/33).
 
-- A: create both (2nd create = no-op) · `propose_admin` (simulate, send; pending fields + eta = now + 48 h) ·
+- A: create both (2nd create = no-op) · `propose_admin` (simulate, send; pending fields + eta = now + 6 h) ·
   accept vault tx: 2 approvals stay Active, the ops key can't approve (`Unauthorized`), 3rd approval → Approved,
-  executable in 48.0 h · execute early → `TimeLockNotReleased` · guardian multisig `set_pause` before the
+  executable in 6.0 h · execute early → `TimeLockNotReleased` · guardian multisig `set_pause` before the
   handover → FUMPAD `Unauthorized`.
-- warp 1 (+64 h) · B: `accept_admin` executed through the admin vault (admin, guardian, treasury set; nothing
+- warp 1 (+8.3 h) · B: `accept_admin` executed through the admin vault (admin, guardian, treasury set; nothing
   pending) · old admin `set_pause` → `Unauthorized` · upgrade authority → admin vault; old authority can't take it
   back (`IncorrectAuthority`) · buffer written, authority → vault, `buffer-hash` matches · upgrade proposed +
   approved, executing early → `TimeLockNotReleased` · guardian `set_pause(31)` with 1 approval →
   `InvalidProposalStatus`, outsider approval → `NotAMember`, with 2 → paused 31 at once; `set_pause(0)` → 0.
-- warp 2 (+96 h) · C: upgrade executed by the vault (deployed slot advanced, buffer closed into spill, authority still
+- warp 2 (+12.5 h) · C: upgrade executed by the vault (deployed slot advanced, buffer closed into spill, authority still
   the vault) · ExtendProgramChecked via the vault refused; unchecked extend by a non-authority payer OK · admin
   `queue_params` → guardian `cancel_params` → nothing pending · admin `propose_admin(rotation)` → guardian
   `cancel_admin` (proposed and executed by the ops key, approved by 2 guardians) → nothing pending, admin unchanged.
@@ -195,7 +195,7 @@ ProgramConfig, generated member keys (`services/.local/multisig`, wiped each run
 **How the 6 h elapse locally** (harness `Validator.warp`): the validator starts with a 4,000,000-slot epoch. To
 warp, it waits until everything sent is finalized, stops, runs `agave-ledger-tool create-snapshot --ledger L <root>
 L --warp-slot <target>`, deletes the old vote tower, and restarts on the same ledger. Clock.unix_timestamp then
-follows PoH time minus the 25 % drift bound ≈ 0.3 s per warped slot, so +600k slots ≈ +50 h. (A plain
+follows PoH time minus the 25 % drift bound ≈ 0.3 s per warped slot, so +75k slots ≈ +6–8 h (+600k ≈ +50 h). (A plain
 `solana-test-validator --warp-slot` restart warps from the newest snapshot = genesis and silently drops every
 account created since; a 2nd warp must wait ≥ 300 rooted slots so no pre-warp slot remains in the status cache.)
 Unit tests (`test/ops/ops.test.ts`) cover the config checks and the loader instruction layouts.
