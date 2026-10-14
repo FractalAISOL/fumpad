@@ -17,7 +17,7 @@ use crate::{
         AdminAccepted, AdminProposalCancelled, AdminProposed, ConfigUpdated, GlobalInitialized, KeepersSet,
         OperatorsSet, ParamsCancelled, ParamsQueued, ParamsUpdated, PauseSet,
     },
-    state::{Global, Params, PAUSE_ALL},
+    state::{FeePolicy, Global, Params, PAUSE_ALL},
 };
 
 #[derive(Accounts)]
@@ -42,6 +42,9 @@ pub struct InitializeGlobal<'info> {
 /// program's upgrade authority can initialize, and it could replace the program anyway; the timelocks protect a
 /// running system. Every later change (`set_keepers`, `queue_config`) keeps its freeze / timelock. remaining_accounts
 /// = the initial DBC configs (0..=8, read-only), each validated exactly like `execute_config` add (INTERFACE §5.4).
+/// `policies[i]` is the fee policy of `remaining_accounts[i]` (validated like `queue_config`); configs past the end
+/// of `policies` are standard (so a standard-only bootstrap passes an empty Vec).
+#[allow(clippy::too_many_arguments)]
 pub fn handle_initialize_global<'info>(
     ctx: Context<'info, InitializeGlobal<'info>>,
     admin: Pubkey,
@@ -50,6 +53,7 @@ pub fn handle_initialize_global<'info>(
     params: Params,
     keepers: [Pubkey; MAX_KEEPERS],
     operators: Vec<Pubkey>,
+    policies: Vec<FeePolicy>,
 ) -> Result<()> {
     require!(params.is_valid(), FumpadError::InvalidParams);
     require!(operators.len() <= MAX_OPERATORS, FumpadError::InvalidParams);
@@ -61,11 +65,17 @@ pub fn handle_initialize_global<'info>(
     validate_keeper_set(&keepers)?;
     validate_operator_set(&operators, &keepers)?;
     let mut configs = [Pubkey::default(); MAX_CONFIGS];
+    let mut config_policies = [FeePolicy::default(); MAX_CONFIGS];
     require!(ctx.remaining_accounts.len() <= MAX_CONFIGS, FumpadError::ConfigListFull);
+    require!(policies.len() <= ctx.remaining_accounts.len(), FumpadError::InvalidParams);
     for (i, info) in ctx.remaining_accounts.iter().enumerate() {
         validate_config(info)?;
         require!(!configs[..i].contains(info.key), FumpadError::InvalidParams);
         configs[i] = *info.key;
+        if let Some(p) = policies.get(i) {
+            validate_fee_policy(p)?;
+            config_policies[i] = *p;
+        }
     }
     let g = &mut ctx.accounts.global;
     g.bump = ctx.bumps.global;
@@ -90,6 +100,10 @@ pub fn handle_initialize_global<'info>(
     g.pending_config_add = 0;
     g.pending_config_eta = 0;
     g.operators = operators;
+    g.config_policies = config_policies;
+    g.config_coins = [0; MAX_CONFIGS];
+    g.pending_config_policy = FeePolicy::default();
+    g.reserved = [0; 64];
     let ts = Clock::get()?.unix_timestamp;
     emit_event!(ctx, GlobalInitialized { admin, platform_treasury, guardian: admin, cluster_tag, params, ts });
     if keepers.iter().any(|k| *k != Pubkey::default()) {
@@ -98,8 +112,8 @@ pub fn handle_initialize_global<'info>(
     if operators.iter().any(|k| *k != Pubkey::default()) {
         emit_event!(ctx, OperatorsSet { operators, ts });
     }
-    for config in configs.into_iter().filter(|c| *c != Pubkey::default()) {
-        emit_event!(ctx, ConfigUpdated { config, add: true, ts });
+    for (config, policy) in configs.into_iter().zip(config_policies).filter(|(c, _)| *c != Pubkey::default()) {
+        emit_event!(ctx, ConfigUpdated { config, add: true, ts, policy });
     }
     Ok(())
 }

@@ -312,7 +312,8 @@ fn cu_report() {
     println!("\n| Account | bytes | rent (LiteSVM, mainnet features) |\n|---|---|---|");
     for (n, len) in [
         ("fumpad.so program data (+45 header)", so + 45),
-        ("Global", 1_044),
+        ("Global", 1_491),
+        ("CoinFeePolicy (wallet-split coins only)", 152),
         ("Coin", 546),
         ("Position", 315),
         ("Ticket", 276),

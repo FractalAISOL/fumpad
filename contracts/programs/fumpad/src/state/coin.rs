@@ -83,7 +83,11 @@ pub struct Coin {
     /// guard is their median (≥ `PREGRAD_MIN_SAMPLES` within `PREGRAD_WINDOW_SECS`, spanning ≥
     /// `PREGRAD_MIN_SPAN_SECS`). Carved out of the former 64 reserved bytes (Coin size unchanged; zeroed = empty).
     pub pregrad_ring: PregradRing,
-    pub reserved: [u8; 2],
+    /// 2026-10-14: the config's fee policy kind at `register_coin` (`FEE_POLICY_*`; 0 = standard = `fee_split`).
+    /// Non-zero: the policy is snapshotted in the `CoinFeePolicy` PDA ["fee_policy", mint] and `fee_split` is unused
+    /// (zero). Carved out of `reserved` (Coin size unchanged; zeroed = standard, so existing coins read standard).
+    pub fee_policy_kind: u8,
+    pub reserved: [u8; 1],
 }
 
 /// L5: ring of recent keeper pre-graduation DBC spot samples (62 bytes).

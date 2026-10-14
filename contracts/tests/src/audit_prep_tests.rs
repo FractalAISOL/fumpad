@@ -134,27 +134,48 @@ fn migrate_global_fills_operators_from_keeper_0() {
     let ks: [Pubkey; 3] = [kp_pk(&env.keepers[0]), kp_pk(&env.keepers[1]), kp_pk(&env.keepers[2])];
     let i = env.initialize_global_ix(fumpad::state::Params::default(), ks, &[config]);
     ok(env.send(&[i], &[]));
-    // = the pre-operators layout: the 64 bytes at the operators offset are zero (they were `reserved`).
-    let g = env.global();
-    let d = env.data(&g);
-    assert_eq!(d.len(), 1_044);
-    assert!(d[GLOBAL_OPERATORS_OFFSET..GLOBAL_OPERATORS_OFFSET + 64].iter().all(|b| *b == 0));
     let c = env.launch(SOL / 10);
     env.skip_launch_window();
     let k0 = env.keepers[0].insecure_clone();
     assert_fumpad_err(sample_as(&mut env, &k0, &[&c]), FumpadError::Unauthorized);
+    // = the pre-operators, pre-fee-policy layout (devnet before 2026-10-14): 1,044 bytes, and the 64 bytes at the
+    // operators offset are zero (they were `reserved`). Truncate the fresh Global to it (its fee-policy tail is
+    // standard anyway, except the coin count, which the old layout didn't have).
+    let g = env.global();
+    let mut acc = env.svm.get_account(&addr(&g)).unwrap();
+    acc.data.truncate(1_044);
+    acc.lamports = env.rent(1_044);
+    env.svm.set_account(addr(&g), acc).unwrap();
+    let d = env.data(&g);
+    assert_eq!(d.len(), 1_044);
+    assert!(d[GLOBAL_OPERATORS_OFFSET..GLOBAL_OPERATORS_OFFSET + 64].iter().all(|b| *b == 0));
+    // Until `migrate_global` grows it, nothing that loads Global works (run it right after the upgrade).
+    assert!(sample_as(&mut env, &k0, &[&c]).is_err());
 
     let admin = env.admin.insecure_clone();
     let rando = env.new_user(1);
     let bad = migrate_global_ix(&env, &kp_pk(&rando));
     assert_fumpad_err(env.send(&[bad], &[&rando]), FumpadError::Unauthorized);
+    let admin_before = env.lamports(&kp_pk(&admin));
     let meta = ok(env.send(&[migrate_global_ix(&env, &kp_pk(&admin))], &[&admin]));
-    println!("migrate_global (fill operators) CU {}", meta.compute_units_consumed);
-    assert_eq!(event::<GlobalMigrated>(&meta).new_len, 1_044);
+    println!("migrate_global (grow 1,044 → 1,491 + fill operators) CU {}", meta.compute_units_consumed);
+    let ev = event::<GlobalMigrated>(&meta);
+    assert_eq!((ev.old_len, ev.new_len), (1_044, 1_491));
+    let grown = env.data(&g);
+    assert_eq!(grown.len(), 1_491);
+    assert_eq!(grown[..GLOBAL_OPERATORS_OFFSET], d[..GLOBAL_OPERATORS_OFFSET], "every old byte before operators verbatim");
+    assert!(grown[1_044..].iter().all(|b| *b == 0), "grown tail zero = standard policies, no counts");
+    assert_eq!(env.lamports(&g), env.rent(1_491), "rent-exempt at the new size");
+    assert_eq!(admin_before - env.lamports(&kp_pk(&admin)), env.rent(1_491) - env.rent(1_044), "the admin paid the extra rent");
     assert_eq!(event::<OperatorsSet>(&meta).operators, [ks[0], Pubkey::default()]);
     let after: Global = env.fetch(&g);
     assert_eq!(after.operators, [ks[0], Pubkey::default()]);
     assert_eq!((after.keepers, after.keeper_added_at, after.configs[0]), (ks, [0; 3], config), "nothing else moved");
+    assert_eq!(after.config_policies, [fumpad::state::FeePolicy::default(); 8], "grown tail = standard policies");
+    assert_eq!((after.config_coins, after.pending_config_policy), ([0; 8], fumpad::state::FeePolicy::default()));
+    let c2 = env.launch(SOL / 10); // launches work again (Global loads) and count on slot 0
+    assert_eq!(env.fetch::<Global>(&g).config_coins[0], 1);
+    assert_eq!(env.coin(&c2).fee_policy_kind, fumpad::FEE_POLICY_STANDARD);
     // The old jobs keeper (attestor-1's key) keeps sampling right after the upgrade.
     ok(sample_as(&mut env, &k0, &[&c]));
     // Separate them: set_keepers can't keep the overlap; set_operators to a fresh key first.

@@ -4,7 +4,7 @@ use anchor_lang::{
 };
 
 use crate::constants::{MAX_KEEPERS, MAX_OPERATORS};
-use crate::state::Params;
+use crate::state::{FeePolicy, Params};
 
 // Every state change emits an event via `emit_event!(ctx, Event { .. })` (needs `#[event_cpi]`). The indexer treats
 // these as the source of truth. Field lists: INTERFACE-v0.7.md §6.
@@ -103,6 +103,8 @@ pub struct ConfigQueued {
     pub add: bool,
     pub eta: i64,
     pub ts: i64,
+    /// The fee policy the config will carry (default for a removal).
+    pub policy: FeePolicy,
 }
 
 #[event]
@@ -110,6 +112,8 @@ pub struct ConfigUpdated {
     pub config: Pubkey,
     pub add: bool,
     pub ts: i64,
+    /// Add: the slot's new policy. Remove: the policy the slot had (existing coins keep their snapshot).
+    pub policy: FeePolicy,
 }
 
 #[event]
@@ -136,6 +140,8 @@ pub struct CoinRegistered {
     pub launch_slot: u64,
     pub launch_window_slots: u64,
     pub ts: i64,
+    /// The fee policy snapshotted for this coin (its config slot's policy at registration).
+    pub fee_policy: FeePolicy,
 }
 
 /// A router trade. buy: `quote_gross` = WSOL spent (fee included); sell: WSOL received + fee. `fee` = Meteora
@@ -172,6 +178,10 @@ pub struct FeesClaimed {
     pub to_creator: u64,
     pub launch_window: bool,
     pub ts: i64,
+    /// Wallet-split policy: lamports paid to `fee_wallet` in this instruction (0 and default for standard coins).
+    /// `to_buyback + to_platform + to_creator + to_wallet == claimed`.
+    pub to_wallet: u64,
+    pub fee_wallet: Pubkey,
 }
 
 #[event]

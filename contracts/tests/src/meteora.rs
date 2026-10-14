@@ -194,6 +194,29 @@ pub fn devnet_config_params() -> ConfigParameters {
     fumpad_config_params(DEVNET_THRESHOLD, s0, s1, l, lb)
 }
 
+/// First-coin "launch config" (user decision 2026-10-14): fee scheduler 99% → 3% linear over 25 × 1 slot (≈ 10 s),
+/// then 3% on the curve; migrated DAMM v2 pool fee 3% (`OnlyB`). Everything else (curve, supply, leftover, locks)
+/// identical to the standard config.
+pub const FIRST_COIN_PERIODS: u16 = 25;
+/// (990,000,000 − 30,000,000) / 25 — exact, so the fee is exactly 3% from slot 25 on.
+pub const FIRST_COIN_REDUCTION: u64 = 38_400_000;
+pub const FIRST_COIN_FEE_BPS: u16 = 300;
+
+pub fn first_coin_config(mut p: ConfigParameters) -> ConfigParameters {
+    p.base_fee.first_factor = FIRST_COIN_PERIODS;
+    p.base_fee.third_factor = FIRST_COIN_REDUCTION;
+    p.migrated_pool_fee_bps = FIRST_COIN_FEE_BPS;
+    p
+}
+
+pub fn first_coin_mainnet_config_params() -> ConfigParameters {
+    first_coin_config(mainnet_config_params())
+}
+
+pub fn first_coin_devnet_config_params() -> ConfigParameters {
+    first_coin_config(devnet_config_params())
+}
+
 // ── DBC instructions ────────────────────────────────────────────────────────
 pub fn dbc_event_authority() -> Pubkey {
     m::DBC_EVENT_AUTHORITY

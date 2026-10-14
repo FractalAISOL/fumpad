@@ -46,6 +46,48 @@ pub struct Global {
     /// former `reserved [u8; 64]` (same offset 980, Global size unchanged): a pre-operators Global reads as "no
     /// operators" until `migrate_global` fills slot 0 from `keepers[0]`.
     pub operators: [Pubkey; MAX_OPERATORS],
+    // ── 2026-10-14: per-config fee policies. Global grew 1,044 → 1,491 bytes; `migrate_global` grows an older
+    // Global in place (new bytes zero = `FEE_POLICY_STANDARD` everywhere, no counts). ──
+    /// Fee policy of each allow-listed config (same index as `configs`). Snapshotted into every coin registered on
+    /// that config (`Coin.fee_policy_kind` + its `CoinFeePolicy` PDA), so removing or replacing a config never
+    /// changes an existing coin's routing.
+    pub config_policies: [FeePolicy; MAX_CONFIGS],
+    /// Coins registered on each slot's config since it was allow-listed (enforces `FeePolicy.max_coins`).
+    pub config_coins: [u32; MAX_CONFIGS],
+    /// Policy of the pending config add (`queue_config`); default for a removal or when nothing is pending.
+    pub pending_config_policy: FeePolicy,
+    pub reserved: [u8; 64],
+}
+
+/// A config's fee policy (INTERFACE §5.9). 39 bytes.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, Default, PartialEq, Eq, InitSpace)]
+pub struct FeePolicy {
+    /// `FEE_POLICY_STANDARD` (0) or `FEE_POLICY_WALLET_SPLIT` (1).
+    pub kind: u8,
+    /// Wallet split: relative weights of our claimed fees, written as bps of volume (first coin: 100 = 1.0% → the
+    /// coin's buyback balance, 140 = 1.4% → `wallet`). The wallet gets ⌊claimed × wallet_share / (buyback_share +
+    /// wallet_share)⌋, the buyback the rest. Standard: both 0.
+    pub buyback_share: u16,
+    pub wallet_share: u16,
+    /// Max coins registered on the config while this policy is allow-listed (0 = unlimited). Any kind.
+    pub max_coins: u16,
+    /// Wallet split: receives the wallet share and 100% of the launch-window claim. Standard: default.
+    pub wallet: Pubkey,
+}
+
+impl FeePolicy {
+    /// Shape check (the wallet must also not be a fumpad PDA: `admin::validate_fee_policy`).
+    pub fn is_valid(&self) -> bool {
+        match self.kind {
+            FEE_POLICY_STANDARD => self.buyback_share == 0 && self.wallet_share == 0 && self.wallet == Pubkey::default(),
+            FEE_POLICY_WALLET_SPLIT => {
+                self.wallet != Pubkey::default()
+                    && self.wallet_share > 0
+                    && self.buyback_share as u64 + self.wallet_share as u64 <= BPS_DENOM
+            }
+            _ => false,
+        }
+    }
 }
 
 pub const PAUSE_LAUNCH: u8 = 1 << 0;
@@ -241,13 +283,37 @@ impl Global {
         *key == self.admin || (self.guardian != Pubkey::default() && *key == self.guardian)
     }
     pub fn is_allowed_config(&self, config: &Pubkey) -> bool {
-        *config != Pubkey::default() && self.configs.iter().any(|c| c == config)
+        self.config_slot(config).is_some()
+    }
+    /// Allow-list slot of `config`.
+    pub fn config_slot(&self, config: &Pubkey) -> Option<usize> {
+        if *config == Pubkey::default() {
+            return None;
+        }
+        self.configs.iter().position(|c| c == config)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fee_policy_shapes() {
+        let w = Pubkey::new_unique();
+        let std = FeePolicy::default();
+        assert!(std.is_valid());
+        assert!(FeePolicy { max_coins: 3, ..std }.is_valid());
+        assert!(!FeePolicy { wallet: w, ..std }.is_valid());
+        assert!(!FeePolicy { buyback_share: 1, ..std }.is_valid());
+        let first = FeePolicy { kind: FEE_POLICY_WALLET_SPLIT, buyback_share: 100, wallet_share: 140, max_coins: 1, wallet: w };
+        assert!(first.is_valid());
+        assert!(FeePolicy { buyback_share: 0, ..first }.is_valid(), "all to the wallet is expressible");
+        assert!(!FeePolicy { wallet_share: 0, ..first }.is_valid());
+        assert!(!FeePolicy { wallet: Pubkey::default(), ..first }.is_valid());
+        assert!(!FeePolicy { buyback_share: 9_861, ..first }.is_valid());
+        assert!(!FeePolicy { kind: 2, ..first }.is_valid());
+    }
 
     #[test]
     fn defaults_valid_and_bounds() {

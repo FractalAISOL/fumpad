@@ -240,6 +240,19 @@ impl Env {
         operators: [Pubkey; 2],
         configs: &[Pubkey],
     ) -> Instruction {
+        self.initialize_global_ix_policies(payer, params, keepers, operators, configs, vec![])
+    }
+
+    /// `initialize_global` with fee policies for the first `policies.len()` configs.
+    pub fn initialize_global_ix_policies(
+        &self,
+        payer: &Pubkey,
+        params: fumpad::state::Params,
+        keepers: [Pubkey; 3],
+        operators: [Pubkey; 2],
+        configs: &[Pubkey],
+        policies: Vec<fumpad::state::FeePolicy>,
+    ) -> Instruction {
         let program_data =
             Pubkey::find_program_address(&[fumpad::ID.as_ref()], &anchor_lang::solana_program::bpf_loader_upgradeable::ID).0;
         let mut i = ix(
@@ -258,6 +271,7 @@ impl Env {
                 params,
                 keepers,
                 operators: operators.iter().copied().filter(|k| *k != Pubkey::default()).collect(),
+                policies,
             },
         );
         i.accounts.extend(configs.iter().map(|c| ro(*c)));
@@ -297,6 +311,10 @@ impl Env {
     }
 
     pub fn queue_config(&mut self, config: Pubkey, add: bool) -> TransactionResult {
+        self.queue_config_with(config, add, fumpad::state::FeePolicy::default())
+    }
+
+    pub fn queue_config_with(&mut self, config: Pubkey, add: bool, policy: fumpad::state::FeePolicy) -> TransactionResult {
         let i = ix(
             fumpad::accounts::QueueConfig {
                 admin: kp_pk(&self.admin),
@@ -305,7 +323,7 @@ impl Env {
                 event_authority: ev_auth(),
                 program: fumpad::ID,
             },
-            fumpad::instruction::QueueConfig { config, add },
+            fumpad::instruction::QueueConfig { config, add, policy },
         );
         let admin = self.admin.insecure_clone();
         self.send(&[i], &[&admin])
@@ -321,7 +339,12 @@ impl Env {
 
     /// queue_config(add) → 48h → execute_config.
     pub fn allow_config(&mut self, config: Pubkey) {
-        ok(self.queue_config(config, true));
+        self.allow_config_with(config, fumpad::state::FeePolicy::default());
+    }
+
+    /// queue_config(add, policy) → timelock → execute_config.
+    pub fn allow_config_with(&mut self, config: Pubkey, policy: fumpad::state::FeePolicy) {
+        ok(self.queue_config_with(config, true, policy));
         self.warp(fumpad::CONFIG_TIMELOCK_SECS);
         ok(self.execute_config(config));
     }
@@ -378,6 +401,9 @@ impl Env {
     }
     pub fn reward_vault(&self, mint: &Pubkey) -> Pubkey {
         base_ata(&self.reward_pool(), mint)
+    }
+    pub fn fee_policy_pda(&self, mint: &Pubkey) -> Pubkey {
+        pda(&[fumpad::FEE_POLICY_SEED, mint.as_ref()])
     }
 
     /// Send with `payer` as fee payer plus extra signers.
@@ -579,6 +605,8 @@ mod e2e_tests;
 mod error_coverage;
 #[cfg(test)]
 mod fees_tests;
+#[cfg(test)]
+mod first_coin_tests;
 #[cfg(test)]
 pub(crate) mod lifecycle_tests;
 #[cfg(test)]

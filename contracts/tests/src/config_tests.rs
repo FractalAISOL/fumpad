@@ -167,7 +167,7 @@ fn config_allow_list_is_timelocked_and_validated() {
     let rando = env.new_user(1);
     let i = ix(
         fumpad::accounts::QueueConfig { admin: kp_pk(&rando), global: g, dbc_config: other, event_authority: ev_auth(), program: fumpad::ID },
-        fumpad::instruction::QueueConfig { config: other, add: true },
+        fumpad::instruction::QueueConfig { config: other, add: true, policy: Default::default() },
     );
     assert_fumpad_err(env.send(&[i], &[&rando]), FumpadError::Unauthorized);
 }

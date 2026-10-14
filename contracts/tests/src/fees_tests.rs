@@ -123,7 +123,7 @@ fn fee_claims_reject_spoofed_accounts() {
     assert_fumpad_err(env.send_as(&k, &[i], &[&k]), FumpadError::InvalidAccount);
     // Fake DBC program.
     let mut i = env.claim_fees_ix(&c, &kp_pk(&k));
-    let last = i.accounts.len() - 3;
+    let last = i.accounts.len() - 5; // dbc_program, then fee_policy, fee_wallet and the event-CPI pair
     i.accounts[last].pubkey = addr(&meteora::DAMM);
     assert_fumpad_err(env.send_as(&k, &[i], &[&k]), FumpadError::WrongVenue);
     // claim_lp_fees before graduation.

@@ -47,7 +47,9 @@ pub mod fumpad {
     // ── admin / governance ──────────────────────────────────────────────────
     /// remaining_accounts = the initial DBC config allow-list (0..=8, validated like `execute_config` add).
     /// `operators`: 0..=2 jobs keys (a Vec, not a fixed array: the bundled create_config + initialize_global
-    /// simulation of the bootstrap scripts must fit one 1,232-byte transaction).
+    /// simulation of the bootstrap scripts must fit one 1,232-byte transaction). `policies[i]` = fee policy of the
+    /// i-th config (shorter Vec: the rest are standard).
+    #[allow(clippy::too_many_arguments)]
     pub fn initialize_global<'info>(
         ctx: Context<'info, InitializeGlobal<'info>>,
         admin: Pubkey,
@@ -56,8 +58,18 @@ pub mod fumpad {
         params: Params,
         keepers: [Pubkey; MAX_KEEPERS],
         operators: Vec<Pubkey>,
+        policies: Vec<FeePolicy>,
     ) -> Result<()> {
-        instructions::handle_initialize_global(ctx, admin, platform_treasury, cluster_tag, params, keepers, operators)
+        instructions::handle_initialize_global(
+            ctx,
+            admin,
+            platform_treasury,
+            cluster_tag,
+            params,
+            keepers,
+            operators,
+            policies,
+        )
     }
 
     pub fn queue_params(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
@@ -101,8 +113,8 @@ pub mod fumpad {
         instructions::handle_cancel_admin(ctx)
     }
 
-    pub fn queue_config(ctx: Context<QueueConfig>, config: Pubkey, add: bool) -> Result<()> {
-        instructions::handle_queue_config(ctx, config, add)
+    pub fn queue_config(ctx: Context<QueueConfig>, config: Pubkey, add: bool, policy: FeePolicy) -> Result<()> {
+        instructions::handle_queue_config(ctx, config, add, policy)
     }
 
     pub fn execute_config(ctx: Context<ExecuteConfig>) -> Result<()> {

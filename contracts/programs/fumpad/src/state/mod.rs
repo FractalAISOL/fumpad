@@ -1,6 +1,7 @@
 pub mod claim_queue;
 pub mod coin;
 pub mod consumed;
+pub mod fee_policy;
 pub mod global;
 pub mod observations;
 pub mod position;
@@ -9,6 +10,7 @@ pub mod ticket;
 pub use claim_queue::*;
 pub use coin::*;
 pub use consumed::*;
+pub use fee_policy::*;
 pub use global::*;
 pub use observations::*;
 pub use position::*;
@@ -22,7 +24,9 @@ mod size_tests {
     /// v0.7 fresh layouts (D39): account sizes incl. the 8-byte discriminator (INTERFACE §5, CONTRACTS.md).
     #[test]
     fn account_sizes() {
-        assert_eq!(8 + Global::INIT_SPACE, 1_044);
+        assert_eq!(8 + Global::INIT_SPACE, 1_491);
+        assert_eq!(FeePolicy::INIT_SPACE, 39);
+        assert_eq!(8 + CoinFeePolicy::INIT_SPACE, 152);
         assert_eq!(Params::INIT_SPACE, 168);
         assert_eq!(8 + Coin::INIT_SPACE, 546);
         assert_eq!(8 + Position::INIT_SPACE, 315);

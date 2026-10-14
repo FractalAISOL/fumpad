@@ -29,6 +29,9 @@ pub const REWARD_POOL_SEED: &[u8] = b"reward_pool";
 /// D30: swap payer for buybacks; owns only ATA(buyback, WSOL).
 #[constant]
 pub const BUYBACK_SEED: &[u8] = b"buyback";
+/// Per-coin fee-policy snapshot (`CoinFeePolicy`), created by `register_coin` only for a non-standard policy.
+#[constant]
+pub const FEE_POLICY_SEED: &[u8] = b"fee_policy"; // ["fee_policy", mint]
 
 // ── Fixed-point ──────────────────────────────────────────────────────────────
 /// Prices are lamports per base unit of the token, in Q64.64 (u128).
@@ -141,6 +144,16 @@ pub const MAX_KEEPERS: usize = 3;
 pub const MAX_OPERATORS: usize = 2;
 /// Config allow-list slots (`Global.configs`).
 pub const MAX_CONFIGS: usize = 8;
+
+// ── Per-config fee policies (`Global.config_policies`, snapshotted per coin) ───
+/// D32/D33 as configured in `Params`: our share split buyback / platform / creator (`Coin.fee_split`), the
+/// launch-window claim 100% → buyback. All other policy fields zero.
+#[constant]
+pub const FEE_POLICY_STANDARD: u8 = 0;
+/// First-coin policy (2026-10-14): our share split `buyback_share : wallet_share` between the coin's buyback balance
+/// and `FeePolicy.wallet` (no platform, no creator); the launch-window claim 100% → the wallet. Same split for LP fees.
+#[constant]
+pub const FEE_POLICY_WALLET_SPLIT: u8 = 1;
 
 pub const OBSERVATION_CAPACITY: usize = 256;
 /// D17: 1024 entries; the queue PDA is 8 + 48 + 80 × 1024 = 81,976 bytes (9 `init_claim_queue` calls).
