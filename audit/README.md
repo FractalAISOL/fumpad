@@ -304,9 +304,11 @@ tail -c +754289 /tmp/devnet.so | tr -d '\0' | wc -c                       # 0 (p
 ```
 Caveat: this is a host build (`cargo build-sbf` via Anchor on macOS arm64), not a Docker-pinned verifiable build.
 Byte equality on a different machine / OS is **UNVERIFIED**; if your bytes differ, compare platform-tools
-(v1.57), Rust, and that `contracts/.cargo/config.toml` (inliner flags) was picked up. A verifiable build
-(`solana-verify build` / `anchor build --verifiable`) with a published hash is planned before mainnet and is not
-done yet.
+(v1.57), Rust, and that `contracts/.cargo/config.toml` (inliner flags) was picked up. Verifiable (docker) build:
+`scripts/verify-build.sh` (`solana-verify build`, image `solanafoundation/solana-verifiable-build:4.3.0`,
+`--arch v3`) — rehearsed 2026-10-13, reproducible across images, but its bytes differ from the macOS build that is
+deployed on devnet (Linux vs macOS platform-tools codegen; `services/LAUNCH-DAY.md` §10 "Rehearsal" has both hashes).
+Mainnet will deploy the docker build only.
 
 **Mainnet** (planned, `services/LAUNCH-DAY.md`): a fresh program keypair, `declare_id!` changed to it on a release
 branch (`services/scripts/mainnet/build-program.ts` performs exactly that substitution in a temp copy and checks

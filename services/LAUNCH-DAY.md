@@ -89,14 +89,17 @@ Opening the app only after the handover means no hot key holds admin power while
     git add contracts/program-ids/mainnet.txt && git commit -m "mainnet program id $FUMPAD_PROGRAM_ID"
     git tag fumpad-mainnet-v0.7 && git push origin HEAD --tags && REL=$(git rev-parse HEAD)
     # b) verifiable build of that commit (docker; mount = contracts/, the cargo workspace)
-    cd ~/fumpad/contracts && solana-verify build --library-name fumpad --base-image <IMAGE> -- --features mainnet
-    solana-verify get-executable-hash target/deploy/fumpad.so                # = H (record it)
+    #    = cd contracts && solana-verify build --library-name fumpad \
+    #        --base-image solanafoundation/solana-verifiable-build:4.3.0 --arch v3 -- --features mainnet
+    #    ~17 min on Apple Silicon (amd64 emulation), a few min on x86_64 Linux
+    cd ~/fumpad && scripts/verify-build.sh --mainnet                          # prints "HASH: <H>" (record it)
     # c) cross-check with the local, non-docker path (same feature, platform-tools v1.57, sbpf v3)
     cd ~/fumpad/services && npm run mainnet:build-program -- --program-keypair $K/fumpad-program-keypair.json
     #    → "program-ids/mainnet.txt (committed) = <id>: this is the release build's input" + "executable hash H'"
     ```
-    Deploy the docker-built `contracts/target/deploy/fumpad.so` (`--so` in §2). H ≠ H' means the image's toolchain
-    differs from ours (§10): pick the image that matches before day 0. `$B --step program` on mainnet refuses unless
+    Deploy the docker-built `contracts/target/deploy/fumpad.so` (`--so` in §2), never the local one. H ≠ H' is
+    **expected** (§10 "Rehearsal": the docker build embeds `/home/runner/...` panic paths, the macOS one
+    `/Users/runner/...`); H is the hash of record, H' only confirms the id/feature plumbing. `$B --step program` on mainnet refuses unless
     the committed `mainnet.txt` holds `$FUMPAD_PROGRAM_ID`.
 12. **Plan + simulate** against mainnet (read-only):
     ```sh
@@ -260,7 +263,7 @@ providers keep full history; `rpc-check` verifies it.
 **Mechanism.** `declare_id!` must equal the deployed id, and the mainnet program keypair only exists from launch day
 (`--step keys`). So the id is data, not code:
 - `contracts/program-ids/devnet.txt` = `5YMF…S9Fb` = the `declare_id!` of the default build (`anchor build`; a unit
-  test in `lib.rs` and `test/ops/mainnet.test.ts` keep them equal). Devnet/local builds are unchanged (same 754,288 B).
+  test in `lib.rs` and `test/ops/mainnet.test.ts` keep them equal). Devnet/local builds are unchanged by the feature.
 - `contracts/program-ids/mainnet.txt` = `UNSET` until launch day. Cargo feature `mainnet` (`programs/fumpad/build.rs`)
   reads it and compiles in `declare_id!("<it>")` instead; the build **fails** while it is `UNSET`, not a 32-byte
   base58 key, or the devnet id. No environment variable is involved: the bytes depend only on the commit + the
@@ -271,18 +274,24 @@ providers keep full history; `rpc-check` verifies it.
 1. `$B --step keys` generates `fumpad-program-keypair.json` (back it up offline).
 2. Commit its **pubkey** into `contracts/program-ids/mainnet.txt` (the keypair never enters git), tag, push. `REL` =
    that commit. The release commit = the one the services/app are built from too.
-3. Verifiable build of `REL`: `cd contracts && solana-verify build --library-name fumpad --base-image <IMAGE> --
-   --features mainnet` (args after `--` go to cargo). `solana-verify get-executable-hash target/deploy/fumpad.so` = H.
-4. Compare: `npm run mainnet:build-program -- --program-keypair $K/fumpad-program-keypair.json` (local, non-docker,
-   same feature) prints its executable hash H′. `$B --step program` prints the sha256 of what it deploys.
-5. Deploy that .so (`$B --step program … --so contracts/target/deploy/fumpad.so`), then
-   `solana-verify get-program-hash -u <rpc> $FUMPAD_PROGRAM_ID` must print H.
+3. Verifiable build of `REL` (clean checkout of the tag; `IMAGE=solanafoundation/solana-verifiable-build:4.3.0`):
+   `scripts/verify-build.sh --mainnet` = `cd contracts && solana-verify build --library-name fumpad --base-image
+   $IMAGE --arch v3 -- --features mainnet` (args after `--` go to cargo), then prints size, sha256 and
+   `solana-verify get-executable-hash target/deploy/fumpad.so` = **H**. Record H + `REL`.
+4. Cross-check (optional): `npm run mainnet:build-program -- --program-keypair $K/fumpad-program-keypair.json` (local,
+   non-docker, same feature) prints H′. **H′ ≠ H is expected** (see "Rehearsal" below): H′ only confirms that the id
+   was compiled in; the docker bytes (H) are what gets deployed and verified. `$B --step program` prints the sha256
+   of what it deploys (= the docker .so's sha256).
+5. Deploy the docker-built .so (`$B --step program … --so contracts/target/deploy/fumpad.so`; copy it somewhere
+   safe first, a later `anchor build` overwrites it), then `solana-verify get-program-hash -u <rpc>
+   $FUMPAD_PROGRAM_ID` must print H (or rebuild and compare in one go: `scripts/verify-build.sh --mainnet
+   --program-id $FUMPAD_PROGRAM_ID -u <rpc>`, exit 3 on mismatch).
 6. Verify against the repo and publish (day 0, **while the deployer is still the upgrade authority**: the
    verification PDA is signed by the upgrade authority):
    ```sh
    RPC="$(sed -n 's/^RPC_URL=//p' $K/rpc.env)"
    solana-verify verify-from-repo -u "$RPC" --program-id $FUMPAD_PROGRAM_ID https://github.com/<org>/fumpad \
-     --commit-hash $REL --library-name fumpad --mount-path contracts --base-image <IMAGE> \
+     --commit-hash $REL --library-name fumpad --mount-path contracts --base-image $IMAGE --arch v3 \
      -k $K/deployer.json -- --features mainnet        # rebuilds in docker, compares with the chain, asks to upload the PDA: yes
    solana-verify remote submit-job --program-id $FUMPAD_PROGRAM_ID --uploader $(solana-keygen pubkey $K/deployer.json)
    solana-verify remote get-job-status --job-id <id from the previous command>   # OtterSec API → verified
@@ -291,14 +300,37 @@ providers keep full history; `rpc-check` verifies it.
    and publish H + `REL`). Later upgrades (upgrade authority = admin vault): build the new commit the same way and
    `solana-verify export-pda-tx … --uploader <admin vault>` → a Squads proposal next to the upgrade (MULTISIG.md).
 
-**Status of this procedure (2026-10-13).** Tested here: the default `anchor build` (devnet id, 0 warnings, 754,288 B,
-contracts suite green) and the non-docker mainnet path (`build-program.ts`, `cargo build-sbf --features mainnet`,
-platform-tools v1.57, sbpf v3) with a stand-in id: the .so embeds the stand-in and not the devnet id; the build
-refuses `UNSET`, a malformed key and the devnet id. **UNVERIFIED: the docker steps** (3, 5's hash equality, 6) —
-docker and solana-verify are not installed on the build machine. Before T−3 d, on a machine with docker, rehearse
-steps 3–4 on a throwaway branch with a stand-in id in `mainnet.txt` and choose `<IMAGE>` (a
-`solanafoundation/solana-verifiable-build:<agave version>` tag) such that H = H′. Watch: our builds use platform-tools
-v1.57 + `--arch v3` (Anchor 1.2.1 defaults, CONTRACTS.md "Build profile"); an image whose `cargo build-sbf` defaults
-differ produces different bytes (use a solana-verify release that accepts `--arch v3` if needed, or
-`anchor build --verifiable -- --features mainnet`, which runs Anchor's image with Anchor's own flags, and compare
-again). `contracts/.cargo/config.toml` (inliner flags) is inside the mount, so docker builds read it too.
+**Rehearsal (2026-10-13, Apple M1, colima vz + qemu-user amd64 emulation, solana-verify 0.5.2, commit = main after
+the pre-audit hardening).** Steps 3–5 rehearsed read-only (no deploy, no transaction):
+
+| Build | Command | Size | Executable hash |
+|---|---|---|---|
+| docker, devnet id | `scripts/verify-build.sh` (image 4.3.0) | 806,584 | `f1e6a0d05294dec0bc6830353522be319112c6921d4114bbf5803e053e3f94fb` |
+| docker, devnet id | same, image 4.1.2 + `--cargo-build-sbf-args="--tools-version v1.57"` | 806,584 | `f1e6a0d0…94fb` (identical) |
+| docker, stand-in id `CKGq…9VfC` | `--features mainnet`, throwaway copy of `contracts/` outside the repo tree | 806,472 | `f95aec7e0075423bd4fcc8264f89c8ed3d22a7ef22a9cca33594fe887fde3d6e` |
+| local macOS, devnet id | `anchor build` / `cargo build-sbf --tools-version v1.57 --arch v3` | 805,648 | `7a5f424eee50be32928d2fa29ff460bac195537dcb1788e06587536957e47c37` |
+| deployed devnet `5YMF…S9Fb` | `solana-verify get-program-hash -u devnet` | | `7a5f424e…7c37` (= the local build) |
+
+- **Works.** The docker build reproduces across images (4.3.0 and 4.1.2 + v1.57: same bytes); `get-executable-hash`
+  of the output = the hash solana-verify prints. The mainnet feature build embeds the stand-in id and not the devnet
+  id. The full LiteSVM suite (`cargo test -p tests`, 94 passed / 1 ignored) passes against the docker-built devnet .so.
+- **H ≠ H′ (docker vs local macOS) is structural, not a misconfiguration:** `.rodata` is byte-identical in size,
+  `.text` is +936 B in docker (same delta before the hardening merge), and the precompiled std embeds
+  `/home/runner/…` vs `/Users/runner/…` paths: the Linux-x86_64 and macOS-arm64 platform-tools v1.57 builds generate
+  slightly different code. A Mac can never reproduce the docker hash natively, so **only the docker .so is deployed**
+  and H′ (step 4) is just a sanity check of the id plumbing.
+- **Image:** `solanafoundation/solana-verifiable-build:4.3.0` (platform-tools v1.57 baked in, so no download in the
+  container; amd64 only). Always pass `--arch v3` (solana-verify defaults to v0). The 4.1.x images default to v1.54.
+- **Duration:** cold (empty `contracts/target`) ~17 min on the M1 under emulation; warm (deps cached in
+  `contracts/target`, only fumpad recompiled) ~1.5 min. Pre-pull the image (~40 s). On x86_64 Linux: a few minutes.
+- **Pitfalls found:** (1) qemu-user can deadlock (a forked `cargo` child that never execs, 0% CPU forever; 2 of 6
+  runs here): if the log stops at `Compiling fumpad` with an idle container for > 5 min, stop it and rerun, or enable
+  Rosetta (`colima stop && colima start --vm-type vz --vz-rosetta`) / build on x86_64. (2) solana-verify builds the
+  first crate named `fumpad` anywhere under the mount, `target/` included: never keep copies of the program under
+  `contracts/` (`scripts/verify-build.sh` refuses). (3) The build writes `contracts/target/deploy/fumpad.so`, the same
+  path as `anchor build`: copy the docker .so aside before running anything else.
+- **Devnet:** the deployed devnet program is the local macOS build (`7a5f…`), so it cannot be verified with
+  solana-verify. Recommended: redeploy devnet from the docker .so (`f1e6…`, fits the current 810,280 B ProgramData)
+  so devnet = verifiable bytes and launch day uses the same artefact path; not done here (no deploys).
+- Still UNVERIFIED: step 6 (`verify-from-repo` + OtterSec remote job) needs the public repo and a deployed docker
+  build.

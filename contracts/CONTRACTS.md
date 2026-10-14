@@ -33,6 +33,25 @@ Program id: the default build declares the devnet id (`program-ids/devnet.txt`).
 `cargo build-sbf --tools-version v1.57 --arch v3 --features mainnet`, or `solana-verify build … -- --features mainnet`)
 compiles in the id committed in `program-ids/mainnet.txt` via `programs/fumpad/build.rs`, and fails while it is
 `UNSET`. Launch-day procedure (commit the id → verifiable build → hash → deploy → verify): services/LAUNCH-DAY.md §10.
+
+Verifiable (docker) build — the bytes of record for mainnet:
+```sh
+scripts/verify-build.sh             # devnet id;  = cd contracts && solana-verify build --library-name fumpad \
+                                    #     --base-image solanafoundation/solana-verifiable-build:4.3.0 --arch v3
+scripts/verify-build.sh --mainnet   # + `-- --features mainnet` (fails while program-ids/mainnet.txt is UNSET)
+scripts/verify-build.sh --program-id <id> -u <rpc>   # also compare with the deployed program (read-only)
+```
+- Image `solanafoundation/solana-verifiable-build:4.3.0` (Agave 4.3.0): its `cargo build-sbf` defaults to
+  platform-tools **v1.57** (baked into the image, = what `anchor build` uses); `--arch v3` must be passed explicitly
+  (solana-verify defaults to v0). The 4.1.x images ship platform-tools v1.54. Image is amd64 only.
+- solana-verify ≥ 0.5.2 (it supports `--arch`). It mounts `contracts/` (incl. `.cargo/config.toml`, so the inliner
+  flags apply) and builds the **first** crate named `fumpad` it finds anywhere in the mount, `target/` included:
+  never keep a copy of the program under `contracts/` (the script refuses to run if one exists).
+- Duration: ~17 min cold (~1.5 min with deps cached in `contracts/target`) on an Apple M1 (amd64 under qemu-user emulation, colima `vz`, rosetta off), a few minutes on
+  x86_64 Linux. Under qemu the build **can hang** (a forked `cargo` that never execs, 0% CPU; 2 of 6 runs here):
+  stop it and rerun, or run colima with Rosetta (`colima start --vm-type vz --vz-rosetta`), or build on x86_64.
+- The docker .so differs from the local macOS build (different bytes and size; see LAUNCH-DAY.md §10 "Rehearsal"):
+  deploy and verify the docker one.
 Fixtures (`tests/fixtures/`, dumped read-only from mainnet; no mainnet transaction was sent):
 `dbc_mainnet.so` (sha256 `4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b`, programdata dump incl.
 padding), `damm_v2_mainnet.so` (`4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b`),
