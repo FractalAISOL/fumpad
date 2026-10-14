@@ -163,7 +163,7 @@ pub fn ok(r: TransactionResult) -> TransactionMetadata {
 
 impl Env {
     /// Fresh SVM: fumpad + mainnet DBC/DAMM v2, Global initialized (default params, cluster tag 2), 3 keepers past
-    /// their 6h attestation freeze, and the mainnet FUMPAD DBC config created and allow-listed (48h timelock).
+    /// their 6h attestation freeze, and the mainnet FUMPAD DBC config created and allow-listed (1 h config timelock).
     pub fn new() -> Self {
         Self::with_params(fumpad::state::Params::default())
     }
@@ -319,7 +319,7 @@ impl Env {
         self.send(&[i], &[])
     }
 
-    /// queue_config(add) → 48h → execute_config.
+    /// queue_config(add) → 1 h → execute_config.
     pub fn allow_config(&mut self, config: Pubkey) {
         ok(self.queue_config(config, true));
         self.warp(fumpad::CONFIG_TIMELOCK_SECS);

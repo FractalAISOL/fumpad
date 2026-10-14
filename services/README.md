@@ -207,7 +207,7 @@ is schema-validated (400, L-3).
 Jobs: sampling (heartbeat every graduated coin, full rate near triggers / pending buybacks, batches ≤5 legacy,
 6–10 v0 + lookup table it manages, coins past half their interval ride along), graduate + post-graduation setup (init_observations, then 9× init_claim_queue in one tx: 1024-entry queue, 81,976 bytes, ~69k CU), auto-claim (D17),
 execute_buyback (median/±3% pre-checked), process_queue, skim+settle
-(NothingToSkim = skip), withdraw_platform_fees, execute_params after the 48 h timelock. Dynamic priority fee
+(NothingToSkim = skip), withdraw_platform_fees, execute_params / execute_config after the 1 h timelock. Dynamic priority fee
 (percentile of recent fees on written accounts, clamped to `PRIORITY_MAX_MICROLAMPORTS` and to
 `PRIORITY_MAX_LAMPORTS_PER_TX` per transaction), retries on expiry, in-flight guards, `DRY_RUN=true`
 (simulate only), `/health` (slim: ok, version, loop age, failing job names, over-budget flag), Telegram alerts
@@ -251,8 +251,10 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
 - **History (L8)**: coins launched before the RPC's `getFirstAvailableBlock` are refused (use an archive RPC);
   `RPC_HISTORY_CHECK=off` disables it.
 - **Watcher alerts** (L7): attestation mismatches (until the guardian voids), sells with a derived ticket that never
-  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues; re-alerted every
-  `WATCH_ALERT_COOLDOWN_MS` (30 min).
+  got attested (until `max_attest_age` + 1 h), missing rebuy debits, engine issues, and **every pending governance
+  change** (`gov:params:*` / `gov:config:*` / `gov:admin:*`: params diff, config add/remove, new admin / treasury /
+  guardian, eta — `keeper/src/watch/governance.ts`; the timelocks are 1 h / 6 h, SPEC v0.7 clarification 29, so the
+  guardian must cancel fast); re-alerted every `WATCH_ALERT_COOLDOWN_MS` (30 min) until resolved.
 
 ### Keeper board (per-keeper roles — the documented default, V7-M1)
 The three attestors share one Postgres for the signature board. Give each its own role so one compromised keeper

@@ -20,7 +20,7 @@ devnet curve simulates OK on devnet DBC **0.2.2** (35k CU) and the simulated con
 
 | key (`~/fumpad-keys/devnet/v07/`) | role | on chain | funded (SOL) |
 |---|---|---|---|
-| deployer `~/.config/solana/id.json` | upgrade authority, **admin**, **guardian** (devnet only: `initialize_global` sets guardian = admin; to split later: `propose_admin(admin, treasury, guardian)` → 48 h → `accept_admin`; `guardian.json` is generated for that. Mainnet: admin + guardian + upgrade authority go to Squads multisigs, `MULTISIG.md`) | — | pays everything below |
+| deployer `~/.config/solana/id.json` | upgrade authority, **admin**, **guardian** (devnet only: `initialize_global` sets guardian = admin; to split later: `propose_admin(admin, treasury, guardian)` → 6 h → `accept_admin`; `guardian.json` is generated for that. Mainnet: admin + guardian + upgrade authority go to Squads multisigs, `MULTISIG.md`) | — | pays everything below |
 | `operator.json` | **the jobs keeper** (samples, `claim_for`, pre-grad buybacks, cranks; pays graduation setup) | `Global.operators[0]` | 2.00 |
 | `attestor-1.json` | attestor 1 (attestations only) | `Global.keepers[0]` | 0.25 |
 | `attestor-2.json` | attestor 2 | `Global.keepers[1]` | 0.25 |
@@ -272,6 +272,10 @@ setsecret() { railway variables --service "$1" --skip-deploys --set-from-stdin "
    railway variables --service watcher --skip-deploys --set "SERVICE_ENTRY=keeper/dist/main.js" --set "KEEPER_MODE=watcher" --set "PYTH_SOURCE=onchain" --set "PORT=8790"
    envval ~/fumpad-keys/devnet/rpc-d.env RPC_URL      | setsecret watcher RPC_URL
    envval ~/fumpad-keys/devnet/rpc-d.env PYTH_RPC_URL | setsecret watcher PYTH_RPC_URL   # its provider's mainnet url
+   # REQUIRED (governance timelocks are 1 h / 6 h, SPEC v0.7 clarification 29): the watcher alerts the guardian chat on
+   # every pending params / config / admin change — without these it only logs.
+   envval ~/fumpad-keys/devnet/telegram.env TELEGRAM_BOT_TOKEN | setsecret watcher TELEGRAM_BOT_TOKEN
+   envval ~/fumpad-keys/devnet/telegram.env TELEGRAM_CHAT_ID   | setsecret watcher TELEGRAM_CHAT_ID
    railway up --service watcher --detach
    railway domain --service watcher               # optional: public /v1/verification
    ```
@@ -500,4 +504,22 @@ new binary refuses attestor-1's key, and permissionless jobs — fees, graduatio
 attestor-1 SOL beyond its 0.25 target can be drained to the deployer. Then move the attestors to the §1 topology
 (separate projects / accounts / providers) one at a time: an attestor that is down only costs liveness while the other
 two sign.
+
+## 11. Timelocks 1 h / 6 h — upgrading the devnet program (2026-10-14)
+
+SPEC v0.7 clarification 29: `PARAMS_TIMELOCK_SECS` = `CONFIG_TIMELOCK_SECS` = 1 h, `ADMIN_TIMELOCK_SECS` = 6 h
+(were 48 h). Constants only: no account layout change, no `migrate_global`, no key or params change — a plain
+program upgrade. Devnet runs the local `anchor build` (its deployed hash = the local macOS build, LAUNCH-DAY §10), so
+build locally; only mainnet must use the docker build (`scripts/verify-build.sh`).
+
+```sh
+cd ~/fumpad/contracts && anchor build -p fumpad          # target/deploy/fumpad.so = 805,640 bytes (fits: no extend)
+set -a; . ~/fumpad-keys/devnet/rpc.env; set +a
+solana program deploy target/deploy/fumpad.so --program-id target/deploy/fumpad-keypair.json \
+  --upgrade-authority ~/.config/solana/id.json --keypair ~/.config/solana/id.json --url "$RPC_URL" --with-compute-unit-price 10000
+cd ~/fumpad/services && npx tsx scripts/devnet/bootstrap-v07.ts --step verify    # bytecode = local .so, nothing pending
+# services (this branch merged): the watcher now alerts on pending governance changes — set its TELEGRAM_* (§4 step 7)
+for s in keeper attestor-1 attestor-2 attestor-3 watcher indexer api; do railway up --service $s --detach; done
+```
+A change already pending before the upgrade keeps the eta it was queued with (the eta is stored, not recomputed).
 

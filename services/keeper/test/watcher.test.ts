@@ -4,9 +4,10 @@ import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 
 import type { EngineOutput, HistoryTx } from "@fumpad/engine";
-import { EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, toIdl } from "@fumpad/sdk";
+import { DEFAULT_PARAMS, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, toIdl } from "@fumpad/sdk";
 
 import { lifecycleEvents } from "../src/attest/derive.js";
+import { governanceAlerts } from "../src/watch/governance.js";
 import { Watcher } from "../src/watch/run.js";
 import { verifyCoin } from "../src/watch/verify.js";
 
@@ -181,5 +182,58 @@ describe("ticket lifecycle → engine events", () => {
     expect(ev[1]).toMatchObject({ status: "claimed", ticket: { signature: sellSig, ixKey: 7 } });
     // other mints' events are ignored
     expect(lifecycleEvents(Keypair.generate().publicKey.toBase58(), [tx("att", 11, [attested(900n)])])).toEqual([]);
+  });
+});
+
+describe("governance alerts (C-TL: 1 h / 6 h timelocks)", () => {
+  const k = () => Keypair.generate().publicKey;
+  const base = { ...DEFAULT_PARAMS };
+  const g0 = {
+    admin: k(),
+    platformTreasury: k(),
+    guardian: k(),
+    params: base,
+    pendingParams: base,
+    pendingEta: 0n,
+    pendingAdmin: PublicKey.default,
+    pendingTreasury: PublicKey.default,
+    pendingGuardian: PublicKey.default,
+    pendingAdminEta: 0n,
+    pendingConfig: PublicKey.default,
+    pendingConfigAdd: 0,
+    pendingConfigEta: 0n,
+  };
+
+  it("nothing pending → no alert", () => {
+    expect(governanceAlerts(g0 as never, NOW)).toEqual([]);
+  });
+
+  it("ParamsQueued / ConfigQueued / AdminProposed state → one alert each, with the diff and the eta", async () => {
+    const cfg = k();
+    const newAdmin = k();
+    const g = {
+      ...g0,
+      pendingParams: { ...base, claimBps: 2_500, ticketChallengeSecs: 3_600n },
+      pendingEta: BigInt(NOW + 3_600),
+      pendingConfig: cfg,
+      pendingConfigAdd: 1,
+      pendingConfigEta: BigInt(NOW + 1_800),
+      pendingAdmin: newAdmin,
+      pendingTreasury: g0.platformTreasury,
+      pendingGuardian: g0.guardian,
+      pendingAdminEta: BigInt(NOW + 6 * 3_600),
+    };
+    const a = governanceAlerts(g as never, NOW);
+    expect(a.map((x) => x.key)).toEqual([`gov:params:${NOW + 3_600}`, `gov:config:${cfg.toBase58()}:ADD:${NOW + 1_800}`, `gov:admin:${newAdmin.toBase58()}:${NOW + 6 * 3_600}`]);
+    expect(a[0].text).toMatch(/ParamsQueued.*executable in 1h00m.*claimBps 1000→2500; ticketChallengeSecs 21600→3600.*cancel_params/);
+    expect(a[1].text).toMatch(/ConfigQueued.*executable in 0h30m.*cancel_config/);
+    expect(a[2].text).toMatch(new RegExp(`AdminProposed.*executable in 6h00m.*admin ${g0.admin.toBase58()}→${newAdmin.toBase58()}; platform_treasury .*\\(same\\).*cancel_admin`));
+
+    // The watcher sends them on every tick (before the coins), deduplicated by the Alerter's cooldown.
+    const sent: string[] = [];
+    const w = new Watcher({ coins: async () => [], global: async () => g as never, derive: async () => ({}) as never, alerts: { alert: async (key: string) => void sent.push(key) }, now: () => NOW });
+    await w.tick();
+    expect(sent).toEqual(a.map((x) => x.key));
+    expect(w.stats.governancePending).toBe(3);
   });
 });

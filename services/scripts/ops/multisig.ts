@@ -60,8 +60,9 @@ import { assertCluster, expandHome, parseArgs, readEnvValue, readKeypair, redact
 export const SQUADS_PROGRAM_ID = new PublicKey("SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf");
 if (!sq.PROGRAM_ID.equals(SQUADS_PROGRAM_ID)) throw new Error(`@sqds/multisig targets ${sq.PROGRAM_ID.toBase58()}, expected Squads v4 ${SQUADS_PROGRAM_ID.toBase58()}`);
 
-/** FUMPAD's own admin timelock (propose_admin → accept_admin), contracts ADMIN_TIMELOCK_SECS. */
-export const ADMIN_TIMELOCK_SECS = 48 * 3600;
+/** FUMPAD's own admin timelock (propose_admin → accept_admin), contracts ADMIN_TIMELOCK_SECS (SPEC v0.7 C-TL: 6 h,
+ * was 48 h). Also the recommended Squads time lock of the admin multisig (MULTISIG.md §2: it gates program upgrades). */
+export const ADMIN_TIMELOCK_SECS = 6 * 3600;
 const SQUADS_MAX_TIME_LOCK_SECS = 90 * 86_400; // Squads v4 MAX_TIME_LOCK (3 months)
 
 // ── config ────────────────────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ export function checkMultisigConfig(c: MultisigConfig): { problems: string[]; wa
   if (c.members.length > 65_535) problems.push("too many members");
   if (c.threshold === 1 && voters > 1) warnings.push("threshold 1: any single voter controls this multisig");
   if (voters - c.threshold < 1) warnings.push(`no spare voter: losing one of ${voters} keys locks the multisig (recommend threshold ≤ voters − 1)`);
-  if (/admin/i.test(c.label) && c.timeLockSecs < ADMIN_TIMELOCK_SECS) warnings.push(`admin time lock ${c.timeLockSecs}s < 48h: program upgrades through this multisig would be faster than users can react`);
+  if (/admin/i.test(c.label) && c.timeLockSecs < ADMIN_TIMELOCK_SECS) warnings.push(`admin time lock ${c.timeLockSecs}s < 6h: program upgrades through this multisig would be faster than users can react`);
   if (/guardian/i.test(c.label) && c.timeLockSecs > 0) warnings.push("guardian time lock > 0 delays emergency pauses");
   return { problems, warnings };
 }
