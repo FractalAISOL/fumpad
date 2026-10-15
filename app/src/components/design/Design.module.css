@@ -187,3 +187,34 @@
   align-items: center;
   max-width: 360px;
 }
+
+/* Anime kit showcase */
+.fumiGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--s-3);
+}
+.fumiCard {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 4px;
+  padding: var(--s-3) var(--s-2) var(--s-4);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--rule);
+  text-align: center;
+  min-width: 0;
+}
+.fumiCard b {
+  font-size: var(--fs-sm);
+  margin-top: var(--s-2);
+}
+.fumiMeans {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-2);
+}

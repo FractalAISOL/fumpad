@@ -47,6 +47,7 @@ import {
   cx,
   useToast,
 } from "@/design";
+import { Bang, FUMI_POSES, FUMI_POSE_KEYS, Fumi, FumiEmptyState, FumiErrorState, FumiLoadingState, PopIn, Sparkles, SpeechBubble, SpeedLines, SweatDrop, hasArt } from "@/design/anime";
 import * as f from "@/design/format";
 import { type ColorToken, colorDark, colorLight, duration, easing, radius, typeScale } from "@/design/tokens";
 import { ClaimMoment, type ClaimResult } from "../moment/ClaimMoment";
@@ -531,6 +532,108 @@ export function DesignView({ tickets, series }: { tickets: Ticket[]; series: Pri
                 Your wallet is clean, which is rarer than a 10×.
               </EmptyState>
             </Panel>
+          </div>
+        )}
+      </Spec>
+
+      {/* ── Anime kit (phase 1): Fumi + effects on top of Signal. Rules: marketing/STYLE-ANIME.md ── */}
+      <Spec title="Fumi · poses" note="Anime kit, src/design/anime. Fumi is punctuation, not the product: max one per screen, never over prices, charts, forms or buttons. A pose without art falls back (→)." mode={mode}>
+        {() => (
+          <ul className={s.fumiGrid}>
+            {FUMI_POSE_KEYS.map((k) => (
+              <li key={k} className={s.fumiCard}>
+                <Fumi pose={k} size="md" fade />
+                <b className="num">{k}</b>
+                <span className={s.cap}>
+                  {FUMI_POSES[k].fallback ? `falls back to ${FUMI_POSES[k].fallback}` : "core pose"}
+                  {hasArt(k) ? "" : " (no art yet)"}
+                </span>
+                <span className={s.fumiMeans}>{FUMI_POSES[k].means}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Spec>
+
+      <Spec title="Fumi · sizes, crops, effects" note="full (3:4 cut-out) or bust (square, framing normalised across poses). fx plays the pose's own effects. Phones shrink lg/xl." mode={mode}>
+        {() => (
+          <div className={s.stack}>
+            <Row label="bust">
+              <Fumi pose="waving" size="xs" crop="bust" />
+              <Fumi pose="crying" size="sm" crop="bust" />
+              <Fumi pose="moneyeyes" size="sm" crop="bust" />
+              <Fumi pose="running" size="sm" crop="bust" />
+              <Fumi pose="thinking" size="md" crop="bust" />
+            </Row>
+            <Row label="full + fx">
+              <Fumi pose="cheering" size="lg" fx pop />
+              <Fumi pose="shocked" size="lg" fx />
+              <Fumi pose="thumbsdown" size="md" fx />
+              <Fumi pose="ticket" size="md" fx />
+              <Fumi pose="thinking" size="md" fx idle />
+            </Row>
+          </div>
+        )}
+      </Spec>
+
+      <Spec title="Anime effects" note="Ink punctuation that flips with the theme. Orange stays money-only. Reduced motion shows the finished frame." mode={mode}>
+        {() => (
+          <div className={s.stack}>
+            <Row label="effects">
+              <Sparkles size={56} />
+              <Bang size={48} />
+              <Bang size={48} glyph="?" />
+              <SweatDrop size={36} />
+              <SpeedLines size={72} />
+              <PopIn>
+                <Badge tone="ink">Graduated</Badge>
+              </PopIn>
+            </Row>
+            <Row label="bubble">
+              <SpeechBubble tail="bottom-right">Sold too early? Same.</SpeechBubble>
+              <SpeechBubble tail="bottom-left">Hi, fumbler!</SpeechBubble>
+              <SpeechBubble tail="left">Under $50 doesn’t count.</SpeechBubble>
+              <SpeechBubble tail="right">Hmm…</SpeechBubble>
+            </Row>
+          </div>
+        )}
+      </Spec>
+
+      <Spec title="Fumi states" note="Empty, loading and error with Fumi, for non-trading surfaces. Same copy rules as everywhere: say what happened and what to do." mode={mode}>
+        {() => (
+          <div className={s.grid2}>
+            <Panel>
+              <FumiEmptyState
+                title="No fumbles yet"
+                quip="Clean hands!"
+                action={
+                  <Button variant="line" size="sm">
+                    Browse launches
+                  </Button>
+                }
+              >
+                Sell $50 or more of any FUMPAD coin and the ticket shows up here.
+              </FumiEmptyState>
+            </Panel>
+            <div className={s.stack}>
+              <Panel>
+                <FumiErrorState
+                  title="Couldn’t load your tickets"
+                  compact
+                  action={
+                    <Button variant="line" size="sm">
+                      Try again
+                    </Button>
+                  }
+                >
+                  The network didn’t answer. Your tickets are safe on-chain; reload to see them.
+                </FumiErrorState>
+              </Panel>
+              <Panel>
+                <FumiLoadingState label="Loading tickets" line="Counting your fumbles" />
+                <FumiLoadingState label="Loading" compact />
+              </Panel>
+            </div>
           </div>
         )}
       </Spec>

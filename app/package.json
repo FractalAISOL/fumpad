@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "sdk": "tsc -b ../services/sdk && rm -f vendor/fumpad-sdk-*.tgz && npm pack ../services/sdk --pack-destination vendor && npm install --no-audit --no-fund ./vendor/fumpad-sdk-*.tgz",
+    "fumi": "node scripts/fumi-assets.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
