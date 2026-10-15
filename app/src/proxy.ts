@@ -3,12 +3,14 @@ import { decide } from "./prelaunch/gate";
 
 /**
  * Pre-launch gate (see `prelaunch/gate.ts` and `LAUNCH.md`): on fumpad.app / www.fumpad.app the
- * whole site is the waiting room; every other host serves the app unchanged.
+ * whole site is the waiting room, or (NEXT_PUBLIC_PRELAUNCH=checker) the launch-window checker; every other
+ * host serves the app unchanged.
  */
 export function proxy(req: NextRequest) {
   const d = decide(req.headers.get("host"), req.nextUrl.pathname, {
     PRELAUNCH_HOSTS: process.env.PRELAUNCH_HOSTS,
     NEXT_PUBLIC_PRELAUNCH: process.env.NEXT_PUBLIC_PRELAUNCH,
+    NEXT_PUBLIC_CHECKER_MINT: process.env.NEXT_PUBLIC_CHECKER_MINT,
   });
   if (d.action === "next") return NextResponse.next();
   const url = req.nextUrl.clone();
@@ -18,7 +20,7 @@ export function proxy(req: NextRequest) {
   const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
   const proto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
   const to = host ? new URL(d.pathname, `${proto}://${host}`) : url;
-  if (!host) to.search = "";
+  to.search = d.keepQuery ? req.nextUrl.search : "";
   // 307: temporary, so browsers and crawlers don't remember it past launch.
   return NextResponse.redirect(to, 307);
 }

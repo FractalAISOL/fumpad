@@ -105,6 +105,14 @@ export const OPENAPI = {
       },
     },
     "/v1/closest": { get: { summary: "Closest to 10x (getClosestTo10x)", parameters: [q("limit", { type: "integer" }), viewer], responses: ok(arr("CloseCall")) } },
+    "/v1/wallets/{wallet}/fumbles": {
+      get: {
+        summary:
+          "Fumble Checker: the wallet's sells (of `mint`, or of every coin it sold, ≤ 20 coins), each with its ticket conditions (USD minimum at the trade-time SOL price, hold time, not the creator), its attested ticket and the claim target (market cap at 10× the ticket price). Read-only, rate-limited per IP. Sells without a ticket are re-derived from indexed trades; the keepers' attestation is authoritative.",
+        parameters: [p("wallet"), q("mint", { type: "string" }, "Only this coin.")],
+        responses: { ...ok(ref("WalletFumbles")), "400": { description: "Malformed wallet or mint" }, "429": { description: "Rate limited" } },
+      },
+    },
     "/v1/wallets/{owner}/tickets": { get: { summary: "Tickets of a wallet (getTickets)", parameters: [p("owner")], responses: ok(arr("Ticket")) } },
     "/v1/wallets/{wallet}/positions": {
       get: { summary: "Open positions of a wallet, by value (getPositions) — chain balances, FUMPAD average-cost basis", parameters: [p("wallet")], responses: ok(arr("WalletPosition")) },

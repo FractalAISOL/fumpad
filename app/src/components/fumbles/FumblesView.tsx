@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
 import { keepSnapshot, type ProtocolParams, type Ticket, getFumpadData } from "@/data";
@@ -297,6 +298,9 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
           {f.durationAdj(params.oracleWindowSecs)} median holds there.
         </p>
         {isDemo && <p className={s.demo}>Showing a demo wallet. Log in to see your own tickets.</p>}
+        <p className={s.checkerLink}>
+          <Link href="/checker">Fumble Checker: look up any wallet&rsquo;s sells and claim targets →</Link>
+        </p>
       </div>
 
       <div className={s.sum} role="group" aria-label="Summary">

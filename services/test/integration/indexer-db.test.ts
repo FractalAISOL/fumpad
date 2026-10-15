@@ -167,4 +167,60 @@ describe("indexer v0.7 → db → api", () => {
     expect(p.feeBps).toBe(125);
     void Connection;
   });
+
+  it("Fumble Checker: a real seller's sells from indexed trades, an attested one matched to its ticket", async () => {
+    const repo = new Repo(db);
+    // The mainnet wallet with the most sells of the recorded coin.
+    const top = (
+      await db.query<{ wallet: string; n: number }>("SELECT wallet, count(*)::int n FROM trades WHERE mint = $1 AND NOT is_buy GROUP BY wallet ORDER BY n DESC, wallet LIMIT 1", [mint.toBase58()])
+    ).rows[0];
+    const sells = (
+      await db.query<{ signature: string; idx: number; token_amount: string; sol_amount: string; ts: string }>(
+        "SELECT signature, idx, token_amount, sol_amount, ts FROM trades WHERE mint = $1 AND wallet = $2 AND NOT is_buy ORDER BY slot, idx",
+        [mint.toBase58(), top.wallet],
+      )
+    ).rows;
+    // Attest its last sell (the indexer stores the sell's signature + ix_key; the checker joins on them).
+    const last = sells[sells.length - 1];
+    const tk = k();
+    await ing.ingest(
+      tx(sigOf(30), [
+        ev("TicketAttested", {
+          mint, owner: new PublicKey(top.wallet), ticket: tk, seq: bn(0n), pool: new PublicKey(F.coin.dbcPool), venue: 0, source: 0,
+          signature: Array.from(bs58.decode(last.signature)), ix_key: Number(last.idx), base_amount: bn(BigInt(last.token_amount)), quote_gross: bn(BigInt(last.sol_amount)),
+          tokens: bn(BigInt(last.token_amount)), sell_price_q64: bn(1n << 40n), sell_usd_cents: bn(12_345n), pyth_publish_time: bn(0n), slot: bn(1n),
+          sell_ts: bn(BigInt(last.ts)), keepers: [k(), k()], submitter: k(), ts: bn(BigInt(last.ts) + 60n), effective_at: bn(BigInt(last.ts) + 60n),
+        }),
+      ]),
+      "rpc",
+      "finalized",
+    );
+    const r = await repo.walletFumbles(top.wallet, mint.toBase58(), 150);
+    expect(r).toMatchObject({ wallet: top.wallet, found: true });
+    expect(r.coins).toHaveLength(1);
+    const c = r.coins[0];
+    expect(c.coin.mint).toBe(mint.toBase58());
+    expect(c.fees?.feeBps).toBe(125);
+    expect(c.sells).toHaveLength(sells.length);
+    expect(c.sells.map((s) => s.ts)).toEqual([...c.sells.map((s) => s.ts)].sort((a, b) => b - a));
+    const attested = c.sells.find((s) => s.signature === last.signature)!;
+    expect(attested).toMatchObject({ outcome: "ticket", usd: 123.45, usdBasis: "attested", checks: { usd: "ok", hold: "ok", creator: "ok" } });
+    expect(attested.ticket?.id).toBe(tk.toBase58());
+    expect(attested.target!.targetMarketCapSol).toBeCloseTo(attested.ticket!.sellPrice * 10 * 1e9, 3);
+    // Every other sell is assessed from indexed trades: an outcome, a reason when there's no ticket, a USD value.
+    for (const s of c.sells.filter((x) => x !== attested)) {
+      expect(["verifying", "no-ticket"]).toContain(s.outcome);
+      if (s.outcome === "no-ticket") expect(s.reason).toBeTruthy();
+      expect(s.usd).toBeGreaterThanOrEqual(0);
+      expect(s.usdBasis === "nearby" || s.usdBasis === "current").toBe(true);
+    }
+    // All coins (no mint): the same coin, last sell first. The synthetic trader's ticket has no indexed trade.
+    expect((await repo.walletFumbles(top.wallet, undefined, 150)).coins.map((x) => x.coin.mint)).toEqual([mint.toBase58()]);
+    const t = await repo.walletFumbles(trader.toBase58(), undefined, 150);
+    expect(t.found).toBe(true);
+    expect(t.coins[0].sells.find((s) => s.ticket?.id === ticketA.toBase58())).toMatchObject({ outcome: "ticket", signature: sigOf(9) });
+    // Unknown wallet / coin.
+    expect(await repo.walletFumbles(k().toBase58(), mint.toBase58(), 150)).toMatchObject({ found: false, coins: [{ sells: [] }] });
+    expect(await repo.walletFumbles(k().toBase58(), k().toBase58(), 150)).toMatchObject({ found: false, coins: [] });
+  });
 });

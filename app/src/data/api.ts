@@ -32,6 +32,7 @@ import type {
   TradeQuote,
   SystemStatus,
   TradeRow,
+  WalletFumbles,
   WalletPosition,
 } from "./types";
 import { isMintAddress, mergeCoins, normalizeSymbol } from "../components/coin/ident";
@@ -255,6 +256,9 @@ export class ApiFumpadData implements FumpadData {
   }
   getCreatedCoins(wallet: Address): Promise<CreatedCoin[]> {
     return this.get(`/v1/wallets/${seg(wallet)}/created`);
+  }
+  getWalletFumbles(wallet: Address, mint?: Address): Promise<WalletFumbles> {
+    return this.get(`/v1/wallets/${seg(wallet)}/fumbles`, { mint });
   }
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote> {
     return this.get("/v1/quote", { mint: args.mint, side: args.side, amount: args.amount, wallet: args.wallet });

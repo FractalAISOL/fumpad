@@ -25,7 +25,10 @@ export function RoomHeader() {
   );
 }
 
-export function RoomFooter() {
+const ROOM_DISCLAIMER =
+  "FUMPAD is software for launching and trading memecoins on Solana. Memecoins are extremely risky and most go to zero. A fumble ticket is not insurance: claims pay only while the coin\u2019s reward pool can cover them. Nothing here is financial advice. Examples on this page use made-up coins and numbers.";
+
+export function RoomFooter({ disclaimer = ROOM_DISCLAIMER }: { disclaimer?: string }) {
   return (
     <footer className={s.foot}>
       <div className={s.footInner}>
@@ -33,10 +36,7 @@ export function RoomFooter() {
           <Mark size={22} />
           <span className={s.word}>FUMPAD</span>
         </div>
-        <p className={s.disclaimer}>
-          FUMPAD is software for launching and trading memecoins on Solana. Memecoins are extremely risky and most go to zero. A fumble ticket is not insurance: claims pay
-          only while the coin&rsquo;s reward pool can cover them. Nothing here is financial advice. Examples on this page use made-up coins and numbers.
-        </p>
+        <p className={s.disclaimer}>{disclaimer}</p>
         <nav className={s.footLinks} aria-label="Legal and social">
           <Link href="/terms">Terms</Link>
           <Link href="/risk">Risk disclosure</Link>

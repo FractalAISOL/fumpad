@@ -58,6 +58,44 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "string"
   },
+  "ClaimTarget": {
+    "additionalProperties": false,
+    "description": "When a ticket can claim: the coin's claim median must hold `triggerMultiple` × the ticket price. Expressed as the market cap at that price (price × total supply) so it reads like the number traders watch.",
+    "properties": {
+      "claimTokens": {
+        "description": "The claim: `claimBps` of the ticket's tokens.",
+        "type": "number"
+      },
+      "claimValueSolAtTarget": {
+        "description": "claimTokens × targetPrice: what the claim is worth the moment it unlocks, SOL.",
+        "type": "number"
+      },
+      "estimated": {
+        "type": "boolean"
+      },
+      "sellPrice": {
+        "description": "Ticket price (SOL per token). `estimated` while verifying: the fill price; the attested floor can only be ≥ it.",
+        "type": "number"
+      },
+      "targetMarketCapSol": {
+        "description": "targetPrice × total supply, SOL.",
+        "type": "number"
+      },
+      "targetPrice": {
+        "description": "`triggerMultiple` × sellPrice, SOL per token.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "sellPrice",
+      "estimated",
+      "targetPrice",
+      "targetMarketCapSol",
+      "claimTokens",
+      "claimValueSolAtTarget"
+    ],
+    "type": "object"
+  },
   "CloseCall": {
     "additionalProperties": false,
     "properties": {
@@ -1184,6 +1222,95 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "FumbleSell": {
+    "additionalProperties": false,
+    "properties": {
+      "app": {
+        "description": "App label of the sell (see `Ticket.app`), \"fumpad\" for router sells.",
+        "type": "string"
+      },
+      "checks": {
+        "additionalProperties": false,
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/SellCheck"
+          },
+          "hold": {
+            "$ref": "#/components/schemas/SellCheck"
+          },
+          "usd": {
+            "$ref": "#/components/schemas/SellCheck"
+          }
+        },
+        "required": [
+          "usd",
+          "hold",
+          "creator"
+        ],
+        "type": "object"
+      },
+      "countedTokens": {
+        "description": "Tokens of this sell that sat in the wallet for the hold time (the ticket's size before rebuy debits).",
+        "type": "number"
+      },
+      "ixKey": {
+        "type": "number"
+      },
+      "outcome": {
+        "$ref": "#/components/schemas/SellOutcome"
+      },
+      "reason": {
+        "$ref": "#/components/schemas/SellNoTicketReason"
+      },
+      "signature": {
+        "description": "Sell transaction and the swap's instruction key (one transaction can hold several swaps).",
+        "type": "string"
+      },
+      "sol": {
+        "type": "number"
+      },
+      "target": {
+        "$ref": "#/components/schemas/ClaimTarget"
+      },
+      "ticket": {
+        "$ref": "#/components/schemas/Ticket"
+      },
+      "tokens": {
+        "type": "number"
+      },
+      "ts": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "usd": {
+        "description": "USD value of the part that counts (else the whole sell) at the trade-time SOL price.",
+        "type": "number"
+      },
+      "usdBasis": {
+        "description": "`attested`: the keepers' Pyth price (ticket); `nearby`: from another attested sell within an hour; `current`: today's SOL price.",
+        "enum": [
+          "attested",
+          "nearby",
+          "current"
+        ],
+        "type": "string"
+      },
+      "venue": {
+        "$ref": "#/components/schemas/Venue"
+      }
+    },
+    "required": [
+      "signature",
+      "ts",
+      "tokens",
+      "sol",
+      "usd",
+      "usdBasis",
+      "countedTokens",
+      "checks",
+      "outcome"
+    ],
+    "type": "object"
+  },
   "HealthLevel": {
     "description": "ok: working; degraded: working but behind or running low; down: not working; unknown: no signal yet.",
     "enum": [
@@ -1841,6 +1968,36 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "SellCheck": {
+    "description": "One ticket condition for a sell: met, not met, or not decidable from indexed data (the keepers decide).",
+    "enum": [
+      "ok",
+      "fail",
+      "unknown"
+    ],
+    "type": "string"
+  },
+  "SellNoTicketReason": {
+    "description": "Why a sell has no ticket. The keepers' engine is authoritative (complete history incl. transfers and the Pyth price at the block); the API re-derives the common reasons from indexed trades:  - creator: the coin's creator never gets tickets on it  - not_matured: none of the sold tokens sat in the wallet for the hold time  - below_minimum_usd: the counted part was worth less than the minimum at the trade-time SOL price  - too_many_open_tickets: the wallet already held the maximum of open tickets on the coin  - same_tx_buy: bought and sold in one transaction  - not_attested: looked eligible, but no attestation arrived within the attestation window",
+    "enum": [
+      "creator",
+      "not_matured",
+      "below_minimum_usd",
+      "too_many_open_tickets",
+      "same_tx_buy",
+      "not_attested"
+    ],
+    "type": "string"
+  },
+  "SellOutcome": {
+    "description": "Where a sell stands: has a ticket, waits for the keepers, or files none.",
+    "enum": [
+      "ticket",
+      "verifying",
+      "no-ticket"
+    ],
+    "type": "string"
+  },
   "ServiceVersion": {
     "additionalProperties": false,
     "description": "One deployed service and the build it runs (git sha when the host provides it).",
@@ -2462,6 +2619,68 @@ export const SCHEMAS: Record<string, unknown> = {
       "damm"
     ],
     "type": "string"
+  },
+  "WalletCoinFumbles": {
+    "additionalProperties": false,
+    "properties": {
+      "coin": {
+        "$ref": "#/components/schemas/CoinSummary"
+      },
+      "fees": {
+        "$ref": "#/components/schemas/CoinFees",
+        "description": "The coin's own fees (the first coin trades at 3%, not the standard 1.25%)."
+      },
+      "isCreator": {
+        "description": "The wallet launched this coin (its sells never file tickets).",
+        "type": "boolean"
+      },
+      "sells": {
+        "description": "Newest first.",
+        "items": {
+          "$ref": "#/components/schemas/FumbleSell"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "coin",
+      "isCreator",
+      "sells"
+    ],
+    "type": "object"
+  },
+  "WalletFumbles": {
+    "additionalProperties": false,
+    "properties": {
+      "asOf": {
+        "$ref": "#/components/schemas/Millis"
+      },
+      "coins": {
+        "description": "Coins the wallet sold, last sell first.",
+        "items": {
+          "$ref": "#/components/schemas/WalletCoinFumbles"
+        },
+        "type": "array"
+      },
+      "found": {
+        "description": "The wallet has indexed trades or tickets (on `mint`, when one was asked for).",
+        "type": "boolean"
+      },
+      "truncated": {
+        "description": "More coins (or sells) exist than were returned.",
+        "type": "boolean"
+      },
+      "wallet": {
+        "$ref": "#/components/schemas/Address"
+      }
+    },
+    "required": [
+      "wallet",
+      "found",
+      "coins",
+      "asOf"
+    ],
+    "type": "object"
   },
   "WalletPosition": {
     "additionalProperties": false,

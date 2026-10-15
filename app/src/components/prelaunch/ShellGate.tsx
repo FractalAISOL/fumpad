@@ -36,7 +36,8 @@ export function ShellGate({
   children: ReactNode;
 }) {
   const segment = useSelectedLayoutSegment();
-  if (segment === "soon") return <>{children}</>;
+  // The launch-window checker (`app/live`) has its own frame too.
+  if (segment === "soon" || segment === "live") return <>{children}</>;
   return (
     <Providers now={now} params={params} solUsd={solUsd}>
       <Header solUsd={solUsd} />

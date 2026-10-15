@@ -268,6 +268,22 @@ export async function buildServer(
     const limit = Math.min(int(qs.limit, 5), 50);
     return cached(`closest:${limit}:${viewer ?? ""}`, 5_000, () => repo.getClosestTo10x(limit, viewer));
   });
+  // Fumble Checker: any pasted address, no login; read-only. Own per-IP limit (each lookup is a few indexed queries).
+  app.get(
+    "/v1/wallets/:wallet/fumbles",
+    {
+      config: { rateLimit: { max: cfg.fumblesRateLimitPerMin, timeWindow: "1 minute" } },
+      schema: {
+        params: { type: "object", properties: { wallet: { type: "string", pattern: B58 } }, required: ["wallet"] },
+        querystring: { type: "object", properties: { mint: { type: "string", pattern: `${B58}|^$` } } },
+      },
+    },
+    async (req) => {
+      const wallet = addr((req.params as { wallet: string }).wallet, "wallet");
+      const mint = optAddr((req.query as Record<string, string>).mint, "mint");
+      return cached(`wfumbles:${wallet}:${mint ?? "all"}`, 3_000, async () => repo.walletFumbles(wallet, mint, await chain.solUsd()));
+    },
+  );
   app.get("/v1/wallets/:owner/tickets", async (req) => {
     const owner = addr((req.params as { owner: string }).owner, "owner");
     return cached(`tickets:${owner}`, 2_000, () => repo.getTickets(owner));

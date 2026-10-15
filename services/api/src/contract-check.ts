@@ -28,6 +28,7 @@ export type ContractCheck = [
   Assert<Same<Awaited<ReturnType<Repo["getTicket"]>>, R<"getTicket">>>,
   Assert<Same<Awaited<ReturnType<Repo["getLeaderboard"]>>, R<"getLeaderboard">>>,
   Assert<Same<Awaited<ReturnType<Repo["getProfile"]>>, R<"getProfile">>>,
+  Assert<Same<Awaited<ReturnType<Repo["walletFumbles"]>>, R<"getWalletFumbles">>>,
   Assert<Same<Awaited<ReturnType<ChainReader["quote"]>>, R<"quoteTrade">>>,
   Assert<Same<Awaited<ReturnType<ChainReader["balances"]>>, R<"getBalances">>>,
   Assert<Same<Awaited<ReturnType<ChainReader["solUsd"]>>, R<"getSolUsd">>>,

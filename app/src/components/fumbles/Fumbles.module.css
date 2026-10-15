@@ -23,6 +23,19 @@
   font-size: var(--fs-xs);
   color: var(--ink-3);
 }
+.checkerLink {
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+}
+.checkerLink a {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-2);
+  text-underline-offset: 3px;
+}
+.checkerLink a:hover {
+  color: var(--ink);
+}
 
 .sum {
   display: grid;

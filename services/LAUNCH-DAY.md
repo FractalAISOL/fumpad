@@ -28,7 +28,7 @@ SPEND="--send --i-understand-this-spends-real-sol"
 | **Day 0, morning (H0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
 | H0 … H0 + 6 h | 6 h: voters approve `accept_admin` in Squads (right away — the Squads 6 h lock starts at the 3rd approval); services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
 | **≥ H0 + 6 h (same day)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
-| **T0 (same evening or next morning)** | pre-flight re-check → open the app (prelaunch gate off) → first coin on the first-coin config → remove that config | the first coin's 3% fee + routing: yes (snapshotted) |
+| **T0 (same evening or next morning)** | pre-flight re-check → first coin on the first-coin config (app still gated) → launch-window checker on fumpad.app → remove that config → open the app (gate off) | the first coin's 3% fee + routing: yes (snapshotted) |
 
 (Was a 3-day schedule with the 48 h timelocks; since SPEC v0.7 clarification 29 the handover is 6 h on chain and the
 recommended Squads time lock is 6 h, so day 0 fits in one working day if the 3 voters approve within ~an hour of
@@ -193,8 +193,8 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
 1. Morning re-checks: `npm run mainnet:compare` (✓), `$B --step verify` (✓), `rpc-check` on the four providers,
    keeper/attestor balances (operator ≥ 1 SOL), Telegram heartbeat, watcher feed clean, Railway services healthy,
    vanity pool ≥ 20, `/v1/status` green.
-2. Prelaunch gate release (app/LAUNCH.md "Open the app"): Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` → redeploy →
-   `curl -sI https://fumpad.app/launches` = `200`.
+2. fumpad.app stays the waiting room (gate on) while the first coin launches; the app is reachable on
+   `https://fumpad.vercel.app` (never gated). The API runs the build with `GET /v1/wallets/:wallet/fumbles` (the checker).
 3. **First coin, on the one-off first-coin config** (user decision 2026-10-14; SPEC Clarification 30): 3% fee
    (99% → 3% over ~10 s, 3% after graduation too), of FUMPAD's 2.4%: 1.0% → its reward pool, 1.4% + FUMPAD's whole
    launch-window share → `firstCoin.feeWallet` (`7eXG…jFa3`); no platform / creator share.
@@ -202,7 +202,8 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       The fee wallet holds ≥ 0.001 SOL (claims refuse to leave it below rent exemption — `FeeWalletNotRentExempt`).
    2. API: Railway `api` variable `LAUNCH_FIRST_COIN=true`, redeploy; `curl -s https://<api>/v1/launch/options` shows
       `firstCoin` with that config and wallet.
-   3. Launch through the app at `https://fumpad.app/launch?config=first-coin` (Privy wallet, small first buy). The
+   3. Launch through the app at `https://fumpad.vercel.app/launch?config=first-coin` (Privy wallet, small first buy; fumpad.app
+      is still gated). The
       review must show **Trading fee 3%, first-coin config** and the wallet; the app refuses to sign unless the chain
       lists that config with the wallet-split policy and its fee is 3%.
    4. Check in order: Solscan tx (DBC init on the first-coin config + swap + `register_coin`, launch-signer
@@ -219,8 +220,15 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       (`CONFIG_TIMELOCK_SECS`) rerun `$B --step remove-first-coin-config $SPEND` → `execute_config` (permissionless).
       `$B --step verify`: "first-coin config … not allow-listed (removed)". The first coin keeps its 3% routing (its
       snapshot is in its own account).
-4. Re-run `rpc-check … --l8-slot <first coin's launch slot>`.
-5. Announce.
+   6. **Launch-window checker (app/LAUNCH.md "the 3-step flip", step 2), right after the coin registers** (its
+      `https://fumpad.vercel.app/coin/<mint>` page loads): Vercel Production `NEXT_PUBLIC_CHECKER_MINT=<mint>`, optionally
+      `NEXT_PUBLIC_APP_OPENS_AT=<ISO>`, `NEXT_PUBLIC_PRELAUNCH=checker` → redeploy. fumpad.app now shows the first coin
+      live + the Fumble Checker (read-only; nothing to sign). Check `https://fumpad.app/?wallet=<first seller>`: its sells,
+      "Verifying" then "6-hour check" with the countdown once `TicketAttested` lands, and the claim target.
+4. **Open the app** (~30–60 min after the checker, step 3 of the flip): Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` →
+   redeploy → `curl -sI https://fumpad.app/launches` = `200`. The checker stays in the app at `/checker`.
+5. Re-run `rpc-check … --l8-slot <first coin's launch slot>`.
+6. Announce.
 
 ## 6. Monitoring (first 72 h, then daily)
 
@@ -242,7 +250,7 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 - `set_pause` lapses after 7 days (re-pause to extend). Trading on Meteora itself can't be paused by us (DBC/DAMM
   pools are permissionless); `PAUSE_TRADE` stops the FUMPAD router only.
 - Bad attestation: `PAUSE_ATTEST` (16) + `void_ticket` by the guardian (Squads transaction builder).
-- App: `NEXT_PUBLIC_PRELAUNCH` back on + redeploy hides the app (the chain keeps running).
+- App: `NEXT_PUBLIC_PRELAUNCH` back on (unset, or `checker` to keep the read-only first-coin page) + redeploy hides the app (the chain keeps running).
 - Keeper/attestor misbehaving: stop the Railway service (attestations need 2 of 3; one down is fine). A compromised
   attestor key: guardian `PAUSE_ATTEST`, admin `set_keepers` (6 h Squads lock, then the 6 h freeze for the new key).
   A compromised operator (jobs) key: stop the `keeper` service; it can't attest — at worst it times samples / pre-grad

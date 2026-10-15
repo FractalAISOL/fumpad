@@ -45,8 +45,10 @@ export const CLUSTER_LABEL: string | null = CLUSTER === "mainnet" ? null : CLUST
 
 /** The FUMPAD program this build talks to (NEXT_PUBLIC_FUMPAD_PROGRAM_ID; default the devnet deployment). */
 export const FUMPAD_PROGRAM_ADDRESS = DEPLOYMENT.program;
+/** Solscan's query string for this cluster ("" on mainnet). */
+export const SOLSCAN_QUERY = CLUSTER === "mainnet" ? "" : CLUSTER === "localnet" ? `?cluster=custom&customUrl=${encodeURIComponent(RPC)}` : `?cluster=${CLUSTER}`;
+
 /** Solscan link for an account on this cluster. */
 export function solscanAccount(address: string): string {
-  const q = CLUSTER === "mainnet" ? "" : CLUSTER === "localnet" ? `?cluster=custom&customUrl=${encodeURIComponent(RPC)}` : `?cluster=${CLUSTER}`;
-  return `https://solscan.io/account/${address}${q}`;
+  return `https://solscan.io/account/${address}${SOLSCAN_QUERY}`;
 }

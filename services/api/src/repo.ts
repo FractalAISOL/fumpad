@@ -33,8 +33,11 @@ import type {
   Ticket,
   TicketState,
   TradeRow,
+  WalletCoinFumbles,
+  WalletFumbles,
 } from "./generated/app-types.js";
 import type { CoinSort } from "./generated/app-interface.js";
+import { assessSells, usdRateFrom, type WalletEvent } from "./fumbles.js";
 import { assemble, buildBooks, type LedgerEntry, type PortfolioCoinRow, type TicketStat } from "./portfolio.js";
 
 const Q64 = 1n << 64n;
@@ -913,6 +916,109 @@ export class Repo {
     };
   }
 
+  /**
+   * Fumble Checker (`GET /v1/wallets/:wallet/fumbles`): the wallet's sells of `mint` (or of every coin it sold, last
+   * sell first, ≤ `maxCoins`), each with its ticket conditions, ticket and claim target (`fumbles.ts`). `solUsd` is
+   * today's SOL price, the fallback for a sell with no attested sell within an hour of it.
+   */
+  async walletFumbles(wallet: string, mint: string | undefined, solUsd: number, opts: { maxCoins?: number; maxEvents?: number } = {}): Promise<WalletFumbles> {
+    const maxCoins = opts.maxCoins ?? 20;
+    const maxEvents = opts.maxEvents ?? 2_000;
+    const asOf = Date.now();
+    let mints: string[];
+    let truncated = false;
+    if (mint) mints = [mint];
+    else {
+      const r = await this.db.query<{ mint: string }>(
+        `SELECT mint FROM (
+           SELECT mint, max(ts) AS last FROM trades WHERE wallet = $1 AND NOT is_buy GROUP BY mint
+           UNION ALL SELECT mint, max(sell_ts) FROM tickets WHERE owner = $1 GROUP BY mint
+         ) x GROUP BY mint ORDER BY max(last) DESC, mint LIMIT $2`,
+        [wallet, maxCoins + 1],
+      );
+      mints = r.rows.map((x) => x.mint);
+      if (mints.length > maxCoins) {
+        truncated = true;
+        mints = mints.slice(0, maxCoins);
+      }
+    }
+    const rows = await this.coinRows(mints);
+    const byMint = new Map(rows.map((c) => [c.mint, c]));
+    const coins: WalletCoinFumbles[] = [];
+    let found = false;
+    for (const m of mints) {
+      const c = byMint.get(m);
+      if (!c) continue;
+      const r = await this.walletCoinFumbles(wallet, c, solUsd, maxEvents);
+      if (r.truncated) truncated = true;
+      if (r.found) found = true;
+      coins.push(r.coin);
+    }
+    return { wallet, found, coins, ...(truncated ? { truncated } : {}), asOf };
+  }
+
+  private async walletCoinFumbles(wallet: string, c: CoinRow, solUsd: number, maxEvents: number): Promise<{ coin: WalletCoinFumbles; found: boolean; truncated: boolean }> {
+    const p = await this.params();
+    const [tr, cl, tk, rates] = await Promise.all([
+      this.db.query<{ signature: string; idx: number; slot: string; ts: string; is_buy: boolean; token_amount: string; sol_amount: string; venue: string | null; app: string | null; routed: boolean | null }>(
+        `SELECT signature, idx, slot, ts, is_buy, token_amount, sol_amount, venue, app, routed FROM trades
+          WHERE wallet = $1 AND mint = $2 ORDER BY slot DESC, idx DESC LIMIT $3`,
+        [wallet, c.mint, maxEvents + 1],
+      ),
+      this.db.query<{ signature: string; idx: number; slot: string | null; ts: string; amount: string }>(
+        `SELECT cl.signature, cl.idx, tx.slot, cl.ts, cl.amount FROM claims cl LEFT JOIN transactions tx USING (signature)
+          WHERE cl.owner = $1 AND cl.mint = $2 AND NOT cl.escrowed ORDER BY cl.ts DESC LIMIT 200`,
+        [wallet, c.mint],
+      ),
+      this.db.query<TicketRow>(`${TICKET_SELECT} WHERE t.owner = $1 AND t.mint = $2 ORDER BY t.sell_ts DESC LIMIT 500`, [wallet, c.mint]),
+      // USD per SOL at attested sells of this coin (any wallet): the keepers' Pyth price at those blocks.
+      this.db.query<{ ts: string; rate: number }>(
+        `SELECT sell_ts AS ts, (sell_usd_cents::float8 / 100) / (sell_lamports::float8 / 1e9) AS rate
+           FROM tickets WHERE mint = $1 AND sell_lamports > 0 ORDER BY sell_ts DESC LIMIT 2000`,
+        [c.mint],
+      ),
+    ]);
+    const truncated = tr.rows.length > maxEvents;
+    const tradeRows = tr.rows.slice(0, maxEvents);
+    const events: WalletEvent[] = [
+      ...tradeRows.map((x) => ({
+        kind: (x.is_buy ? "buy" : "sell") as WalletEvent["kind"],
+        signature: x.signature,
+        ixKey: Number(x.idx),
+        slot: Number(x.slot),
+        ts: Number(x.ts),
+        base: BigInt(x.token_amount),
+        lamports: BigInt(x.sol_amount),
+        venue: x.venue,
+        app: x.app,
+        routed: x.routed,
+      })),
+      ...cl.rows.map((x) => ({ kind: "inflow" as const, signature: x.signature, ixKey: Number(x.idx), slot: Number(x.slot ?? 0), ts: Number(x.ts), base: BigInt(x.amount), lamports: 0n })),
+    ];
+    const tickets = await this.tickets(tk.rows);
+    const sells = assessSells({
+      isCreator: c.creator === wallet,
+      events,
+      tickets: tickets.map((t, i) => ({ ticket: t, sellSignature: tk.rows[i].sell_signature, sellIxKey: tk.rows[i].sell_ix_key === null ? null : Number(tk.rows[i].sell_ix_key) })),
+      params: {
+        minSellUsd: Number(p.minSellUsdCents) / 100,
+        minHoldSecs: BigInt(p.minHoldSecs),
+        maxOpenTickets: p.maxOpenTickets,
+        triggerMultiple: p.triggerMultipleBps / 10_000,
+        claimBps: p.claimBps,
+        totalSupply: tok(p.totalSupply),
+        maxAttestAgeSecs: Number(p.maxAttestAgeSecs),
+      },
+      usdPerSol: usdRateFrom(rates.rows.map((x) => ({ ts: Number(x.ts), rate: Number(x.rate) })), solUsd),
+      now: nowSecs(),
+    });
+    return {
+      coin: { coin: await this.summary(c), fees: coinFees(c, p), isCreator: c.creator === wallet, sells },
+      found: tradeRows.length > 0 || tk.rows.length > 0 || cl.rows.length > 0,
+      truncated,
+    };
+  }
+
   async getLeaderboard(board: Board, viewer?: string): Promise<LeaderRow[]> {
     const notFlagged = "NOT EXISTS (SELECT 1 FROM wallet_flags f WHERE f.wallet = x.address)";
     let rows: Omit<LeaderRow, "rank">[] = [];
@@ -1177,6 +1283,7 @@ interface TicketRow {
   source: "router" | "outside";
   app: string | null;
   sell_signature: string | null;
+  sell_ix_key: string | null;
   attested_at: string | null;
   effective_at: string | null;
   void_reason: "rebuy" | "guardian" | null;

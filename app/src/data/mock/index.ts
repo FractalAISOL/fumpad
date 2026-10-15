@@ -28,6 +28,9 @@ import type {
   TicketChainStatus,
   TradeQuote,
   TradeRow,
+  FumbleSell,
+  WalletCoinFumbles,
+  WalletFumbles,
   WalletPosition,
 } from "../types";
 import { type MockEntry, baseLedger, foldBooks, isClosedBook, mockCreatorFees } from "./portfolio";
@@ -1291,6 +1294,70 @@ export class MockFumpadData implements FumpadData {
       vanityPool: { level: "ok", available: 200, reserved: 1 },
       services: [svc("api"), svc("indexer"), svc("keeper")],
     };
+  }
+
+  /**
+   * Fumble Checker over the mock world: every ticket of the wallet as an attested sell, plus, on the coin of its
+   * newest ticket, three sells without one (verifying, under the minimum, held too briefly) so every state shows.
+   */
+  async getWalletFumbles(wallet: Address, mint?: Address): Promise<WalletFumbles> {
+    const now = this.now();
+    const tickets = ticketsFor(wallet).filter((t) => !mint || t.mint === mint);
+    const byMint = new Map<Address, Ticket[]>();
+    for (const t of tickets) byMint.set(t.mint, [...(byMint.get(t.mint) ?? []), t]);
+    if (mint && !byMint.size && specOf(mint)) byMint.set(mint, []);
+    const target = (sellPrice: number, claimTokens: number, estimated: boolean) => ({
+      sellPrice,
+      estimated,
+      targetPrice: sellPrice * PARAMS.triggerMultiple,
+      targetMarketCapSol: sellPrice * PARAMS.triggerMultiple * PARAMS.totalSupply,
+      claimTokens,
+      claimValueSolAtTarget: claimTokens * sellPrice * PARAMS.triggerMultiple,
+    });
+    const coins: WalletCoinFumbles[] = [];
+    let first = true;
+    for (const [m, ts] of byMint) {
+      const c = specOf(m);
+      if (!c) continue;
+      const sells: FumbleSell[] = ts.map((t) => ({
+        signature: t.sellSignature ?? signature("sell:" + t.id),
+        ts: t.sellTs,
+        venue: c.status === "graduated" ? "damm" : "dbc",
+        app: t.source === "router" ? "fumpad" : t.app,
+        tokens: t.originalTokens,
+        sol: t.sellSol,
+        usd: t.sellUsd,
+        usdBasis: "attested",
+        countedTokens: t.originalTokens,
+        checks: { usd: "ok", hold: "ok", creator: "ok" },
+        outcome: "ticket",
+        ticket: t,
+        target: target(t.sellPrice, t.claimAmount, false),
+      }));
+      if (first && wallet !== creatorOf(c)) {
+        first = false;
+        const spot = summary(c).price;
+        const r = rng("checker:" + wallet + c.symbol);
+        const tok = Math.round(between(r, 200_000, 2_000_000));
+        sells.push({
+          signature: signature("v:" + wallet + c.symbol), ts: now - 40_000, venue: "dbc", app: "axiom", tokens: tok, sol: tok * spot, usd: tok * spot * SOL_USD,
+          usdBasis: "current", countedTokens: tok, checks: { usd: "ok", hold: "ok", creator: "ok" }, outcome: "verifying", target: target(spot, (tok * PARAMS.claimBps) / 10_000, true),
+        });
+        const small = Math.max(1, Math.round((20 / SOL_USD / spot) * between(r, 0.3, 0.9)));
+        sells.push({
+          signature: signature("s:" + wallet + c.symbol), ts: now - 3 * HOUR, venue: "dbc", app: "jupiter", tokens: small, sol: small * spot, usd: small * spot * SOL_USD,
+          usdBasis: "nearby", countedTokens: small, checks: { usd: "fail", hold: "ok", creator: "ok" }, outcome: "no-ticket", reason: "below_minimum_usd",
+        });
+        sells.push({
+          signature: signature("h:" + wallet + c.symbol), ts: now - 26 * HOUR, venue: "dbc", app: "gmgn", tokens: tok, sol: tok * spot * 0.6, usd: tok * spot * 0.6 * SOL_USD,
+          usdBasis: "nearby", countedTokens: 0, checks: { usd: "ok", hold: "fail", creator: "ok" }, outcome: "no-ticket", reason: "not_matured",
+        });
+      }
+      sells.sort((a, b) => b.ts - a.ts);
+      coins.push({ coin: summary(c), fees: detail(c).fees, isCreator: wallet === creatorOf(c), sells });
+    }
+    coins.sort((a, b) => (b.sells[0]?.ts ?? 0) - (a.sells[0]?.ts ?? 0));
+    return { wallet, found: tickets.length > 0, coins, asOf: now };
   }
 
   async getCreatedCoins(wallet: Address): Promise<CreatedCoin[]> {

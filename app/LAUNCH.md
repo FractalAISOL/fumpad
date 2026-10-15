@@ -1,6 +1,14 @@
-# Pre-launch waiting room and how to open the app
+# Pre-launch waiting room, launch-window checker, and how to open the app
 
-Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. Every other host (fumpad.vercel.app, preview URLs, localhost) serves the full app as before, so the team can keep testing it.
+Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. Between the first coin's launch and the full release (~30–60 min) they show the **launch-window checker**: one read-only page about the first coin (live chart, price, market cap, curve, trades from every app, the Fumble Checker for any pasted wallet, the rules, the "How to play" video, "Trade it now" links). Every other host (fumpad.vercel.app, preview URLs, localhost) serves the full app as before, so the team can keep testing it.
+
+| `NEXT_PUBLIC_PRELAUNCH` | fumpad.app shows |
+|---|---|
+| unset (or anything else) | the waiting room (`/soon`) |
+| `checker` + `NEXT_PUBLIC_CHECKER_MINT=<first coin's mint>` | the launch-window checker (`/live`) at `/`; every other app route redirects to `/`; `/terms` `/risk` `/privacy` as in the waiting room. Without a valid mint it stays the waiting room. |
+| `off` | the full app |
+
+The full app has the same checker for every coin at **`/checker`** (linked from My fumbles), e.g. `/checker?wallet=<address>`.
 
 ## How it works
 
@@ -8,6 +16,7 @@ Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. 
 |---|---|---|
 | Gate | `src/proxy.ts` + `src/prelaunch/gate.ts` (tests: `gate.test.ts`) | Next.js 16 Proxy (the old "middleware"). On a gated host: `/` is rewritten to the waiting room, `/terms` `/risk` `/privacy` to the waiting-room copies of the legal pages, and every other page redirects (307, temporary) to `/`. Build assets (`/_next/*`), share cards (`/og/*`), `/api/*` and static files (favicon, icons, OG images, `robots.txt`, manifest) pass through. |
 | Waiting room | `src/app/soon/` (page, layout, legal pages, OG image), `src/components/prelaunch/` | Its own frame: no app header, tab bar, footer, wallet, live socket or Privy. `components/prelaunch/ShellGate.tsx` drops the app shell for the `soon` segment in the root layout. On other hosts it's viewable at `/soon`. |
+| Launch-window checker | `src/app/live/` (page + its own frame), `src/components/checker/` (`LaunchWindow`, `CoinWindow`, `FumbleCheck`, `Rules`, `HowToPlayVideo`, `model.ts` + tests) | Same frame rules as the waiting room (no app shell, wallet, Privy or signing code; `ShellGate` drops the shell for the `live` segment). Live data from the API: REST + the WebSocket (`coin` messages). The wallet lookup is `GET /v1/wallets/<address>/fumbles?mint=<mint>` from the browser (rate-limited per IP: `FUMBLES_RATE_LIMIT_PER_MIN`, 60). `?wallet=` makes a result a link. The video is self-hosted (`public/video/howtoplay-*.mp4`, CSP `media-src 'self'`, no new origin). On other hosts it's viewable at `/live` (needs the env below). |
 | Waitlist | `POST /v1/waitlist` on the API (`services/api/src/waitlist.ts`), stored in its **own** Postgres (`waitlist-db`, `WAITLIST_DATABASE_URL`; services/DEPLOY-v07.md §7) | Email or X handle, deduped, IP stored only as an HMAC hash. The page posts to `NEXT_PUBLIC_FUMPAD_API`. |
 
 ## Environment variables (Vercel, Production)
@@ -15,7 +24,9 @@ Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. 
 | Variable | Default | Meaning |
 |---|---|---|
 | `PRELAUNCH_HOSTS` | `fumpad.app,www.fumpad.app` | Comma list of hosts that show only the waiting room. Read at request time. An empty value gates nothing. |
-| `NEXT_PUBLIC_PRELAUNCH` | unset (gate on) | Set to `off` to open the app on every host. Read by the proxy at request time and inlined at build, so redeploy after changing it. |
+| `NEXT_PUBLIC_PRELAUNCH` | unset (gate on) | `checker` = the launch-window checker; `off` = open the app on every host. Read by the proxy at request time and inlined at build, so redeploy after changing it. |
+| `NEXT_PUBLIC_CHECKER_MINT` | unset | The first coin's mint (base58) for the launch-window checker. Required for `checker` mode. Inlined at build. |
+| `NEXT_PUBLIC_APP_OPENS_AT` | unset | Optional ISO time, e.g. `2026-11-03T18:00:00Z`: the checker's banner counts down to it ("Full app opens in ~25 min"). Unset: "The full app opens shortly." Inlined at build. |
 | `NEXT_PUBLIC_LAUNCH_AT` | unset | ISO time, e.g. `2026-11-03T17:00:00Z`. When set, the waiting room shows a countdown; unset or unparseable hides it. Inlined at build: redeploy after changing it. |
 | `NEXT_PUBLIC_FUMPAD_API` | (already set) | The waitlist posts to `<API>/v1/waitlist`. Without it the form says the waitlist isn't connected. |
 | `NEXT_PUBLIC_SITE_URL` | (currently `https://fumpad.vercel.app`) | Base for absolute OG/Twitter image URLs. Set it to `https://fumpad.app` once the domain is attached so previews point at the real domain. |
@@ -41,6 +52,19 @@ Headers on every route (`src/security/headers.ts`, applied in `next.config.ts`):
 Privy dashboard (privy.io → the app → Settings → Domains): allowed origins should be exactly `https://fumpad.app`, `https://www.fumpad.app`, `https://fumpad.vercel.app` (plus `http://localhost:3000`/`3100` only while testing). Login is refused from anywhere else, which limits what a copied front end can do with our app id.
 
 After deploying: open the site, log in, open the wallet menu and a coin page with DevTools → Console open; there should be no `Content-Security-Policy` violations. `curl -sI https://fumpad.app/ | grep -i content-security` shows the enforced header.
+
+## Launch day: the 3-step flip
+
+Each step is a Vercel Production env change + a redeploy (`NEXT_PUBLIC_*` are inlined at build; ~2 min). The API must already run the build with `GET /v1/wallets/:wallet/fumbles` (this commit or later) before step 2.
+
+1. **Waiting room** (now): `NEXT_PUBLIC_PRELAUNCH` unset. Launch the first coin from a non-gated host (`https://fumpad.vercel.app/launch?config=first-coin`, services/LAUNCH-DAY.md §5).
+2. **Checker, right after the first coin registers** (its page at `https://fumpad.vercel.app/coin/<mint>` loads, i.e. the indexer has it):
+   set `NEXT_PUBLIC_CHECKER_MINT=<mint>`, optionally `NEXT_PUBLIC_APP_OPENS_AT=<ISO time>`, then `NEXT_PUBLIC_PRELAUNCH=checker` → redeploy.
+   Check: `curl -s https://fumpad.app/ | grep '<title>'` → "FUMPAD — The first coin is live. Did you fumble?"; `curl -sI https://fumpad.app/launches` → `307` to `/`;
+   open `https://fumpad.app/?wallet=<a wallet that sold>` and see its sells; DevTools console free of CSP violations; the video plays.
+3. **Full app** (~30–60 min later): `NEXT_PUBLIC_PRELAUNCH=off` → redeploy (the steps below). `NEXT_PUBLIC_CHECKER_MINT` / `NEXT_PUBLIC_APP_OPENS_AT` can stay; they only affect `/live`.
+
+Rollback at any step: set the previous value and redeploy (or promote the previous production deployment in Vercel → Deployments → ⋯ → Promote, instant).
 
 ## Open the app (launch day)
 

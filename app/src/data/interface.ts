@@ -23,6 +23,7 @@ import type {
   Ticket,
   TradeQuote,
   TradeRow,
+  WalletFumbles,
   WalletPosition,
 } from "./types";
 
@@ -75,6 +76,11 @@ export interface FumpadData {
   getClosedPositions(wallet: Address): Promise<ClosedPosition[]>;
   /** Coins the wallet launched, newest first, with creator fees. */
   getCreatedCoins(wallet: Address): Promise<CreatedCoin[]>;
+  /**
+   * Fumble Checker: the wallet's sells (one coin, or every coin it sold), each with its ticket conditions, the
+   * ticket when the keepers attested one, and the claim target. Read-only; any address, no login.
+   */
+  getWalletFumbles(wallet: Address, mint?: Address): Promise<WalletFumbles>;
 
   /** Off-chain quote mirroring Meteora's math (DBC curve or DAMM v2 + the pool fee + ticket rules). */
   quoteTrade(args: { mint: Address; side: Side; amount: number; wallet?: Address }): Promise<TradeQuote>;

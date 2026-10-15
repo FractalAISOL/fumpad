@@ -95,6 +95,8 @@ export interface ApiConfig {
   // ── Coin image proxy (GET /v1/img/:mint, V7-L6) ──────────────────────────
   /** Per-IP image requests per minute (a board renders ~50 tiles). */
   imgRateLimitPerMin: number;
+  /** Per-IP Fumble Checker lookups per minute (`GET /v1/wallets/:wallet/fumbles`). */
+  fumblesRateLimitPerMin: number;
   /** Largest image accepted from a creator's host. */
   imgMaxBytes: number;
   /** In-memory image cache budget (bytes). */
@@ -165,6 +167,7 @@ export function loadApiConfig(env = process.env): ApiConfig {
     waitlistRateLimitPerMin: Number(env.WAITLIST_RATE_LIMIT_PER_MIN ?? 5),
     waitlistPerIpPerDay: Number(env.WAITLIST_PER_IP_PER_DAY ?? 20),
     imgRateLimitPerMin: Number(env.IMG_RATE_LIMIT_PER_MIN ?? 600),
+    fumblesRateLimitPerMin: Number(env.FUMBLES_RATE_LIMIT_PER_MIN ?? 60),
     imgMaxBytes: Number(env.IMG_MAX_BYTES ?? 2 * 1024 * 1024),
     imgCacheBytes: Number(env.IMG_CACHE_MB ?? 64) * 1024 * 1024,
     ipfsGateway: env.IPFS_GATEWAY || "https://ipfs.io/ipfs/",

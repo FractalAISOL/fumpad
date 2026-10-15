@@ -625,6 +625,88 @@ export interface ProtocolParams {
   attestDelaySecs: number;
 }
 
+/* ── Fumble Checker (`GET /v1/wallets/:wallet/fumbles`) ────────────────────── */
+
+/** One ticket condition for a sell: met, not met, or not decidable from indexed data (the keepers decide). */
+export type SellCheck = "ok" | "fail" | "unknown";
+
+/**
+ * Why a sell has no ticket. The keepers' engine is authoritative (complete history incl. transfers and the Pyth
+ * price at the block); the API re-derives the common reasons from indexed trades:
+ *  - creator: the coin's creator never gets tickets on it
+ *  - not_matured: none of the sold tokens sat in the wallet for the hold time
+ *  - below_minimum_usd: the counted part was worth less than the minimum at the trade-time SOL price
+ *  - too_many_open_tickets: the wallet already held the maximum of open tickets on the coin
+ *  - same_tx_buy: bought and sold in one transaction
+ *  - not_attested: looked eligible, but no attestation arrived within the attestation window
+ */
+export type SellNoTicketReason = "creator" | "not_matured" | "below_minimum_usd" | "too_many_open_tickets" | "same_tx_buy" | "not_attested";
+
+/** Where a sell stands: has a ticket, waits for the keepers, or files none. */
+export type SellOutcome = "ticket" | "verifying" | "no-ticket";
+
+/**
+ * When a ticket can claim: the coin's claim median must hold `triggerMultiple` × the ticket price. Expressed as the
+ * market cap at that price (price × total supply) so it reads like the number traders watch.
+ */
+export interface ClaimTarget {
+  /** Ticket price (SOL per token). `estimated` while verifying: the fill price; the attested floor can only be ≥ it. */
+  sellPrice: number;
+  estimated: boolean;
+  /** `triggerMultiple` × sellPrice, SOL per token. */
+  targetPrice: number;
+  /** targetPrice × total supply, SOL. */
+  targetMarketCapSol: number;
+  /** The claim: `claimBps` of the ticket's tokens. */
+  claimTokens: number;
+  /** claimTokens × targetPrice: what the claim is worth the moment it unlocks, SOL. */
+  claimValueSolAtTarget: number;
+}
+
+export interface FumbleSell {
+  /** Sell transaction and the swap's instruction key (one transaction can hold several swaps). */
+  signature: string;
+  ixKey?: number;
+  ts: Millis;
+  venue?: Venue;
+  /** App label of the sell (see `Ticket.app`), "fumpad" for router sells. */
+  app?: string;
+  tokens: number;
+  sol: number;
+  /** USD value of the part that counts (else the whole sell) at the trade-time SOL price. */
+  usd: number;
+  /** `attested`: the keepers' Pyth price (ticket); `nearby`: from another attested sell within an hour; `current`: today's SOL price. */
+  usdBasis: "attested" | "nearby" | "current";
+  /** Tokens of this sell that sat in the wallet for the hold time (the ticket's size before rebuy debits). */
+  countedTokens: number;
+  checks: { usd: SellCheck; hold: SellCheck; creator: SellCheck };
+  outcome: SellOutcome;
+  reason?: SellNoTicketReason;
+  ticket?: Ticket;
+  target?: ClaimTarget;
+}
+
+export interface WalletCoinFumbles {
+  coin: CoinSummary;
+  /** The coin's own fees (the first coin trades at 3%, not the standard 1.25%). */
+  fees?: CoinFees;
+  /** The wallet launched this coin (its sells never file tickets). */
+  isCreator: boolean;
+  /** Newest first. */
+  sells: FumbleSell[];
+}
+
+export interface WalletFumbles {
+  wallet: Address;
+  /** The wallet has indexed trades or tickets (on `mint`, when one was asked for). */
+  found: boolean;
+  /** Coins the wallet sold, last sell first. */
+  coins: WalletCoinFumbles[];
+  /** More coins (or sells) exist than were returned. */
+  truncated?: boolean;
+  asOf: Millis;
+}
+
 /* ── Trades & live updates ─────────────────────────────────────────────────── */
 
 /** One trade on a coin's own pools (DBC curve or DAMM v2), from any app. */

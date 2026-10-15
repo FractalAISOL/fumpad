@@ -19,7 +19,7 @@ type NavItem = { href: string; label: string; short?: string; icon: (p: SVGProps
 const NAV: NavItem[] = [
   { href: "/", label: "Feed", icon: IconFeed, match: (p) => p === "/" },
   { href: "/launches", label: "Launches", icon: IconCoins, match: (p) => p.startsWith("/launches") || p.startsWith("/coin/") },
-  { href: "/fumbles", label: "My fumbles", short: "Fumbles", icon: IconFumbles, match: (p) => p === "/fumbles" },
+  { href: "/fumbles", label: "My fumbles", short: "Fumbles", icon: IconFumbles, match: (p) => p === "/fumbles" || p.startsWith("/checker") },
   { href: "/leaderboard", label: "Leaderboard", short: "Ranks", icon: IconRanks, match: (p) => p.startsWith("/leaderboard") },
 ];
 
