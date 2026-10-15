@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { type SVGProps, useEffect, useRef, useState } from "react";
-import { IconCoins, IconFeed, IconFumbles, IconMoon, IconPlus, IconRanks, IconSun, IconSystem, IconUser, Mark, Wordmark, cx } from "@/design";
+import { IconCoins, IconFeed, IconFumbles, IconMoon, IconPlus, IconRanks, IconSearch, IconSun, IconSystem, IconUser, Mark, Wordmark, cx } from "@/design";
 import { useViewer } from "./Providers";
 import s from "./Shell.module.css";
 import { THEME_KEY, THEME_SCRIPT } from "./theme";
@@ -15,11 +15,12 @@ import { WalletButton, requestWalletConnect } from "./Wallet";
  * place (the bar doesn't reflow when autoConnect lands) and opens the connect dialog, like the
  * wallet button, then goes to the profile once connected.
  */
-type NavItem = { href: string; label: string; short?: string; icon: (p: SVGProps<SVGSVGElement>) => React.ReactNode; match: (p: string) => boolean };
+type NavItem = { href: string; label: string; short?: string; icon: (p: SVGProps<SVGSVGElement>) => React.ReactNode; match: (p: string) => boolean; desktopOnly?: boolean };
 const NAV: NavItem[] = [
   { href: "/", label: "Feed", icon: IconFeed, match: (p) => p === "/" },
   { href: "/launches", label: "Launches", icon: IconCoins, match: (p) => p.startsWith("/launches") || p.startsWith("/coin/") },
-  { href: "/fumbles", label: "My fumbles", short: "Fumbles", icon: IconFumbles, match: (p) => p === "/fumbles" || p.startsWith("/checker") },
+  { href: "/fumbles", label: "My fumbles", short: "Fumbles", icon: IconFumbles, match: (p) => p === "/fumbles" },
+  { href: "/checker", label: "Checker", icon: IconSearch, match: (p) => p.startsWith("/checker"), desktopOnly: true },
   { href: "/leaderboard", label: "Leaderboard", short: "Ranks", icon: IconRanks, match: (p) => p.startsWith("/leaderboard") },
 ];
 
@@ -120,7 +121,7 @@ export function TabBar() {
   const { claimable } = useViewer();
   return (
     <nav className={s.tabbar} aria-label="Main">
-      {NAV.map((n) => {
+      {NAV.filter((n) => !n.desktopOnly).map((n) => {
         const on = n.match(path);
         const Icon = n.icon;
         return (
