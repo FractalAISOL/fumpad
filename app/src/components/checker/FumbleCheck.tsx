@@ -6,9 +6,10 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import type { CoinSummary, FumbleSell, ProtocolParams, WalletCoinFumbles, WalletFumbles } from "@/data";
 import { getFumpadData } from "@/data";
 import { Badge, Button, CoinTile, CopyButton, EmptyState, IconExternal, IconSearch, Loading, Skeleton, TextInput, Tokens, cx } from "@/design";
+import { Fumi, SpeechBubble } from "@/design/anime";
 import * as f from "@/design/format";
 import { useClock } from "./hooks";
-import { checkLabel, checkName, feeNote, steps, parseWalletInput, reasonText, solscan, targetProgress, ticketStatus } from "./model";
+import { checkLabel, checkerMood, checkName, feeNote, steps, parseWalletInput, reasonText, solscan, targetProgress, ticketStatus } from "./model";
 import s from "./Checker.module.css";
 
 type Status = { kind: "idle" } | { kind: "loading"; wallet: string } | { kind: "done"; wallet: string; data: WalletFumbles } | { kind: "error"; wallet: string; message: string };
@@ -17,7 +18,8 @@ type Status = { kind: "idle" } | { kind: "loading"; wallet: string } | { kind: "
  * "Did you fumble?": paste any wallet (no connect, no login, nothing to sign) → its sells, each with the three ticket
  * conditions, the ticket's state on its path (verifying → 6-hour check → open → claimable → paid) and the claim
  * target as a market cap. `mint` limits it to one coin (the launch window); without it, every coin the wallet sold.
- * The address lives in `?wallet=` so a result is a link.
+ * The address lives in `?wallet=` so a result is a link. Fumi (the anime mascot) sits beside the paste box and reacts
+ * to the result (`checkerMood`), never over it; `mascot={false}` drops her (e.g. when the page already shows one).
  */
 export function FumbleCheck({
   mint,
@@ -28,6 +30,7 @@ export function FumbleCheck({
   coinLinks = false,
   serverNow,
   headingId,
+  mascot = true,
 }: {
   mint?: string;
   params: ProtocolParams;
@@ -39,6 +42,8 @@ export function FumbleCheck({
   coinLinks?: boolean;
   serverNow: number;
   headingId?: string;
+  /** Show Fumi beside the paste box (default). Pass false where the page already has its one Fumi. */
+  mascot?: boolean;
 }) {
   const data = getFumpadData();
   const search = useSearchParams();
@@ -136,6 +141,7 @@ export function FumbleCheck({
 
   return (
     <div className={s.checker}>
+      <div className={cx(s.top, mascot && s.topFumi)}>
       <form className={s.form} onSubmit={submit} role="search" aria-labelledby={headingId}>
         <TextInput
           label="Wallet address"
@@ -167,6 +173,8 @@ export function FumbleCheck({
           )}
         </div>
       </form>
+      {mascot && <CheckerFumi mood={checkerMood(status)} />}
+      </div>
 
       <div ref={resultsRef} className={s.results} aria-live="polite" aria-busy={status.kind === "loading"}>
         {status.kind === "loading" && (
@@ -197,6 +205,25 @@ export function FumbleCheck({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Fumi beside the paste box: full figure on wide screens, a bust in a row above the form on phones. Fixed-size slots,
+ * so a pose or quip change never moves the form or the results. Decorative: the results carry the meaning.
+ */
+function CheckerFumi({ mood }: { mood: ReturnType<typeof checkerMood> }) {
+  return (
+    <div className={s.fumiSpot} aria-hidden="true" data-pose={mood.pose}>
+      <Fumi key={`b-${mood.pose}`} pose={mood.pose} size={64} crop="bust" pop className={s.fumiBust} />
+      <SpeechBubble key={mood.quip} tail="left" className={cx(s.fumiQuip, s.fumiQuipPhone)}>
+        {mood.quip}
+      </SpeechBubble>
+      <SpeechBubble key={`w-${mood.quip}`} tail="right" className={cx(s.fumiQuip, s.fumiQuipWide)}>
+        {mood.quip}
+      </SpeechBubble>
+      <Fumi key={`f-${mood.pose}`} pose={mood.pose} size={156} fx pop fade className={s.fumiFull} />
     </div>
   );
 }

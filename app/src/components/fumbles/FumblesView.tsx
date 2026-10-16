@@ -4,12 +4,14 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFumpadTx } from "@/chain/tx";
 import { keepSnapshot, type ProtocolParams, type Ticket, getFumpadData } from "@/data";
+import { Fumi, FumiEmptyState, SpeechBubble } from "@/design/anime";
 import { Button, EmptyState, Loading, Multiple, Panel, PanelHead, Segmented, Skeleton, TicketCard, cx, useToast } from "@/design";
 import * as f from "@/design/format";
 import { ClaimMoment, type ClaimResult } from "../moment/ClaimMoment";
 import { ShareButton } from "../share/ShareButton";
 import { useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
+import { fumblesMood } from "./mood";
 import s from "./Fumbles.module.css";
 
 type Filter = "all" | "new" | "claimable" | "tracking" | "waiting" | "queued" | "closed" | "flagged";
@@ -278,6 +280,10 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
     [tx, toast, override, data],
   );
 
+  // One Fumi per screen: her reaction to the wallet's strongest ticket stage, by the page head (null when the
+  // wallet has no tickets: the empty state below has her instead).
+  const mood = fumblesMood(tickets);
+
   const FILTERS: { value: Filter; label: string; count: number }[] = [
     { value: "all", label: "All", count: counts.all },
     { value: "new", label: "Verifying", count: counts.new },
@@ -291,8 +297,12 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
 
   return (
     <div className="wrap">
-      <div className={s.pageHead}>
-        <h1 className={s.h1}>My fumbles</h1>
+      <div className={cx(s.pageHead, mood && s.pageHeadFumi)}>
+        <div className={s.headText}>
+        <div className={s.titleRow}>
+          <h1 className={s.h1}>My fumbles</h1>
+          {mood && <Fumi key={mood.pose} pose={mood.pose} size={56} crop="bust" pop className={s.headBust} />}
+        </div>
         <p className={s.lede}>
           Every sell of a FUMPAD coin over {f.usdRule(params.minSellUsd)}, on any app, measured against 10× of your price. Claim 10% of what you sold once the{" "}
           {f.durationAdj(params.oracleWindowSecs)} median holds there.
@@ -301,6 +311,15 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
         <p className={s.checkerLink}>
           <Link href="/checker">Fumble Checker: look up any wallet&rsquo;s sells and claim targets →</Link>
         </p>
+        </div>
+        {mood && (
+          <div className={s.headFumi} aria-hidden="true" data-pose={mood.pose}>
+            <SpeechBubble key={mood.quip} tail="right" className={s.headQuip}>
+              {mood.quip}
+            </SpeechBubble>
+            <Fumi key={mood.pose} pose={mood.pose} size="md" fx pop fade className={s.headFull} />
+          </div>
+        )}
       </div>
 
       <div className={s.sum} role="group" aria-label="Summary">
@@ -428,10 +447,10 @@ export function FumblesView({ initial }: { initial: Ticket[] }) {
             Your wallet is clean, which is rarer than a 10×. Rebuys elsewhere within {f.duration(params.rebuyWindowSecs)} or linked wallets would show up here.
           </EmptyState>
         ) : tickets.length === 0 ? (
-          <EmptyState title="No fumbles yet" action={<Button href="/launches">Browse launches</Button>}>
+          <FumiEmptyState title="No fumbles yet" quip="Clean hands!" action={<Button href="/launches">Browse launches</Button>}>
             Sell {f.usdRule(params.minSellUsd)} or more of any FUMPAD coin, here or on any other app, and the ticket shows up here about a minute later, measured
             against 10× of your price.
-          </EmptyState>
+          </FumiEmptyState>
         ) : (
           <EmptyState
             title="Nothing here"

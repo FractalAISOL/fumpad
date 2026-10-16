@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { FumbleSell, ProtocolParams, Ticket } from "../../data/types";
-import { base58Bytes, countdown, feeNote, isPublicKey, opensInText, parseOpensAt, parseWalletInput, reasonText, solscan, targetProgress, ticketStatus, tradeLinks } from "./model";
+import { base58Bytes, checkerMood, countdown, feeNote, isPublicKey, opensInText, parseOpensAt, parseWalletInput, reasonText, solscan, targetProgress, ticketStatus, tradeLinks } from "./model";
 
 const ALICE = "9zLVbFe9uSfwL9HzdVGX4T1UJfoG8DQD3rWdqpfTWcdN";
 const MINT = "EsWqW6inhiDYKaYqpX4kGXaUkBUBmVqbXypoUB4bfmbL";
@@ -124,5 +124,38 @@ describe("links", () => {
     assert.equal(opensInText(t, t - 30_000), "The full app opens any minute now.");
     assert.match(opensInText(t, t + 1)!, /opening now/);
     assert.equal(opensInText(null, 0), "The full app opens shortly.");
+  });
+});
+
+describe("Fumi's reaction", () => {
+  const sell = (outcome: FumbleSell["outcome"], state?: Ticket["state"]) => ({ outcome, ticket: state ? ({ state } as Ticket) : undefined }) as FumbleSell;
+  const done = (sells: FumbleSell[], found = true) => ({ kind: "done" as const, data: { found, coins: sells.length ? [{ sells } as never] : [] } });
+  it("idle, loading and error", () => {
+    assert.equal(checkerMood({ kind: "idle" }).pose, "thinking");
+    assert.equal(checkerMood({ kind: "loading" }).pose, "thinking");
+    assert.equal(checkerMood({ kind: "error" }).pose, "facepalm");
+  });
+  it("the strongest beat wins", () => {
+    assert.equal(checkerMood(done([], false)).pose, "thinking");
+    assert.equal(checkerMood(done([])).pose, "waving");
+    assert.equal(checkerMood(done([sell("no-ticket")])).pose, "thumbsdown");
+    assert.equal(checkerMood(done([sell("no-ticket"), sell("verifying")])).pose, "thinking");
+    assert.equal(checkerMood(done([sell("verifying"), sell("ticket", "tracking")])).pose, "crying");
+    assert.equal(checkerMood(done([sell("ticket", "expired"), sell("ticket", "claimed")])).pose, "cheering");
+    assert.equal(checkerMood(done([sell("ticket", "claimed"), sell("ticket", "queued")])).pose, "moneyeyes");
+    assert.equal(checkerMood(done([sell("ticket", "tracking"), sell("ticket", "claimable")])).pose, "moneyeyes");
+  });
+  it("quips stay short and promise nothing", () => {
+    const all = [
+      checkerMood({ kind: "idle" }),
+      checkerMood({ kind: "loading" }),
+      checkerMood({ kind: "error" }),
+      ...[[], [sell("no-ticket")], [sell("verifying")], [sell("ticket", "tracking")], [sell("ticket", "claimed")], [sell("ticket", "claimable")]].map((x) => checkerMood(done(x))),
+      checkerMood(done([], false)),
+    ];
+    for (const m of all) {
+      assert.ok(m.quip.split(/\s+/).length <= 8, m.quip);
+      assert.doesNotMatch(m.quip, /profit|guarantee|earn|returns|free money|\$|\bSOL\b/i, m.quip);
+    }
   });
 });
