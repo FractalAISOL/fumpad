@@ -30,19 +30,14 @@ const fonts = Promise.all([
  * the rest. Read once; a missing file drops her, never the card.
  */
 const BUST = 128;
-const BUST_FILES = { ticket: join(dir, "fumi-ticket-bust.png"), crying: join(dir, "fumi-crying-bust.png") };
-type CardPose = keyof typeof BUST_FILES;
-const busts = new Map<CardPose, Promise<string | null>>();
-function bustSrc(pose: CardPose): Promise<string | null> {
-  let p = busts.get(pose);
-  if (!p) {
-    p = readFile(BUST_FILES[pose])
-      .then((b) => `data:image/png;base64,${b.toString("base64")}`)
-      .catch(() => null);
-    busts.set(pose, p);
-  }
-  return p;
-}
+type CardPose = "ticket" | "crying";
+// Literal paths (like the fonts above) so the bundler traces only these two files, not the whole project.
+const toSrc = (b: Buffer) => `data:image/png;base64,${b.toString("base64")}`;
+const busts: Record<CardPose, Promise<string | null>> = {
+  ticket: readFile(join(dir, "fumi-ticket-bust.png")).then(toSrc, () => null),
+  crying: readFile(join(dir, "fumi-crying-bust.png")).then(toSrc, () => null),
+};
+const bustSrc = (pose: CardPose): Promise<string | null> => busts[pose];
 
 /** The big multiple shrinks with its length so "11.6×" and "<0.1×" fit beside the copy. */
 const figureSize = (text: string) => (text.length <= 4 ? 176 : text.length === 5 ? 140 : 118);
