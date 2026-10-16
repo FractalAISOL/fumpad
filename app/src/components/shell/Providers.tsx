@@ -5,6 +5,7 @@ import { type ReactNode, createContext, useCallback, useContext, useEffect, useM
 import { keepSnapshot, DEMO_WALLET, type ProtocolParams, getFumpadData } from "@/data";
 import { PARAMS } from "@/data/chain";
 import { ToastProvider } from "@/design";
+import { useDisclaimerAccepted } from "../legal/acceptance";
 import { WALLET_MODE, useWallet } from "../wallet/store";
 import { useLiveMessages, useRefresh } from "./live";
 
@@ -130,6 +131,8 @@ function ViewerProvider({ children }: { children: ReactNode }) {
 /* ── Root ─────────────────────────────────────────────────────────────────── */
 
 export function Providers({ now, params, solUsd, children }: { now: number; params: ProtocolParams; solUsd: number; children: ReactNode }) {
+  // No wallet SDK (and so no login or session restore) until the legal disclaimer is accepted.
+  const accepted = useDisclaimerAccepted();
   return (
     <ParamsProvider initial={params}>
       <ViewerProvider>
@@ -139,7 +142,7 @@ export function Providers({ now, params, solUsd, children }: { now: number; para
           </SolUsdCtx.Provider>
         </NowProvider>
       </ViewerProvider>
-      {WALLET_MODE === "privy" && <PrivyIsland />}
+      {WALLET_MODE === "privy" && accepted === true && <PrivyIsland />}
     </ParamsProvider>
   );
 }

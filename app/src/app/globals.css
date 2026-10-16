@@ -132,3 +132,13 @@ table {
     scroll-behavior: auto !important;
   }
 }
+
+/* Disclaimer gate (components/legal/DisclaimerGate.tsx). Until this browser accepts it, the root layout's pre-paint
+   script marks <html data-disclaimer="pending">: the page is hidden (so nothing behind it is visible, clickable or
+   focusable); only the gate's dialog ([data-disclaimer-gate], a direct child of body) shows. */
+html[data-disclaimer="pending"] body {
+  overflow: hidden;
+}
+html[data-disclaimer="pending"] body > :not([data-disclaimer-gate]) {
+  visibility: hidden;
+}

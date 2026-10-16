@@ -4,6 +4,7 @@ import { ShellGate } from "@/components/prelaunch/ShellGate";
 import { Footer } from "@/components/shell/Footer";
 import { THEME_SCRIPT } from "@/components/shell/theme";
 import { shellSnapshot } from "@/data/server";
+import { DISCLAIMER_SCRIPT } from "@/legal/disclaimer";
 import { archivo, martian } from "@/design/fonts";
 import { colorDark, colorLight, tokensToCss } from "@/design/tokens";
 import "./globals.css";
@@ -36,6 +37,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <head>
         <Script id="theme" strategy="beforeInteractive">
           {THEME_SCRIPT}
+        </Script>
+        {/* Hides the page until the legal disclaimer is accepted (components/legal/DisclaimerGate.tsx). */}
+        <Script id="disclaimer" strategy="beforeInteractive">
+          {DISCLAIMER_SCRIPT}
         </Script>
         <style dangerouslySetInnerHTML={{ __html: TOKENS_CSS }} />
       </head>

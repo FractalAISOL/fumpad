@@ -17,6 +17,8 @@ const TOKENS_CSS = tokensToCss();
 export default function GlobalError({ error, retry }: { error: Error & { digest?: string }; retry: () => void }) {
   // Apply a saved light/dark choice (the root layout's pre-paint script isn't here).
   useEffect(() => {
+    // The disclaimer gate lives in the root layout, which failed: don't leave the page hidden behind it.
+    document.documentElement.removeAttribute("data-disclaimer");
     try {
       const t = localStorage.getItem(THEME_KEY);
       if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
