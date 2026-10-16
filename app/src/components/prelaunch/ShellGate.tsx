@@ -1,9 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useSelectedLayoutSegment } from "next/navigation";
+import { useSelectedLayoutSegments } from "next/navigation";
 import type { ReactNode } from "react";
 import type { ProtocolParams } from "@/data";
+import { isLegalRoute } from "@/legal/disclaimer";
+import { DisclaimerGate } from "../legal/DisclaimerGate";
 
 /*
  * Loaded through next/dynamic (still server-rendered) so their chunks — the data layer,
@@ -35,11 +37,21 @@ export function ShellGate({
   solUsd: number;
   children: ReactNode;
 }) {
-  const segment = useSelectedLayoutSegment();
+  const segments = useSelectedLayoutSegments();
+  const segment = segments[0] ?? null;
+  // Every page asks for the legal disclaimer first, except the legal pages it links to.
+  const gate = <DisclaimerGate legal={isLegalRoute(segments)} />;
   // The launch-window checker (`app/live`) has its own frame too.
-  if (segment === "soon" || segment === "live") return <>{children}</>;
+  if (segment === "soon" || segment === "live")
+    return (
+      <>
+        {children}
+        {gate}
+      </>
+    );
   return (
     <Providers now={now} params={params} solUsd={solUsd}>
+      {gate}
       <Header solUsd={solUsd} />
       <main id="main" className={mainClassName}>
         {children}
