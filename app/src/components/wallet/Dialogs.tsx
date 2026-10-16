@@ -15,7 +15,7 @@ import * as f from "@/design/format";
 import { announceOwnTx } from "../shell/live";
 import s from "../shell/Wallet.module.css";
 import { useSolBalance } from "./balance";
-import { type WalletAccount, usePendingConfirm, walletActions, WALLET_MODE } from "./store";
+import { type WalletAccount, showLoginNotice, useLoginNotice, usePendingConfirm, walletActions, WALLET_MODE } from "./store";
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -379,6 +379,46 @@ export function ConfirmHost() {
       }
     >
       {p && <p className={s.body}>{p.body}</p>}
+    </Dialog>
+  );
+}
+
+/**
+ * Why a login didn't work (wallet refused to sign, Phantom in Testnet Mode, session expired),
+ * shown after Privy's own window has closed. Wallet flow: plain message, no mascot.
+ */
+export function LoginNoticeHost() {
+  const n = useLoginNotice();
+  const close = () => showLoginNotice(null);
+  return (
+    <Dialog
+      open={!!n}
+      onClose={close}
+      title={n?.title ?? ""}
+      size="sm"
+      footer={
+        n && (
+          <>
+            <Button variant="ghost" onClick={close}>
+              Close
+            </Button>
+            <Button
+              onClick={() => {
+                close();
+                walletActions().login();
+              }}
+            >
+              {n.action}
+            </Button>
+          </>
+        )
+      }
+    >
+      {n && (
+        <p className={s.body} role="alert">
+          {n.body}
+        </p>
+      )}
     </Dialog>
   );
 }
