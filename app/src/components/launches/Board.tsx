@@ -6,6 +6,7 @@ import { useFumpadTx } from "@/chain/tx";
 import { type CoinSummary, getFumpadData, keepSnapshot } from "@/data";
 import { graduationSolOf } from "@/data/chain";
 import { CoinTile, CopyButton, EmptyState, Gauge, IconBolt, IconFilter, IconGlobe, IconSearch, IconTelegram, IconX, Segmented, cx, useToast } from "@/design";
+import { FumiEmptyState, type FumiPose } from "@/design/anime";
 import * as f from "@/design/format";
 import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
@@ -330,9 +331,11 @@ interface LaneProps {
   arrivals: Record<string, Arrival>;
   onBuy: (c: CoinSummary) => void;
   searching: boolean;
+  /** This lane's empty state gets Fumi. At most one lane does, so a screen never shows two of her. */
+  fumi: boolean;
 }
 
-function Lane({ lane, rows, total, filter, onFilter, gradSort, onGradSort, active, solUsd, graduationSol, buyLabel, instant, busyMint, arrivals, onBuy, searching }: LaneProps) {
+function Lane({ lane, rows, total, filter, onFilter, gradSort, onGradSort, active, solUsd, graduationSol, buyLabel, instant, busyMint, arrivals, onBuy, searching, fumi }: LaneProps) {
   const id = useId();
   const popId = `${id}-filters`;
   const [open, setOpen] = useState(false);
@@ -405,20 +408,41 @@ function Lane({ lane, rows, total, filter, onFilter, gradSort, onGradSort, activ
       </ol>
       {rows.length === 0 && (
         <div className={s.empty}>
-          {filtered ? (
-            <EmptyState title="Nothing matches">
-              {total > 0 ? `${total} ${total === 1 ? "coin is" : "coins are"} hidden by your filters or search.` : "No coins here yet."}
-            </EmptyState>
-          ) : lane === "new" ? (
-            <EmptyState title="No new launches yet">Launch one and it lands here first.</EmptyState>
-          ) : lane === "final" ? (
-            <EmptyState title="Nothing in the final stretch">Coins show up here once they are past half the curve.</EmptyState>
+          {fumi ? (
+            <LaneEmpty lane={lane} filtered={filtered} total={total} />
+          ) : filtered ? (
+            <EmptyState title="Nothing matches">{hiddenNote(total)}</EmptyState>
           ) : (
-            <EmptyState title="No graduates yet">A coin graduates when its curve fills. Claims open after that.</EmptyState>
+            <EmptyState title={LANE_EMPTY[lane].title}>{LANE_EMPTY[lane].body}</EmptyState>
           )}
         </div>
       )}
     </section>
+  );
+}
+
+/* ── Empty lanes ─────────────────────────────────────────────────────────── */
+
+const LANE_EMPTY: Record<LaneId, { title: string; body: string; quip: string; pose: FumiPose }> = {
+  new: { title: "No new launches yet", body: "Launch one and it lands here first.", quip: "Quiet out here.", pose: "waving" },
+  final: { title: "Nothing in the final stretch", body: "Coins show up here once they are past half the curve.", quip: "Nobody's close yet.", pose: "thinking" },
+  graduated: { title: "No graduates yet", body: "A coin graduates when its curve fills. Claims open after that.", quip: "Caps and gowns pending.", pose: "thinking" },
+};
+const hiddenNote = (total: number) => (total > 0 ? `${total} ${total === 1 ? "coin is" : "coins are"} hidden by your filters or search.` : "No coins here yet.");
+
+/** An empty lane with Fumi (anime kit): no rows, so she sits clear of every price and buy button. */
+function LaneEmpty({ lane, filtered, total }: { lane: LaneId; filtered: boolean; total: number }) {
+  if (filtered)
+    return (
+      <FumiEmptyState compact title="Nothing matches" quip="Too picky?" pose="thinking">
+        {hiddenNote(total)}
+      </FumiEmptyState>
+    );
+  const e = LANE_EMPTY[lane];
+  return (
+    <FumiEmptyState compact title={e.title} quip={e.quip} pose={e.pose}>
+      {e.body}
+    </FumiEmptyState>
   );
 }
 
@@ -558,6 +582,9 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
   // The limit counts the fee and first-time account rent too (M-9, chain/limits.ts); the session cap can still ask.
   const instantBuy = instant && solLamports(amount) + FIRST_TIME_RENT <= solLamports(maxSol);
 
+  // One Fumi per screen: phones show only the active lane, desktops all three.
+  const fumiLane = lanes[tab].rows.length === 0 ? tab : LANES.find((l) => lanes[l].rows.length === 0);
+
   return (
     <div className={cx("wrap", s.page)}>
       <div className={s.head}>
@@ -654,6 +681,7 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
             arrivals={arrivals}
             onBuy={onBuy}
             searching={q.length > 0}
+            fumi={l === fumiLane}
           />
         ))}
       </div>

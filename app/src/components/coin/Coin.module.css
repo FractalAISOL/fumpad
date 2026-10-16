@@ -49,6 +49,34 @@
   }
 }
 
+/* Graduation reaction (anime kit): one quiet row of its own, clear of prices, chart and trade panel. */
+.gradMoment {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: 0 0 var(--s-5);
+  min-height: 48px;
+}
+.gradMoment .gradQuip {
+  flex: none;
+  font-size: var(--fs-sm);
+  text-wrap: nowrap;
+}
+.gradText {
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+@media (max-width: 599px) {
+  /* Phones: the header already says when it graduated; keep the reaction to one short row. */
+  .gradMoment {
+    margin-bottom: var(--s-4);
+  }
+  .gradText {
+    display: none;
+  }
+}
+
 /*
  * Two independent columns from 1000 px: each stacks by its own height, so no panel waits on a
  * row in the other column. Below 1000 px both columns dissolve (display: contents) into one
