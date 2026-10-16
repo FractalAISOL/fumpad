@@ -556,3 +556,34 @@ and standard launches work as before. To try a first-coin launch on devnet: api 
 `fumpad.vercel.app/launch?config=first-coin`; afterwards `bootstrap-v07.ts --step first-coin-done --yes` (queues the
 removal), rerun after 1 h (executes), api `LAUNCH_FIRST_COIN=false`. Tickets attested earlier with Hermes prices may
 show as watcher mismatches (§4 "Pyth", Switching).
+
+## 12. 2026-10-15 devnet upkeep: program to main + alert noise
+
+**Program upgrade.** Contract diff vs the previously deployed build: one line, `DEFAULT_MAX_PRICE_AGE_SECS` 60 → 120
+(commit 635e3ce, `constants.rs`; only used by `Params::default()`, i.e. `initialize_global` and the pending-params
+reset). The devnet Global already stores `params.max_price_age_secs = 120`, so no `set_params` was needed.
+Local `anchor build -p fumpad` (830,248 B; fits the 830,760 B program data account, no extend), contracts tests
+23 lib + 109 integration pass, one `solana program deploy` (§11 step 1 command). Executable hash
+before `6da802ef26db…e89d` → after `88d345d5ca12…679c` (= local .so; `bootstrap-v07.ts --step verify` ✓).
+Upgrade tx `2CsxaqmDrH8MGS6VRhij5cy5TVW7ZW4PVikn6eV5PeU8GzYVzf3kshEw3Ma552Yjthk4yDrufdrNaL3VoAFo4Fb6`.
+
+**Alert noise — attestor-2 + watcher on the public RPC (TEMPORARY measure, devnet only).** §8 wants one provider
+per keeper; on devnet attestor-2 and the watcher ran on `api.devnet.solana.com` (429s → derivation-failed alerts)
+and their `PYTH_RPC_URL` on public mainnet (history only ≈ 6 h back → `oracle_unavailable` for older sells, which is
+what makes the watcher flag the two Oct 13 `$LIVE7` tickets every ~30 min). Until the QuickNode / Alchemy keys
+arrive (→ `rpc-b.env` / `rpc-d.env`, then the §8 loop), point both at provider A (Helius) — this shares one
+provider between attestor-1/2/3 and the watcher, acceptable on devnet only, never on mainnet:
+```sh
+for s in attestor-2 watcher; do
+  envval ~/fumpad-keys/devnet/rpc.env RPC_URL | setsecret $s RPC_URL
+  envval ~/fumpad-keys/devnet/rpc.env RPC_URL | sed 's#//devnet\.#//mainnet.#' | setsecret $s PYTH_RPC_URL
+  railway variables --service $s --skip-deploys --set "RPC_MIN_GAP_MS=0"
+  railway redeploy --service $s --yes
+done
+```
+
+**The two `$LIVE7` tickets** (mint `HAwjL35B…fmbL`): `DQn5aHjw…Upp57` (alice) and `EJQQbYzv…bhEx` (owner `6uCk7vSe…`),
+attested Oct 13 15:40 / 15:49 UTC. They can NOT be voided: both are `queued` (void needs `open`) and their 1 h
+challenge windows closed Oct 13 16:40 / 16:49 UTC (`scripts/ops/void-ticket.ts` simulation → `TicketNotOpen`).
+Guardian tool for future cases (simulates by default, refuses mainnet):
+`npx tsx scripts/ops/void-ticket.ts <ticket> … [--reopen] [--reason n] [--yes]`.
