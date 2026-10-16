@@ -47,6 +47,7 @@ import {
   Usd,
   cx,
 } from "@/design";
+import { Fumi, SpeechBubble } from "@/design/anime";
 import * as f from "@/design/format";
 import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
@@ -395,9 +396,24 @@ export function CoinView({
     },
   ];
 
+  // Fumi's one reaction on a coin: the finished result (graduation). Its own row between the header
+  // and the columns, never inside or beside the chart, prices or trade panel (STYLE-ANIME.md).
+  const gradMoment = grad && (
+    <div className={s.gradMoment}>
+      <Fumi pose="cheering" size={48} crop="bust" />
+      <SpeechBubble tail="left" className={s.gradQuip}>
+        It graduated!
+      </SpeechBubble>
+      <p className={s.gradText}>
+        Curve filled{coin.graduatedAt ? ` ${f.date(coin.graduatedAt)}` : ""}. Now on Meteora; tickets that reach 10× can claim.
+      </p>
+    </div>
+  );
+
   return (
     <div className="wrap">
       {head}
+      {gradMoment}
       <div className={s.cols}>
         <div className={s.colMain}>
           {chart}

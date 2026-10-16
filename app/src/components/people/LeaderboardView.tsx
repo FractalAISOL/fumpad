@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useCallback, useState } from "react";
 import { keepSnapshot, type Board, type LeaderRow, type Profile, getFumpadData } from "@/data";
 import { Address, type Column, Multiple, Panel, PanelHead, PanelNote, Sol, Table, Tabs, cx, tabPanelId, tabId } from "@/design";
+import { Fumi, FumiEmptyState, SpeechBubble, type FumiPose } from "@/design/anime";
 import { useRefresh } from "../shell/live";
 import { useViewer } from "../shell/Providers";
 import s from "./People.module.css";
+import lb from "./Leaderboard.module.css";
 import { ProfileCard } from "./ProfileCard";
 import { coinHref, isMintAddress } from "@/components/coin/ident";
 
@@ -15,6 +17,13 @@ const BOARDS: { value: Board; label: string; aside: string }[] = [
   { value: "claimers", label: "Top claimers", aside: "paid out in the last 30 days, valued at claim" },
   { value: "diamond", label: "Diamond hands", aside: "claims held open longest after crossing 10×" },
 ];
+
+/** Empty boards: Fumi, one quip each (no promises), and what would rank here. */
+const EMPTY: Record<Board, { title: string; quip: string; pose: FumiPose; body: string }> = {
+  fumbles: { title: "No fumbles this month", quip: "Clean hands, for now.", pose: "thinking", body: "Sells that kept climbing after the seller left rank here, by what the sold tokens are worth today." },
+  claimers: { title: "No claims this month", quip: "Nobody's claimed yet.", pose: "thinking", body: "Paid claims from the last 30 days rank here, valued at the time of the claim." },
+  diamond: { title: "No diamond hands yet", quip: "Still waiting on one.", pose: "thinking", body: "Claims held open after crossing 10× rank here, longest wait first." },
+};
 
 const rankCol: Column<LeaderRow> = {
   key: "rank",
@@ -94,12 +103,20 @@ export function LeaderboardView({ initial, profile: initialProfile }: { initial:
   useRefresh(load, { wallets: [address], onFeed: true, pollMs: 60_000, debounceMs: 3_000 });
 
   const meta = BOARDS.find((b) => b.value === board)!;
+  const empty = rows[board].length === 0;
   return (
     <div className="wrap">
-      <div className={s.pageHead}>
+      <div className={cx(s.pageHead, lb.head)}>
         <div>
           <h1 className={s.h1}>Leaderboard</h1>
-          <p className={s.lede}>The hall of early exits. Ranked over the last 30 days; flagged wallets don&apos;t appear.</p>
+          <p className={cx(s.lede, lb.lede)}>The hall of early exits. Ranked over the last 30 days; flagged wallets don&apos;t appear.</p>
+        </div>
+        {/* One Fumi per screen: an empty board brings its own, so the header one steps aside (space kept, nothing shifts). */}
+        <div className={lb.cheer} data-hidden={empty || undefined} aria-hidden="true">
+          <SpeechBubble tail="right" className={lb.cheerQuip}>
+            Respect the fumble.
+          </SpeechBubble>
+          <Fumi pose="cheering" size={56} crop="bust" />
         </div>
       </div>
       <div className={s.grid}>
@@ -116,6 +133,11 @@ export function LeaderboardView({ initial, profile: initialProfile }: { initial:
               rows={rows[board]}
               rowKey={(r) => r.address + r.rank}
               highlight={(r) => r.address === address}
+              empty={
+                <FumiEmptyState compact title={EMPTY[board].title} quip={EMPTY[board].quip} pose={EMPTY[board].pose}>
+                  {EMPTY[board].body}
+                </FumiEmptyState>
+              }
             />
           </div>
           <PanelNote>Wallets linked to a coin&apos;s creator by funding history are flagged publicly and left off every board. They can still claim.</PanelNote>

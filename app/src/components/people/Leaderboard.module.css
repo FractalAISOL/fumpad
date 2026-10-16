@@ -1,0 +1,33 @@
+/* Leaderboard only: Fumi's header reaction (anime kit, STYLE-ANIME.md). Off the tables and amounts. */
+.head {
+  position: relative;
+}
+.cheer {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-left: auto;
+}
+.cheer[data-hidden] {
+  visibility: hidden;
+}
+.cheer .cheerQuip {
+  flex: none;
+  font-size: var(--fs-sm);
+  text-wrap: nowrap;
+}
+@media (max-width: 599px) {
+  /* Phones: the bust sits top-right of the title, so the head doesn't grow a row. */
+  .cheer {
+    position: absolute;
+    top: var(--s-7);
+    right: 0;
+    gap: var(--s-2);
+  }
+  .cheer .cheerQuip {
+    display: none;
+  }
+  .lede {
+    padding-right: 64px;
+  }
+}
