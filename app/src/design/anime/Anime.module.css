@@ -212,6 +212,7 @@
   position: absolute;
   right: calc(50% + 24px);
   top: 4px;
+  width: max-content; /* the box is only as wide as Fumi; size to the text, capped below */
   max-width: 16ch;
   font-size: var(--fs-sm);
   white-space: normal;

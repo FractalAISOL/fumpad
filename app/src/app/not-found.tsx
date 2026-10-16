@@ -1,6 +1,5 @@
 import { Button, Panel } from "@/design";
 import { FumiEmptyState } from "@/design/anime";
-import states from "@/components/shell/states.module.css";
 
 export default function NotFound() {
   return (
@@ -8,7 +7,6 @@ export default function NotFound() {
       <h1 className="sr-only">Page not found</h1>
       <Panel>
         <FumiEmptyState
-          className={states.quipFix}
           pose="facepalm"
           quip="Wrong turn. Happens to everyone."
           title="Nothing at this address"

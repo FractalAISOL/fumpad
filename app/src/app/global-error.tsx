@@ -4,7 +4,6 @@ import { useEffect } from "react";
 import { THEME_KEY } from "@/components/shell/theme";
 import { Button, Panel } from "@/design";
 import { FumiErrorState } from "@/design/anime";
-import states from "@/components/shell/states.module.css";
 import { archivo, martian } from "@/design/fonts";
 import { tokensToCss } from "@/design/tokens";
 import "./globals.css";
@@ -34,7 +33,6 @@ export default function GlobalError({ error, retry }: { error: Error & { digest?
           <h1 className="sr-only">Something went wrong</h1>
           <Panel>
             <FumiErrorState
-              className={states.quipFix}
               pose="crying"
               quip="We fumbled this one."
               title="FUMPAD didn't load"

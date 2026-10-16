@@ -24,7 +24,6 @@ import {
   useToast,
 } from "@/design";
 import { Fumi, FumiEmptyState, SpeechBubble } from "@/design/anime";
-import states from "@/components/shell/states.module.css";
 import * as f from "@/design/format";
 import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Launch.module.css";
@@ -170,7 +169,6 @@ export function LaunchView() {
       <div className="wrap">
         <Panel className={s.done}>
           <FumiEmptyState
-            className={states.quipFix}
             pose="cheering"
             quip="It's live!"
             title={`$${done.symbol} is live`}

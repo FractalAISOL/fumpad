@@ -2,7 +2,6 @@
 
 import { Button, Panel } from "@/design";
 import { FumiErrorState } from "@/design/anime";
-import states from "@/components/shell/states.module.css";
 
 /**
  * A page threw while rendering. The header, tab bar and footer stay (this sits inside the root
@@ -14,7 +13,6 @@ export default function PageError({ error, retry }: { error: Error & { digest?: 
       <h1 className="sr-only">Something went wrong</h1>
       <Panel>
         <FumiErrorState
-          className={states.quipFix}
           pose="facepalm"
           quip="Oops. That one's on us."
           title="This page didn't load"
