@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { r1, HERO_CROSS, HERO_EXAMPLE, HERO_SELL, clamp, ease, fix, heroPrice, int, lerp, prog, sample, smooth } from "./math";
+import { Greeter } from "./Greeter";
 import s from "./Hero.module.css";
 
 /**
@@ -238,12 +239,16 @@ export function Hero() {
     <section ref={root} className={s.hero} aria-labelledby="hero-title">
       <div ref={stage} className={s.stage} data-beat="-1" data-money="0">
         <div className={s.intro} data-intro>
-          <h1 id="hero-title" className={s.title}>
-            The launchpad for people who sell too early.
-          </h1>
-          <p className={s.lede}>
-            Sell a FUMPAD coin, here or on any app. If it later holds 10× your sell price, you claim 10% of the tokens you sold.
-          </p>
+          <div>
+            <h1 id="hero-title" className={s.title}>
+              The launchpad for people who sell too early.
+            </h1>
+            <p className={s.lede}>
+              Sell a FUMPAD coin, here or on any app. If it later holds 10× your sell price, you claim 10% of the tokens you sold.
+            </p>
+          </div>
+          {/* The greeter leaves with the headline, before the chart's run is drawn. */}
+          <Greeter pose="waving" quip="Hi, fumbler! Sold too early? Same." idle className={s.greeter} hint={300} />
         </div>
 
         <div className={s.readout} data-readout aria-hidden="true">

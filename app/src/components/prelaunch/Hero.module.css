@@ -22,6 +22,23 @@
   z-index: 3;
   will-change: transform, opacity;
 }
+/* Fumi waves from the right of the headline (wide) or under the lede (narrow), clear of the chart. */
+.greeter {
+  --greet-h: clamp(108px, 17svh, 156px);
+  margin: 4px 0 0 auto;
+}
+@media (min-width: 900px) {
+  .intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: clamp(16px, 2vw, 48px);
+    align-items: start;
+  }
+  .greeter {
+    --greet-h: min(clamp(220px, 23vw, 460px), 44svh);
+    margin: 0;
+  }
+}
 .title {
   font-size: clamp(42px, 7.6vw, 168px);
   line-height: 0.9;
@@ -502,6 +519,10 @@
   }
   .intro {
     order: 0;
+  }
+  /* unpinned, the readout follows the intro: keep Fumi a clear step away from its number */
+  .greeter {
+    margin-bottom: 32px;
   }
   .plot {
     order: 2;

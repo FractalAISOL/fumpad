@@ -45,6 +45,17 @@
   color: var(--ink-2);
   text-wrap: pretty;
 }
+/* Fumi in a section head, under the lede: right-aligned on phones, left column on wide screens. */
+.greeter {
+  --greet-h: clamp(132px, 20svh, 176px);
+  margin: clamp(8px, 1.4vw, 24px) 0 0 auto;
+}
+@media (min-width: 1100px) {
+  .greeter {
+    --greet-h: min(clamp(220px, 17vw, 360px), 40svh);
+    margin-right: 0;
+  }
+}
 .body {
   display: grid;
   gap: clamp(28px, 3vw, 56px);
@@ -578,6 +589,31 @@
   grid-column: 1 / -1;
   display: grid;
   gap: clamp(20px, 2.4vw, 44px);
+}
+/* Title and lede left; Fumi right of them on wide screens, pointing left/down at the waitlist,
+   under the lede on phones. She never sits in the actions row. */
+.launchTop {
+  display: grid;
+  gap: clamp(20px, 2.4vw, 44px);
+}
+.launchCopy {
+  display: grid;
+  gap: clamp(20px, 2.4vw, 44px);
+  min-width: 0;
+}
+.launchFumi {
+  --greet-h: clamp(132px, 20svh, 176px);
+  margin: -8px 0 0 auto;
+}
+@media (min-width: 900px) {
+  .launchTop {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+  .launchFumi {
+    --greet-h: min(clamp(240px, 22vw, 440px), 46svh);
+    margin: 0;
+  }
 }
 .launchTitle {
   font-size: clamp(48px, 10.5vw, 260px);

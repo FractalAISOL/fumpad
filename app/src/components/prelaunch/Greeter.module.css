@@ -1,0 +1,31 @@
+/* Fumi the greeter: a bubble slot over her head, then her figure. The caller sets --greet-h.
+   Ink bubble, ink effects; her own orange is her art. Nothing here sits over text or controls. */
+
+.greeter {
+  --greet-h: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: max-content;
+  max-width: 100%;
+  pointer-events: none;
+}
+/* Room for a two-line bubble, always, so a new line never moves her. */
+.slot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  min-height: 3.6em;
+  margin-bottom: 10px;
+  font-size: var(--fs-md, 15px);
+}
+.quip {
+  /* tail sits over her head (head centre ≈ 42% from the figure's right edge) */
+  margin-right: max(0px, calc(var(--greet-h) * 0.75 * 0.42 - 30px));
+  max-width: 17ch;
+  animation-delay: 240ms;
+}
+/* The kit sizes her from --fumi-h (inline); the greeter's height wins so she scales with the page. */
+.fumi {
+  --fumi-h: var(--greet-h) !important;
+}
