@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { IconX } from "@/design/components/Icons";
+import { Greeter } from "./Greeter";
 import { X_URL } from "./links";
 import s from "./Sections.module.css";
 
@@ -66,13 +67,15 @@ function Countdown({ at }: { at: number }) {
 
 type State = { kind: "idle" } | { kind: "sending" } | { kind: "done"; what: string; email: boolean } | { kind: "error"; msg: string };
 
-function Waitlist() {
+function Waitlist({ onDone }: { onDone: () => void }) {
   const [value, setValue] = useState("");
   const [state, setState] = useState<State>({ kind: "idle" });
   const [trap, setTrap] = useState("");
   useEffect(() => {
-    if (state.kind === "done") document.getElementById("waitlist-done")?.focus();
-  }, [state.kind]);
+    if (state.kind !== "done") return;
+    document.getElementById("waitlist-done")?.focus();
+    onDone();
+  }, [state.kind, onDone]);
 
   if (state.kind === "done") {
     return (
@@ -160,15 +163,27 @@ function Waitlist() {
 }
 
 export function Launch() {
+  // Fumi points at the waitlist, then cheers once you're on it (same box: no layout shift).
+  const [joined, setJoined] = useState(false);
+  const onDone = useCallback(() => setJoined(true), []);
   return (
     <div className={s.launch}>
-      <h2 id="launch-title" className={s.launchTitle}>
-        Coming to Solana mainnet.
-      </h2>
-      <p className={s.launchLede}>Launching soon. Get one message when it opens, or follow along on X.</p>
-      {LAUNCH_AT !== null && <Countdown at={LAUNCH_AT} />}
+      <div className={s.launchTop}>
+        <div className={s.launchCopy}>
+          <h2 id="launch-title" className={s.launchTitle}>
+            Coming to Solana mainnet.
+          </h2>
+          <p className={s.launchLede}>Launching soon. Get one message when it opens, or follow along on X.</p>
+          {LAUNCH_AT !== null && <Countdown at={LAUNCH_AT} />}
+        </div>
+        {joined ? (
+          <Greeter pose="cheering" quip="You’re in! See you at launch." className={s.launchFumi} />
+        ) : (
+          <Greeter pose="pointing" quip="One message at launch. That’s it." pop={false} className={s.launchFumi} />
+        )}
+      </div>
       <div className={s.launchActions}>
-        <Waitlist />
+        <Waitlist onDone={onDone} />
         <a href={X_URL} className={s.xCta} target="_blank" rel="noopener noreferrer">
           <IconX width={18} height={18} aria-hidden="true" />
           Follow @Fumblepad

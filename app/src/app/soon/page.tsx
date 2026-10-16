@@ -1,3 +1,4 @@
+import { Greeter } from "@/components/prelaunch/Greeter";
 import { Hero } from "@/components/prelaunch/Hero";
 import { Launch } from "@/components/prelaunch/Launch";
 import { PoolFill } from "@/components/prelaunch/PoolFill";
@@ -179,6 +180,7 @@ export default function WaitingRoom() {
               Fair by design.
             </h2>
             <p className={s.lede}>The obvious tricks don&rsquo;t pay. Tokens also need 10 minutes in your wallet before a sell counts.</p>
+            <Greeter pose="thinking" quip="Clever trick? Already covered." className={s.greeter} />
           </header>
           <Reveal className={`${s.body} ${s.fair}`}>
             <figure className={s.rule}>
