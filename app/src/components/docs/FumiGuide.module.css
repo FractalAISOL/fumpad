@@ -1,0 +1,54 @@
+/* Fumi as the How it works guide. Ink bubbles, no colour of our own (STYLE-ANIME.md). */
+
+.mark {
+  display: block;
+}
+.inline {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-4);
+}
+.inlineBubble {
+  font-size: var(--fs-sm);
+}
+@media (min-width: 1200px) {
+  .inline {
+    display: none;
+  }
+}
+
+/* Companion rail: a fixed box, so pose and bubble changes never move anything. */
+.rail {
+  display: grid;
+  justify-items: center;
+  user-select: none;
+}
+.bubbleBox {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  height: 88px;
+  padding-bottom: var(--s-4);
+}
+.stage {
+  position: relative;
+  width: 120px;
+  height: 160px;
+}
+.stage > .layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  transition: opacity 180ms ease-out;
+}
+.stage > .on {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage > .layer {
+    transition: none;
+  }
+}

@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { keepSnapshot, type CloseCall, type CoinDetail, type CoinSummary, type FeedEvent, type FeedKind, type PlatformStats, getFumpadData } from "@/data";
-import { Avatar, Button, Change, Chips, CoinTile, EmptyState, Gauge, Multiple, Panel, PanelHead, Sparkline, cx } from "@/design";
+import { Avatar, Button, Change, Chips, CoinTile, Gauge, Multiple, Panel, PanelHead, Sparkline, cx } from "@/design";
+import { Fumi, FumiEmptyState, SpeechBubble } from "@/design/anime";
 import * as f from "@/design/format";
 import { useLiveMessages, useRefresh } from "../shell/live";
 import { useProtocolParams, useViewer } from "../shell/Providers";
@@ -146,6 +147,21 @@ export function FeedView({
     <div className={cx("wrap", s.grid)}>
       <div className={s.mainCol}>
         <h1 className="sr-only">Live feed</h1>
+        {/* Fumi hosts the feed (anime kit): above the totals, never beside a number. One Fumi per screen, so she
+            steps out while the empty state below has her. Fixed height: no layout shift either way. */}
+        <div className={s.host}>
+          {visible.length > 0 && (
+            <span className={s.hostArt}>
+              <Fumi pose="waving" size={56} crop="bust" />
+              <SpeechBubble tail="left" pop={false} className={s.hostBubble}>
+                Hi, fumbler!
+              </SpeechBubble>
+            </span>
+          )}
+          <p className={s.hostLine}>
+            Trade FUMPAD coins anywhere: every sell over {f.usdRule(params.minSellUsd)} counts. <Link href="/how-it-works">How it works</Link>
+          </p>
+        </div>
         <div className={s.wire} aria-label="Live totals, last 24 hours" role="group">
           <div>
             <div className={s.k}>Paid back to fumblers, 24h</div>
@@ -195,9 +211,9 @@ export function FeedView({
             {visible.length ? (
               visible.map((e) => <FeedPost key={e.id} e={e} fresh={fresh.has(e.id)} />)
             ) : (
-              <EmptyState title="Quiet for now" compact>
+              <FumiEmptyState title="Quiet for now" pose="thinking" quip="Nothing yet. Hmm." compact>
                 Nothing of this kind in the last few hours. Live events land here the moment they happen.
-              </EmptyState>
+              </FumiEmptyState>
             )}
           </div>
           {!exhausted && filter === "all" && (

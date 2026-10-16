@@ -7,6 +7,7 @@ import * as f from "@/design/format";
 import { useProtocolParams } from "../shell/Providers";
 import { DocPage, DocSection, Facts, type TocItem } from "./Doc";
 import s from "./Doc.module.css";
+import { BeatMark, BeatSpot, FumiCompanion, useActiveBeat, type Beat } from "./FumiGuide";
 
 /** Protocol constants that are not `Global.params` (fixed in the program, docs/SPEC-v0.7-meteora.md). */
 const REFERENCE_WINDOW_SECS = 600;
@@ -54,6 +55,22 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
   const schedule = snipeOn ? Array.from({ length: p.snipeWindowSlots }, (_, d) => feeBpsAtSlot(p, d)) : [];
   const grad = p.graduationSol < 10 ? f.fixed(p.graduationSol, 2) : f.int(p.graduationSol);
 
+  // Fumi's beats, in reading order (bubbles <= 8 words, no promises; numbers come from the same params as the text).
+  const beats: Beat[] = [
+    { pose: "pointing", say: "Sold too early? Same.", inline: true },
+    { pose: "thumbsdown", say: `Under ${minSell}? Doesn't count.`, inline: true },
+    { pose: "ticket", say: `${ATTEST_THRESHOLD} of ${KEEPERS} keepers sign it.`, inline: true },
+    { pose: "shocked", say: `It held ${trigger}?!`, inline: true },
+    { pose: "moneyeyes", say: "Claim time?" },
+    { pose: "moneyeyes", say: "Fees refill the reward pool.", inline: true },
+    { pose: "thinking", say: snipeOn ? "Snipers pay more. Hmm." : "No snipe window right now." },
+    { pose: "cheering", say: "It graduated!", inline: true },
+    { pose: "pointing", say: "Locked. Nobody can pull it." },
+    { pose: "thinking", say: "Gaming it? Already thought of." },
+    { pose: "thinking", say: "Still wondering?" },
+  ];
+  const beat = useActiveBeat();
+
   return (
     <DocPage
       title="How FUMPAD works"
@@ -72,8 +89,10 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
         </figure>
       }
       toc={TOC}
+      companion={<FumiCompanion beats={beats} active={beat} />}
     >
       <DocSection id="concept" title="The idea">
+        <BeatMark beats={beats} i={0} />
         <p>
           Everyone has sold a coin that went on to do {trigger}. On FUMPAD that sell is on the record: every sell of {minSell} or more of a FUMPAD coin files a
           ticket at your sell price, whether you sold here or on {APPS}. Each coin carries its own reward pool: {poolPct}% of the supply set aside for it,
@@ -86,6 +105,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="tickets" title="Tickets">
+        <BeatMark beats={beats} i={1} />
         <p>A sell files a ticket when all of these hold. If one doesn&apos;t, the sell still goes through, just without a ticket.</p>
         <Facts
           label="Ticket rules"
@@ -108,6 +128,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="verify" title="How a sell becomes a ticket">
+        <BeatMark beats={beats} i={2} />
         <p>
           Most trades don&apos;t go through FUMPAD, so the tickets don&apos;t come from our app. FUMPAD runs {KEEPERS} independent keepers, each on its own
           machine and its own Solana RPC. Each one reads every finalized trade on a FUMPAD coin&apos;s pools, from every app, re-derives the ticket with the
@@ -131,6 +152,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="claims" title="Claims and the 10× median">
+        <BeatMark beats={beats} i={3} />
         <p>
           A ticket is claimable once the coin has graduated, its challenge window has passed, and its <b>{median} median price</b> holds at {trigger} your
           ticket price or more. A median over many keeper samples, not a single trade, so a one-block spike doesn&apos;t count.
@@ -146,6 +168,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
           ]}
         />
         <p>
+          <BeatSpot i={4} />
           If the claim fits the pool, it pays in the same transaction. If it doesn&apos;t, it joins the coin&apos;s claim queue, ordered by sell time; smaller
           claims that fit can skip ahead. Queued claims don&apos;t expire and are never paid in part. Claims are made for you by default (auto-claim, to
           your own wallet only); you can turn that off per coin in <Link href="/fumbles">My fumbles</Link>. If your wallet can&apos;t receive the payout, it
@@ -154,6 +177,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="fees" title="Fees & rewards">
+        <BeatMark beats={beats} i={5} />
         <p>
           Every trade on a FUMPAD coin&apos;s pools pays a {fee}% fee in SOL, on any app, before and after graduation. Meteora, which runs the pools, keeps{" "}
           {pctOfBps(venueFeeBps)}%. FUMPAD&apos;s {ourFee}% splits {split[0]} / {split[1]} / {split[2]}:
@@ -184,6 +208,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="snipe" title="Snipe protection">
+        <BeatMark beats={beats} i={6} />
         {schedule.length ? (
           <>
             <p>
@@ -228,6 +253,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="graduation" title="Graduation">
+        <BeatMark beats={beats} i={7} />
         <p>
           Every coin launches on a Meteora Dynamic Bonding Curve with FUMPAD&apos;s settings, and trades on any app from its first block. When the curve has
           raised {grad} SOL it completes: the last buy is filled only up to the end and the rest of its SOL stays in the buyer&apos;s wallet. The coin then
@@ -247,6 +273,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="lp" title="Liquidity locked forever">
+        <BeatMark beats={beats} i={8} />
         <p>
           At graduation the pool&apos;s whole liquidity position is permanently locked by Meteora&apos;s program and owned by a FUMPAD account that can only
           claim its trading fees. Nobody can withdraw the liquidity, including FUMPAD and the creator. The lock lives in Meteora&apos;s programs, which their
@@ -255,6 +282,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="protections" title="Protections">
+        <BeatMark beats={beats} i={9} />
         <ul>
           <li>
             <b>Hold time.</b> Tokens must sit in your wallet for {hold} before a sell of them counts, measured on chain across every app and transfer, so
@@ -291,6 +319,7 @@ export function HowItWorksView({ cluster }: { cluster: string | null }) {
       </DocSection>
 
       <DocSection id="faq" title="FAQ">
+        <BeatMark beats={beats} i={10} />
         <div className={s.faq}>
           <Faq q="Is this insurance?">
             <p>

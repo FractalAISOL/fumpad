@@ -7,8 +7,25 @@ export type TocItem = { id: string; label: string };
 /**
  * Reading pages (How it works, Terms, Risk, Privacy): a title block, an "On this page" index
  * (sticky beside the text from 1000 px, a wrapping row above it below), and the sections.
+ * `companion`: an optional sticky rail right of the text from 1200 px (How it works: Fumi). Legal pages never pass one.
  */
-export function DocPage({ title, lede, notice, toc, aside, children }: { title: string; lede: ReactNode; notice?: ReactNode; toc: TocItem[]; aside?: ReactNode; children: ReactNode }) {
+export function DocPage({
+  title,
+  lede,
+  notice,
+  toc,
+  aside,
+  companion,
+  children,
+}: {
+  title: string;
+  lede: ReactNode;
+  notice?: ReactNode;
+  toc: TocItem[];
+  aside?: ReactNode;
+  companion?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className={cx("wrap", s.page)}>
       <header className={s.head}>
@@ -19,7 +36,7 @@ export function DocPage({ title, lede, notice, toc, aside, children }: { title: 
         </div>
         {aside && <div className={s.headAside}>{aside}</div>}
       </header>
-      <div className={s.layout}>
+      <div className={cx(s.layout, companion != null && s.layoutCompanion)}>
         <nav className={s.toc} aria-label="On this page">
           <p className={s.tocTitle}>On this page</p>
           <ul>
@@ -31,6 +48,7 @@ export function DocPage({ title, lede, notice, toc, aside, children }: { title: 
           </ul>
         </nav>
         <article className={s.body}>{children}</article>
+        {companion != null && <div className={s.companion}>{companion}</div>}
       </div>
     </div>
   );
