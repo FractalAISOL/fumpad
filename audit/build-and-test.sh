@@ -101,8 +101,8 @@ check_fixtures() {
     got="$(sha256 "$dir/$f" 2>/dev/null || echo missing)"
     if [ "$got" = "$want" ]; then echo "ok  $f"; else echo "BAD $f: $got (want $want)"; bad=1; fi
   done <<'EOF'
-4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b dbc_mainnet.so
-4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b damm_v2_mainnet.so
+e2bfc853c1a1778dd8ee40ea9a0f3edf5587442360c57c685e7e3024ad0cad47 dbc_mainnet.so
+967ff9fb161eec2e62f66d2c899100739fb747c445f697b8625c86b31b9a2022 damm_v2_mainnet.so
 fc5c08462fc2d118b09353121112725a33aa684e0f255719575e09efbc1f4c2f damm_v2_migration_config_mainnet.json
 dec8d3e0fae58c7c8f2416e5f67c25e673f047afd6dd2bba4a47e0b29a01d34c squads_v4_mainnet.so
 6dcbc4560e65bfc97dceb3bb75f801437568d3c417d9f716a332c654c8b9b81d squads_v4_program_config_mainnet.json

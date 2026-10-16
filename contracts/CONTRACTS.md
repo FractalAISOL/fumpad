@@ -14,10 +14,11 @@ and on-chain hold/rebuy/reference bookkeeping are **deleted** (SPEC v0.7 D30/D31
 `target/deploy/fumpad-keypair.json` (git-ignored — back it up before any deploy; the old `ASVE6Nk8…` is not reused).
 
 External programs (raw CPI with hard-coded discriminators and byte offsets, no Meteora crates — `src/external/meteora.rs`):
-Meteora DBC `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN` (mainnet 0.2.1: `create_config`, `EvtSwap`/`EvtSwap2`) and
-DAMM v2 `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG` (0.2.4), Ed25519 precompile, Token-2022, SPL Token, ATA. Nothing
-requires DBC 0.2.2 (`create_config2`, `EvtSwap3`): FUMPAD configs are created with `create_config`, which 0.2.2 still
-accepts (the spike used `create_config2` on devnet; `create_config` on the 0.2.2 bytecode is UNVERIFIED).
+Meteora DBC `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN` (built against 0.2.1: `create_config`, `EvtSwap`/`EvtSwap2`;
+mainnet runs 0.2.2 since slot 457,502,600) and DAMM v2 `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG` (built against
+0.2.4; mainnet runs 0.2.5 since slot 457,080,014), Ed25519 precompile, Token-2022, SPL Token, ATA. Nothing requires
+DBC 0.2.2 features (`create_config2`, `EvtSwap3`): FUMPAD configs are created with the (deprecated but accepted)
+`create_config`, verified on the mainnet 0.2.2 bytecode by every test suite (see "Meteora upgrade 2026-10-16").
 
 ## Build & test
 ```
@@ -53,8 +54,8 @@ scripts/verify-build.sh --program-id <id> -u <rpc>   # also compare with the dep
 - The docker .so differs from the local macOS build (different bytes and size; see LAUNCH-DAY.md §10 "Rehearsal"):
   deploy and verify the docker one.
 Fixtures (`tests/fixtures/`, dumped read-only from mainnet; no mainnet transaction was sent):
-`dbc_mainnet.so` (sha256 `4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b`, programdata dump incl.
-padding), `damm_v2_mainnet.so` (`4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b`),
+`dbc_mainnet.so` (DBC 0.2.2, sha256 `e2bfc853c1a1778dd8ee40ea9a0f3edf5587442360c57c685e7e3024ad0cad47`, programdata
+dump incl. padding), `damm_v2_mainnet.so` (DAMM v2 0.2.5, `967ff9fb161eec2e62f66d2c899100739fb747c445f697b8625c86b31b9a2022`),
 `damm_v2_migration_config_mainnet.json` (`A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck`, the DAMM v2 config DBC uses
 for `Customizable`), `pyth_sol_usd_mainnet.json` (attestation USD vectors), `wsol_mint.json`. Re-dump before mainnet:
 Meteora can upgrade either program at any time (D38).
@@ -311,6 +312,31 @@ untouched): `solana program show 5YMF…` → if its data length is below the ne
 first-coin config) and `--step policies --yes` (`migrate_global` grows Global; then `queue_config(first-coin config,
 add, {1, 100, 140, max 1, first-coin-wallet})`), rerun `--step policies --yes` after the config timelock
 (`execute_config`), `--step fund --yes` (the fee wallet's rent), `--step verify`; services/DEPLOY-v07.md §11.
+
+## Meteora upgrade 2026-10-16 (fixtures refreshed, behavior re-verified)
+Meteora upgraded both programs on mainnet (same upgrade authority `JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd`, same
+programdata sizes). Re-dumped read-only (`npm run mainnet:snapshot`, finalized slot 457,763,744; no transaction sent)
+and committed as the new `tests/fixtures/*.so`:
+
+| Program | Before (tested until 2026-10-14) | After (mainnet + fixtures now) |
+|---|---|---|
+| DBC `dbcij3LW…` | 0.2.1, sha256 `4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b`, deployed slot 445,503,633 | 0.2.2 (Meteora PR #211), sha256 `e2bfc853c1a1778dd8ee40ea9a0f3edf5587442360c57c685e7e3024ad0cad47`, deployed slot 457,502,600 |
+| DAMM v2 `cpamdpZC…` | 0.2.4, sha256 `4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b`, deployed slot 445,230,614 | 0.2.5 (Meteora PR #229), sha256 `967ff9fb161eec2e62f66d2c899100739fb747c445f697b8625c86b31b9a2022`, deployed slot 457,080,014 |
+
+Versions are from Meteora's release commits/CHANGELOG (the binaries carry no version string). Unchanged: Squads v4
+(`dec8d3e0…`, immutable), the DAMM v2 migration config `A8gMrEPJ…`, Squads ProgramConfig, WSOL mint (account
+fixtures byte-identical). Relevant changelog points: DBC 0.2.2 adds transfer-fee mints via `create_config2` and
+`EvtSwap3` (both unused; `create_config` deprecated but still accepted, `EvtSwap`/`EvtSwap2` still emitted, a new
+`PoolConfig.version` = 1 written by config creation; the transfer-fee migration path applies only to transfer-fee
+configs, not ours); DAMM v2 0.2.5 accepts `compounding_fee_bps = 0` and makes fee/reward accumulators wrap instead
+of failing (no layout change). No FUMPAD code change was needed. Re-verified on the new binaries, no failures:
+- `cargo test` (contracts): 23 unit + 109 LiteSVM integration = **132 passed**, 1 ignored (`derive_exact_curves`, a tool)
+- services `npm test` (unit): 499 passed (51 files)
+- services `npm run local` (validator + Postgres + full local e2e on the fixtures): 24/24 checks
+- services `npm run mainnet:rehearsal` (local fork of mainnet at slot 457,770,194, bootstrap + multisig handover +
+  smoke): **37/37 ✓** in 890 s; it rewrote `services/scripts/mainnet/tested-programs.json`. (The first run was 35/37:
+  its only failures were the two "bytes = the rehearsed ones" checks against the old manifest — a chicken-and-egg
+  check; the manifest was re-seeded from that run's read-only dump and the re-run passed every check.)
 
 ## Archive: v0.3–v0.6 notes (superseded by the v0.7 fresh layouts, D39 — kept for history only)
 ### v0.6 interface changes (final pre-mainnet review — `FINAL_REVIEW.md`; SPEC D23–D29)

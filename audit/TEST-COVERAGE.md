@@ -3,10 +3,14 @@
 This branch's head (pre-audit fixes, PRIOR-REVIEWS §0), run on 2026-10-13 with `audit/build-and-test.sh`
 (toolchain in README §4).
 
+**2026-10-16 re-run on the upgraded Meteora binaries** (DBC 0.2.2 `e2bfc853…`, DAMM v2 0.2.5 `967ff9fb…`; fixtures
+replaced, CONTRACTS.md "Meteora upgrade 2026-10-16") at `main`: `cargo test` 23 unit + 109 LiteSVM = 132 pass, 1 ignored;
+services `npm test` 51 files / 499 tests; `npm run local` 24/24; `npm run mainnet:rehearsal` passed. No failures.
+
 | Suite | Command | Count | Runtime (M1) |
 |---|---|---|---|
 | Program unit tests | `cargo test -p fumpad --lib` | 21 | < 1 s |
-| LiteSVM integration (mainnet DBC 0.2.1 + DAMM v2 0.2.4 binaries) | `cargo test -p tests` | 94 pass, 1 ignored (`derive_exact_curves`, a tool) | ≈ 15 s |
+| LiteSVM integration (mainnet DBC + DAMM v2 binaries: 0.2.1 / 0.2.4 at this run; 0.2.2 / 0.2.5 since 2026-10-16) | `cargo test -p tests` | 94 pass, 1 ignored (`derive_exact_curves`, a tool) | ≈ 15 s |
 | Services unit (vitest `unit`) | `npm test` in `services/` | 42 files, 436 tests | ≈ 50 s |
 | Services integration incl. local e2e | `npm run test:integration` | 6 files, 31 tests (e2e: 1 test, 20 named checks) | ≈ 4 min |
 | App (node test runner) | `npm test` in `app/` | 113 tests | ≈ 2 s |

@@ -9,7 +9,8 @@ Sources:
   PumpSwap, `fumpad_lp_locker`), 2026-10-12. Most of that code was deleted in v0.7 (D30); kept here for the
   findings whose rule carried over.
 - **RV** — `contracts/REVIEW-v0.7.md`: internal review of the **v0.7** program at `95c59e9`, 2026-10-13.
-  Repros in `contracts/tests/src/review_v07.rs`, run on the mainnet DBC 0.2.1 / DAMM v2 0.2.4 binaries.
+  Repros in `contracts/tests/src/review_v07.rs`, run on the mainnet DBC 0.2.1 / DAMM v2 0.2.4 binaries
+  (re-run green on the upgraded mainnet DBC 0.2.2 / DAMM v2 0.2.5 on 2026-10-16).
 - **SR7** — `security-review/REPORT-v0.7.md`: v0.7 off-chain review (services + app) at `95c59e9`, 2026-10-13.
   PoCs in `security-review/v07-poc/`.
 - **SR6** — `security-review/REPORT.md`: v0.6 off-chain review at `ff0c4ea`, 2026-10-12. Listed where the code

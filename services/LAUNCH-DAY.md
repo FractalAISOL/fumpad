@@ -41,8 +41,8 @@ Opening the app only after the handover means no hot key holds admin power while
 1. **Release commit.** Tag it. Gates on that commit: `npm run typecheck`, `npm test`, `npm run local` (20/20),
    `npm run multisig:rehearsal`, `npm run mainnet:rehearsal` (must end `✓ mainnet rehearsal passed`).
 2. **Meteora / Squads / Token-2022 / Pyth programs = what we tested.** Re-dump mainnet read-only and compare with
-   `scripts/mainnet/tested-programs.json` (written by the last passing rehearsal; DBC 0.2.1 `4c26a8a5…`, DAMM v2
-   0.2.4 `4d5b920b…`, Squads v4 `dec8d3e0…` + their upgrade authorities and the DAMM v2 migration config):
+   `scripts/mainnet/tested-programs.json` (written by the last passing rehearsal; DBC 0.2.2 `e2bfc853…`, DAMM v2
+   0.2.5 `967ff9fb…` since the 2026-10-16 Meteora upgrade, was 0.2.1 `4c26a8a5…` / 0.2.4 `4d5b920b…`; Squads v4 `dec8d3e0…` + their upgrade authorities and the DAMM v2 migration config):
    ```sh
    npm run mainnet:compare            # exit 1 + the list if any program/account changed
    ```

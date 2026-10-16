@@ -93,7 +93,7 @@ Line counts: `wc -l` (all lines) and "code" = lines that are neither blank nor c
 | `src/constants.rs` | 156 | seeds, defaults, param bounds, external ids, `MAX_KEEPERS` 3 / `MAX_OPERATORS` 2 |
 | `src/error.rs` | 131 | 62 custom errors (6000–6061) |
 | `src/events.rs` | 387 | events + shared event self-CPI (`emit_cpi_data`) |
-| `src/external/meteora.rs` | 396 | DBC 0.2.1 / DAMM v2 0.2.4 raw layouts (byte offsets), discriminators, pass-through CPI, `require_exact_accounts` |
+| `src/external/meteora.rs` | 396 | DBC 0.2.1 / DAMM v2 0.2.4 raw layouts (byte offsets; unchanged in the mainnet 0.2.2 / 0.2.5, re-verified 2026-10-16), discriminators, pass-through CPI, `require_exact_accounts` |
 | `src/external/mod.rs` | 1 | |
 | `src/math/{fees,price,mod}.rs` | 44 + 132 + 5 | 50/30/20 split, Q64 price from `sqrt_price`, 10× check |
 | `src/state/global.rs` | 276 | `Global` (incl. `operators`), `Params` + `is_valid` bounds, pause flags, keeper / operator / guardian predicates |
@@ -166,8 +166,8 @@ check that our code does not assume more than stated.
 
 | Component | Version / id | Our assumptions |
 |---|---|---|
-| **Meteora DBC** | `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`, mainnet 0.2.1, programdata sha256 `4c26a8a5…f23b`, upgrade authority `JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd`, last deployed slot 445,503,633 | Account layouts at the byte offsets in `external/meteora.rs` (`VirtualPool` 424 B, `PoolConfig` 1,048 B) stay valid (readers fail closed on owner / discriminator / length). `claim_trading_fee` pays partner fees only to the config's `fee_claimer` signer. `withdraw_leftover` pays the leftover only to `ATA(leftover_receiver, mint)` and sets `is_withdraw_leftover`. `withdraw_migration_fee` (partner) / `partner_withdraw_surplus` pay only to the `fee_claimer` signer and set their flags. `migration_damm_v2` creates the DAMM v2 pool under a config whose `pool_creator_authority` is DBC's pool authority and mints the 100% partner-locked position NFT to `fee_claimer`. `enable_first_swap_with_min_fee` gives the min fee to exactly one swap of the pool-creation transaction (verified on the binary: `verify_dbc_min_fee_goes_to_one_swap_per_launch_tx`). `TokenAuthorityOption::Immutable` leaves no mint / freeze / metadata authority. Swaps emit `EvtSwap` + `EvtSwap2` via self-CPI with the `__event_authority` PDA. |
-| **Meteora DAMM v2** | `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`, mainnet 0.2.4, sha256 `4d5b920b…848b`, same upgrade authority, last deployed slot 445,230,614; migration config `A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck` | Pool PDA `["pool", config, max(mint, WSOL), min(mint, WSOL)]`; `sqrt_price` at offset 456, `pool_status` at 481, `token_b_amount` for depth. `claim_position_fee` requires the position-NFT holder to sign and pays to the given token accounts. Permanently locked liquidity can never be withdrawn by anyone. Anyone can create positions / add / lock liquidity in the pool (handled, REVIEW-v0.7 H-1). The pool can be disabled by its operator (`pool_status` @481 ≠ 0: router and buybacks refuse it, samples skip it). Farming rewards (`reward_infos` @728) are paid by `claim_reward` to the position-NFT holder's signature (`claim_position_rewards`); on our pools only a DAMM admin can open one (UNVERIFIED). |
+| **Meteora DBC** | `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`, mainnet 0.2.2 (was 0.2.1 `4c26a8a5…f23b` until slot 445,503,633 → upgraded 2026-10-16), programdata sha256 `e2bfc853…ad47`, upgrade authority `JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd`, last deployed slot 457,502,600 | Account layouts at the byte offsets in `external/meteora.rs` (`VirtualPool` 424 B, `PoolConfig` 1,048 B) stay valid (readers fail closed on owner / discriminator / length). `claim_trading_fee` pays partner fees only to the config's `fee_claimer` signer. `withdraw_leftover` pays the leftover only to `ATA(leftover_receiver, mint)` and sets `is_withdraw_leftover`. `withdraw_migration_fee` (partner) / `partner_withdraw_surplus` pay only to the `fee_claimer` signer and set their flags. `migration_damm_v2` creates the DAMM v2 pool under a config whose `pool_creator_authority` is DBC's pool authority and mints the 100% partner-locked position NFT to `fee_claimer`. `enable_first_swap_with_min_fee` gives the min fee to exactly one swap of the pool-creation transaction (verified on the binary: `verify_dbc_min_fee_goes_to_one_swap_per_launch_tx`). `TokenAuthorityOption::Immutable` leaves no mint / freeze / metadata authority. Swaps emit `EvtSwap` + `EvtSwap2` via self-CPI with the `__event_authority` PDA. |
+| **Meteora DAMM v2** | `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`, mainnet 0.2.5 (was 0.2.4 `4d5b920b…848b`, slot 445,230,614), sha256 `967ff9fb…2022`, same upgrade authority, last deployed slot 457,080,014; migration config `A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck` | Pool PDA `["pool", config, max(mint, WSOL), min(mint, WSOL)]`; `sqrt_price` at offset 456, `pool_status` at 481, `token_b_amount` for depth. `claim_position_fee` requires the position-NFT holder to sign and pays to the given token accounts. Permanently locked liquidity can never be withdrawn by anyone. Anyone can create positions / add / lock liquidity in the pool (handled, REVIEW-v0.7 H-1). The pool can be disabled by its operator (`pool_status` @481 ≠ 0: router and buybacks refuse it, samples skip it). Farming rewards (`reward_infos` @728) are paid by `claim_reward` to the position-NFT holder's signature (`claim_position_rewards`); on our pools only a DAMM admin can open one (UNVERIFIED). |
 | **Squads v4** | `SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf`, sha256 `dec8d3e0…d34c`, upgrade authority **none** (immutable), last deployed slot 302,582,236 | Vault PDA signs only executed proposals; time lock enforced by the program; `configAuthority = null` makes membership / threshold / time-lock changes themselves subject to vote + time lock. |
 | **Pyth** (Hermes historical API, SOL/USD feed `0xef0d8b6f…b56d`) | off-chain only in v0.7 (the program no longer reads Pyth) | All attestors and the watcher use the same Hermes source and pick the update with the greatest `publish_time ≤ block_time` (deterministic tie-break); the program only checks `0 ≤ block_time − pyth_publish_time ≤ max_price_age_secs` on the attested numbers. Hermes availability / integrity is trusted for the $50 threshold only. |
 | SPL Token, Token-2022, ATA, System, Ed25519 precompile, instructions sysvar | Solana mainnet builtins / programs | Standard semantics. Ed25519 precompile verifies every listed signature or fails the whole transaction. |
@@ -221,7 +221,8 @@ directory it prints; each step prints its pass/fail line. What it runs, in order
 3. **Program unit tests.** `cargo test -p fumpad --lib` — 21 tests (attestation codec + Ed25519 parsing, queue,
    oracle median / coverage, pre-graduation ring, rate cap, fee split, price math, account sizes).
 4. **LiteSVM integration suite.** `cargo test -p tests` — 94 pass + 1 ignored (`derive_exact_curves`, a re-derivation
-   tool), ≈ 15 s. Runs the built `fumpad.so` together with the **mainnet** DBC 0.2.1 and DAMM v2 0.2.4 binaries and
+   tool), ≈ 15 s. Runs the built `fumpad.so` together with the **mainnet** DBC 0.2.2 and DAMM v2 0.2.5 binaries (0.2.1 / 0.2.4 until
+   2026-10-16; CONTRACTS.md "Meteora upgrade 2026-10-16": 23 unit + 109 integration at that re-run) and
    the mainnet DAMM v2 migration config. Includes the CU / tx-size / rent report (`cu_report`; print it with
    `cargo test -p tests cu_report -- --nocapture`) and the attestation / DBC-config test-vector checks
    (`UPDATE_VECTORS=1` regenerates them).
@@ -260,8 +261,8 @@ were re-run (TEST-COVERAGE §3).
 
 | File | sha256 | What |
 |---|---|---|
-| `dbc_mainnet.so` | `4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b` | DBC programdata payload (0.2.1) |
-| `damm_v2_mainnet.so` | `4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b` | DAMM v2 programdata payload (0.2.4) |
+| `dbc_mainnet.so` | `e2bfc853c1a1778dd8ee40ea9a0f3edf5587442360c57c685e7e3024ad0cad47` | DBC programdata payload (0.2.2, deployed slot 457,502,600) |
+| `damm_v2_mainnet.so` | `967ff9fb161eec2e62f66d2c899100739fb747c445f697b8625c86b31b9a2022` | DAMM v2 programdata payload (0.2.5, deployed slot 457,080,014) |
 | `damm_v2_migration_config_mainnet.json` | `fc5c08462fc2d118b09353121112725a33aa684e0f255719575e09efbc1f4c2f` | account `A8gMrEPJ…Ctck` |
 | `squads_v4_mainnet.so` | `dec8d3e0fae58c7c8f2416e5f67c25e673f047afd6dd2bba4a47e0b29a01d34c` | Squads v4 (multisig rehearsal only) |
 | `squads_v4_program_config_mainnet.json` | `6dcbc4560e65bfc97dceb3bb75f801437568d3c417d9f716a332c654c8b9b81d` | Squads ProgramConfig |
@@ -277,7 +278,7 @@ solana account -u mainnet-beta A8gMrEPJkacWkcb3DGwtJwTe16HktSEfvwtuDh2MCtck --ou
 cd services && MAINNET_RPC_URL=<rpc> npx tsx scripts/mainnet/fork.ts compare --tested scripts/mainnet/tested-programs.json
 ```
 `services/scripts/mainnet/tested-programs.json` is the manifest of the last passing mainnet rehearsal (mainnet slot
-456,589,591). Meteora can upgrade DBC / DAMM v2 at any time (D38): if mainnet differs from the fixtures, replace the
+457,770,194, 2026-10-16, DBC 0.2.2 / DAMM v2 0.2.5). Meteora can upgrade DBC / DAMM v2 at any time (D38): if mainnet differs from the fixtures, replace the
 fixture and re-run the suites; `cargo test -p tests derive_exact_curves -- --ignored --nocapture` re-derives the
 exact-8% curve configs for a new DBC binary.
 

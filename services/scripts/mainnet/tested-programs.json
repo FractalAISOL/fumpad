@@ -1,6 +1,6 @@
 {
-  "takenAt": "2026-10-14T02:15:24.174Z",
-  "slot": 456668770,
+  "takenAt": "2026-10-16T20:28:04.247Z",
+  "slot": 457770194,
   "genesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   "programs": [
     {
@@ -8,11 +8,11 @@
       "id": "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN",
       "programData": "HUfnSSiJxgspQm6C1rkqv6L3XgVtn7AESApgCQpCXCYh",
       "upgradeAuthority": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
-      "lastDeployedSlot": 445503633,
+      "lastDeployedSlot": 457502600,
       "payloadBytes": 2326577,
-      "sha256": "4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b",
+      "sha256": "e2bfc853c1a1778dd8ee40ea9a0f3edf5587442360c57c685e7e3024ad0cad47",
       "fixture": "dbc_mainnet.so",
-      "fixtureSha256": "4c26a8a5da99f8ce932fa0300c46675b527090021fbb74214c9486bedda9f23b",
+      "fixtureSha256": "e2bfc853c1a1778dd8ee40ea9a0f3edf5587442360c57c685e7e3024ad0cad47",
       "matchesFixture": true
     },
     {
@@ -20,11 +20,11 @@
       "id": "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
       "programData": "AUh8bm2XsMfex3KjYGcM3G4uBqUNSDw6HEhWaWMYnyPH",
       "upgradeAuthority": "JADaUV8kvDpDbJr55wxXJHVaBS3VCj8thZZHjfeuCVLd",
-      "lastDeployedSlot": 445230614,
+      "lastDeployedSlot": 457080014,
       "payloadBytes": 2174352,
-      "sha256": "4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b",
+      "sha256": "967ff9fb161eec2e62f66d2c899100739fb747c445f697b8625c86b31b9a2022",
       "fixture": "damm_v2_mainnet.so",
-      "fixtureSha256": "4d5b920baebc090f89b2e8796a3452ed067c9667a143058c96a312f2c1e6848b",
+      "fixtureSha256": "967ff9fb161eec2e62f66d2c899100739fb747c445f697b8625c86b31b9a2022",
       "matchesFixture": true
     },
     {
@@ -85,13 +85,13 @@
       "owner": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
       "lamports": 1825031,
       "space": 134,
-      "sha256": "a7630a7c8b2a7c9ce6377780ead34ad627bc92ef80d270541071936f4c30bb99"
+      "sha256": "7d5a5be9e46c92c36d9287478c04e384f3cfbd4466c1bdd89a9660dead5c29e5"
     },
     {
       "name": "wsol_mint",
       "id": "So11111111111111111111111111111111111111112",
       "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-      "lamports": 1852116095981,
+      "lamports": 1853325059072,
       "space": 82,
       "sha256": "b0f919425a529f4971ef8dabd535aec34947d5c8c4885df80dae91635b98c5f3",
       "fixture": "wsol_mint.json",
@@ -109,7 +109,7 @@
       "name": "damm_v2_pool_authority",
       "id": "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC",
       "owner": "11111111111111111111111111111111",
-      "lamports": 177587371817,
+      "lamports": 177917485309,
       "space": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
@@ -146,9 +146,14 @@
       "lamports": 3423920
     },
     {
-      "label": "Global (1,044)",
-      "bytes": 1044,
-      "lamports": 5953760
+      "label": "Coin + fee-policy tail (593, wallet-split coins only)",
+      "bytes": 593,
+      "lamports": 3662680
+    },
+    {
+      "label": "Global (1,491)",
+      "bytes": 1491,
+      "lamports": 8224520
     },
     {
       "label": "DBC config (1,048)",
@@ -177,21 +182,21 @@
       "p50": 0,
       "p75": 0,
       "p90": 0,
-      "max": 0
+      "max": 50000
     },
     {
       "program": "damm_v2 (program + pool authority)",
       "samples": 150,
       "p50": 0,
       "p75": 0,
-      "p90": 0,
-      "max": 181764
+      "p90": 3319,
+      "max": 1516324
     }
   ],
   "pyth": {
-    "priceUsd": 107.41694632000001,
-    "publishTime": 1791944057,
-    "ageSecs": 35
+    "priceUsd": 103.47104974,
+    "publishTime": 1792182422,
+    "ageSecs": 30
   },
   "features": {
     "checked": 280,
