@@ -198,6 +198,13 @@
   text-align: right;
   white-space: nowrap;
 }
+/* Phones: a long value ("FUMPAD or any other app, …") wraps instead of running over its label. */
+@media (max-width: 599px) {
+  .facts dd {
+    white-space: normal;
+    max-width: 60%;
+  }
+}
 
 .figure {
   padding: var(--s-4);
@@ -280,4 +287,20 @@
 }
 .faq details > div {
   padding: 0 0 var(--s-4);
+}
+
+/* Optional companion rail (How it works: Fumi), right of the text from 1200 px; hidden below. */
+.companion {
+  display: none;
+}
+@media (min-width: 1200px) {
+  .layoutCompanion {
+    grid-template-columns: 200px minmax(0, 70ch) 200px;
+  }
+  .companion {
+    display: block;
+    position: sticky;
+    top: calc(var(--header-h) + var(--s-6));
+    align-self: start;
+  }
 }

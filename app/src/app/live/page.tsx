@@ -4,6 +4,9 @@ import { Rules } from "@/components/checker/Rules";
 import s from "@/components/checker/Checker.module.css";
 import { CLUSTER_LABEL, SOLSCAN_QUERY } from "@/chain/cluster";
 import { cachedCoin, cachedPriceSeries, shellSnapshot } from "@/data/server";
+import { cx } from "@/design/cx";
+import { Fumi, SpeechBubble } from "@/design/anime";
+import l from "./Live.module.css";
 
 /**
  * The launch window (LAUNCH.md, "Launch-window checker"): one read-only page about the FIRST coin only, between its
@@ -22,13 +25,27 @@ export default async function LivePage() {
   return (
     <div className={s.page}>
       <OpensBanner opensAt={opensAt} serverNow={now} cluster={CLUSTER_LABEL} />
-      <div className={s.hero}>
-        <p className={s.eyebrow}>Launch window</p>
-        <h1 className={s.h1}>
-          The first coin is live.
-          <br />
-          <span className={s.h1Quiet}>Sold too early? Check.</span>
-        </h1>
+      <div className={cx(s.hero, l.hero)}>
+        <div className={l.heroText}>
+          <div className={l.greet}>
+            <Fumi pose="waving" size={56} crop="bust" />
+            <SpeechBubble tail="left" pop={false} className={l.greetBubble}>
+              Hi, fumbler!
+            </SpeechBubble>
+          </div>
+          <p className={s.eyebrow}>Launch window</p>
+          <h1 className={s.h1}>
+            The first coin is live.
+            <br />
+            <span className={s.h1Quiet}>Sold too early? Check.</span>
+          </h1>
+        </div>
+        <div className={l.side}>
+          <SpeechBubble tail="bottom-right" className={l.sideBubble}>
+            Hi, fumbler!
+          </SpeechBubble>
+          <Fumi pose="waving" size="md" fade pop />
+        </div>
       </div>
       {valid ? (
         <LaunchWindow mint={mint} coin={first} series={first ? series : []} params={params} solUsd={solUsd} clusterQuery={SOLSCAN_QUERY} serverNow={now} />

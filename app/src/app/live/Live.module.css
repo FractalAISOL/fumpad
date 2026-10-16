@@ -1,0 +1,41 @@
+/* Launch-window header with Fumi (anime kit, marketing/STYLE-ANIME.md). She greets in the header only: right of the
+   headline from 600 px, a small bust above it on phones. Never near the chart, price or checker results below. */
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-6);
+}
+.heroText {
+  min-width: 0;
+}
+.greet {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-4);
+}
+.greetBubble {
+  font-size: var(--fs-sm);
+}
+.side {
+  display: none;
+}
+@media (min-width: 600px) {
+  .greet {
+    display: none;
+  }
+  .side {
+    position: relative;
+    display: block;
+    flex: none;
+    padding-top: 56px;
+  }
+  .sideBubble {
+    position: absolute;
+    top: 0;
+    right: 70%;
+    white-space: nowrap;
+    max-width: none;
+  }
+}
