@@ -1,0 +1,9 @@
+/*
+ * Workaround for the locked anime kit (reported to the kit owner): the Fumi state's quip bubble is
+ * absolutely positioned inside a box as wide as Fumi, so it shrinks to one word per line. Let it
+ * size to its text, still capped at the kit's 16ch. Remove once the kit sets this itself.
+ */
+.quipFix [class*="stateQuip"] {
+  width: max-content;
+  max-width: 16ch;
+}

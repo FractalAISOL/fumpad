@@ -2,6 +2,7 @@ import Link from "next/link";
 import { CLUSTER, CLUSTER_LABEL, FUMPAD_PROGRAM_ADDRESS, solscanAccount } from "@/chain/cluster";
 import { Badge, IconExternal, IconX, Mark, Wordmark } from "@/design";
 import { StatusDot } from "../status/StatusDot";
+import { FooterSignoff } from "./FooterSignoff";
 import s from "./Footer.module.css";
 
 const CLUSTER_NAME = CLUSTER_LABEL ?? "Mainnet";
@@ -61,6 +62,7 @@ export function Footer() {
             <Wordmark />
           </Link>
           <p className={s.tagline}>The launchpad for people who sell too early.</p>
+          <FooterSignoff />
         </div>
 
         {GROUPS.map((g) => (

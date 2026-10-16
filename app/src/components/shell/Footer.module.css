@@ -115,3 +115,16 @@
   color: var(--ink-3);
   white-space: nowrap;
 }
+
+/* Fumi's sign-off: a 48 px bust and one ink bubble under the tagline, never by the disclaimer. */
+.signoff {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  justify-self: start;
+}
+.signoff .signoffQuip {
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  box-shadow: none;
+}

@@ -11,7 +11,6 @@ import {
   CopyButton,
   CurveMeter,
   Dialog,
-  EmptyState,
   IconUpload,
   KV,
   Panel,
@@ -24,6 +23,8 @@ import {
   parseAmount,
   useToast,
 } from "@/design";
+import { Fumi, FumiEmptyState, SpeechBubble } from "@/design/anime";
+import states from "@/components/shell/states.module.css";
 import * as f from "@/design/format";
 import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Launch.module.css";
@@ -157,6 +158,8 @@ export function LaunchView() {
       return;
     }
     setDone({ symbol, mint: prepared.mint, suffix: prepared.suffix });
+    // The form was long; start the success screen at its top, not mid-page under the header.
+    window.scrollTo({ top: 0 });
     setPrepared(null);
     toast(`Launched $${symbol}.`);
     tx.reset();
@@ -166,7 +169,10 @@ export function LaunchView() {
     return (
       <div className="wrap">
         <Panel className={s.done}>
-          <EmptyState
+          <FumiEmptyState
+            className={states.quipFix}
+            pose="cheering"
+            quip="It's live!"
             title={`$${done.symbol} is live`}
             action={
               <>
@@ -178,7 +184,7 @@ export function LaunchView() {
             }
           >
             80,000,000 {done.symbol} sit in its reward pool already. The first person to sell it too early will be glad.
-          </EmptyState>
+          </FumiEmptyState>
           <MintAddress mint={done.mint} suffix={done.suffix} />
         </Panel>
       </div>
@@ -187,11 +193,18 @@ export function LaunchView() {
 
   return (
     <div className="wrap">
+      {/* Fumi stays up here, above the form: never beside the inputs, the fee review or the sign button. */}
       <div className={s.head}>
         <h1 className={s.h1}>Launch a coin</h1>
         <p className={s.lede}>
           Every coin on FUMPAD sets aside 8% of its supply for a reward pool, so people who sell too early, on any app, get paid back. Takes about a minute.
         </p>
+        <div className={s.react} aria-hidden="true">
+          <SpeechBubble tail="right" className={s.quip}>
+            New coin incoming!
+          </SpeechBubble>
+          <Fumi pose="running" size={120} fx fade className={s.reactFumi} />
+        </div>
       </div>
 
       <div className={s.grid}>
