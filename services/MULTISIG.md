@@ -9,7 +9,7 @@ Global is unchanged. Every write simulates first and only sends with `--yes`; `-
 
 | power (INTERFACE-v0.7) | today | after the handover |
 |---|---|---|
-| **admin**: `queue_params`/`execute_params` (1 h), `queue_config`/`execute_config` (1 h), `set_keepers` (immediate), `set_operators` (immediate), `propose_admin` (6 h), everything guardian can do | deployer key | **admin multisig vault** (3-of-5, 6 h Squads time lock) |
+| **admin**: `queue_params`/`execute_params` (1 h), `queue_config`/`execute_config` (1 h), `set_keepers` (immediate), `set_operators` (immediate), `propose_admin` (6 h), everything guardian can do | deployer key | **admin multisig vault** (2-of-3, 6 h Squads time lock) |
 | **guardian**: `set_pause` (immediate, lapses after 7 d), `cancel_params`, `cancel_config`, `cancel_admin`, `void_ticket` | deployer key | **guardian multisig vault** (2-of-3, no time lock) |
 | **program upgrade authority** (BPF loader) | deployer key | **admin multisig vault** |
 | `platform_treasury` | unchanged unless you pass `--treasury` | |
@@ -27,13 +27,22 @@ checked against it at load. The rehearsal runs the exact mainnet bytecode (dumpe
 
 ## 2. Recommendations
 
-**Admin multisig: 3-of-5 voters, Squads time lock 6 h (21,600 s), no config authority.** (Was ≥ 48 h; lowered with
+**Governance decision (user, 2026-10-16): 3 members — the same 3 wallets in both multisigs, normal (non-hardware)
+wallets:**
+`GMtPrH3fhyVPFh5hEHsBhfS6W2hQdcQtv2xLfsDBhTgn`, `CrJD8AptfHPEnqfu2FnBmiPLcdaVxB53UuLFDH7oQQNk`,
+`6K3ybxa3Gtbe3cZ5bKayteX35NVxEqtd3PzFxjKVgjBx`. Admin **2-of-3 with a 6 h Squads time lock**; guardian **2-of-3, no
+time lock**. Config files: `~/fumpad-keys/mainnet/multisig/admin.json` / `guardian.json` (§3). Hardware wallets were
+the original recommendation; the user chose software wallets, so the hygiene rules below are mandatory, not optional.
+
+**Admin multisig: 2-of-3 voters, Squads time lock 6 h (21,600 s), no config authority.** (Was ≥ 48 h; lowered with
 the on-chain timelocks, clarification 29. `multisig.ts` warns below 6 h: `ADMIN_TIMELOCK_SECS`.)
-- 5 voters = 5 hardware wallets (Ledger), held by **different people in different places**; nobody holds 3. Each
-  voter has all permissions (initiate / vote / execute). A 4th or 5th key lost still leaves the multisig working.
+- 3 voters = 3 dedicated member wallets (see "Hot-wallet hygiene"), ideally held by **different people in different
+  places**; nobody holds 2. Each voter has all permissions (initiate / vote / execute). One lost key still leaves
+  the multisig working (2 of the remaining 2); replace it at once (§5).
 - Optional **ops key** (hot, on the ops laptop): permissions `initiate` + `execute` only, **no vote**. It can create
   proposals and press "execute" after the threshold + time lock, but can never approve: losing it is harmless.
-  This is what lets our CLI drive the flow while every approval happens on a Ledger in the Squads app.
+  This is what lets our CLI drive the flow while every approval happens in a member wallet in the Squads app.
+  It must be in the members list **at creation** (adding it later is a config transaction: vote + 6 h).
 - **6 h time lock** covers program upgrades (otherwise instant) and every admin action: users get 6 h to see an
   approved upgrade before it can land, and ≥ 7 h (6 h Squads + 1 h on chain) for a param / config change, ≥ 12 h for
   an authority change. Trade-off: admin's immediate tools (`set_keepers`, `set_operators`, `void_ticket`) also wait
@@ -48,23 +57,39 @@ the on-chain timelocks, clarification 29. `multisig.ts` warns below 6 h: `ADMIN_
 - `configAuthority: null` (autonomous): adding/removing members, the threshold and the time lock themselves need a
   vote **and** the time lock. Our `create` always sets this.
 
-**Guardian multisig: 2-of-3, time lock 0.** Three hardware wallets, different people (ideally reachable in
-different time zones: a pause should take minutes). Overlap with the admin voters is allowed but keep at least
-one guardian who is not an admin voter. All permissions, plus the same **ops key** (initiate + execute, no vote):
-in an incident the ops laptop proposes the exact `set_pause` with the CLI in seconds, two guardians approve on
-their Ledgers in the Squads app, the ops key executes.
+**Guardian multisig: 2-of-3, time lock 0.** The same three member wallets as the admin multisig (decision above;
+the earlier advice to keep one guardian who is not an admin voter is waived), reachable fast — ideally in
+different time zones: a pause should take minutes. All permissions, plus the same **ops key** (initiate + execute,
+no vote): in an incident the ops laptop proposes the exact `set_pause` with the CLI in seconds, two guardians
+approve in their member wallets in the Squads app, the ops key executes.
 
 **Never**: threshold 1, a voter key on a server, two voter keys with one person, a time lock on the guardian.
 The CLI prints warnings for these (`checkMultisigConfig`).
 
+### Hot-wallet hygiene (members use normal wallets, not Ledgers)
+
+With software wallets the multisig is only as strong as the weakest two member wallets. Each member:
+- **Dedicated wallet, used only for Squads.** A fresh seed phrase created for this; never used for trading, dapps,
+  airdrops, mints or signing anything other than FUMPAD Squads proposals. Keep only a little SOL in it (fees).
+- **Separate browser profile or, better, a separate device** for that wallet: no other extensions besides the wallet,
+  no other wallets, only `app.squads.so` (bookmarked; never via links from chat/email/search ads).
+- **Seed phrase offline only** (paper/metal, stored safely); never typed into a computer except to restore that same
+  wallet, never photographed, never in a password manager synced to the cloud, never in chat.
+- **Never imported elsewhere**: the seed/private key lives in exactly one wallet app on one profile/device; no copies
+  in other wallets, scripts, servers or `~/fumpad-keys`.
+- Before approving, read what Squads decodes (and `multisig.ts show-tx`): the expected FUMPAD instruction with the
+  vault as signer, nothing else. If unsure, don't approve; ask in the guardians' chat.
+- A member who suspects their wallet/device is compromised says so immediately: the other two replace that member
+  (config transaction, §5) and, if needed, the guardian pauses.
+
 ## 3. What you must provide
 
 Public keys only (no secret ever leaves the signer):
-1. **5 admin voter pubkeys** (Ledger addresses, e.g. Phantom/Backpack/Solflare connected to the Ledger → copy address).
-2. **3 guardian voter pubkeys**.
-3. Optional: the **ops pubkey** (`solana-keygen new -o ~/fumpad-keys/mainnet/ops.json` on the ops machine;
-   `solana-keygen pubkey …`).
-4. Decision: keep `platform_treasury` (default) or a new treasury pubkey.
+1. **3 member pubkeys** (both multisigs) — provided 2026-10-16: `GMtPrH3f…gTn`, `CrJD8Apt…QNk`, `6K3ybxa3…gjBx`
+   (dedicated wallets, hygiene above).
+2. The **ops pubkey** (`solana-keygen new -o ~/fumpad-keys/mainnet/ops.json` on the ops machine;
+   `solana-keygen pubkey …`) — add it to both config files before `create`.
+3. Decision: keep `platform_treasury` (default) or a new treasury pubkey.
 
 Already on your side: the mainnet deployer key (current admin + upgrade authority), `~/fumpad-keys/mainnet/rpc.env`.
 
@@ -72,21 +97,17 @@ Config files (`~/fumpad-keys/mainnet/multisig/`, dir 700): `createKeyPath` is re
 (600) by `create`; it only signs the creation.
 ```json
 // admin.json
-{ "label": "admin", "threshold": 3, "timeLockSecs": 21600, "createKeyPath": "admin-create-key.json",
+{ "label": "admin", "threshold": 2, "timeLockSecs": 21600, "createKeyPath": "admin-create-key.json",
   "members": [
-    { "pubkey": "<LEDGER_1>", "permissions": "all", "label": "alice" },
-    { "pubkey": "<LEDGER_2>", "permissions": "all", "label": "bob" },
-    { "pubkey": "<LEDGER_3>", "permissions": "all", "label": "carol" },
-    { "pubkey": "<LEDGER_4>", "permissions": "all", "label": "dan" },
-    { "pubkey": "<LEDGER_5>", "permissions": "all", "label": "erin" },
+    { "pubkey": "GMtPrH3fhyVPFh5hEHsBhfS6W2hQdcQtv2xLfsDBhTgn", "permissions": "all", "label": "member-1" },
+    { "pubkey": "CrJD8AptfHPEnqfu2FnBmiPLcdaVxB53UuLFDH7oQQNk", "permissions": "all", "label": "member-2" },
+    { "pubkey": "6K3ybxa3Gtbe3cZ5bKayteX35NVxEqtd3PzFxjKVgjBx", "permissions": "all", "label": "member-3" },
     { "pubkey": "<OPS_PUBKEY>", "permissions": ["initiate", "execute"], "label": "ops (hot, no vote)" } ] }
-// guardian.json
-{ "label": "guardian", "threshold": 2, "timeLockSecs": 0, "createKeyPath": "guardian-create-key.json",
-  "members": [ { "pubkey": "<G_1>", "permissions": "all" }, { "pubkey": "<G_2>", "permissions": "all" },
-               { "pubkey": "<G_3>", "permissions": "all" },
-               { "pubkey": "<OPS_PUBKEY>", "permissions": ["initiate", "execute"], "label": "ops (hot, no vote)" } ] }
+// guardian.json: the same members, "label": "guardian", "threshold": 2, "timeLockSecs": 0,
+//                "createKeyPath": "guardian-create-key.json"
 ```
-(JSON has no comments: drop the `// …` lines.)
+(JSON has no comments: drop the `// …` lines.) Written 2026-10-16 with the 3 members; the ops entry is still to be
+added (no ops key yet). Check before `create`: `checkMultisigConfig` reports no problems/warnings for both.
 
 ## 4. Mainnet sequence (exact commands)
 
@@ -104,7 +125,7 @@ $M create $C --config $K/multisig/admin.json    --payer $K/deployer.json --yes
 $M create $C --config $K/multisig/guardian.json --payer $K/deployer.json --yes
 $M status $C $A                                  # prints both multisigs + vault[0] addresses; members check theirs
 ```
-Each voter opens <https://app.squads.so> with their Ledger and adds the multisig by address (`status` prints it):
+Each member opens <https://app.squads.so> with their dedicated member wallet (hygiene §2) and adds the multisig by address (`status` prints it):
 they must see themselves as members and the right threshold/time lock.
 ```sh
 # 2. day 0: propose_admin(new_admin = admin vault, treasury = current, guardian = guardian vault), signed by the deployer
@@ -115,7 +136,7 @@ $M status $C $A                                  # "PENDING admin <admin vault> 
 # 3. day 0: the accept_admin vault transaction (ops key creates it; no approval from the ops key)
 $M propose $C --config $K/multisig/admin.json --member-key $K/ops.json --action accept-admin --yes   # prints index N
 $M show-tx $C --config $K/multisig/admin.json --index N        # reviewers: inner ix = accept_admin, signer = admin vault
-#    → 3 voters approve transaction N in the Squads app (Ledger). Squads' 6 h time lock starts at the 3rd approval.
+#    → 2 members approve transaction N in the Squads app. Squads' 6 h time lock starts at the 2nd approval.
 
 # 4. ≥ 6 h later, same day (after BOTH: FUMPAD eta and Squads time lock)
 $M execute $C --config $K/multisig/admin.json --index N --member-key $K/ops.json --yes   # or "Execute" in the Squads app

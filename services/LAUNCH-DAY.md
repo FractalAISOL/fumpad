@@ -26,12 +26,12 @@ SPEND="--send --i-understand-this-spends-real-sol"
 |---|---|---|
 | T−7 d … T−1 d | providers, keys, multisigs, build, rehearsal, Railway mainnet project (services stopped) | no |
 | **Day 0, morning (H0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
-| H0 … H0 + 6 h | 6 h: voters approve `accept_admin` in Squads (right away — the Squads 6 h lock starts at the 3rd approval); services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
+| H0 … H0 + 6 h | 6 h: voters approve `accept_admin` in Squads (right away — the Squads 6 h lock starts at the 2nd approval); services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
 | **≥ H0 + 6 h (same day)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
 | **T0 (same evening or next morning)** | pre-flight re-check → first coin on the first-coin config (app still gated) → launch-window checker on fumpad.app → remove that config → open the app (gate off) | the first coin's 3% fee + routing: yes (snapshotted) |
 
 (Was a 3-day schedule with the 48 h timelocks; since SPEC v0.7 clarification 29 the handover is 6 h on chain and the
-recommended Squads time lock is 6 h, so day 0 fits in one working day if the 3 voters approve within ~an hour of
+recommended Squads time lock is 6 h, so day 0 fits in one working day if 2 of the 3 members approve within ~an hour of
 `propose_admin`.)
 
 Opening the app only after the handover means no hot key holds admin power while users have money in.
@@ -67,8 +67,9 @@ Opening the app only after the handover means no hot key holds admin power while
    must use the same source (`hermes` remains an option with a paid key in `$K/pyth.env`, DEPLOY-v07.md §9).
 5. **Telegram**: `$K/telegram.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — a separate mainnet chat; check
    `getMe` → `"ok":true` (DEPLOY-v07.md §9). Guardians and the ops person are in the chat.
-6. **Governance parties** (MULTISIG.md §2–3): 5 admin Ledger voters (3-of-5, 6 h Squads time lock) + 3 guardian
-   Ledgers (2-of-3, no time lock) + the ops key (`$K/ops.json`, initiate + execute only). Create both multisigs
+6. **Governance parties** (MULTISIG.md §2–3; decision 2026-10-16): the same 3 member wallets (normal wallets,
+   MULTISIG.md "Hot-wallet hygiene") in admin (2-of-3, 6 h Squads time lock) and guardian (2-of-3, no time lock)
+   + the ops key (`$K/ops.json`, initiate + execute only). Create both multisigs
    (deployer pays ≈ 0.004 SOL rent; Squads creation fee is 0 today):
    ```sh
    $M create $C --config $K/multisig/admin.json    --payer $K/deployer.json --yes
@@ -146,6 +147,12 @@ Opening the app only after the handover means no hot key holds admin power while
     and the app refuses to load if the SDK and the app disagree (`app/src/chain/deployment.test.ts`). Check on the
     preview: the footer's program link = `$FUMPAD_PROGRAM_ID`, no "Devnet" badge. Keep `NEXT_PUBLIC_PRELAUNCH` unset
     (gate on) until T0. Preview deployment first; check CSP (app/LAUNCH.md).
+15. **Verified program on explorers** (OtterSec / solana-verify, §10 step 6): needs a **PUBLIC GitHub repo** containing
+    the release commit `REL` (mount path `contracts`), so `solana-verify verify-from-repo` can rebuild it and the
+    remote job (`solana-verify remote submit-job`) can publish the "verified" badge. Create/publish the repo before
+    day 0; the verification itself is done **on day 0, right after `--step program`, while the deployer is still the
+    upgrade authority** (the verification PDA is signed by the upgrade authority; after the handover it needs a
+    Squads proposal). ☐ public repo at `REL` ☐ `verify-from-repo` matches the chain ☐ remote job → verified.
 
 ## 2. Day 0 morning (H0): program, config, Global, keepers, propose_admin
 
@@ -170,7 +177,7 @@ remember it costs real SOL and is permanent).
 
 ## 3. H0 … H0 + 6 h: approvals
 
-3 admin voters approve tx `N` in the Squads app on their Ledgers. The Squads 6 h time lock starts at the 3rd
+2 of the 3 admin members approve tx `N` in the Squads app (member wallets). The Squads 6 h time lock starts at the 2nd
 approval, so approve right after `propose_admin` (the FUMPAD eta is H0 + 6 h; both must pass). `$B --step verify` / `$B --step accept-admin` (plan) show approvals and when it can
 execute. Any doubt → the guardian (still the deployer) cancels: `npx tsx scripts/ops/multisig.ts` is not needed,
 the deployer signs `cancel_admin` directly (rehearsed in MULTISIG.md §6).
@@ -202,10 +209,20 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       The fee wallet holds ≥ 0.001 SOL (claims refuse to leave it below rent exemption — `FeeWalletNotRentExempt`).
    2. API: Railway `api` variable `LAUNCH_FIRST_COIN=true`, redeploy; `curl -s https://<api>/v1/launch/options` shows
       `firstCoin` with that config and wallet.
-   3. Launch through the app at `https://fumpad.vercel.app/launch?config=first-coin` (Privy wallet, small first buy; fumpad.app
-      is still gated). The
+   3. Launch through the app at `https://fumpad.vercel.app/launch?config=first-coin` (Privy wallet, first buy below;
+      fumpad.app is still gated). The
       review must show **Trading fee 3%, first-coin config** and the wallet; the app refuses to sign unless the chain
       lists that config with the wallet-split policy and its fee is 3%.
+
+      **First coin details** (user, 2026-10-16):
+      | field | value |
+      |---|---|
+      | name | `Fumble Pad` |
+      | ticker | `FUMPAD` |
+      | image | `marketing/brand/logo/png/fumpad-mark-on-dark-1024.png` (copy: `~/Desktop/FUMPAD-X-assets/first-coin/FUMPAD-logo-1024.png`) |
+      | description | FUMPAD's own coin. Fumble Pad pays you for selling too early: sell $50+ of a FUMPAD coin on any app and you get a Fumble Ticket. If the coin graduates and holds 10× your sell price, you can claim back 10% of what you sold. |
+      | creator wallet | `EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc` — must be the wallet **logged into the app** when launching; needs ≥ ~1.05 SOL (first buy + launch fees/rent) |
+      | first buy | 1 SOL |
    4. Check in order: Solscan tx (DBC init on the first-coin config + swap + `register_coin`, launch-signer
       co-signed), the Coin account is 593 bytes (policy tail), API coin page shows 3% and the wallet split, WS feed,
       trades indexed; after ~10 s the keeper's first `claim_fees` pays the launch window to the wallet (`FeesClaimed`
