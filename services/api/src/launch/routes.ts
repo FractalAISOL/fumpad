@@ -49,6 +49,18 @@ export interface PrepareBody {
 
 export type LaunchConfigKind = "standard" | "first_coin";
 
+/** 403 code + message when standard launches are closed (LAUNCHES_OPEN=false); the app shows a "launches open soon" state. */
+export const LAUNCHES_CLOSED_CODE = "launches_closed";
+export const LAUNCHES_CLOSED_MESSAGE = "Launches open soon";
+
+/**
+ * The LAUNCHES_OPEN gate: refuses a standard launch while launches are closed. The first-coin path is never gated
+ * here (it has its own switch, LAUNCH_FIRST_COIN, checked in `pickLaunchConfig`).
+ */
+export function assertLaunchAllowed(kind: LaunchConfigKind, launchesOpen: boolean): void {
+  if (kind === "standard" && !launchesOpen) throw new LaunchError(403, LAUNCHES_CLOSED_MESSAGE, undefined, LAUNCHES_CLOSED_CODE);
+}
+
 /** The config a prepared launch uses, with its real fees (the app shows these; it re-checks them on chain). */
 export interface LaunchConfigInfo {
   kind: LaunchConfigKind;
@@ -150,9 +162,11 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
     "/v1/launch/prepare",
     { config: { rateLimit: { max: cfg.launchRateLimitPerMin, timeWindow: "1 minute" } } },
     async (req, reply): Promise<PrepareResponse> => {
+      const p = parsePrepareBody(req.body, cfg);
+      // LAUNCHES_OPEN: no standard launch before the public opening (nothing reserved, nothing signed).
+      assertLaunchAllowed(p.launchConfig, cfg.launchesOpen);
       if (!deps.pool) throw new LaunchError(503, "launches are not enabled on this server");
       const pool = deps.pool;
-      const p = parsePrepareBody(req.body, cfg);
       const creator = p.creator.toBase58();
       // M-2: proof of wallet control before anything is reserved.
       if (cfg.launchRequireSignature) {
@@ -236,16 +250,18 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
     },
   );
 
-  // Whether this server offers the first-coin launch config right now (the app shows the option only then).
+  // Whether standard launches are open (LAUNCHES_OPEN) and whether this server offers the first-coin launch config
+  // right now (the app shows a "launches open soon" state / the first-coin option accordingly).
   app.get("/v1/launch/options", async (_req, reply) => {
     reply.header("cache-control", "no-store");
-    if (!cfg.launchFirstCoin || !deps.pool) return { firstCoin: null };
+    const launchesOpen = cfg.launchesOpen;
+    if (!cfg.launchFirstCoin || !deps.pool) return { launchesOpen, firstCoin: null };
     const g = await withTimeout(deps.chain.global(), t, "global lookup");
     try {
       const s = pickLaunchConfig(g, "first_coin", true);
-      return { firstCoin: { dbcConfig: s.dbcConfig.toBase58(), wallet: s.policy.wallet.toBase58(), buybackShareBps: s.policy.buybackShare, walletShareBps: s.policy.walletShare, launchesLeft: s.policy.maxCoins === 0 ? null : s.policy.maxCoins - s.coins } };
+      return { launchesOpen, firstCoin: { dbcConfig: s.dbcConfig.toBase58(), wallet: s.policy.wallet.toBase58(), buybackShareBps: s.policy.buybackShare, walletShareBps: s.policy.walletShare, launchesLeft: s.policy.maxCoins === 0 ? null : s.policy.maxCoins - s.coins } };
     } catch {
-      return { firstCoin: null };
+      return { launchesOpen, firstCoin: null };
     }
   });
 }

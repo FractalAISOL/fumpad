@@ -474,7 +474,7 @@ export async function buildServer(
     if (err instanceof LaunchError) {
       if (err.retryAfterSecs) reply.header("retry-after", String(err.retryAfterSecs));
       if (err.statusCode >= 500) app.log.warn({ msg: err.message }, "launch unavailable");
-      return reply.code(err.statusCode).send({ error: err.message });
+      return reply.code(err.statusCode).send(err.code ? { error: err.message, code: err.code } : { error: err.message });
     }
     if (err instanceof WaitlistError) return reply.code(err.statusCode).send({ error: err.message });
     if ((err as { validation?: unknown }).validation) return reply.code(400).send({ error: err.message });

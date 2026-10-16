@@ -182,7 +182,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }),
     );
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${ports.indexer}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false" }));
+    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false", LAUNCHES_OPEN: "true" }));
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {

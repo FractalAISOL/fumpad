@@ -20,6 +20,8 @@ export class PrepareError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The API's machine-readable code, when it sent one (e.g. "launches_closed", `./launchGate`). */
+    readonly code?: string,
   ) {
     super(message);
   }
@@ -83,13 +85,16 @@ export async function postPrepare(api: string, body: Record<string, unknown>): P
   });
   if (!res.ok) {
     let msg = res.status === 503 ? "No launch addresses are ready right now. Try again in a minute." : "Couldn't prepare the launch.";
+    let code: string | undefined;
     try {
-      const e = ((await res.json()) as { error?: string }).error;
-      if (e && res.status < 500) msg = e.charAt(0).toUpperCase() + e.slice(1) + ".";
+      const j = (await res.json()) as { error?: string; code?: string };
+      const e = j.error;
+      if (e && res.status < 500) msg = e.charAt(0).toUpperCase() + e.slice(1) + (/[.!?]$/.test(e) ? "" : ".");
+      if (typeof j.code === "string") code = j.code;
     } catch {
       /* not json */
     }
-    throw new PrepareError(res.status, msg);
+    throw new PrepareError(res.status, msg, code);
   }
   return res.json();
 }

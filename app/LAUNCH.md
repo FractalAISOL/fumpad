@@ -10,6 +10,8 @@ Until launch, **fumpad.app** and **www.fumpad.app** show only the waiting room. 
 
 The full app has the same checker for every coin at **`/checker`** (linked from My fumbles), e.g. `/checker?wallet=<address>`.
 
+**Launches closed until the opening (API `LAUNCHES_OPEN`).** The gate above only covers fumpad.app; the full app on fumpad.vercel.app stays reachable. So the API also refuses standard launches while its `LAUNCHES_OPEN` is `false` (the mainnet default; every launch needs the API's co-signature, so none lands on chain either). The launch page asks `GET <API>/v1/launch/options` first: with `launchesOpen: false` (or after a prepare answered 403 `launches_closed`) `/launch` shows "Launches open soon." with links to the waiting room (`/soon`) and X instead of the form (Fumi's reaction stays in the header, never beside the form). `/launch?config=first-coin` keeps its form while the API offers the first-coin config (`LAUNCH_FIRST_COIN=true`). Code: `src/chain/launchGate.ts` (tests: `launchGate.test.ts`), `src/components/launch/LaunchView.tsx`. Without `NEXT_PUBLIC_FUMPAD_API` (mock) the page is never gated.
+
 ## How it works
 
 | Piece | File | What it does |
@@ -62,7 +64,7 @@ Each step is a Vercel Production env change + a redeploy (`NEXT_PUBLIC_*` are in
    set `NEXT_PUBLIC_CHECKER_MINT=<mint>`, optionally `NEXT_PUBLIC_APP_OPENS_AT=<ISO time>`, then `NEXT_PUBLIC_PRELAUNCH=checker` → redeploy.
    Check: `curl -s https://fumpad.app/ | grep '<title>'` → "FUMPAD — The first coin is live. Did you fumble?"; `curl -sI https://fumpad.app/launches` → `307` to `/`;
    open `https://fumpad.app/?wallet=<a wallet that sold>` and see its sells; DevTools console free of CSP violations; the video plays.
-3. **Full app** (~30–60 min later): `NEXT_PUBLIC_PRELAUNCH=off` → redeploy (the steps below). `NEXT_PUBLIC_CHECKER_MINT` / `NEXT_PUBLIC_APP_OPENS_AT` can stay; they only affect `/live`.
+3. **Full app** (~30–60 min later): `NEXT_PUBLIC_PRELAUNCH=off` → redeploy (the steps below), **and at the same time** the API's `LAUNCHES_OPEN=true` (Railway `api`) → redeploy, so standard launches open with the app. `NEXT_PUBLIC_CHECKER_MINT` / `NEXT_PUBLIC_APP_OPENS_AT` can stay; they only affect `/live`.
 
 Rollback at any step: set the previous value and redeploy (or promote the previous production deployment in Vercel → Deployments → ⋯ → Promote, instant).
 
@@ -70,14 +72,16 @@ Rollback at any step: set the previous value and redeploy (or promote the previo
 
 1. Vercel → project `fumpad` → Settings → Environment Variables → Production: set `NEXT_PUBLIC_PRELAUNCH` = `off`. (Or delete `PRELAUNCH_HOSTS`'s value / set it to an empty string; `off` is clearer.)
 2. Redeploy production: Deployments → latest production deployment → ⋯ → Redeploy (clear the build cache is not needed). From the CLI: `cd app && vercel --prod`.
-3. Check: `curl -sI https://fumpad.app/launches` returns `200` (not `307`), and `https://fumpad.app/` shows the feed.
-4. Optional: delete `NEXT_PUBLIC_LAUNCH_AT`.
+3. Same time, the API: Railway → service `api` → Variables: `LAUNCHES_OPEN=true` → redeploy (services/LAUNCH-DAY.md §5 step 4). Until then `/launch` says "Launches open soon.".
+4. Check: `curl -sI https://fumpad.app/launches` returns `200` (not `307`), `https://fumpad.app/` shows the feed, `curl -s <API>/v1/launch/options` shows `"launchesOpen":true`, and `https://fumpad.app/launch` shows the form.
+5. Optional: delete `NEXT_PUBLIC_LAUNCH_AT`.
 
 The waiting room stays reachable at `/soon` afterwards; delete `src/app/soon`, `src/components/prelaunch`, `src/prelaunch`, `src/proxy.ts` and the `ShellGate` wrapper in `src/app/layout.tsx` when it's no longer wanted.
 
 ## Close it again (or test the gate)
 
 - Set `NEXT_PUBLIC_PRELAUNCH` back to anything but `off` (or remove it) and redeploy.
+- Stop new launches only (trading keeps working): the API's `LAUNCHES_OPEN=false` + redeploy; `/launch` shows "Launches open soon." again.
 - Local test without DNS: `npm run build && npx next start -p 3100`, then
   `curl -sI -H 'Host: fumpad.app' http://localhost:3100/launches` → `307` to `/`;
   `curl -s -H 'Host: fumpad.app' http://localhost:3100/ | grep '<title>'` → the waiting room;

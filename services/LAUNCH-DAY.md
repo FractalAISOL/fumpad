@@ -126,7 +126,7 @@ Opening the app only after the handover means no hot key holds admin power while
     | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
     | `Postgres` | new, empty (migrations run at the indexer's start) |
     | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan) |
-    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
+    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
     | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
     | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=onchain` (no key; price read via the same `RPC_URL`), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
@@ -201,14 +201,18 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
    keeper/attestor balances (operator ≥ 1 SOL), Telegram heartbeat, watcher feed clean, Railway services healthy,
    vanity pool ≥ 20, `/v1/status` green.
 2. fumpad.app stays the waiting room (gate on) while the first coin launches; the app is reachable on
-   `https://fumpad.vercel.app` (never gated). The API runs the build with `GET /v1/wallets/:wallet/fumbles` (the checker).
+   `https://fumpad.vercel.app` (never gated), but with the api's `LAUNCHES_OPEN=false` its `/launch` shows
+   "Launches open soon." and `POST /v1/launch/prepare` refuses standard launches (403 `launches_closed`); check:
+   `curl -s https://<api>/v1/launch/options` → `"launchesOpen":false`. The API runs the build with
+   `GET /v1/wallets/:wallet/fumbles` (the checker).
 3. **First coin, on the one-off first-coin config** (user decision 2026-10-14; SPEC Clarification 30): 3% fee
    (99% → 3% over ~10 s, 3% after graduation too), of FUMPAD's 2.4%: 1.0% → its reward pool, 1.4% + FUMPAD's whole
    launch-window share → `firstCoin.feeWallet` (`7eXG…jFa3`); no platform / creator share.
    1. Before: `$B --step verify` shows the first-coin config allow-listed (`coins 0/1`, wallet = the config file's).
       The fee wallet holds ≥ 0.001 SOL (claims refuse to leave it below rent exemption — `FeeWalletNotRentExempt`).
-   2. API: Railway `api` variable `LAUNCH_FIRST_COIN=true`, redeploy; `curl -s https://<api>/v1/launch/options` shows
-      `firstCoin` with that config and wallet.
+   2. API: Railway `api` variable `LAUNCH_FIRST_COIN=true` (leave `LAUNCHES_OPEN=false`: the first-coin path works
+      while standard launches are closed), redeploy; `curl -s https://<api>/v1/launch/options` shows
+      `"launchesOpen":false` and `firstCoin` with that config and wallet.
    3. Launch through the app at `https://fumpad.vercel.app/launch?config=first-coin` (Privy wallet, first buy below;
       fumpad.app is still gated). The
       review must show **Trading fee 3%, first-coin config** and the wallet; the app refuses to sign unless the chain
@@ -242,8 +246,12 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       `NEXT_PUBLIC_APP_OPENS_AT=<ISO>`, `NEXT_PUBLIC_PRELAUNCH=checker` → redeploy. fumpad.app now shows the first coin
       live + the Fumble Checker (read-only; nothing to sign). Check `https://fumpad.app/?wallet=<first seller>`: its sells,
       "Verifying" then "6-hour check" with the countdown once `TicketAttested` lands, and the claim target.
-4. **Open the app** (~30–60 min after the checker, step 3 of the flip): Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` →
-   redeploy → `curl -sI https://fumpad.app/launches` = `200`. The checker stays in the app at `/checker`.
+4. **Open the app** (~30–60 min after the checker, step 3 of the flip), both at the same time:
+   - Railway `api` variable `LAUNCHES_OPEN=true` → redeploy → `curl -s https://<api>/v1/launch/options` shows
+     `"launchesOpen":true` (standard launches open; until then `/launch` says "Launches open soon.").
+   - Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` → redeploy → `curl -sI https://fumpad.app/launches` = `200`.
+
+   The checker stays in the app at `/checker`.
 5. Re-run `rpc-check … --l8-slot <first coin's launch slot>`.
 6. Announce.
 
@@ -268,6 +276,10 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
   pools are permissionless); `PAUSE_TRADE` stops the FUMPAD router only.
 - Bad attestation: `PAUSE_ATTEST` (16) + `void_ticket` by the guardian (Squads transaction builder).
 - App: `NEXT_PUBLIC_PRELAUNCH` back on (unset, or `checker` to keep the read-only first-coin page) + redeploy hides the app (the chain keeps running).
+- Stop new launches only, without touching trading (no multisig, ~1 min): Railway `api` `LAUNCHES_OPEN=false` →
+  redeploy. The API refuses standard launches (403 `launches_closed`, `/launch` shows "Launches open soon.") and, since
+  every launch needs its co-signature, no launch lands on chain either; buys, sells, tickets and claims keep working.
+  Back: `LAUNCHES_OPEN=true` + redeploy. (On chain the same is `PAUSE_LAUNCH`, `--bits 1`, through the guardians.)
 - Keeper/attestor misbehaving: stop the Railway service (attestations need 2 of 3; one down is fine). A compromised
   attestor key: guardian `PAUSE_ATTEST`, admin `set_keepers` (6 h Squads lock, then the 6 h freeze for the new key).
   A compromised operator (jobs) key: stop the `keeper` service; it can't attest — at worst it times samples / pre-grad
