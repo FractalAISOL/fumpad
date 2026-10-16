@@ -1,5 +1,51 @@
+/* Header: title + lede, Fumi's "on the way" reaction to the right. Fixed-size box (no shift);
+   on phones she shares the title row and the lede takes the full width below. */
 .head {
   padding: var(--s-7) 0 var(--s-5);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "h1 react"
+    "lede lede";
+  column-gap: var(--s-4);
+}
+@media (min-width: 760px) {
+  .head {
+    grid-template-areas:
+      "h1 react"
+      "lede react";
+  }
+}
+.head > .h1 {
+  grid-area: h1;
+  align-self: end;
+}
+.head > .lede {
+  grid-area: lede;
+}
+.react {
+  grid-area: react;
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 120px;
+}
+.react .quip {
+  width: 8.5em;
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+@media (max-width: 479px) {
+  .react {
+    height: 88px;
+  }
+  .react .reactFumi {
+    height: 88px;
+  }
+  .react .quip {
+    display: none;
+  }
 }
 .h1 {
   font-weight: var(--w-heavy);

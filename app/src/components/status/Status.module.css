@@ -40,6 +40,54 @@
   gap: var(--s-6);
   max-width: 880px;
 }
+/* Header: the title and Fumi's reaction share a row; from 600 px she sits beside the summary.
+   Her box has a fixed size whatever the level, so a pose change never moves the text. */
+.head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "h1 react"
+    "overall overall"
+    "checked checked";
+  column-gap: var(--s-4);
+}
+@media (min-width: 600px) {
+  .head {
+    grid-template-areas:
+      "h1 react"
+      "overall react"
+      "checked react";
+  }
+}
+.head > .h1 {
+  grid-area: h1;
+  align-self: end;
+}
+.head > .overall {
+  grid-area: overall;
+}
+.head > .checked {
+  grid-area: checked;
+}
+.react {
+  grid-area: react;
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 120px;
+}
+.react .quip {
+  width: 8.5em;
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+@media (max-width: 479px) {
+  .react,
+  .react .reactFumi {
+    height: 96px;
+  }
+}
 .h1 {
   margin: 0;
   font-size: var(--fs-2xl);

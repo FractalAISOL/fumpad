@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { HealthLevel, ServiceVersion, SystemStatus } from "@/data";
 import { Panel, PanelHead, cx } from "@/design";
+import { Fumi, type FumiPose, SpeechBubble } from "@/design/anime";
 import * as f from "@/design/format";
 import s from "./Status.module.css";
 import { LEVEL_TEXT, age, levelOf, useSystemStatus } from "./useStatus";
@@ -38,7 +39,16 @@ function vanityText(x: SystemStatus["vanityPool"]) {
   return `${f.int(x.available)} launch addresses ready (each ends in fmbL), ${f.int(x.reserved)} reserved by launches in progress.`;
 }
 
-const short = (v: string | null, n = 7) => (v ? v.slice(0, n) : "–");
+/** Fumi's reaction to the overall level: header only, never next to the service rows or the table. */
+const REACT: Record<HealthLevel | "loading", { pose: FumiPose; quip: string }> = {
+  ok: { pose: "cheering", quip: "All humming along!" },
+  degraded: { pose: "facepalm", quip: "A bit behind. Hang on." },
+  down: { pose: "facepalm", quip: "Oops. Something's down." },
+  unknown: { pose: "thinking", quip: "Hmm, no signal yet." },
+  loading: { pose: "thinking", quip: "Checking…" },
+};
+
+const short =(v: string | null, n = 7) => (v ? v.slice(0, n) : "–");
 
 function Versions({ rows, now }: { rows: ServiceVersion[]; now: number }) {
   return (
@@ -76,8 +86,14 @@ export function StatusView() {
   const x = st.status;
   return (
     <div className={cx("wrap", s.page)}>
-      <header>
+      <header className={s.head}>
         <h1 className={s.h1}>Status</h1>
+        <div className={s.react} aria-hidden="true">
+          <SpeechBubble key={level} tail="right" className={s.quip}>
+            {REACT[level].quip}
+          </SpeechBubble>
+          <Fumi key={REACT[level].pose} pose={REACT[level].pose} size={120} fx fade pop className={s.reactFumi} />
+        </div>
         <p className={s.overall} role="status">
           <span className={cx(s.dot, s[level])} aria-hidden="true" />
           {st.error ? "Can't reach the FUMPAD API." : LEVEL_TEXT[level]}
