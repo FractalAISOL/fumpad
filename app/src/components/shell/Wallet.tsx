@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { CLUSTER_LABEL } from "@/chain/connection";
 import { useSolBalance } from "@/components/wallet/balance";
-import { ConfirmHost, DepositDialog, ExportDialog, WithdrawDialog } from "@/components/wallet/Dialogs";
+import { ConfirmHost, DepositDialog, ExportDialog, LoginNoticeHost, WithdrawDialog } from "@/components/wallet/Dialogs";
 import {
   type WalletKind,
   setInstantSettings,
@@ -67,6 +67,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
           <span className={s.long}>{creating ? "Setting up wallet" : "Log in"}</span>
         </Button>
         <ConfirmHost />
+        <LoginNoticeHost />
       </>
     );
   }
@@ -250,6 +251,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
         </>
       )}
       <ConfirmHost />
+      <LoginNoticeHost />
     </>
   );
 }

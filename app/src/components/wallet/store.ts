@@ -9,6 +9,7 @@
 import type { VersionedTransaction } from "@solana/web3.js";
 import { useSyncExternalStore } from "react";
 import { DEMO_WALLET } from "@/data";
+import { type LoginNotice, type LoginNoticeKind, NOTICES } from "./loginErrors";
 
 /** Privy only when the live API is configured; the mock world signs nothing. */
 export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmv4vuj3k01c60ejxmuyns783";
@@ -285,6 +286,44 @@ export function usePendingConfirm(): Pending | null {
       return () => confirmListeners.delete(l);
     },
     () => pending,
+    () => null,
+  );
+}
+
+/* ── Login notice (failed wallet login, expired session) ─────────────────── */
+
+const NOTICE_KEY = "fumpad.login.notice.v1";
+let notice: LoginNotice | null | undefined;
+const noticeListeners = new Set<() => void>();
+/** "Session expired" survives the reload a failed stale-session logout falls back to (sessionStorage, this tab). */
+const readNotice = (): LoginNotice | null => {
+  try {
+    const k = sessionStorage.getItem(NOTICE_KEY) as LoginNoticeKind | null;
+    return k === "session-expired" ? NOTICES[k] : null;
+  } catch {
+    return null;
+  }
+};
+const getNotice = (): LoginNotice | null => (notice === undefined ? (notice = readNotice()) : notice);
+
+/** Show (or with null, dismiss) the login notice the wallet button renders. */
+export function showLoginNotice(n: LoginNotice | null) {
+  notice = n;
+  try {
+    if (n?.kind === "session-expired") sessionStorage.setItem(NOTICE_KEY, n.kind);
+    else sessionStorage.removeItem(NOTICE_KEY);
+  } catch {
+    /* shown for this visit */
+  }
+  noticeListeners.forEach((l) => l());
+}
+export function useLoginNotice(): LoginNotice | null {
+  return useSyncExternalStore(
+    (l) => {
+      noticeListeners.add(l);
+      return () => noticeListeners.delete(l);
+    },
+    getNotice,
     () => null,
   );
 }
