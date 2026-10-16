@@ -4,3 +4,5 @@ target/
 .env*
 .DS_Store
 .claude/
+marketing/videos/music/12-news_9x16_dark_music.mp4
+marketing/videos/music/__pycache__/
