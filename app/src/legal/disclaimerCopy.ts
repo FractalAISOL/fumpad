@@ -46,7 +46,9 @@ export function disclaimerCopy(cluster: Cluster): DisclaimerCopy {
       [
         "Coins launched on FUMPAD, including FUMPAD’s own coin, give you no rights: no ownership, no share of revenue or profit, and no claim on FUMPAD or its treasury. Nobody promises a price, a payout or a return.",
       ],
-      ["Using this service is legal where you live, and you are of legal age."],
+      [
+        "You are 18 or older and not a U.S. person. You don’t live in, and you aren’t currently in, the United States, the United Kingdom, Canada, Cuba, Iran, North Korea, Syria, Russia, Belarus, Myanmar, or the Crimea, Donetsk, Luhansk, Kherson or Zaporizhzhia regions of Ukraine. You aren’t on any sanctions list, and you don’t use a VPN or any other tool to hide where you are. Using this service is legal where you live.",
+      ],
       [
         "You accept the ",
         { href: "/terms", label: "Terms" },
