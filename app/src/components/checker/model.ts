@@ -2,7 +2,7 @@
  * Fumble Checker logic without React (unit-tested by `model.test.ts`): wallet input parsing, the copy for each sell's
  * conditions and ticket state, the claim target's numbers, countdowns, "trade it now" links. No `@/` imports.
  */
-import type { CoinFees, FumbleSell, ProtocolParams, SellNoTicketReason, Ticket } from "../../data/types";
+import type { CoinFees, FumbleSell, ProtocolParams, SellNoTicketReason, Ticket, WalletFumbles } from "../../data/types";
 
 /* ── Wallet input ──────────────────────────────────────────────────────────── */
 
@@ -251,4 +251,32 @@ export function opensInText(opensAt: number | null, now: number): string | null 
   if (left <= 0) return "The full app is opening now. Refresh in a moment.";
   if (left < 90_000) return "The full app opens any minute now.";
   return `The full app opens in ~${Math.round(left / 60_000)} min.`;
+}
+
+/* ── Fumi's reaction ───────────────────────────────────────────────────────── */
+
+/** Poses the checker uses (a subset of the anime kit's `FumiPose`; kept literal so this file has no `@/` imports). */
+export type CheckerPose = "thinking" | "crying" | "thumbsdown" | "moneyeyes" | "cheering" | "facepalm" | "waving";
+
+/**
+ * Fumi's reaction beside the paste box (marketing/STYLE-ANIME.md): a pose and a quip of at most 8 words, comic about
+ * the fumble, never about money and never a promise. The strongest beat in the result wins: a claim possible →
+ * moneyeyes; paid → cheering; a sell that counts → crying ("I fumbled"); still verifying → thinking; only sells that
+ * don't count → thumbsdown (+ sweat drop); nothing sold → waving.
+ */
+export function checkerMood(
+  status: { kind: "idle" } | { kind: "loading" } | { kind: "error" } | { kind: "done"; data: Pick<WalletFumbles, "found" | "coins"> },
+): { pose: CheckerPose; quip: string } {
+  if (status.kind === "idle") return { pose: "thinking", quip: "Who fumbled today?" };
+  if (status.kind === "loading") return { pose: "thinking", quip: "Checking the chain…" };
+  if (status.kind === "error") return { pose: "facepalm", quip: "Oops. The indexer blinked." };
+  const sells = status.data.coins.flatMap((c) => c.sells);
+  if (!status.data.found) return { pose: "thinking", quip: "No trades here. Yet." };
+  if (!sells.length) return { pose: "waving", quip: "Clean hands! For now." };
+  const st = (s: FumbleSell) => (s.outcome === "ticket" ? s.ticket?.state : undefined);
+  if (sells.some((s) => st(s) === "claimable" || st(s) === "queued")) return { pose: "moneyeyes", quip: "Claim time?" };
+  if (sells.some((s) => st(s) === "claimed")) return { pose: "cheering", quip: "Sold too early. Officially." };
+  if (sells.some((s) => s.outcome === "ticket")) return { pose: "crying", quip: "I fumbled! It counts." };
+  if (sells.some((s) => s.outcome === "verifying")) return { pose: "thinking", quip: "Keepers are checking…" };
+  return { pose: "thumbsdown", quip: "Doesn’t count. Nice try." };
 }

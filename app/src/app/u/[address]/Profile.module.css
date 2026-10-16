@@ -1,0 +1,14 @@
+/* Fumi's header bust on a wallet profile (anime kit, marketing/STYLE-ANIME.md): a fixed-height strip at the top of the
+   profile card. Decorative; the card below carries the meaning. */
+.fumiHead {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 56px;
+  margin: var(--s-4) var(--s-4) 0;
+  pointer-events: none;
+}
+.quip {
+  font-size: var(--fs-sm);
+  max-width: 26ch;
+}

@@ -976,3 +976,64 @@
     border-radius: var(--r-3);
   }
 }
+
+/* ── Fumi beside the paste box (anime kit, marketing/STYLE-ANIME.md) ─────────
+   Phones: a fixed 64 px row above the form (bust + bubble). Wide: a fixed column right of the form (full figure,
+   bubble left of her head). Fixed slots, so pose and quip changes never shift the form or the results. */
+.top {
+  display: grid;
+  gap: var(--s-3);
+}
+.topFumi {
+  grid-template-areas: "fumi" "form";
+}
+.topFumi > .form {
+  grid-area: form;
+}
+.fumiSpot {
+  grid-area: fumi;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 64px;
+  min-width: 0;
+  pointer-events: none;
+}
+.fumiSpot .fumiQuip {
+  font-size: var(--fs-sm);
+  max-width: 24ch;
+}
+.fumiSpot .fumiQuipWide,
+.fumiSpot .fumiFull {
+  display: none;
+}
+@media (min-width: 900px) {
+  .topFumi {
+    grid-template-areas: "form fumi";
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 0;
+    align-items: end;
+  }
+  .fumiSpot {
+    display: block;
+    height: 160px;
+  }
+  .fumiSpot .fumiBust,
+  .fumiSpot .fumiQuipPhone {
+    display: none;
+  }
+  .fumiSpot .fumiFull {
+    display: inline-block;
+    position: absolute;
+    right: 8px;
+    bottom: 0;
+  }
+  .fumiSpot .fumiQuipWide {
+    display: inline-block;
+    position: absolute;
+    right: 120px;
+    top: 8px;
+    max-width: 17ch;
+  }
+}

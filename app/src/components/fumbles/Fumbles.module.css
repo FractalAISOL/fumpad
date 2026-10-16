@@ -1,6 +1,51 @@
 .pageHead {
   padding: var(--s-7) 0 var(--s-5);
 }
+
+/* Fumi (anime kit, marketing/STYLE-ANIME.md): one reaction to the wallet's ticket stage, by the title on phones (bust)
+   and right of the head on wide screens (full figure + bubble). Fixed slots: a pose change never moves anything. */
+.headText {
+  min-width: 0;
+}
+.titleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.headFumi {
+  display: none;
+}
+@media (min-width: 900px) {
+  .pageHeadFumi {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    align-items: end;
+    gap: var(--s-4);
+  }
+  .titleRow .headBust {
+    display: none;
+  }
+  .headFumi {
+    display: block;
+    position: relative;
+    height: 160px;
+    margin-bottom: calc(-1 * var(--s-5));
+    pointer-events: none;
+  }
+  .headFumi .headFull {
+    position: absolute;
+    right: 16px;
+    bottom: 0;
+  }
+  .headFumi .headQuip {
+    position: absolute;
+    right: 136px;
+    top: 6px;
+    max-width: 17ch;
+    font-size: var(--fs-sm);
+  }
+}
 .h1 {
   font-weight: var(--w-heavy);
   font-variation-settings: "wdth" var(--wdth-title);

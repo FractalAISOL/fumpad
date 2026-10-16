@@ -12,6 +12,8 @@ import { gauge as G } from "@/design/tokens";
  * Archivo and Martian Mono live in src/assets/og (Satori can't read variable woff2).
  * GET /og/<ticket>?style=flare|paper|night. Every ticket state has its own card; orange only
  * appears on money states (claimable, queued, paid). The flare style is the grey canvas otherwise.
+ * Fumi (anime kit, marketing/STYLE-ANIME.md) sits in the top-right corner as a small bust, above the figure and
+ * clear of every number: holding a ticket on money cards, crying ("I fumbled") on the rest.
  */
 
 const dir = join(process.cwd(), "src/assets/og");
@@ -21,6 +23,26 @@ const fonts = Promise.all([
   readFile(join(dir, "martian-condensed-600.ttf")),
   readFile(join(dir, "martian-semicondensed-400.ttf")),
 ]);
+
+/**
+ * Fumi's corner busts: the anime kit's head-normalised bust crop of public/fumi/<pose>-720.webp, pre-cut to 128 px
+ * PNGs in src/assets/og (Satori/resvg can't draw WebP; ~25 KB each). Ticket on money cards, crying ("I fumbled") on
+ * the rest. Read once; a missing file drops her, never the card.
+ */
+const BUST = 128;
+const BUST_FILES = { ticket: join(dir, "fumi-ticket-bust.png"), crying: join(dir, "fumi-crying-bust.png") };
+type CardPose = keyof typeof BUST_FILES;
+const busts = new Map<CardPose, Promise<string | null>>();
+function bustSrc(pose: CardPose): Promise<string | null> {
+  let p = busts.get(pose);
+  if (!p) {
+    p = readFile(BUST_FILES[pose])
+      .then((b) => `data:image/png;base64,${b.toString("base64")}`)
+      .catch(() => null);
+    busts.set(pose, p);
+  }
+  return p;
+}
 
 /** The big multiple shrinks with its length so "11.6×" and "<0.1×" fit beside the copy. */
 const figureSize = (text: string) => (text.length <= 4 ? 176 : text.length === 5 ? 140 : 118);
@@ -42,6 +64,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
   // Curve cards show how far the coin is from graduating.
   const progress = copy.kind === "curve" ? curveProgress(await data.getCoin(t.mint).catch(() => null)) : undefined;
   const [wide, body, monoBig, mono] = await fonts;
+  const fumi = await bustSrc(copy.money ? "ticket" : "crying");
   const c = cardPalette(style, copy.money);
   const name = t.owner.slice(0, 4) + "…" + t.owner.slice(-4);
   const pos = f.gaugePos(copy.figure) * 100;
@@ -60,8 +83,28 @@ export async function GET(req: Request, ctx: { params: Promise<{ ticket: string 
         color: c.fg,
         padding: "60px 62px 52px",
         fontFamily: "Archivo",
+        position: "relative",
       }}
     >
+      {/* Fumi: corner bust, under the coin link and above the figure (the figure and the copy stay clear of her). */}
+      {fumi && (
+        <div
+          style={{
+            position: "absolute",
+            right: 62,
+            top: 112,
+            width: BUST + 4,
+            height: BUST + 4,
+            display: "flex",
+            overflow: "hidden",
+            borderRadius: 18,
+            border: `2px solid ${c.line}`,
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text -- Satori renders this to a PNG */}
+          <img src={fumi} width={BUST} height={BUST} />
+        </div>
+      )}
       {/* top */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>

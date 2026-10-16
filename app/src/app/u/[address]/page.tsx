@@ -7,7 +7,10 @@ import s from "@/components/people/People.module.css";
 import { DEMO_WALLET } from "@/data";
 import { cachedClosedPositions, cachedCreatedCoins, cachedPositions, cachedProfile, cachedTickets } from "@/data/server";
 import { Loading, Panel, Skeleton } from "@/design";
+import { Fumi, SpeechBubble } from "@/design/anime";
 import * as f from "@/design/format";
+import { profileMood } from "./mood";
+import ps from "./Profile.module.css";
 
 export async function generateStaticParams() {
   return [{ address: DEMO_WALLET }];
@@ -59,10 +62,17 @@ async function ProfileBody({ params }: { params: Promise<{ address: string }> })
     cachedCreatedCoins(p.address),
   ]);
   const initial = { tickets, positions, closed, created };
+  const mood = profileMood(p, initial);
   return (
     <div className="wrap">
       <div className={s.profileGrid}>
         <Panel>
+          <div className={ps.fumiHead} aria-hidden="true" data-pose={mood.pose}>
+            <Fumi pose={mood.pose} size={56} crop="bust" pop />
+            <SpeechBubble tail="left" className={ps.quip}>
+              {mood.quip}
+            </SpeechBubble>
+          </div>
           <ProfileCard p={p} headingLevel={1} />
         </Panel>
         <Panel aria-label="Portfolio">
