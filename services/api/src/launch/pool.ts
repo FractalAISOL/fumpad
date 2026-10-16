@@ -30,6 +30,8 @@ export class LaunchError extends Error {
     readonly statusCode: number,
     message: string,
     readonly retryAfterSecs?: number,
+    /** Machine-readable error code, sent as `code` next to `error` (e.g. "launches_closed"). */
+    readonly code?: string,
   ) {
     super(message);
   }

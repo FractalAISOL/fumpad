@@ -27,7 +27,7 @@ import type { SilentPolicy } from "./allowlist";
 import { type BuiltTx, type PreparedTrade, buildClaimTx, prepareBuy, prepareSell, buildSetAutoClaimTx, buildWithdrawCreatorFeesTx, buildWithdrawEscrowTx, fumpadClient } from "./build";
 import { getConnection } from "./connection";
 import { txErrorMessage as programErrorMessage } from "./errors";
-import { type LaunchConfigInfo, type PrepareArgs, prepareLaunchSigned, sendBuilt as sendBuiltTx, signAndSendLaunch } from "./flow";
+import { type LaunchConfigInfo, type PrepareArgs, PrepareError, prepareLaunchSigned, sendBuilt as sendBuiltTx, signAndSendLaunch } from "./flow";
 import { instantDecision, lamportsSol, simulateSpend, worstCaseSpend } from "./limits";
 import { VANITY_SUFFIX } from "./program";
 import type { FumpadSigner } from "./signer";
@@ -196,6 +196,8 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   const [launchStep, setLaunchStep] = useState<LaunchStep | null>(null);
   /** The latest error without waiting for a re-render (callers read it right after `await`). */
   const errorRef = useRef<string | null>(null);
+  /** The API's error code from the last failed prepare (e.g. "launches_closed"), read right after `await`. */
+  const errorCodeRef = useRef<string | null>(null);
   const connection = getConnection();
   const owner = wallet.active?.address ?? DEMO_WALLET;
   /** The active wallet signs without a popup (Trading wallet + Instant trading on; also the demo wallet). */
@@ -399,6 +401,8 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
   const prepareLaunch = useCallback(
     async (args: LaunchArgs): Promise<PreparedLaunch | null> => {
       setError(null);
+      errorRef.current = null;
+      errorCodeRef.current = null;
       setStatus("building");
       try {
         if (!live) {
@@ -418,7 +422,9 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
       } catch (e) {
         setLaunchStep(null);
         setStatus("error");
-        setError(e instanceof Error ? e.message : "Couldn't prepare the launch.");
+        errorRef.current = e instanceof Error ? e.message : "Couldn't prepare the launch.";
+        errorCodeRef.current = e instanceof PrepareError ? (e.code ?? null) : null;
+        setError(errorRef.current);
         return null;
       }
     },
@@ -562,13 +568,17 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
     setLaunchStep(null);
     setError(null);
     errorRef.current = null;
+    errorCodeRef.current = null;
   }, []);
   const lastError = useCallback(() => errorRef.current, []);
+  const lastErrorCode = useCallback(() => errorCodeRef.current, []);
 
   return {
     status,
     error,
     lastError,
+    /** The API's code for the last failed launch prepare (e.g. "launches_closed"), else null. */
+    lastErrorCode,
     buy,
     sell,
     claim,

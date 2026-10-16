@@ -355,3 +355,22 @@
     animation: none;
   }
 }
+
+/* Launches closed (before the public opening): a calm note in place of the form. No Fumi here (she's in the header). */
+.closed {
+  max-width: 640px;
+  padding: var(--s-6);
+  display: grid;
+  gap: var(--s-3);
+}
+.closedTitle {
+  font-weight: var(--w-heavy);
+  font-size: 22px;
+  line-height: 1.15;
+}
+.closedActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}

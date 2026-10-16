@@ -1,6 +1,7 @@
 "use client";
 
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
+import { fetchLaunchOptions, LAUNCHES_CLOSED_CODE, type LaunchOptions, launchPageState } from "@/chain/launchGate";
 import { splitVanity } from "@/chain/program";
 import { type LaunchStep, type PreparedLaunch, useFumpadTx } from "@/chain/tx";
 import { curveReservesAt, quoteBuy } from "@/data/meteora";
@@ -25,8 +26,12 @@ import {
 } from "@/design";
 import { Fumi, FumiEmptyState, SpeechBubble } from "@/design/anime";
 import * as f from "@/design/format";
+import { X_URL } from "../prelaunch/links";
 import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Launch.module.css";
+
+/** The live API (same switch as the data layer); unset = mock, launches are simulated and never gated. */
+const API = process.env.NEXT_PUBLIC_FUMPAD_API?.replace(/\/+$/, "");
 
 const MAX_IMG = 4 * 1024 * 1024;
 const IMG_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -84,6 +89,20 @@ export function LaunchView() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from the URL on the client
     setFirstCoin(new URLSearchParams(window.location.search).get("config") === "first-coin");
   }, []);
+  /**
+   * Launch day (`./launchGate`): the API's `GET /v1/launch/options`. undefined = loading; null = unknown or no API (the
+   * form; the API still refuses a closed launch, which flips `closedByApi`).
+   */
+  const [options, setOptions] = useState<LaunchOptions | null | undefined>(API ? undefined : null);
+  const [closedByApi, setClosedByApi] = useState(false);
+  useEffect(() => {
+    if (!API) return;
+    let alive = true;
+    void fetchLaunchOptions(API).then((o) => alive && setOptions(o));
+    return () => {
+      alive = false;
+    };
+  }, []);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgId = useId();
 
@@ -130,7 +149,8 @@ export function LaunchView() {
   const openReview = async () => {
     const p = await tx.prepareLaunch({ name, symbol, uri: "ipfs://pending", initialBuySol: firstBuy, ...(firstCoin ? { launchConfig: "first_coin" as const } : {}) });
     if (!p) {
-      toast(tx.error ?? "Couldn't prepare the launch. Nothing was charged.");
+      if (tx.lastErrorCode() === LAUNCHES_CLOSED_CODE) setClosedByApi(true);
+      else toast(tx.lastError() ?? "Couldn't prepare the launch. Nothing was charged.");
       tx.reset();
       return;
     }
@@ -188,6 +208,9 @@ export function LaunchView() {
       </div>
     );
   }
+
+  const gate = launchPageState(options, firstCoin, closedByApi);
+  if (gate !== "form") return <LaunchesClosed loading={gate === "loading"} />;
 
   return (
     <div className="wrap">
@@ -475,6 +498,50 @@ export function LaunchView() {
         {tx.launchStep && <LaunchProgress step={tx.launchStep} instant={tx.instant} />}
         {isDemo && <p className={s.hint}>Demo wallet: the launch is simulated.</p>}
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * Before the public opening (the API's LAUNCHES_OPEN=false): the launch page's header, with Fumi's reaction in the
+ * same place as W5's launch header, and a calm note instead of the form. `loading`: the options are still on their
+ * way, so only the header shows (no form flashing up on a closed launch day).
+ */
+function LaunchesClosed({ loading }: { loading: boolean }) {
+  return (
+    <div className="wrap">
+      <div className={s.head}>
+        <h1 className={s.h1}>Launch a coin</h1>
+        <p className={s.lede}>
+          Every coin on FUMPAD sets aside 8% of its supply for a reward pool, so people who sell too early, on any app, get paid back.
+        </p>
+        {!loading && (
+          <div className={s.react} aria-hidden="true">
+            <SpeechBubble tail="right" className={s.quip}>
+              Almost time.
+            </SpeechBubble>
+            <Fumi pose="thinking" size={120} fx fade className={s.reactFumi} />
+          </div>
+        )}
+      </div>
+      {loading ? (
+        <p className={s.hint} role="status">
+          Checking launches…
+        </p>
+      ) : (
+        <Panel className={s.closed}>
+          <h2 className={s.closedTitle}>Launches open soon.</h2>
+          <p className={s.hint}>
+            Coin launches aren&apos;t open yet. Join the waiting room or follow FUMPAD on X to hear the moment they are. Nothing to do or sign here until then.
+          </p>
+          <div className={s.closedActions}>
+            <Button href="/soon">Join the waiting room</Button>
+            <Button href={X_URL} variant="line" target="_blank" rel="noopener noreferrer">
+              Follow on X
+            </Button>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }

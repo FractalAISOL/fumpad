@@ -47,6 +47,13 @@ export interface ApiConfig {
    * launch (the admin also removes the config from the allow-list, services/LAUNCH-DAY.md).
    */
   launchFirstCoin: boolean;
+  /**
+   * LAUNCHES_OPEN: whether `POST /v1/launch/prepare` accepts standard launches. Closed = 403 `launches_closed`
+   * (every launch needs this API's co-signature, so this also blocks launches on chain); the first-coin path
+   * (LAUNCH_FIRST_COIN) is not affected. Default: open on devnet/testnet/localnet, **closed on mainnet** (fail-safe
+   * until the public opening, services/LAUNCH-DAY.md §5). See `launchesOpenFromEnv`.
+   */
+  launchesOpen: boolean;
   vanitySuffix: string;
   /** A reservation returns to the pool after this long if its launch never landed. */
   launchReservationMs: number;
@@ -120,6 +127,21 @@ export function waitlistConfig(env: NodeJS.ProcessEnv, prod: boolean): Pick<ApiC
   return { waitlistDatabaseUrl: url, waitlistIpSalt: salt, waitlistDisabledReason: problems.length ? problems.join("; ") : undefined };
 }
 
+/** Clusters where standard launches are open unless LAUNCHES_OPEN says otherwise (unset FUMPAD_CLUSTER = devnet, as in @fumpad/sdk). */
+const OPEN_BY_DEFAULT_CLUSTERS = new Set(["", "devnet", "testnet", "localnet"]);
+
+/**
+ * LAUNCHES_OPEN (true/false, also 1/0, yes/no). Unset: true on devnet/testnet/localnet (and an unset FUMPAD_CLUSTER),
+ * false on mainnet or any other cluster name (fail-safe). An unrecognised value is a startup error, never a guess.
+ */
+export function launchesOpenFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.LAUNCHES_OPEN?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return OPEN_BY_DEFAULT_CLUSTERS.has(env.FUMPAD_CLUSTER?.trim().toLowerCase() ?? "");
+  if (raw === "true" || raw === "1" || raw === "yes") return true;
+  if (raw === "false" || raw === "0" || raw === "no") return false;
+  throw new Error(`api: LAUNCHES_OPEN=${JSON.stringify(env.LAUNCHES_OPEN)}: expected true or false`);
+}
+
 export function loadApiConfig(env = process.env): ApiConfig {
   const prod = isProduction(env);
   requireEnv(env, "api", prod ? ["DATABASE_URL", "RPC_URL", "CORS_ORIGINS", "API_SSR_SECRET"] : ["DATABASE_URL"]);
@@ -151,6 +173,7 @@ export function loadApiConfig(env = process.env): ApiConfig {
     mintPoolKey: env.MINT_POOL_KEY || undefined,
     launchSignerKey: env.LAUNCH_SIGNER_KEY || undefined,
     launchFirstCoin: env.LAUNCH_FIRST_COIN === "true",
+    launchesOpen: launchesOpenFromEnv(env),
     vanitySuffix: env.VANITY_SUFFIX || "fmbL",
     launchReservationMs: Math.round(Number(env.LAUNCH_RESERVATION_MINUTES ?? 10) * 60_000),
     launchSweepMs: Number(env.LAUNCH_SWEEP_SECS ?? 15) * 1000,
