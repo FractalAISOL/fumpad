@@ -32,7 +32,7 @@ export function validateLaunch(v: LaunchFormValues): LaunchFormErrors {
   else if (!/^[A-Z0-9]{2,10}$/.test(v.symbol)) e.symbol = "Use 2 to 10 letters or digits.";
   if (v.description.length > 280) e.description = "Keep it to 280 characters.";
   if (v.x && !/^@?[A-Za-z0-9_]{1,15}$/.test(v.x)) e.x = "Use an X handle, like @fumpad.";
-  if (v.telegram && !/^(https:\/\/t\.me\/)?[A-Za-z0-9_]{4,}$/.test(v.telegram)) e.telegram = "Use a t.me link or group name.";
+  if (v.telegram && !/^(https:\/\/t\.me\/)?[A-Za-z0-9_]{4,32}$/.test(v.telegram)) e.telegram = "Use a t.me link or group name.";
   if (v.website && !/^https:\/\/\S+\.\S+/.test(v.website)) e.website = "Use a full https:// address.";
   return e;
 }

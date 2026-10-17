@@ -133,8 +133,8 @@ Opening the app only after the handover means no hot key holds admin power while
     |---|---|
     | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
     | `Postgres` | new, empty (migrations run at the indexer's start) |
-    | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan) |
-    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`) |
+    | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan), `PINATA_GATEWAY` (optional, = the api's) |
+    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`), **`PINATA_JWT`** (from `$K/pinata.env`, item 16: without it on mainnet `POST /v1/launch/metadata` answers 503, the api logs `launch metadata uploads DISABLED` at boot and no coin can launch from the app), `PINATA_GATEWAY` (optional, dedicated gateway domain) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
     | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
     | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=onchain` (no key; price read via the same `RPC_URL`), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
@@ -161,6 +161,16 @@ Opening the app only after the handover means no hot key holds admin power while
     day 0; the verification itself is done **on day 0, right after `--step program`, while the deployer is still the
     upgrade authority** (the verification PDA is signed by the upgrade authority; after the handover it needs a
     Squads proposal). ☐ public repo at `REL` ☐ `verify-from-repo` matches the chain ☐ remote job → verified.
+16. **Pinata (coin metadata on IPFS)**: every launch from the app pins its image + metadata JSON through the api
+    (`POST /v1/launch/metadata`, services/README "Coin metadata"). Create a Pinata API key (JWT) with file-upload
+    rights, put `PINATA_JWT=…` (and, with a dedicated gateway, `PINATA_GATEWAY=<name>.mypinata.cloud`) in
+    `$K/pinata.env` (mode 600), then check it (read-only `testAuthentication`, nothing pinned, the JWT is never printed):
+    ```sh
+    npm run pinata-check -- --env $K/pinata.env      # PASS Pinata accepted the JWT (HTTP 200)
+    ```
+    Set it on the mainnet api (item 13). After the api deploy, its log must say `launch metadata: pinning to IPFS
+    (Pinata)`, not `DISABLED`. Before T0's first coin, a dry run on devnet with the same key (a devnet launch with an
+    image) must show the logo on the coin page.
 
 ## 2. Day 0 morning (H0): program, config, Global, keepers, propose_admin
 

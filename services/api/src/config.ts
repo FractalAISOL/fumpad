@@ -1,4 +1,4 @@
-import { isProduction, requireEnv, rpcUrlFromEnv } from "@fumpad/indexer";
+import { ipfsGatewaysFromEnv, isProduction, PUBLIC_IPFS_GATEWAY, requireEnv, rpcUrlFromEnv } from "@fumpad/indexer";
 
 export interface ApiConfig {
   databaseUrl: string;
@@ -110,6 +110,22 @@ export interface ApiConfig {
   imgCacheBytes: number;
   /** ipfs:// images are fetched through this https gateway. */
   ipfsGateway: string;
+  /** IPFS gateways our image fetches try in order: `PINATA_GATEWAY` (dedicated) when set, then `ipfsGateway`. */
+  ipfsGateways: string[];
+  // ── Coin metadata upload (POST /v1/launch/metadata, launch/metadata.ts) ──
+  /** Pinata JWT (sealed). Unset: devnet/localnet answer the placeholder uri; mainnet disables uploads (503). */
+  pinataJwt?: string;
+  /**
+   * Mainnet (FUMPAD_CLUSTER not devnet/testnet/localnet/unset): metadata must be real. Prepare refuses the
+   * placeholder uri, and without PINATA_JWT the metadata route answers 503 (`metadataDisabledReason`).
+   */
+  metadataRequired: boolean;
+  metadataDisabledReason?: string;
+  /** Per-IP metadata uploads per minute. */
+  launchMetadataRateLimitPerMin: number;
+  /** Per-wallet metadata uploads per minute and per hour. */
+  launchMetadataWalletLimitPerMin: number;
+  launchMetadataWalletLimitPerHour: number;
 }
 
 /** Outside production only: the ip_hash key when WAITLIST_IP_SALT is unset. */
@@ -140,6 +156,17 @@ export function launchesOpenFromEnv(env: NodeJS.ProcessEnv): boolean {
   if (raw === "true" || raw === "1" || raw === "yes") return true;
   if (raw === "false" || raw === "0" || raw === "no") return false;
   throw new Error(`api: LAUNCHES_OPEN=${JSON.stringify(env.LAUNCHES_OPEN)}: expected true or false`);
+}
+
+/** PINATA_JWT and whether metadata must be real on this cluster (pure; see ApiConfig.metadata*). */
+export function metadataConfig(env: NodeJS.ProcessEnv): Pick<ApiConfig, "pinataJwt" | "metadataRequired" | "metadataDisabledReason"> {
+  const pinataJwt = env.PINATA_JWT?.trim() || undefined;
+  const metadataRequired = !OPEN_BY_DEFAULT_CLUSTERS.has(env.FUMPAD_CLUSTER?.trim().toLowerCase() ?? "");
+  return {
+    pinataJwt,
+    metadataRequired,
+    metadataDisabledReason: metadataRequired && !pinataJwt ? "PINATA_JWT is not set (required on mainnet: coin metadata is pinned to IPFS through Pinata)" : undefined,
+  };
 }
 
 export function loadApiConfig(env = process.env): ApiConfig {
@@ -193,7 +220,12 @@ export function loadApiConfig(env = process.env): ApiConfig {
     fumblesRateLimitPerMin: Number(env.FUMBLES_RATE_LIMIT_PER_MIN ?? 60),
     imgMaxBytes: Number(env.IMG_MAX_BYTES ?? 2 * 1024 * 1024),
     imgCacheBytes: Number(env.IMG_CACHE_MB ?? 64) * 1024 * 1024,
-    ipfsGateway: env.IPFS_GATEWAY || "https://ipfs.io/ipfs/",
+    ipfsGateway: env.IPFS_GATEWAY || PUBLIC_IPFS_GATEWAY,
+    ipfsGateways: ipfsGatewaysFromEnv(env),
+    ...metadataConfig(env),
+    launchMetadataRateLimitPerMin: Number(env.LAUNCH_METADATA_RATE_LIMIT_PER_MIN ?? 6),
+    launchMetadataWalletLimitPerMin: Number(env.LAUNCH_METADATA_WALLET_LIMIT_PER_MIN ?? 3),
+    launchMetadataWalletLimitPerHour: Number(env.LAUNCH_METADATA_WALLET_LIMIT_PER_HOUR ?? 20),
     ...waitlistConfig(env, prod),
   };
 }

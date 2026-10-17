@@ -30,6 +30,7 @@
     "mainnet:compare": "tsx scripts/mainnet/fork.ts compare",
     "mainnet:build-program": "tsx scripts/mainnet/build-program.ts",
     "rpc-check": "tsx scripts/ops/rpc-check.ts",
+    "pinata-check": "tsx scripts/ops/pinata-check.ts",
     "api-types": "node scripts/gen-api-types.mjs",
     "test:all": "vitest run"
   },

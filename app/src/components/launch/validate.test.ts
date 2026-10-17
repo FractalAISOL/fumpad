@@ -27,6 +27,8 @@ describe("launch form validation", () => {
     const e = validateLaunch({ name: "A", symbol: "AB", description: "d".repeat(281), x: "not a handle!", telegram: "t.me", website: "http://x.y" });
     assert.deepEqual(Object.keys(e).sort(), ["description", "telegram", "website", "x"]);
     assert.deepEqual(validateLaunch({ name: "A", symbol: "AB", description: "hi", x: "@fumpad", telegram: "https://t.me/fumpad", website: "https://fumpad.app" }), {});
+    // Telegram names are at most 32 characters (the API refuses longer ones)
+    assert.ok(validateLaunch({ ...empty, name: "A", symbol: "AB", telegram: "t".repeat(33) }).telegram);
   });
 
   it("a picked file must still be a PNG / JPEG / GIF / WebP up to 4 MB", () => {

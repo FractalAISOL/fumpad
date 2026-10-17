@@ -9,6 +9,10 @@
  *   `lookup`), so DNS rebinding between check and connect is impossible.
  * - Redirects are followed manually (max 3), each hop re-checked the same way.
  * - Whole-request deadline and a response size cap (aborts the socket past the cap).
+ * - IPFS content (`ipfs://<cid>` or an https gateway URL `https://<host>/ipfs/<cid>`) can be tried through an
+ *   ordered list of gateways (`ipfsGateways`: our dedicated Pinata gateway first, then a public one, then the
+ *   original URL), so a coin whose URI names a slow or rate-limited public gateway still resolves. The CID pins
+ *   the content, so which gateway serves it doesn't matter; every candidate goes through the same checks.
  */
 import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
@@ -86,6 +90,12 @@ export interface SafeFetchOptions {
   maxBytes?: number;
   maxRedirects?: number;
   ipfsGateway?: string;
+  /**
+   * Ordered https gateways (e.g. `https://<name>.mypinata.cloud/ipfs/`, then `https://ipfs.io/ipfs/`). When set,
+   * IPFS content is fetched through each in turn (then the original https URL) until one answers 200; each try
+   * gets the full `timeoutMs`. Unset = only `ipfsGateway` for ipfs:// and the URL as given otherwise.
+   */
+  ipfsGateways?: string[];
   /** `Accept` header (default application/json: metadata). */
   accept?: string;
   /** Tests only: permit http:// and any port. */
@@ -181,13 +191,81 @@ function once(u: URL, address: { address: string; family: 4 | 6 }, deadline: num
   });
 }
 
-/** GET a user-supplied URL under the SSRF policy; returns the body (≤ maxBytes). */
+/** A CIDv0 (Qm…, base58) or CIDv1 (base32, b…) as gateways put it in a path. */
+const CID = /^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,100})$/;
+
+/**
+ * `<cid>[/path]` of IPFS content: `ipfs://<cid>[/path]` (also `ipfs://ipfs/<cid>`) or a path-style gateway URL
+ * `https://<any host>/ipfs/<cid>[/path]`; null for anything else (query/fragment dropped).
+ */
+export function ipfsPathOf(uri: string): string | null {
+  const raw = uri.trim();
+  let path: string;
+  if (/^ipfs:\/\//i.test(raw)) path = raw.replace(/^ipfs:\/\/(ipfs\/)?/i, "");
+  else {
+    let u: URL;
+    try {
+      u = new URL(raw);
+    } catch {
+      return null;
+    }
+    if (u.protocol !== "https:") return null;
+    const m = /^\/ipfs\/(.+)$/.exec(u.pathname);
+    if (!m) return null;
+    path = m[1];
+  }
+  path = path.split(/[?#]/)[0];
+  const [cid, ...rest] = path.split("/");
+  if (!CID.test(cid) || rest.some((p) => p === ".." || p === ".")) return null;
+  return [cid, ...rest].join("/");
+}
+
+/** The https URLs `safeFetch` tries for `uri`, in order (≤ 3, deduplicated). Throws for a URI it refuses. */
+export function fetchCandidates(uri: string, opts: Pick<SafeFetchOptions, "ipfsGateway" | "ipfsGateways" | "allowHttp"> = {}): URL[] {
+  const gws = (opts.ipfsGateways ?? []).filter(Boolean);
+  const path = gws.length ? ipfsPathOf(uri) : null;
+  if (!path) return [resolveMetadataUrl(uri, opts)];
+  const out: URL[] = [];
+  const add = (s: string) => {
+    try {
+      const u = resolveMetadataUrl(s, opts);
+      if (!out.some((x) => x.href === u.href)) out.push(u);
+    } catch {
+      /* a malformed gateway entry or a refused original: skip it */
+    }
+  };
+  for (const g of gws) add(g.replace(/\/?$/, "/") + path);
+  if (!/^ipfs:/i.test(uri.trim())) add(uri);
+  if (!out.length) return [resolveMetadataUrl(uri, opts)];
+  return out.slice(0, 3);
+}
+
+/**
+ * GET a user-supplied URL under the SSRF policy; returns the body (≤ maxBytes). With `ipfsGateways`, IPFS content
+ * is tried through each candidate (`fetchCandidates`) until one answers 200; else the last answer / error.
+ */
 export async function safeFetch(uri: string, opts: SafeFetchOptions = {}): Promise<{ status: number; body: Buffer; url: string; contentType?: string }> {
+  let res: { status: number; body: Buffer; url: string; contentType?: string } | undefined;
+  let err: unknown;
+  for (const u of fetchCandidates(uri, opts)) {
+    try {
+      const r = await fetchOne(u, opts);
+      if (r.status === 200) return r;
+      res = r;
+    } catch (e) {
+      err = e; // the next gateway may still serve it
+    }
+  }
+  if (res) return res;
+  throw err;
+}
+
+async function fetchOne(start: URL, opts: SafeFetchOptions): Promise<{ status: number; body: Buffer; url: string; contentType?: string }> {
   const deadline = Date.now() + (opts.timeoutMs ?? 5_000);
   const maxBytes = opts.maxBytes ?? 64 * 1024;
   const maxRedirects = opts.maxRedirects ?? 3;
   const allowed = opts.isAllowedAddress ?? isPublicAddress;
-  let u = resolveMetadataUrl(uri, opts);
+  let u = start;
   for (let hop = 0; ; hop++) {
     if (Date.now() >= deadline) throw new SafeFetchError("timeout", "timeout");
     const address = await pinnedLookup(allowed, u.hostname);

@@ -3,7 +3,7 @@
 import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { fetchLaunchOptions, LAUNCHES_CLOSED_CODE, type LaunchOptions, launchPageState } from "@/chain/launchGate";
 import { splitVanity } from "@/chain/program";
-import { type LaunchStep, type PreparedLaunch, useFumpadTx } from "@/chain/tx";
+import { type LaunchStep, METADATA_FAILED_CODE, type PreparedLaunch, useFumpadTx } from "@/chain/tx";
 import { curveReservesAt, quoteBuy } from "@/data/meteora";
 import {
   AmountInput,
@@ -55,6 +55,8 @@ export function LaunchView() {
   const [review, setReview] = useState(false);
   const [done, setDone] = useState<{ symbol: string; mint: string; suffix: string } | null>(null);
   const [prepared, setPrepared] = useState<PreparedLaunch | null>(null);
+  /** The image + details upload failed (network / server): shown under the submit button with "Try again". */
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
   /**
    * `?config=first-coin`: ask the API for the one-off first-coin launch config (3% fee, contracts INTERFACE §5.9). The
    * API decides whether it is offered (server flag + on-chain allow-list); the review step then shows its real fee.
@@ -121,11 +123,22 @@ export function LaunchView() {
   const snipePct = f.fixed((PARAMS.snipeStartBps ?? 0) / 100, 0);
   const feePct = f.fixed(PARAMS.feeBps / 100, PARAMS.feeBps % 100 ? 2 : 0);
 
-  // D18 step 1: reserve the coin's `…fmbL` address (server-side vanity mint) for the review.
+  // D18 step 1: store the coin's image + details on IPFS (the API pins them, returning the metadata uri), then
+  // reserve the coin's `…fmbL` address (server-side vanity mint) for the review. `uri` is replaced by the upload's.
   const openReview = async () => {
-    const p = await tx.prepareLaunch({ name, symbol, uri: "ipfs://pending", initialBuySol: firstBuy, ...(firstCoin ? { launchConfig: "first_coin" as const } : {}) });
+    setUploadErr(null);
+    const p = await tx.prepareLaunch({
+      name,
+      symbol,
+      uri: "ipfs://pending",
+      metadata: { description, x, telegram, website, image: file },
+      initialBuySol: firstBuy,
+      ...(firstCoin ? { launchConfig: "first_coin" as const } : {}),
+    });
     if (!p) {
-      if (tx.lastErrorCode() === LAUNCHES_CLOSED_CODE) setClosedByApi(true);
+      const code = tx.lastErrorCode();
+      if (code === LAUNCHES_CLOSED_CODE) setClosedByApi(true);
+      else if (code === METADATA_FAILED_CODE) setUploadErr(tx.lastError() ?? "Couldn't store the coin's image and details. Nothing was charged.");
       else toast(tx.lastError() ?? "Couldn't prepare the launch. Nothing was charged.");
       tx.reset();
       return;
@@ -382,7 +395,15 @@ export function LaunchView() {
             <Button type="submit" size="lg" block loading={!review && tx.status === "building"}>
               Review launch
             </Button>
-            {!review && (tx.launchStep === "auth" || tx.launchStep === "reserve") && <LaunchProgress step={tx.launchStep} instant={tx.instant} />}
+            {!review && (tx.launchStep === "auth" || tx.launchStep === "upload" || tx.launchStep === "reserve") && <LaunchProgress step={tx.launchStep} instant={tx.instant} />}
+            {uploadErr && !tx.launchStep && (
+              <div className={s.retry} role="alert">
+                <p className={s.err}>{uploadErr}</p>
+                <Button variant="line" size="sm" onClick={() => void openReview()}>
+                  Try again
+                </Button>
+              </div>
+            )}
             {tried && !valid && (
               <p className={s.err} role="alert">
                 Fix the {Object.keys(errs).length === 1 ? "field" : `${Object.keys(errs).length} fields`} above to continue.
@@ -562,6 +583,11 @@ const STEPS: { id: Exclude<LaunchStep, "done">; label: (instant: boolean) => str
       instant
         ? "Your Trading wallet signs a short FUMPAD message. It costs nothing and sends nothing."
         : "Sign the FUMPAD message in your wallet. It costs nothing and sends nothing.",
+  },
+  {
+    id: "upload",
+    label: () => "Store the coin's image and details",
+    hint: () => "Your image, description and links go to IPFS, so wallets and trading apps show them. Usually a few seconds.",
   },
   { id: "reserve", label: () => "Reserve your coin's address", hint: () => "FUMPAD sets aside an address ending in fmbL for your coin." },
   {

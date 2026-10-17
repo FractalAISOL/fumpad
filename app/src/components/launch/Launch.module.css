@@ -206,6 +206,14 @@
   display: grid;
   gap: var(--s-2);
 }
+/* A failed image/details upload: the reason, then "Try again" (nothing was charged). */
+.retry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
 
 .side {
   min-width: 0;
