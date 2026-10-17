@@ -29,7 +29,7 @@
  *
  * No React, no `@/` imports: unit-tested by `launch.test.ts` with `npm test`.
  */
-import type { PublicKey, VersionedTransaction } from "@solana/web3.js";
+import type { AddressLookupTableAccount, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import type { LaunchShape } from "./allowlist";
 import { checkPreparedLaunch } from "./program";
 import { type DbcPoolConfig, type DbcVirtualPool, quoteDbcBuy, withSlippage } from "@fumpad/sdk";
@@ -88,6 +88,10 @@ export interface LaunchIntent {
   firstCoinConfig?: string;
   /** The trading fee (bps) the review step showed; the launch's config must have exactly this fee. */
   expectedFeeBps?: number;
+  /** The configured launch lookup table as read from chain, when the launch uses one (the allow-list verifies it). */
+  lookupTable?: AddressLookupTableAccount;
+  /** The launch table this build accepts (default NEXT_PUBLIC_LAUNCH_ALT; tests pass their own). */
+  launchAlt?: string;
 }
 
 /** A config's allow-list fee policy as read from chain (`Global.config_policies`); null = not allow-listed. */
@@ -118,7 +122,7 @@ export async function checkLaunchBinding(
   readPolicy?: ConfigPolicyReader,
 ): Promise<LaunchShape> {
   // Shape, accounts, signers (the mint's signature verified), summed SOL ≤ the amount typed.
-  const shape = checkPreparedLaunch(tx, intent.wallet, intent.mint, intent.suffix, intent.initialBuyLamports, intent.launchSigner);
+  const shape = checkPreparedLaunch(tx, intent.wallet, intent.mint, intent.suffix, intent.initialBuyLamports, intent.launchSigner, intent.lookupTable, intent.launchAlt);
   if (shape.name !== intent.name || shape.symbol !== intent.symbol || shape.uri !== intent.uri)
     refuse("the coin's name, symbol or metadata differ from what you entered");
 

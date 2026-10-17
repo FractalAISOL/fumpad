@@ -4619,10 +4619,12 @@ dependencies = [
  "solana-account",
  "solana-address 2.7.0",
  "solana-clock 3.2.1",
+ "solana-hash",
  "solana-instruction 4.0.0",
  "solana-keypair",
  "solana-message",
  "solana-signer",
+ "solana-slot-hashes",
  "solana-transaction",
 ]
 

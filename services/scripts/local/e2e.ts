@@ -36,6 +36,7 @@ import {
   FUMPAD_ERROR,
   FUMPAD_PROGRAM_ID,
   inspectLaunchTx,
+  launchTxLookupTables,
   launchInstructions,
   isFumpadVanityMint,
   positionPda,
@@ -59,6 +60,10 @@ export interface E2EReport {
 }
 
 const SOL = BigInt(LAMPORTS_PER_SOL);
+/** The longest launch metadata the app allows (32-byte name, 10-byte symbol) + the https uri the metadata route returns. */
+const LONG_NAME = "Fumble Fumble Fumble Fumble Fumb";
+const LONG_SYMBOL = "FUMBLEFUMB";
+const HTTPS_URI = "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
 
 export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (s: string) => void; grinderThreads?: number } = {}): Promise<E2EReport> {
   const log = opts.log ?? ((s: string) => console.log(s));
@@ -99,18 +104,24 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         creator: creator.publicKey.toBase58(),
-        name: "Fumble",
-        symbol: "FUMB",
-        uri: "https://fumpad.fun/m/fumb.json",
+        // Worst case for the byte budget: max-length name (32) + symbol (10) + the https metadata uri + first buy + co-signer.
+        name: LONG_NAME,
+        symbol: LONG_SYMBOL,
+        uri: HTTPS_URI,
         initialBuyLamports: String(SOL / 20n),
-        auth: signLaunchAuth(creator.secretKey, { creator: creator.publicKey.toBase58(), symbol: "FUMB" }),
+        auth: signLaunchAuth(creator.secretKey, { creator: creator.publicKey.toBase58(), symbol: LONG_SYMBOL }),
       }),
     });
     if (!prep.ok) throw new Error(`prepare → ${prep.status} ${await prep.text()}`);
-    const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number };
+    const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number; lookupTable?: string };
     const launchTx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
-    const info = inspectLaunchTx(launchTx);
+    // The launch ALT: the one the stack created (frozen, exact contents), verified before anything is resolved.
+    const info = inspectLaunchTx(launchTx, await launchTxLookupTables(conn, launchTx, stack.launchAlt));
     const launchKey = stack.launchKey;
+    check(
+      `prepare: v0 through the launch ALT ${stack.launchAlt.toBase58().slice(0, 8)}…, max name/symbol + https uri + first buy + co-signer = ${launchTx.serialize().length} B ≤ 1,232`,
+      launchTx.message.addressTableLookups.length === 1 && prepared.lookupTable === stack.launchAlt.toBase58() && info.name === LONG_NAME && info.symbol === LONG_SYMBOL && info.uri === HTTPS_URI && launchTx.serialize().length <= 1_232,
+    );
     check(
       "prepare: DBC init → creator top-level swap2 → register_coin, creator pays, only the mint + the API launch key signed",
       info.feePayer === creator.publicKey.toBase58() && [...info.signed].sort().join() === [prepared.mint, launchKey.publicKey.toBase58()].sort().join() && info.buyLamports === SOL / 20n && info.dbcConfig === config.publicKey.toBase58(),

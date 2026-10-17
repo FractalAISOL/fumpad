@@ -37,6 +37,7 @@ labelled **estimate** with a source where a vendor decides (RPC, Railway). No re
 |---|---|---|---|
 | FUMPAD DBC configs (`create_config` ×2: standard + the one-off first-coin config) | 2 × 1,048 | 2 × 0.005974 | deployer |
 | Global (`initialize_global`) | 1,491 | 0.008225 | deployer |
+| launch address lookup table (`--step alt`: 56 + 11 × 32; frozen, so never reclaimed) | 408 | 0.002723 (5,080 lamports/byte incl. the 128-byte overhead; = what devnet charged) | deployer |
 | admin Squads multisig (5 voters + ops key = 6 members; `132 + 33·n` bytes) | 330 | 0.002327 | deployer |
 | guardian Squads multisig (3 voters + ops key) | 264 | 0.001991 | deployer |
 | Squads multisig creation fee (`ProgramConfig.multisig_creation_fee`, mainnet, read 2026-10-13) | — | **0** | — |

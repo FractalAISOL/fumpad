@@ -70,6 +70,11 @@ program accepts any fresh mint, like pump.fun's `pump`).
     a wallet can alter it afterwards. The app still checks the returned tx (`app/src/chain/program.ts`
     `checkPreparedLaunch`: fee payer = wallet, only ComputeBudget + FUMPAD create_coin[+buy], advertised `…fmbL` mint)
     before asking the wallet to sign, so a compromised API can't get anything else signed.
+  - **Launch lookup table** (`LAUNCH_ALT`, `api/src/launch/alt.ts`): the message is v0 through the FUMPAD launch ALT,
+    11 static accounts (`@fumpad/sdk` `launchAltAddresses()`), frozen at creation (bootstrap `--step alt`). The api
+    loads it and refuses (503) unless its contents are exactly that list and it is frozen + active; verified once,
+    then cached (immutable). Unset `LAUNCH_ALT` → 503 on every cluster but `localnet` (inline launches there). The
+    app resolves only its own configured table (`NEXT_PUBLIC_LAUNCH_ALT`) and re-checks it before signing.
 - **Lifecycle**: `available → reserved → used`. The indexer marks a mint `used` (and wipes its secret) on
   `CoinCreated`. The API sweeper (`LAUNCH_SWEEP_SECS`) returns a reservation to the pool only when it is older than
   `LAUNCH_RESERVATION_MINUTES` (10) **and** the chain is past the `lastValidBlockHeight` of every tx co-signed for it
@@ -94,11 +99,12 @@ The app uploads the coin's image + details **before** prepare: `POST /v1/launch/
   socials normalized to full URLs (`https://x.com/<handle>`, `https://t.me/<name>`), empty fields left out. The image
   is pinned first (`image` = `https://ipfs.io/ipfs/<cid>`), the JSON as **CIDv0** (46 chars, the shortest).
 - **URI form**: `https://ipfs.io/ipfs/<CIDv0>` (fetched directly by every wallet / aggregator; the neutral public
-  gateway, not our Pinata account) **when the launch tx has room**, else `ipfs://<CIDv0>`. The launch tx has no lookup
-  table and must fit 1,232 bytes: with the launch co-signer (mainnet) and a first buy, name + ticker + uri get ≈ 77
-  bytes, so a first-buy launch gets `ipfs://…` (53 bytes) and one whose name + ticker exceed ≈ 24 bytes can't carry
-  any IPFS uri: 400 before anything is pinned ("shorten them, or launch without a first buy"). `firstBuy: false`
-  always fits the https form. `metadataUriFor` measures the real prepare transaction.
+  gateway, not our Pinata account) **when the launch tx has room**, else `ipfs://<CIDv0>`. The launch tx must fit
+  1,232 bytes. Through the launch lookup table (every cluster but localnet) the https form ALWAYS fits: max name (32 B)
+  + ticker (10 B) + https uri + first buy + launch co-signer + priority fee = 1,103 B (129 spare). Inline (localnet
+  without `LAUNCH_ALT`) name + ticker + uri get ≈ 77 bytes with a first buy: `ipfs://…`, or a 400 before anything is
+  pinned when name + ticker exceed ≈ 24 bytes. `metadataUriFor` measures the real prepare transaction (with the ALT
+  when the server uses one).
 - **Without `PINATA_JWT`**: devnet/localnet answer the old placeholder `ipfs://pending` (`placeholder: true`, logged);
   mainnet (`FUMPAD_CLUSTER=mainnet`) answers 503 and logs `DISABLED` at boot, and prepare refuses `ipfs://pending`.
 - **Our display path**: the indexer and `/v1/img/:mint` fetch IPFS content (`ipfs://…` **and** any
@@ -359,6 +365,7 @@ local validator.
 | `PYTH_API_KEY` (alias `HERMES_API_KEY`), `HERMES_URL`, `HERMES_API_KEY_HEADER` | attestor, watcher | `hermes` only (paid plan since 2026-10): **sealed** key, sent as `Authorization: Bearer`; production refuses to start without it |
 | `RPC_HISTORY_CHECK` (on) | attestor, watcher | `off` disables the L8 first-available-block check |
 | `WATCH_ALERT_COOLDOWN_MS` (30 min) | watcher | re-alert interval per item |
+| `LAUNCH_ALT` | api | the FUMPAD launch address lookup table (bootstrap `--step alt`; `launch-alt.json`). **Required** unless `FUMPAD_CLUSTER=localnet`: unset = prepare + metadata answer 503 (`launches DISABLED` at boot). Same value as the app's `NEXT_PUBLIC_LAUNCH_ALT` |
 | `LAUNCH_SIGNER_KEY` | api | **sealed**; 64-byte secret (base58 or JSON array) whose pubkey is `Params.launch_signer`; co-signs `register_coin` (L1). Separate from `MINT_POOL_KEY` |
 | `LAUNCH_FIRST_COIN` | api | `true` = `POST /v1/launch/prepare` accepts `launchConfig: "first_coin"` (the one-off first-coin DBC config: 3% fee, wallet-split fee policy, contracts INTERFACE §5.9) and `/v1/launch/options` advertises it while it is allow-listed with launches left. Default off; on only for the first coin, then off again (LAUNCH-DAY.md §5) |
 | `LAUNCHES_OPEN` | api | Whether `POST /v1/launch/prepare` accepts standard launches. `false` = 403 `{error: "Launches open soon", code: "launches_closed"}` (every launch needs the API's co-signature, so none lands on chain either) and `/v1/launch/options` says `launchesOpen: false` (the app shows "Launches open soon." on `/launch`); the first-coin path (`LAUNCH_FIRST_COIN`) is not affected. Default: `true` on devnet/testnet/localnet (or `FUMPAD_CLUSTER` unset), **`false` on mainnet** (fail-safe); `true`/`false` (also `1`/`0`, `yes`/`no`) set it explicitly, anything else fails startup. LAUNCH-DAY.md §5: `true` when the app opens |

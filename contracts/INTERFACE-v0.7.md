@@ -130,6 +130,12 @@ first-coin launch tx is exactly as large as a standard one.
 DBC 0.2.1 gives its min fee (`enable_first_swap_with_min_fee`) to ONE swap of the pool-creation tx only: further
 top-level swaps in the same tx pay the 99% scheduler fee (verified on the mainnet binary,
 `review_v07::verify_dbc_min_fee_goes_to_one_swap_per_launch_tx`), so `register_coin` doesn't introspect the tx.
+Launch transaction encoding (off chain, no program change, 2026-10-17): the API builds it as a v0 message through the
+frozen FUMPAD launch lookup table (11 static accounts: Global, reward_pool, event authority, DBC pool + event
+authority, WSOL, Token / Token-2022 / ATA / System, instructions sysvar; @fumpad/sdk `launchAltAddresses()`). Lookups
+are resolved by the runtime before execution, so every account check above sees the same keys; signers and invoked
+programs stay static. `alt_launch_tests` proves the worst case (32 B name, 10 B symbol, https IPFS uri, first buy,
+launch signer, priority fee: 1,103 B) registers and the first buy still gets the min fee.
 
 ### Router
 | Ix | Args | Accounts |

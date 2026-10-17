@@ -38,6 +38,7 @@ The full app has the same checker for every coin at **`/checker`** (linked from 
 | `NEXT_PUBLIC_APP_OPENS_AT` | unset | Optional ISO time, e.g. `2026-11-03T18:00:00Z`: in the live state the banner counts down to it ("Full app opens in ~25 min"). Unset: "The full app opens shortly." Inlined at build. |
 | `NEXT_PUBLIC_LAUNCH_AT` | unset | Only the old waiting room's countdown (not served on fumpad.app any more); can be deleted. |
 | `NEXT_PUBLIC_FUMPAD_API` | (already set) | The live page's data (REST + WebSocket) and the checker's wallet lookups. |
+| `NEXT_PUBLIC_LAUNCH_ALT` | devnet `D7FRDjziN1XninqtCLZrJz55TE27ZU2bQzX5SG85dTBF`; mainnet: day 0 (`--step alt`) | The FUMPAD launch lookup table (= the api's `LAUNCH_ALT`). The app signs launches only through this table, loaded from chain and checked (exact contents, frozen). Unset: every API-prepared launch is refused. Inlined at build: redeploy after changing it. |
 | `NEXT_PUBLIC_SITE_URL` | (currently `https://fumpad.vercel.app`) | Base for absolute OG/Twitter image URLs. Set it to `https://fumpad.app` once the domain is attached so previews point at the real domain. |
 
 The API's `CORS_ORIGINS` (Railway, service `api`) must include `https://fumpad.app` and `https://www.fumpad.app` (done on Oct 12 2026). Required in production: `WAITLIST_DATABASE_URL` (`${{waitlist-db.DATABASE_URL}}`) and `WAITLIST_IP_SALT` (HMAC key for IP hashes, set); without either the API answers 503 on the waitlist only. Optional: `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20).

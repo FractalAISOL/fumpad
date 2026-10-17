@@ -14,6 +14,9 @@
  *                      firstCoin.feeWallet, max_coins 1}] (no timelock), admin = guardian = deployer, platform_treasury
  *                      = config `treasury`
  *   fund               top up operator + attestor-1/2/3 from the deployer
+ *   alt                the launch address lookup table: create + extend with @fumpad/sdk `launchAltAddresses()` +
+ *                      FREEZE in one tx (scripts/ops/launch-alt.ts); recorded in <config dir>/launch-alt.json →
+ *                      LAUNCH_ALT (api) + NEXT_PUBLIC_LAUNCH_ALT (app). Without it the API refuses every launch.
  *   propose-admin      propose_admin(new admin = admin vault, treasury, guardian vault) by the deployer (6 h)
  *   accept-admin       admin multisig vault tx `accept_admin`: create it (ops key), report approvals, execute once both
  *                      the 6 h FUMPAD eta and the Squads time lock have passed (voters approve in the Squads app)
@@ -82,6 +85,7 @@ import {
 
 import { configProblems, firstCoinConfigProblems, firstCoinPolicy, paramsDiff } from "../devnet/bootstrap-v07.js";
 import { GENESIS, redactText } from "../ops/common.js";
+import { launchAltCheck, launchAltStep } from "../ops/launch-alt.js";
 import { executeVaultTx, proposalState, proposeVaultTx, readMultisig, setUpgradeAuthorityIx, SQUADS_PROGRAM_ID, vaultPdaOf } from "../ops/multisig.js";
 import { committedMainnetId } from "./build-program.js";
 import { type Manifest, SERVICES, TESTED_MANIFEST } from "./fork.js";
@@ -89,10 +93,10 @@ import { DEFAULT_FUND_SOL, ensureHotKeys, type FundedKey, type HotKey, keyPath, 
 
 export type MainnetCluster = "mainnet" | "local-fork";
 export type Mode = "plan" | "simulate" | "send";
-export const STEPS = ["keys", "program", "config", "init", "fund", "propose-admin", "accept-admin", "upgrade-authority", "verify", "remove-first-coin-config"] as const;
+export const STEPS = ["keys", "program", "config", "init", "fund", "alt", "propose-admin", "accept-admin", "upgrade-authority", "verify", "remove-first-coin-config"] as const;
 export type Step = (typeof STEPS)[number];
 /** `all` = everything that can happen on day 0 (the handover's accept + upgrade authority need 6 h + approvals). */
-export const DAY0_STEPS: Step[] = ["keys", "program", "config", "init", "fund", "propose-admin", "verify"];
+export const DAY0_STEPS: Step[] = ["keys", "program", "config", "init", "fund", "alt", "propose-admin", "verify"];
 
 /** Asked once per sending step with a summary; must return true to proceed (CLI: the operator types `phrase`). */
 export type Confirm = (step: Step, summary: string[], phrase: string) => Promise<boolean>;
@@ -303,7 +307,7 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     if (raw.length > 1_232) throw new Error(`${name}: transaction is ${raw.length} B (> 1,232)`);
     if (o.mode === "plan") {
       say(`  PLAN ${name}: ${ixs.length} ix, ${raw.length} B, ${msg.header.numRequiredSignatures} sig(s), max fee ${sol(fee)} SOL (add --simulate)`);
-      return { ok: true, accounts: [] as ({ owner: PublicKey; data: Uint8Array } | null)[] };
+      return { ok: true, accounts: [] as ({ owner: PublicKey; data: Uint8Array } | null)[], sig: undefined as string | undefined };
     }
     const r = await conn.simulateTransaction(tx, { sigVerify: true, commitment: "confirmed", accounts: { encoding: "base64", addresses: accounts.map((a) => a.toBase58()) } });
     const ok = !r.value.err;
@@ -314,14 +318,14 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
         failures.push(`simulate ${name}`);
       }
       const accs = (r.value.accounts ?? []).map((a) => (a ? { owner: new PublicKey(a.owner), data: Uint8Array.from(Buffer.from((a.data as unknown as [string, string])[0], "base64")) } : null));
-      return { ok, accounts: accs };
+      return { ok, accounts: accs, sig: undefined };
     }
     const sig = await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 3 });
     await confirmSignature(conn, sig, lastValidBlockHeight, "confirmed", raw);
     const st = await conn.getSignatureStatus(sig);
     if (st.value?.err) throw new Error(`${name}: failed on chain ${JSON.stringify(st.value.err)} (${sig})`);
     say(`  SENT ${name}: ${sig}`);
-    return { ok: true, accounts: [] };
+    return { ok: true, accounts: [], sig };
   };
 
   // ── keys (public view; generation happened in the entry point) ───────────
@@ -493,6 +497,25 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
       if (o.mode === "send") await gate("fund", rows.filter((r) => r.topUp > 0n).map((r) => `${sol(r.topUp)} SOL → ${r.name} ${r.to.toBase58()}`));
       await track("fund", () => exec("fund", `fund ${rows.filter((r) => r.topUp > 0n).length} keepers (${sol(topUps)} SOL)`, rows.filter((r) => r.topUp > 0n).map((r) => SystemProgram.transfer({ fromPubkey: deployer.publicKey, toPubkey: r.to, lamports: r.topUp })), []));
     }
+  }
+
+  // ── alt (the launch lookup table; frozen, so the deployer's authority ends with its creation tx) ─────────────
+  if (o.steps.includes("alt")) {
+    const addr = await track("alt", () =>
+      launchAltStep({
+        conn,
+        dir,
+        cluster: o.cluster,
+        authority: deployer,
+        mode: o.mode,
+        exec: (name, ixs, accounts) => exec("alt", name, ixs, [], accounts),
+        say,
+        failures,
+        beforeSend: (summary) => gate("alt", summary),
+      }),
+    );
+    if (addr) pubkeys["launch-alt"] = addr.toBase58();
+    else if (o.mode === "send") next.push("--step alt (the launch lookup table; the API refuses every launch without LAUNCH_ALT)");
   }
 
   // ── governance parties (read-only; needed by the handover steps and verify) ──
@@ -668,6 +691,9 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
         next.push("--step propose-admin");
       }
     } else next.push("--step program, config, init");
+    const altCheck = await launchAltCheck(conn, dir);
+    checks.push(altCheck);
+    if (!altCheck[1]) next.push("--step alt, then set LAUNCH_ALT (api) + NEXT_PUBLIC_LAUNCH_ALT (app)");
     const pc = await partyCheck();
     for (const p of pc.problems) checks.push([`governance: ${p}`, false]);
     warnings.push(...pc.warnings);

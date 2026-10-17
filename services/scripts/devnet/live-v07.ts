@@ -44,6 +44,7 @@ import {
   FUMPAD_PROGRAM_ID,
   globalPda,
   inspectLaunchTx,
+  launchTxLookupTables,
   isFumpadVanityMint,
   medianPriceQ64,
   observationsPda,
@@ -211,7 +212,7 @@ class Run {
     if (!r.ok) throw new Error(`prepare → ${r.status} ${await r.text()}`);
     const prepared = (await r.json()) as { mint: string; transaction: string; lastValidBlockHeight: number; firstBuy?: { tokensOut: string; minTokensOut: string } };
     const ltx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
-    const info = inspectLaunchTx(ltx);
+    const info = inspectLaunchTx(ltx, await launchTxLookupTables(this.conn, ltx));
     const launchSigner = g.params.launchSigner.toBase58();
     const cfgKey = g.configs.find((k) => !k.equals(PublicKey.default))!;
     this.check(

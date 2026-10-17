@@ -5,6 +5,10 @@
  *   NEXT_PUBLIC_FUMPAD_PROGRAM_ID   the FUMPAD program (unset = the devnet deployment, DEVNET_PROGRAM_ADDRESS)
  *   NEXT_PUBLIC_FUMPAD_CLUSTER      mainnet | devnet | localnet (unset = inferred from the RPC URL); REQUIRED with a
  *                                   non-default program id, so a mainnet build can't silently run as "devnet"
+ *   NEXT_PUBLIC_LAUNCH_ALT          the FUMPAD launch address lookup table (bootstrap `--step alt`, = the API's
+ *                                   LAUNCH_ALT). The only table a launch may use: the app loads it from chain and
+ *                                   checks its contents before signing (`./allowlist.ts`). Unset = this build signs
+ *                                   only inline launches (it refuses every launch that uses a lookup table).
  *
  * next.config.ts hands the same two values to @fumpad/sdk (as FUMPAD_PROGRAM_ID / FUMPAD_CLUSTER), and
  * `./allowlist.ts` refuses to load if the SDK's program id differs from FUMPAD_PROGRAM_ADDRESS.
@@ -45,6 +49,17 @@ export const CLUSTER_LABEL: string | null = CLUSTER === "mainnet" ? null : CLUST
 
 /** The FUMPAD program this build talks to (NEXT_PUBLIC_FUMPAD_PROGRAM_ID; default the devnet deployment). */
 export const FUMPAD_PROGRAM_ADDRESS = DEPLOYMENT.program;
+/** Base58 check of NEXT_PUBLIC_LAUNCH_ALT (pure; unit-tested). Throws on a malformed value; undefined when unset. */
+export function resolveLaunchAlt(v: string | undefined): string | undefined {
+  const s = (v ?? "").trim();
+  if (!s) return undefined;
+  if (!BASE58_KEY.test(s)) throw new Error(`NEXT_PUBLIC_LAUNCH_ALT=${JSON.stringify(s)} is not a base58 address`);
+  return s;
+}
+
+/** The FUMPAD launch lookup table this build accepts (NEXT_PUBLIC_LAUNCH_ALT); undefined = inline launches only. */
+export const LAUNCH_ALT_ADDRESS: string | undefined = resolveLaunchAlt(process.env.NEXT_PUBLIC_LAUNCH_ALT);
+
 /** Solscan's query string for this cluster ("" on mainnet). */
 export const SOLSCAN_QUERY = CLUSTER === "mainnet" ? "" : CLUSTER === "localnet" ? `?cluster=custom&customUrl=${encodeURIComponent(RPC)}` : `?cluster=${CLUSTER}`;
 

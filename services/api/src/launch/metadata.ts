@@ -10,20 +10,23 @@
  * funded wallets only, same LAUNCHES_OPEN / first-coin gate as prepare: nobody gets free IPFS hosting from us.
  *
  * Response: `{ uri, image?, placeholder? }`. `uri` is `https://ipfs.io/ipfs/<CIDv0 of the JSON>` when the launch
- * transaction has room for it, else the shorter `ipfs://<CIDv0>` (`metadataUriFor`: the launch tx has no lookup
- * table and must fit 1,232 bytes; with the launch co-signer and a first buy, name + ticker + uri get ~77 bytes).
- * Name + ticker too long for even that → 400 before anything is pinned. Without PINATA_JWT: devnet/localnet answer the old placeholder
+ * transaction has room for it, else the shorter `ipfs://<CIDv0>` (`metadataUriFor`: the launch tx must fit 1,232
+ * bytes). Through the launch lookup table (LAUNCH_ALT, every cluster but localnet) the https form always fits: a
+ * max-length name (32) + ticker (10) + https uri + first buy + launch co-signature + priority fee leave ~129 bytes.
+ * Inline (localnet without LAUNCH_ALT) name + ticker + uri get ~77 bytes with a first buy, so https rarely fits there.
+ * Name + ticker too long for even `ipfs://` → 400 before anything is pinned. Without PINATA_JWT: devnet/localnet answer the old placeholder
  * (`ipfs://pending`, `placeholder: true`, logged); mainnet answers 503 (and the API logs it at boot).
  *
  * The JSON is pump.fun's shape (what Axiom, Jupiter, Phantom, Dexscreener, Birdeye already parse for Meteora DBC /
  * pump coins) plus the Metaplex fields: see `buildTokenMetadata`.
  */
-import { PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { AddressLookupTableAccount, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 
-import { launchInstructions, launchMetadataError } from "@fumpad/sdk";
+import { LAUNCH_TX_MAX_BYTES, launchAltAddresses, launchInstructions, launchMetadataError } from "@fumpad/sdk";
 
 import type { ApiConfig } from "../config.js";
+import { launchAltInUse } from "./alt.js";
 import { launchAuthError } from "./auth.js";
 import { checkLaunchImage, type CheckedImage, ImageCheckError, LAUNCH_IMAGE_MAX_BYTES } from "./image.js";
 import { LaunchError, withTimeout } from "./pool.js";
@@ -39,8 +42,8 @@ import { assertLaunchAllowed, type LaunchConfigKind, PLACEHOLDER_URI, WindowLimi
  * Pinata gateway for these same CIDs (`PINATA_GATEWAY`, safeFetch `ipfsGateways`).
  */
 export const METADATA_URI_GATEWAY = "https://ipfs.io/ipfs/";
-/** Solana's packet limit for the launch transaction (no lookup tables in a launch, see routes.ts). */
-export const LAUNCH_TX_MAX_BYTES = 1_232;
+/** Solana's packet limit for the launch transaction. */
+export { LAUNCH_TX_MAX_BYTES };
 export const METADATA_CREATED_ON = "https://fumpad.app";
 export { PLACEHOLDER_URI };
 /** JSON body cap for this route only (4 MB image as base64 ≈ 5.4 MB, plus the fields). */
@@ -198,14 +201,20 @@ export function buildTokenMetadata(m: { name: string; symbol: string; descriptio
 }
 
 const DUMMY = { creator: PublicKey.unique(), mint: PublicKey.unique(), dbcConfig: PublicKey.unique(), launchSigner: PublicKey.unique() };
+/** The launch ALT's contents are fixed (`launchAltAddresses`), so its size effect needs no RPC: any table address will do. */
+const DUMMY_ALT = new AddressLookupTableAccount({
+  key: PublicKey.unique(),
+  state: { deactivationSlot: (1n << 64n) - 1n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: launchAltAddresses() },
+});
 
 /**
  * Serialized size of the launch transaction prepare would build for this name / symbol / uri: worst case the API
- * produces (launch co-signer present, as on mainnet; first buy if asked; no priority fee, which the app never sends).
+ * produces (launch co-signer present, as on mainnet; first buy if asked; no priority fee, which the app never sends),
+ * through the launch ALT when `alt` (what prepare does wherever LAUNCH_ALT is configured or required).
  */
-export function launchTxSize(m: { name: string; symbol: string; uri: string; firstBuy: boolean }): number {
+export function launchTxSize(m: { name: string; symbol: string; uri: string; firstBuy: boolean; alt?: boolean }): number {
   const ixs = launchInstructions({ ...DUMMY, name: m.name, symbol: m.symbol, uri: m.uri, buyLamports: m.firstBuy ? 1n : 0n, minTokensOut: 1n });
-  const msg = new TransactionMessage({ payerKey: DUMMY.creator, recentBlockhash: PublicKey.default.toBase58(), instructions: ixs }).compileToV0Message();
+  const msg = new TransactionMessage({ payerKey: DUMMY.creator, recentBlockhash: PublicKey.default.toBase58(), instructions: ixs }).compileToV0Message(m.alt ? [DUMMY_ALT] : []);
   return new VersionedTransaction(msg).serialize().length;
 }
 
@@ -215,10 +224,11 @@ const SAMPLE_CID_V0 = "Qm" + "1".repeat(44);
 /**
  * The most compatible metadata URI that still fits the launch transaction: `https://ipfs.io/ipfs/<cid>` (fetched
  * directly by every wallet / aggregator), else `ipfs://<cid>` (consumers must map it to a gateway themselves; our
- * indexer and image proxy do), else null (name + ticker too long to launch with any IPFS uri). With the mainnet
- * launch co-signer, the https form only fits launches without a first buy.
+ * indexer and image proxy do), else null (name + ticker too long to launch with any IPFS uri). Through the launch
+ * ALT (`alt`, every cluster but localnet) the https form always fits, whatever the name / ticker / first buy; inline,
+ * with the launch co-signer, it only fits launches without a first buy.
  */
-export function metadataUriFor(cid: string, m: { name: string; symbol: string; firstBuy: boolean }): string | null {
+export function metadataUriFor(cid: string, m: { name: string; symbol: string; firstBuy: boolean; alt?: boolean }): string | null {
   for (const uri of [`${METADATA_URI_GATEWAY}${cid}`, `ipfs://${cid}`]) if (launchTxSize({ ...m, uri }) <= LAUNCH_TX_MAX_BYTES) return uri;
   return null;
 }
@@ -289,13 +299,13 @@ export interface MetadataResponse {
 export const ipfsUri = (cid: string) => `${METADATA_URI_GATEWAY}${cid}`;
 
 /** The 400 for a name + ticker that can't launch with any IPFS uri (checked before anything is pinned). */
-export function assertMetadataFits(m: { name: string; symbol: string; firstBuy: boolean }) {
+export function assertMetadataFits(m: { name: string; symbol: string; firstBuy: boolean; alt?: boolean }) {
   if (!metadataUriFor(SAMPLE_CID_V0, m))
     throw bad(m.firstBuy ? "the name and ticker are too long to fit in one launch transaction with a first buy: shorten them, or launch without a first buy" : "the name and ticker are too long to fit in one launch transaction");
 }
 
-/** Pin the image (if any), then the JSON (as CIDv0); returns the launch uri. */
-export async function pinLaunchMetadata(pinner: IpfsPinner, m: LaunchMetadataInput, image?: CheckedImage): Promise<MetadataResponse> {
+/** Pin the image (if any), then the JSON (as CIDv0); returns the launch uri (sized for the ALT launch when `alt`). */
+export async function pinLaunchMetadata(pinner: IpfsPinner, m: LaunchMetadataInput, image?: CheckedImage, alt = false): Promise<MetadataResponse> {
   const kv = { app: "fumpad", creator: m.creator.toBase58(), symbol: m.symbol };
   let img: { uri: string; type: string } | undefined;
   if (image) {
@@ -305,7 +315,7 @@ export async function pinLaunchMetadata(pinner: IpfsPinner, m: LaunchMetadataInp
   }
   const json = buildTokenMetadata(m, img);
   const cid = await pinner.pin({ bytes: Buffer.from(JSON.stringify(json), "utf8"), name: `${m.symbol}.json`, type: "application/json", keyvalues: { ...kv, kind: "metadata" }, cidVersion: "v0" });
-  const uri = metadataUriFor(cid, m);
+  const uri = metadataUriFor(cid, { ...m, alt });
   const err = uri ? launchMetadataError({ name: m.name, symbol: m.symbol, uri }) : "does not fit the launch transaction";
   if (!uri || err) throw new PinError(`pinned uri rejected: ${err}`);
   return { uri, ...(img ? { image: img.uri } : {}) };
@@ -340,11 +350,14 @@ export function registerMetadataRoute(app: FastifyInstance, cfg: ApiConfig, deps
       if (m.launchConfig === "first_coin" && !cfg.launchFirstCoin) throw new LaunchError(403, "the first-coin launch config is not enabled on this server");
       if (!deps.launchesEnabled) throw new LaunchError(503, "launches are not enabled on this server");
       if (cfg.metadataDisabledReason) throw new LaunchError(503, "coin metadata uploads are not configured on this server");
+      // Prepare refuses every launch without the required lookup table: don't pin for a launch that can't happen.
+      if (cfg.launchAltRequired && !cfg.launchAlt) throw new LaunchError(503, "launches are not configured on this server (lookup table)");
       if (cfg.launchRequireSignature) {
         const err = launchAuthError(m.auth, { creator: m.creator, symbol: m.symbol }, { maxAgeSecs: cfg.launchSignatureMaxAgeSecs });
         if (err) throw new LaunchError(401, err);
       }
-      assertMetadataFits(m);
+      const alt = launchAltInUse(cfg);
+      assertMetadataFits({ ...m, alt });
       const creator = m.creator.toBase58();
       if (!perWalletMin.take(creator) || !perWalletHour.take(creator)) throw new LaunchError(429, "too many metadata uploads for this wallet, wait a bit", 60);
       // Check the image before spending an RPC call or a pin on it.
@@ -366,7 +379,7 @@ export function registerMetadataRoute(app: FastifyInstance, cfg: ApiConfig, deps
         return { uri: PLACEHOLDER_URI, placeholder: true };
       }
       try {
-        const out = await pinLaunchMetadata(deps.pinner, m, image);
+        const out = await pinLaunchMetadata(deps.pinner, m, image, alt);
         req.log.info({ creator, symbol: m.symbol, uri: out.uri, image: !!image }, "launch metadata pinned");
         return out;
       } catch (e) {

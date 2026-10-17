@@ -8,10 +8,23 @@
  * The creator's buy must be top-level DBC (not routed) and the pool's first swap in the creation tx to
  * get `enable_first_swap_with_min_fee` (DBC process_swap.rs validate_contain_initialize_pool_ix_and_no_cpi).
  */
-import { ComputeBudgetProgram, PublicKey, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { AddressLookupTableAccount, AddressLookupTableProgram, ComputeBudgetProgram, PublicKey, type TransactionInstruction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 
 import { fumpadCoder } from "./coder.js";
-import { DBC_PROGRAM_ID, FUMPAD_PROGRAM_ID, SWAP_MODE, TOKEN_2022_PROGRAM_ID, WSOL_MINT } from "./constants.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  DBC_EVENT_AUTHORITY,
+  DBC_POOL_AUTHORITY,
+  DBC_PROGRAM_ID,
+  FUMPAD_PROGRAM_ID,
+  SEEDS,
+  SWAP_MODE,
+  SYSTEM_PROGRAM_ID,
+  SYSVAR_INSTRUCTIONS_ID,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  WSOL_MINT,
+} from "./constants.js";
 import { registerCoinIx } from "./instructions/fumpad.js";
 import { closeTokenAccountIx, createAtaIdempotentIx, wrapSolIxs } from "./instructions/spl.js";
 import { DBC_IX, dbcBuyIx, dbcInitializePoolToken2022Ix } from "./meteora/instructions.js";
@@ -67,9 +80,8 @@ export interface LaunchParams {
 
 /** The launch instructions in order (see module doc). */
 export function launchInstructions(p: LaunchParams): TransactionInstruction[] {
-  // The launch tx has no lookup table and (with the launch co-signer) little room left under 1,232 bytes: the CU
-  // limit is only set when it matters (a priority price, or an explicit limit); the default per-instruction
-  // budget covers a launch.
+  // Bytes are scarce under 1,232 (inline launches on localnet especially): the CU limit is only set when it matters
+  // (a priority price, or an explicit limit); the default per-instruction budget covers a launch.
   const ixs: TransactionInstruction[] = [];
   if (p.computeUnits || p.priorityMicroLamports) ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: p.computeUnits ?? 400_000 }));
   if (p.priorityMicroLamports) ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: p.priorityMicroLamports }));
@@ -85,9 +97,121 @@ export function launchInstructions(p: LaunchParams): TransactionInstruction[] {
   return ixs;
 }
 
-/** v0 launch transaction (creator = fee payer). The caller signs with the mint keypair (+ the launch signer); the creator signs last. */
-export function buildLaunchTx(p: LaunchParams, recentBlockhash: string): VersionedTransaction {
-  const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash, instructions: launchInstructions(p) }).compileToV0Message();
+// ── the launch address lookup table (ALT) ────────────────────────────────────
+/**
+ * Solana's packet limit. A launch without a lookup table (every key inline) leaves name + symbol + uri ~77 bytes with
+ * the launch co-signer and a first buy; with the FUMPAD launch ALT (11 keys loaded by a 1-byte index instead of 32
+ * bytes each) a max-length name (32) + symbol (10) + `https://ipfs.io/ipfs/<CIDv0>` (67) + first buy + co-signer +
+ * priority fee still leaves ~129 bytes.
+ */
+export const LAUNCH_TX_MAX_BYTES = 1_232;
+
+/**
+ * The FUMPAD launch ALT's exact contents, in order: every account of a launch that is the same for every coin of this
+ * deployment (cluster-wide constants + this program's PDAs), and nothing else. Signers (creator, mint, launch signer),
+ * invoked program ids (DBC, FUMPAD, Compute Budget: the runtime only takes them from the static keys) and per-coin /
+ * per-creator accounts (pool, vaults, Coin PDA, ATAs) stay inline; the DBC configs too (they change with the
+ * allow-list; an ALT holding them would need rotating whenever a config is added, and the budget fits without them).
+ * Token / System / ATA programs are listed: they are plain accounts (not invoked) in a launch without a first buy.
+ *
+ * Trust: the table is created, extended with exactly this list and FROZEN in one transaction (bootstrap `--step alt`):
+ * no authority, so nobody (not the admin, not a stolen key) can extend, deactivate or close it. Everyone who reads a
+ * launch (the API before signing, the app before the wallet signs) loads the configured address and refuses unless its
+ * contents equal this list exactly and it is frozen and active (`launchAltProblems`).
+ */
+export function launchAltAddresses(programId: PublicKey = FUMPAD_PROGRAM_ID): PublicKey[] {
+  const pda = (seed: Uint8Array) => PublicKey.findProgramAddressSync([seed], programId)[0];
+  return [
+    pda(SEEDS.global),
+    pda(SEEDS.rewardPool),
+    pda(SEEDS.eventAuthority),
+    DBC_POOL_AUTHORITY,
+    DBC_EVENT_AUTHORITY,
+    WSOL_MINT,
+    TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+    SYSTEM_PROGRAM_ID,
+    SYSVAR_INSTRUCTIONS_ID,
+  ];
+}
+
+/** `deactivation_slot` of an active table (u64::MAX). */
+const ALT_ACTIVE = (1n << 64n) - 1n;
+
+/**
+ * Why `table` is not the FUMPAD launch ALT at `expected` (empty = it is): missing, another address, contents not
+ * exactly `launchAltAddresses()` (same keys, same order: a launch's indexes point into it), not frozen (an authority
+ * could still extend, deactivate or close it), or deactivated.
+ */
+export function launchAltProblems(table: AddressLookupTableAccount | null | undefined, expected: PublicKey, programId: PublicKey = FUMPAD_PROGRAM_ID): string[] {
+  if (!table) return [`launch lookup table ${expected.toBase58()} not found`];
+  const out: string[] = [];
+  if (!table.key.equals(expected)) out.push(`lookup table ${table.key.toBase58()} is not the configured launch table ${expected.toBase58()}`);
+  const want = launchAltAddresses(programId);
+  const got = table.state.addresses;
+  if (got.length !== want.length || got.some((k, i) => !k.equals(want[i]))) out.push(`launch lookup table contents differ from the expected ${want.length} accounts`);
+  if (table.state.authority) out.push("launch lookup table is not frozen (it still has an authority)");
+  if (BigInt(table.state.deactivationSlot) !== ALT_ACTIVE) out.push("launch lookup table is deactivated");
+  return out;
+}
+
+/** Reads an account (the part of `Connection` `loadLaunchAlt` uses). */
+export interface AltReader {
+  getAccountInfo(address: PublicKey, commitment?: "processed" | "confirmed" | "finalized"): Promise<{ data: Uint8Array; owner: PublicKey } | null>;
+}
+
+/**
+ * Load the launch ALT at `address` and verify it (`launchAltProblems`; owner = the Address Lookup Table program).
+ * Throws with the problems otherwise: never resolve a launch through an unverified table.
+ */
+export async function loadLaunchAlt(conn: AltReader, address: PublicKey, programId: PublicKey = FUMPAD_PROGRAM_ID): Promise<AddressLookupTableAccount> {
+  const acc = await conn.getAccountInfo(address, "confirmed");
+  if (acc && !acc.owner.equals(AddressLookupTableProgram.programId)) throw new Error(`launch lookup table ${address.toBase58()} is not owned by the lookup table program`);
+  let table: AddressLookupTableAccount | null = null;
+  if (acc) {
+    try {
+      table = new AddressLookupTableAccount({ key: address, state: AddressLookupTableAccount.deserialize(new Uint8Array(acc.data)) });
+    } catch {
+      throw new Error(`launch lookup table ${address.toBase58()} is not a lookup table`);
+    }
+  }
+  const p = launchAltProblems(table, address, programId);
+  if (p.length) throw new Error(p.join("; "));
+  return table!;
+}
+
+/**
+ * The verified lookup tables a (prepared) launch transaction uses: [] for an inline launch, else its one table, loaded
+ * and checked (`loadLaunchAlt`). `expected` (the configured launch ALT): refuse any other address.
+ */
+export async function launchTxLookupTables(conn: AltReader, tx: VersionedTransaction, expected?: PublicKey): Promise<AddressLookupTableAccount[]> {
+  const lookups = tx.message.addressTableLookups;
+  if (!lookups.length) return [];
+  if (lookups.length !== 1) throw new Error("a launch uses at most one lookup table");
+  const key = lookups[0].accountKey;
+  if (expected && !key.equals(expected)) throw new Error(`launch uses lookup table ${key.toBase58()}, not the configured ${expected.toBase58()}`);
+  return [await loadLaunchAlt(conn, key)];
+}
+
+/**
+ * The instructions that create the launch ALT, fill it with `launchAltAddresses()` and freeze it, in ONE transaction
+ * (nothing can land in between; ~600 bytes). `recentSlot` must be a recent slot (in SlotHashes): the table's
+ * address derives from (authority, recentSlot). After the freeze the authority is gone, so who it was doesn't matter.
+ */
+export function launchAltCreateIxs(a: { authority: PublicKey; payer: PublicKey; recentSlot: number | bigint; programId?: PublicKey }): { address: PublicKey; ixs: TransactionInstruction[] } {
+  const [create, address] = AddressLookupTableProgram.createLookupTable({ authority: a.authority, payer: a.payer, recentSlot: a.recentSlot });
+  const extend = AddressLookupTableProgram.extendLookupTable({ lookupTable: address, authority: a.authority, payer: a.payer, addresses: launchAltAddresses(a.programId) });
+  const freeze = AddressLookupTableProgram.freezeLookupTable({ lookupTable: address, authority: a.authority });
+  return { address, ixs: [create, extend, freeze] };
+}
+
+/**
+ * v0 launch transaction (creator = fee payer), through the launch ALT when given (inline otherwise: localnet and
+ * tests only, see the API). The caller signs with the mint keypair (+ the launch signer); the creator signs last.
+ */
+export function buildLaunchTx(p: LaunchParams, recentBlockhash: string, alt?: AddressLookupTableAccount): VersionedTransaction {
+  const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash, instructions: launchInstructions(p) }).compileToV0Message(alt ? [alt] : []);
   return new VersionedTransaction(msg);
 }
 
@@ -116,11 +240,23 @@ const ALLOWED_SETUP = new Set([
  * Decode a launch transaction and check its shape: setup instructions only from compute budget / system /
  * SPL Token / ATA, exactly one DBC init, at most one DBC swap2 by the creator (top-level, after the init),
  * exactly one fumpad register_coin for the same mint + config, creator = fee payer. Throws otherwise.
+ * A launch through the launch ALT needs that table, verified (`launchTxLookupTables` / `loadLaunchAlt`): it must be
+ * the one table the message uses, and every index must resolve.
  */
-export function inspectLaunchTx(tx: VersionedTransaction): LaunchTxInfo {
+export function inspectLaunchTx(tx: VersionedTransaction, lookupTables: AddressLookupTableAccount[] = []): LaunchTxInfo {
   const msg = tx.message;
-  if (msg.addressTableLookups.length) throw new Error("launch tx must not use lookup tables");
-  const keys = msg.staticAccountKeys;
+  const lookups = msg.addressTableLookups;
+  if (lookups.length > 1) throw new Error("a launch uses at most one lookup table");
+  if (lookups.length) {
+    const table = lookupTables.find((t) => t.key.equals(lookups[0].accountKey));
+    if (!table) throw new Error(`launch uses lookup table ${lookups[0].accountKey.toBase58()}, which wasn't supplied`);
+    const n = table.state.addresses.length;
+    if ([...lookups[0].writableIndexes, ...lookups[0].readonlyIndexes].some((i) => i >= n)) throw new Error("launch references lookup table entries that don't exist");
+  }
+  const all = msg.getAccountKeys({ addressLookupTableAccounts: lookupTables });
+  const keys: PublicKey[] = [];
+  for (let i = 0; i < all.length; i++) keys.push(all.get(i)!);
+  const signerKeys = msg.staticAccountKeys;
   const feePayer = keys[0].toBase58();
   const ixs = msg.compiledInstructions.map((ix) => ({ program: keys[ix.programIdIndex].toBase58(), accounts: ix.accountKeyIndexes.map((i) => keys[i]), data: Uint8Array.from(ix.data) }));
   const disc = (d: Uint8Array, x: readonly number[]) => x.every((b, i) => d[i] === b);
@@ -170,6 +306,6 @@ export function inspectLaunchTx(tx: VersionedTransaction): LaunchTxInfo {
   const symbol = str();
   const uri = str();
   const n = msg.header.numRequiredSignatures;
-  const signed = keys.slice(0, n).filter((_, j) => tx.signatures[j]?.some((b) => b !== 0)).map((k) => k.toBase58());
+  const signed = signerKeys.slice(0, n).filter((_, j) => tx.signatures[j]?.some((b) => b !== 0)).map((k) => k.toBase58());
   return { feePayer, creator, mint, dbcConfig, name, symbol, uri, buyLamports, minTokensOut, signed };
 }

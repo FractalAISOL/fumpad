@@ -7,8 +7,10 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Keypair, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
-import { type DbcPoolConfig, launchInstructions, wrapSolIxs, withSlippage } from "@fumpad/sdk";
+import { AddressLookupTableAccount, Keypair, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { type DbcPoolConfig, launchAltAddresses, launchInstructions, wrapSolIxs, withSlippage } from "@fumpad/sdk";
+import { resolveLaunchAlt } from "./cluster";
+import { launchLookupTable } from "./flow";
 import { readDbcConfig } from "./build";
 import { DEVNET_DBC_CONFIG, SDK_FRESH_BUYS } from "./fixtures/devnetDbcConfig";
 import { checkLaunchBinding, expectedFirstBuy, LAUNCH_SLIPPAGE_BPS, type LaunchIntent, quoteFirstBuy } from "./launch";
@@ -161,5 +163,53 @@ describe("checkLaunchBinding", () => {
       checkLaunchBinding(tx, intentFor(k, BUDGET), async () => noMin),
       /snipe fee/,
     );
+  });
+});
+
+describe("a launch through the launch lookup table (NEXT_PUBLIC_LAUNCH_ALT)", () => {
+  const ALT = Keypair.generate().publicKey;
+  const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
+  const table = (key = ALT, addresses = launchAltAddresses(), authority?: PublicKey) =>
+    new AddressLookupTableAccount({ key, state: { deactivationSlot: U64_MAX, lastExtendedSlot: 1, lastExtendedSlotStartIndex: 0, authority, addresses } });
+  const uri = "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+  function altLaunch(mintKp: Keypair, alt = table()) {
+    const want = expectedFirstBuy(curve, BUDGET)!;
+    const ixs = launchInstructions({ creator: wallet, mint: mintKp.publicKey, dbcConfig: config, name: "W".repeat(32), symbol: "W".repeat(10), uri, buyLamports: BUDGET, minTokensOut: want.minTokensOut });
+    const t = new VersionedTransaction(new TransactionMessage({ payerKey: wallet, recentBlockhash: "11111111111111111111111111111111", instructions: ixs }).compileToV0Message([alt]));
+    t.sign([mintKp]);
+    return t;
+  }
+  const altIntent = (k: Keypair, lookupTable?: AddressLookupTableAccount, launchAlt = ALT.toBase58()): LaunchIntent => ({ ...intentFor(k, BUDGET), name: "W".repeat(32), symbol: "W".repeat(10), uri, lookupTable, launchAlt });
+
+  it("binds the max-length metadata + https uri + first buy, resolved through the verified table", async () => {
+    const k = vanityKeypair();
+    const shape = await checkLaunchBinding(altLaunch(k), altIntent(k, table()), readCurve);
+    assert.equal(shape.uri, uri);
+    assert.equal(shape.firstBuy?.amountIn, BUDGET);
+    await refused(checkLaunchBinding(altLaunch(k), altIntent(k, table(ALT, launchAltAddresses(), Keypair.generate().publicKey)), readCurve), /isn't the expected one/);
+    await refused(checkLaunchBinding(altLaunch(k), altIntent(k, table(), Keypair.generate().publicKey.toBase58()), readCurve), /isn't FUMPAD's launch table/);
+  });
+
+  it("launchLookupTable: the configured table from chain, never the one the transaction names", async () => {
+    const k = vanityKeypair();
+    const asked: string[] = [];
+    const conn = (value: AddressLookupTableAccount | null) => ({
+      getAddressLookupTable: async (key: PublicKey) => (asked.push(key.toBase58()), { context: { slot: 1 }, value }),
+    });
+    const evil = table(Keypair.generate().publicKey);
+    const got = await launchLookupTable(conn(table()) as never, altLaunch(k, evil), ALT.toBase58());
+    assert.ok(got?.key.equals(ALT));
+    assert.deepEqual(asked, [ALT.toBase58()]); // never the evil table the tx uses (the allow-list then refuses it)
+    assert.equal(await launchLookupTable(conn(null) as never, launch(k), ALT.toBase58()), undefined); // inline: nothing to load
+    await refused(launchLookupTable(conn(table()) as never, altLaunch(k), undefined), /none configured/);
+    await refused(launchLookupTable(conn(null) as never, altLaunch(k), ALT.toBase58()), /isn't on chain/);
+    await refused(launchLookupTable({ getAddressLookupTable: async () => { throw new Error("rpc"); } } as never, altLaunch(k), ALT.toBase58()), /Couldn't read/);
+  });
+
+  it("resolveLaunchAlt: base58 or unset", () => {
+    assert.equal(resolveLaunchAlt(undefined), undefined);
+    assert.equal(resolveLaunchAlt(" "), undefined);
+    assert.equal(resolveLaunchAlt(` ${ALT.toBase58()} `), ALT.toBase58());
+    assert.throws(() => resolveLaunchAlt("not-a-key!"), /NEXT_PUBLIC_LAUNCH_ALT/);
   });
 });

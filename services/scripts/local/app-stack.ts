@@ -21,13 +21,13 @@ for (const [name, sol] of Object.entries(WALLETS)) {
   await airdrop(stack.conn, k.publicKey, sol);
   wallets[name] = { address: k.publicKey.toBase58(), keypair: keypairPath(name) };
 }
-const info = { rpcUrl: stack.v.rpcUrl, wsUrl: stack.v.wsUrl, api: stack.api, dbcConfig: stack.config.publicKey.toBase58(), wallets };
+const info = { rpcUrl: stack.v.rpcUrl, wsUrl: stack.v.wsUrl, api: stack.api, dbcConfig: stack.config.publicKey.toBase58(), launchAlt: stack.launchAlt.toBase58(), wallets };
 writeFileSync(join(LOCAL, "app-stack.json"), JSON.stringify(info, null, 2));
 console.log(`
 local v0.7 stack ready (${join(LOCAL, "app-stack.json")})
   rpc  ${info.rpcUrl}
   api  ${info.api}
-  app  NEXT_PUBLIC_FUMPAD_API=${info.api} NEXT_PUBLIC_SOLANA_RPC=${info.rpcUrl} npm run dev
+  app  NEXT_PUBLIC_FUMPAD_API=${info.api} NEXT_PUBLIC_SOLANA_RPC=${info.rpcUrl} NEXT_PUBLIC_LAUNCH_ALT=${info.launchAlt} npm run dev
 Ctrl-C to stop.`);
 
 const stop = async () => {

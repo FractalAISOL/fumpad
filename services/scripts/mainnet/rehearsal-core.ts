@@ -41,6 +41,7 @@ import {
   FUMPAD_PROGRAM_ID,
   globalPda,
   inspectLaunchTx,
+  launchTxLookupTables,
   isFumpadVanityMint,
   PAUSE_ALL,
   rewardVault,
@@ -54,6 +55,7 @@ import { signLaunchAuth } from "@fumpad/api";
 import { airdrop, directDammBuy, directDbcBuy, directDbcSell, routedBuy, routedSell, tokenBalance } from "../local/actors.js";
 import { keypair as localKeypair, readKeypairFile, runBinary, sleep, startValidator, type Validator, waitFor } from "../local/harness.js";
 import { startStack, type Stack } from "../local/stack.js";
+import { readAltRecord } from "../ops/launch-alt.js";
 import { ADMIN_TIMELOCK_SECS, approveVaultTx, chainTime, createMultisig, executeVaultTx, loadMultisigConfig, type MultisigConfig, proposalState, proposeVaultTx, readGlobal, run, TxFailed, upgradeAuthority, vaultPdaOf } from "../ops/multisig.js";
 import { type MainnetBootstrapResult, runMainnetBootstrap, type Step } from "./bootstrap-core.js";
 import { describeManifest, inactiveOnMainnet, mainnetRpcUrl, type Manifest, ReadOnlyRpc, SERVICES, snapshotMainnet, TESTED_MANIFEST } from "./fork.js";
@@ -164,7 +166,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     const boot = (mode: "plan" | "simulate" | "send", steps: Step[]) =>
       runMainnetBootstrap({ cluster: "local-fork", mode, steps, rpcUrl: v!.rpcUrl, configPath, soPath: o.so, log, confirm: async (step, _s, phrase) => (confirms.push(`${step}:${phrase}`), true) });
     const nPlan = lines.length;
-    const plan = await boot("plan", ["keys", "program", "config", "init", "fund", "propose-admin", "verify"]);
+    const plan = await boot("plan", ["keys", "program", "config", "init", "fund", "alt", "propose-admin", "verify"]);
     check("plan: nothing sent, verify lists what is missing", !lines.slice(nPlan).some((l) => l.includes("SENT")) && plan.next.length > 0 && (await conn.getAccountInfo(FUMPAD_PROGRAM_ID)) === null);
     const deployerBefore = BigInt(await conn.getBalance(deployer.publicKey));
     const dep = await boot("send", ["program"]);
@@ -174,11 +176,13 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     // a freshly deployed program is callable from a later slot; on mainnet the next command comes minutes later
     const s0 = await conn.getSlot("finalized");
     await waitFor("deploy finalized + a few slots", async () => ((await conn.getSlot("finalized")) > s0 + 4 ? true : null), 60_000, 400);
-    const sim = await boot("simulate", ["config", "init", "fund"]);
+    const sim = await boot("simulate", ["config", "init", "fund", "alt"]);
     check("simulate: create_config (§5.4 in the simulated post-state), create_config+initialize_global bundled, funding all OK", sim.ok && lines.some((l) => l.includes("simulated config passes every §5.4 check")));
     check("simulate: nothing landed (no config, no Global)", (await conn.getAccountInfo(new PublicKey(sim.pubkeys["dbc-config"]))) === null && (await conn.getAccountInfo(globalPda())) === null);
-    const sent = await boot("send", ["config", "init", "fund"]);
-    check("send: config + initialize_global + fund, each behind its confirmation", sent.ok && ["config:", "init:", "fund:"].every((p) => confirms.some((c) => c.startsWith(p))));
+    const sent = await boot("send", ["config", "init", "fund", "alt"]);
+    check("send: config + initialize_global + fund + launch ALT, each behind its confirmation", sent.ok && ["config:", "init:", "fund:", "alt:"].every((p) => confirms.some((c) => c.startsWith(p))));
+    const altRec = readAltRecord(K);
+    check("launch ALT recorded (launch-alt.json), frozen with the exact launch accounts", !!altRec && !!sent.pubkeys["launch-alt"], altRec?.address);
     costs["config + initialize_global + fees (deployer)"] = `${sol((sent.spent.config ?? 0n) + (sent.spent.init ?? 0n))} SOL (local rent)`;
     costs["fund (attestor working balances)"] = `${sol(sent.spent.fund ?? 0n)} SOL`;
 
@@ -211,7 +215,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     const ver = await boot("plan", ["verify"]);
     check("verify (day 0): program, config §5.4 + vector bytes, Global (cluster_tag 0, mainnet params, keepers, configs), handover pending, keepers funded", ver.ok, ver.next.join(" · "));
     const n0 = lines.length;
-    const again = await boot("send", ["keys", "program", "config", "init", "fund", "propose-admin"]);
+    const again = await boot("send", ["keys", "program", "config", "init", "fund", "alt", "propose-admin"]);
     check("second send run of every day-0 step sends nothing (idempotent)", again.ok && !lines.slice(n0).some((l) => l.includes("SENT") || l.startsWith("  solana:")));
     costs["deployer total so far (deploy + config + init + fund + propose + multisigs)"] = `${sol(deployerBefore - BigInt(await conn.getBalance(deployer.publicKey)) + (before - deployerBefore))} SOL (local rent)`;
 
@@ -234,7 +238,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
       rpcPort,
       apiPort,
       log,
-      chain: { v, keeperKeyPaths: [keyPath(K, "attestor-1"), keyPath(K, "attestor-2"), keyPath(K, "attestor-3")], operatorKeyPath: keyPath(K, "operator"), launchKey: kp("launch-signer"), config: kp("dbc-config").publicKey, solUsd, cluster: "mainnet" },
+      chain: { v, keeperKeyPaths: [keyPath(K, "attestor-1"), keyPath(K, "attestor-2"), keyPath(K, "attestor-3")], operatorKeyPath: keyPath(K, "operator"), launchKey: kp("launch-signer"), config: kp("dbc-config").publicKey, solUsd, cluster: "mainnet", launchAlt: new PublicKey(readAltRecord(K)!.address) },
     });
     const { api, get } = stack;
     const [creator, alice, bob, whale] = Array.from({ length: 4 }, () => Keypair.generate());
@@ -252,7 +256,7 @@ export async function runRehearsal(o: { root: string; keysDir: string; so: strin
     if (!prep.ok) throw new Error(`prepare → ${prep.status} ${await prep.text()}`);
     const prepared = (await prep.json()) as { mint: string; transaction: string; lastValidBlockHeight: number };
     const launchTx = VersionedTransaction.deserialize(Buffer.from(prepared.transaction, "base64"));
-    const info = inspectLaunchTx(launchTx);
+    const info = inspectLaunchTx(launchTx, await launchTxLookupTables(conn, launchTx, new PublicKey(readAltRecord(K)!.address)));
     launchTx.sign([creator]);
     const raw = launchTx.serialize();
     const launchSig = await conn.sendRawTransaction(raw, { maxRetries: 0 });
