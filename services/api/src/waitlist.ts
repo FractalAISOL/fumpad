@@ -178,7 +178,7 @@ export class WaitlistStore {
   }
 }
 
-const UNAVAILABLE = "The waitlist is unavailable right now. Try again later or follow @Fumblepad for the launch.";
+const UNAVAILABLE = "The waitlist is unavailable right now. Try again later or follow @fumpadapp for the launch.";
 
 /**
  * Where the waitlist lives: `injected` (tests) > WAITLIST_DATABASE_URL (its own pool) > outside production

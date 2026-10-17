@@ -84,7 +84,7 @@ function Waitlist({ onDone }: { onDone: () => void }) {
         <p className={s.doneSub}>
           {state.email ? "We\u2019ll email you once, when FUMPAD opens." : `Saved ${state.what}.`} Launch news goes out first on{" "}
           <a href={X_URL} target="_blank" rel="noopener noreferrer">
-            @Fumblepad
+            @fumpadapp
           </a>
           .
         </p>
@@ -96,7 +96,7 @@ function Waitlist({ onDone }: { onDone: () => void }) {
     e.preventDefault();
     const v = value.trim();
     if (!v) return setState({ kind: "error", msg: "Add an email or an X handle." });
-    if (!API) return setState({ kind: "error", msg: "The waitlist isn't connected on this deployment. Follow @Fumblepad for the launch." });
+    if (!API) return setState({ kind: "error", msg: "The waitlist isn't connected on this deployment. Follow @fumpadapp for the launch." });
     setState({ kind: "sending" });
     try {
       const r = await fetch(`${API}/v1/waitlist`, {
@@ -186,7 +186,7 @@ export function Launch() {
         <Waitlist onDone={onDone} />
         <a href={X_URL} className={s.xCta} target="_blank" rel="noopener noreferrer">
           <IconX width={18} height={18} aria-hidden="true" />
-          Follow @Fumblepad
+          Follow @fumpadapp
         </a>
       </div>
     </div>

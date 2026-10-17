@@ -48,7 +48,7 @@ export function soonLede(p: { triggerMultiple: number; claimBps: number }): stri
 
 /** Under the lede: no promises, and where the real mint comes from. */
 export const SOON_CAVEAT =
-  "Nothing is guaranteed: most memecoins go to zero, and claims pay only while the coin’s Reward Pool can cover them. The first coin’s address will be posted by @Fumblepad and shown on this page; trust no other.";
+  "Nothing is guaranteed: most memecoins go to zero, and claims pay only while the coin’s Reward Pool can cover them. The first coin’s address will be posted by @fumpadapp and shown on this page; trust no other.";
 
 export const SOON_BANNER = { strong: "Coming soon.", rest: "The first coin launches here, then the full app opens." };
 
@@ -64,7 +64,7 @@ export const META: Record<LaunchState["state"], PageMeta> = {
   soon: {
     title: "FUMPAD — The first coin launches soon.",
     description:
-      "FUMPAD is a Solana launchpad for people who sell too early: sell, and if the coin later holds 10× your price, claim 10% of what you sold. The first coin launches soon. Follow @Fumblepad.",
+      "FUMPAD is a Solana launchpad for people who sell too early: sell, and if the coin later holds 10× your price, claim 10% of what you sold. The first coin launches soon. Follow @fumpadapp.",
     socialTitle: "FUMPAD — The first coin launches soon.",
     socialDescription: "The launchpad for people who sell too early. Sell, and if the coin later holds 10× your price, claim 10% of what you sold. Coming soon to Solana.",
   },

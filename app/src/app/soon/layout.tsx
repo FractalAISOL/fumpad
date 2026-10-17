@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    site: "@Fumblepad",
+    site: "@fumpadapp",
     title: "FUMPAD — The launchpad for people who sell too early.",
     description: "Sell, and if the coin later holds 10× your price, claim 10% of what you sold. Coming to Solana mainnet.",
   },

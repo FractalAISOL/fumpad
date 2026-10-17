@@ -16,7 +16,7 @@ export function RoomHeader() {
         <a href={X_URL} className={s.follow} target="_blank" rel="noopener noreferrer">
           <IconX width={15} height={15} aria-hidden="true" />
           <span>
-            Follow <span className={s.hideSm}>@Fumblepad</span>
+            Follow <span className={s.hideSm}>@fumpadapp</span>
           </span>
         </a>
         <ThemeSwitch />
@@ -42,7 +42,7 @@ export function RoomFooter({ disclaimer = ROOM_DISCLAIMER }: { disclaimer?: stri
           <Link href="/risk">Risk disclosure</Link>
           <Link href="/privacy">Privacy</Link>
           <a href={X_URL} target="_blank" rel="noopener noreferrer">
-            X (@Fumblepad)
+            X (@fumpadapp)
           </a>
         </nav>
         <p className={s.copy}>© 2026 FUMPAD</p>
