@@ -2,7 +2,7 @@
 
 Until the full release, **fumpad.app** and **www.fumpad.app** show only one page, the **launch-window page** (`/live`, served at `/`; visitors never see `/live` in the URL). It has two states, chosen by `NEXT_PUBLIC_CHECKER_MINT`:
 
-- **Coming soon** (no mint yet): "The first coin launches soon.", a two-sentence explainer with its caveat, Fumi's greeting, "Follow @Fumblepad on X", then the five levels, where the fees go and the "How to play" video. No coin panel, trade links or checker box, no waitlist, no countdown.
+- **Coming soon** (no mint yet): "The first coin launches soon.", a two-sentence explainer with its caveat, Fumi's greeting, "Follow @fumpadapp on X", then the five levels, where the fees go and the "How to play" video. No coin panel, trade links or checker box, no waitlist, no countdown.
 - **Live** (the first coin's mint is set): the same page shows the coin (live chart, price, market cap, curve, trades from every app, "Trade it now" links), the Fumble Checker for any pasted wallet (`fumpad.app/?wallet=<address>` links work), then the rules and the video.
 
 Every other host (fumpad.vercel.app, preview URLs, localhost) serves the full app as before, so the team can keep testing it; `/live` is viewable there too.

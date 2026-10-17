@@ -6,10 +6,10 @@ import { clientIp, ipHasher, normalizeEmail, normalizeHandle, parseWaitlistBody,
 
 describe("waitlist normalisation", () => {
   it("handles: @, URLs, case; rejects anything X wouldn't allow", () => {
-    expect(normalizeHandle("@Fumblepad")).toBe("fumblepad");
+    expect(normalizeHandle("@FumpadApp")).toBe("fumpadapp");
     expect(normalizeHandle("fumble_pad")).toBe("fumble_pad");
-    expect(normalizeHandle("https://x.com/Fumblepad?s=20")).toBe("fumblepad");
-    expect(normalizeHandle("twitter.com/Fumblepad/")).toBe("fumblepad");
+    expect(normalizeHandle("https://x.com/FumpadApp?s=20")).toBe("fumpadapp");
+    expect(normalizeHandle("twitter.com/FumpadApp/")).toBe("fumpadapp");
     expect(normalizeHandle("www.x.com/abc")).toBe("abc");
     expect(normalizeHandle("a".repeat(16))).toBeNull();
     expect(normalizeHandle("no spaces")).toBeNull();

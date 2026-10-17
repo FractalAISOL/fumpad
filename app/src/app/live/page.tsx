@@ -16,7 +16,7 @@ import l from "./Live.module.css";
 /**
  * The launch-window page (LAUNCH.md): fumpad.app's only page until the full app opens. Two states
  * (`components/checker/launchState.ts`):
- *   coming soon (no NEXT_PUBLIC_CHECKER_MINT): a pre-launch hero with Fumi's greeting and "Follow @Fumblepad", then
+ *   coming soon (no NEXT_PUBLIC_CHECKER_MINT): a pre-launch hero with Fumi's greeting and "Follow @fumpadapp", then
  *     the rules, fees and video. No coin panel, trade links or checker box.
  *   live (the first coin's mint is set): one read-only page about the FIRST coin, its live chart and trade links,
  *     and the Fumble Checker; NEXT_PUBLIC_APP_OPENS_AT (ISO) adds a countdown.
@@ -62,7 +62,7 @@ export default async function LivePage() {
           {show.follow && (
             <div className={l.cta}>
               <Button href={X_URL} size="lg" target="_blank" rel="noopener noreferrer" icon={<IconX width={16} height={16} />}>
-                Follow @Fumblepad on X
+                Follow @fumpadapp on X
               </Button>
             </div>
           )}
