@@ -3,14 +3,13 @@ import { decide } from "./prelaunch/gate";
 
 /**
  * Pre-launch gate (see `prelaunch/gate.ts` and `LAUNCH.md`): on fumpad.app / www.fumpad.app the
- * whole site is the waiting room, or (NEXT_PUBLIC_PRELAUNCH=checker) the launch-window checker; every other
- * host serves the app unchanged.
+ * whole site is the launch-window page (coming soon, then the first coin live) until NEXT_PUBLIC_PRELAUNCH=off;
+ * every other host serves the app unchanged.
  */
 export function proxy(req: NextRequest) {
   const d = decide(req.headers.get("host"), req.nextUrl.pathname, {
     PRELAUNCH_HOSTS: process.env.PRELAUNCH_HOSTS,
     NEXT_PUBLIC_PRELAUNCH: process.env.NEXT_PUBLIC_PRELAUNCH,
-    NEXT_PUBLIC_CHECKER_MINT: process.env.NEXT_PUBLIC_CHECKER_MINT,
   });
   if (d.action === "next") return NextResponse.next();
   const url = req.nextUrl.clone();

@@ -1,58 +1,78 @@
-import { LaunchWindow, OpensBanner } from "@/components/checker/LaunchWindow";
-import { isPublicKey, parseOpensAt } from "@/components/checker/model";
+import { LaunchWindow, OpensBanner, SoonBanner } from "@/components/checker/LaunchWindow";
+import { HERO, SOON_CAVEAT, launchSections, launchState, soonLede } from "@/components/checker/launchState";
+import { parseOpensAt } from "@/components/checker/model";
 import { Rules } from "@/components/checker/Rules";
 import s from "@/components/checker/Checker.module.css";
+import { X_URL } from "@/components/prelaunch/links";
 import { CLUSTER_LABEL, SOLSCAN_QUERY } from "@/chain/cluster";
 import { cachedCoin, cachedPriceSeries, shellSnapshot } from "@/data/server";
+import { Button } from "@/design";
+import { IconX } from "@/design/components/Icons";
 import { cx } from "@/design/cx";
 import { Fumi, SpeechBubble } from "@/design/anime";
 import l from "./Live.module.css";
 
 /**
- * The launch window (LAUNCH.md, "Launch-window checker"): one read-only page about the FIRST coin only, between its
- * launch and the full app. The coin is NEXT_PUBLIC_CHECKER_MINT; NEXT_PUBLIC_APP_OPENS_AT (ISO) adds a countdown.
+ * The launch-window page (LAUNCH.md): fumpad.app's only page until the full app opens. Two states
+ * (`components/checker/launchState.ts`):
+ *   coming soon (no NEXT_PUBLIC_CHECKER_MINT): a pre-launch hero with Fumi's greeting and "Follow @Fumblepad", then
+ *     the rules, fees and video. No coin panel, trade links or checker box.
+ *   live (the first coin's mint is set): one read-only page about the FIRST coin, its live chart and trade links,
+ *     and the Fumble Checker; NEXT_PUBLIC_APP_OPENS_AT (ISO) adds a countdown.
+ * One Fumi per screen: the header's (bust on phones, figure from 600 px); the checker's own sits a screen lower.
  * Server data is cached (prerendered with the shell, revalidated in the background); the client keeps it live
  * over the API's WebSocket. The wallet lookup runs in the browser against the API.
  */
 export default async function LivePage() {
-  const mint = (process.env.NEXT_PUBLIC_CHECKER_MINT ?? "").trim();
+  const ls = launchState(process.env.NEXT_PUBLIC_CHECKER_MINT);
+  const show = launchSections(ls.state);
+  const hero = HERO[ls.state];
   const opensAt = parseOpensAt(process.env.NEXT_PUBLIC_APP_OPENS_AT);
   const { solUsd, now, params } = await shellSnapshot();
-  const valid = isPublicKey(mint);
-  const [coin, series] = valid ? await Promise.all([cachedCoin(mint), cachedPriceSeries(mint, "all")]) : [null, []];
-  const first = coin && coin.mint === mint ? coin : null;
+  const [coin, series] = ls.mint ? await Promise.all([cachedCoin(ls.mint), cachedPriceSeries(ls.mint, "all")]) : [null, []];
+  const first = coin && coin.mint === ls.mint ? coin : null;
 
   return (
     <div className={s.page}>
-      <OpensBanner opensAt={opensAt} serverNow={now} cluster={CLUSTER_LABEL} />
+      {show.opensBanner && <OpensBanner opensAt={opensAt} serverNow={now} cluster={CLUSTER_LABEL} />}
+      {show.soonBanner && <SoonBanner cluster={CLUSTER_LABEL} />}
       <div className={cx(s.hero, l.hero)}>
         <div className={l.heroText}>
           <div className={l.greet}>
             <Fumi pose="waving" size={56} crop="bust" />
             <SpeechBubble tail="left" pop={false} className={l.greetBubble}>
-              Hi, fumbler!
+              {hero.bubble}
             </SpeechBubble>
           </div>
-          <p className={s.eyebrow}>Launch window</p>
+          <p className={s.eyebrow}>{hero.eyebrow}</p>
           <h1 className={s.h1}>
-            The first coin is live.
+            {hero.title}
             <br />
-            <span className={s.h1Quiet}>Sold too early? Check.</span>
+            <span className={s.h1Quiet}>{hero.quiet}</span>
           </h1>
+          {show.intro && (
+            <>
+              <p className={cx(s.lede, l.intro)}>{soonLede(params)}</p>
+              <p className={l.caveat}>{SOON_CAVEAT}</p>
+            </>
+          )}
+          {show.follow && (
+            <div className={l.cta}>
+              <Button href={X_URL} size="lg" target="_blank" rel="noopener noreferrer" icon={<IconX width={16} height={16} />}>
+                Follow @Fumblepad on X
+              </Button>
+            </div>
+          )}
         </div>
         <div className={l.side}>
           <SpeechBubble tail="bottom-right" className={l.sideBubble}>
-            Hi, fumbler!
+            {hero.bubble}
           </SpeechBubble>
           <Fumi pose="waving" size="md" fade pop />
         </div>
       </div>
-      {valid ? (
-        <LaunchWindow mint={mint} coin={first} series={first ? series : []} params={params} solUsd={solUsd} clusterQuery={SOLSCAN_QUERY} serverNow={now} />
-      ) : (
-        <section className={s.section}>
-          <p className={s.lede}>No coin is configured for the launch window yet (NEXT_PUBLIC_CHECKER_MINT).</p>
-        </section>
+      {show.coin && ls.mint && (
+        <LaunchWindow mint={ls.mint} coin={first} series={first ? series : []} params={params} solUsd={solUsd} clusterQuery={SOLSCAN_QUERY} serverNow={now} />
       )}
       <section className={s.section} aria-labelledby="rules-h">
         <div className={s.sectionHead}>
