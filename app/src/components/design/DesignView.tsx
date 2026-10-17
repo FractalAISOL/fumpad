@@ -1,7 +1,8 @@
 "use client";
 
 import { type ReactNode, useState } from "react";
-import type { PricePoint, Ticket } from "@/data";
+import type { CandleSeries, Ticket } from "@/data";
+import { fillCandles, INTERVAL_MS, intervalLabel } from "@/data/candles";
 import {
   Address,
   AmountInput,
@@ -29,7 +30,7 @@ import {
   PanelHead,
   PoolMeter,
   Price,
-  PriceChart,
+  CandleChart,
   Segmented,
   Skeleton,
   Sol,
@@ -106,10 +107,10 @@ const SAMPLE: SampleRow[] = [
   { id: "d", who: "paperhandpete", sol: 103.4, x: 3.4 },
 ];
 
-export function DesignView({ tickets, series }: { tickets: Ticket[]; series: PricePoint[] }) {
+export function DesignView({ tickets, candles: candleSeries }: { tickets: Ticket[]; candles: CandleSeries }) {
   const [mode, setMode] = useState<Mode>("both");
   const [tab, setTab] = useState("one");
-  const [seg, setSeg] = useState("7d");
+  const [seg, setSeg] = useState("5m");
   const [chip, setChip] = useState("all");
   const [amt, setAmt] = useState("2,000,000");
   const [amtOver, setAmtOver] = useState("40");
@@ -118,7 +119,9 @@ export function DesignView({ tickets, series }: { tickets: Ticket[]; series: Pri
   const toast = useToast();
   const now = useNow();
   const claimable = tickets.find((t) => t.state === "claimable");
-  const sell = series[Math.floor(series.length * 0.2)];
+  const candles = fillCandles(candleSeries, candleSeries.candles[candleSeries.candles.length - 1]?.t ?? candleSeries.from);
+  const sellCandle = candles[Math.floor(candles.length * 0.3)];
+  const sell = sellCandle ? { t: sellCandle.t + INTERVAL_MS[candleSeries.interval] / 2, p: sellCandle.c } : undefined;
 
   const cols: Column<SampleRow>[] = [
     { key: "who", header: "Wallet", render: (r) => <Address address={r.id.repeat(44)} name={r.who} you={r.me} link={false} /> },
@@ -277,14 +280,14 @@ export function DesignView({ tickets, series }: { tickets: Ticket[]; series: Pri
               ]}
             />
             <Row>
-              <Segmented label="Range" value={seg} onChange={setSeg} items={["1h", "1d", "7d", "All"].map((v) => ({ value: v, label: v }))} />
-              <Segmented size="sm" label="Range small" value={seg} onChange={setSeg} items={["1h", "1d", "7d", "All"].map((v) => ({ value: v, label: v }))} />
+              <Segmented label="Candle size" value={seg} onChange={setSeg} items={["1m", "5m", "30m"].map((v) => ({ value: v, label: v }))} />
+              <Segmented size="sm" label="Candle size small" value={seg} onChange={setSeg} items={["1m", "5m", "30m"].map((v) => ({ value: v, label: v }))} />
             </Row>
             <Segmented
               block
               label="Side"
-              value={seg === "1h" ? "buy" : "sell"}
-              onChange={(v) => setSeg(v === "buy" ? "1h" : "7d")}
+              value={seg === "1m" ? "buy" : "sell"}
+              onChange={(v) => setSeg(v === "buy" ? "1m" : "5m")}
               items={[
                 { value: "buy", label: "Buy" },
                 { value: "sell", label: "Sell" },
@@ -393,15 +396,16 @@ export function DesignView({ tickets, series }: { tickets: Ticket[]; series: Pri
         )}
       </Spec>
 
-      <Spec title="Chart" note="Log price axis. Ring: your sell. Dashed orange: 10× of it. Arrow keys read values." mode={mode}>
+      <Spec title="Chart" note="Candles, log price axis. Up: solid ink, down: hollow graphite, no trade: a flat tick. Ring: your sell. Dashed orange: 10× of it. Arrow keys read candles." mode={mode}>
         {() => (
           <Panel>
-            <PriceChart
-              points={series}
-              sell={sell ? { t: sell.t, p: sell.p } : undefined}
+            <CandleChart
+              candles={candles}
+              intervalMs={INTERVAL_MS[candleSeries.interval]}
+              intervalLabel={intervalLabel(candleSeries.interval)}
+              sell={sell}
               trigger={sell ? sell.p * 10 : undefined}
-              others={series.filter((_, i) => i % 37 === 5)}
-              rangeLabel="since launch"
+              others={candles.filter((_, i) => i % 37 === 5).map((c) => ({ t: c.t, p: c.l }))}
               symbol="MIDC"
               height={260}
             />

@@ -10,6 +10,8 @@ import type { CoinSort, FumpadData, Unsubscribe } from "./interface";
 import type {
   Address,
   Board,
+  CandleInterval,
+  CandleSeries,
   ChartRange,
   CloseCall,
   ClosedPosition,
@@ -133,6 +135,9 @@ export class ApiFumpadData implements FumpadData {
   }
   getPriceSeries(mint: Address, range: ChartRange): Promise<PricePoint[]> {
     return this.get(`/v1/coins/${seg(mint)}/prices`, { range });
+  }
+  getCandles(mint: Address, interval: CandleInterval): Promise<CandleSeries> {
+    return this.get(`/v1/coins/${seg(mint)}/candles`, { interval });
   }
   getHolders(mint: Address, viewer?: Address): Promise<{ total: number; top: Holder[] }> {
     return this.get(`/v1/coins/${seg(mint)}/holders`, { viewer });

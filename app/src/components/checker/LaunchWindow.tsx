@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import type { CoinDetail, PricePoint, ProtocolParams } from "@/data";
+import type { CandleSeries, CoinDetail, ProtocolParams } from "@/data";
 import { Skeleton, cx } from "@/design";
 import { CoinWindow } from "./CoinWindow";
 import { FumbleCheck } from "./FumbleCheck";
@@ -51,7 +51,7 @@ export function SoonBanner({ cluster }: { cluster: string | null }) {
 export function LaunchWindow({
   mint,
   coin,
-  series,
+  candles,
   params,
   solUsd,
   clusterQuery,
@@ -59,7 +59,7 @@ export function LaunchWindow({
 }: {
   mint: string;
   coin: CoinDetail | null;
-  series: PricePoint[];
+  candles: CandleSeries;
   params: ProtocolParams;
   solUsd: number;
   clusterQuery: string;
@@ -69,7 +69,7 @@ export function LaunchWindow({
   return (
     <>
       <section className={s.section} aria-label="The first coin, live">
-        <CoinWindow mint={mint} initialCoin={coin} initialSeries={series} params={params} solUsd={solUsd} clusterQuery={clusterQuery} onCoin={setLive} serverNow={serverNow} />
+        <CoinWindow mint={mint} initialCoin={coin} initialCandles={candles} params={params} solUsd={solUsd} clusterQuery={clusterQuery} onCoin={setLive} serverNow={serverNow} />
       </section>
       <section className={s.section} id="check" aria-labelledby="check-h">
         <div className={s.sectionHead}>

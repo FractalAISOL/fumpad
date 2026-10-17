@@ -14,6 +14,9 @@ export const ATTEST_DELAY_SECS = 60;
 import type {
   Achievement,
   Board,
+  Candle,
+  CandleInterval,
+  CandleSeries,
   ChartRange,
   CloseCall,
   CoinDetail,
@@ -37,6 +40,7 @@ import type {
   WalletFumbles,
 } from "./generated/app-types.js";
 import type { CoinSort } from "./generated/app-interface.js";
+import { CANDLE_SECS, CANDLE_WINDOW, chainCandles } from "./candles.js";
 import { assessSells, usdRateFrom, type WalletEvent } from "./fumbles.js";
 import { assemble, buildBooks, type LedgerEntry, type PortfolioCoinRow, type TicketStat } from "./portfolio.js";
 
@@ -568,6 +572,54 @@ export class Repo {
     const out = new Map<number, { t: number; p: number }>();
     for (const x of [...start, ...(await this.bucketedPrices(c.mint, since, bucket))]) out.set(Math.floor((x.t - since) / bucket), x);
     return [...out.values()].map((x) => ({ t: x.t * 1000, p: x.p }));
+  }
+
+  /**
+   * OHLC candles for the coin chart (app `getCandles`): the latest `CANDLE_WINDOW` buckets of `interval` up to `now`
+   * (unix secs; tests pass it), or from the launch's bucket when that's later. The price points are the line chart's
+   * (every trade's post-trade spot price on the coin's DBC / DAMM v2 pool, plus non-fallback oracle samples, and the
+   * curve's start price at launch), aggregated per UTC-aligned bucket in Postgres; only buckets with a point come back
+   * (the app fills the rest flat, app/src/data/candles.ts). Candles are continuous: each opens at the previous close
+   * (`open`, the last price before the window, for the first one), as `chainCandles` does in the app.
+   */
+  async getCandles(mint: string, interval: CandleInterval, now = nowSecs()): Promise<CandleSeries> {
+    const iv = CANDLE_SECS[interval];
+    const nowB = Math.floor(now / iv) * iv;
+    const c = await this.coinBase(mint);
+    if (!c) return { interval, from: (nowB - (CANDLE_WINDOW - 1) * iv) * 1000, candles: [] };
+    const created = Number(c.created_at);
+    const from = Math.max(nowB - (CANDLE_WINDOW - 1) * iv, Math.floor(created / iv) * iv);
+    // Spot price as Q64 exactly like `spotQ64` (floor((vsol << 64) / vtok)); same sources as the line chart. Order:
+    // block time, slot, then the indexer's ingest order (`transactions.seq`; no intra-slot position is stored), then
+    // the event's index in its transaction.
+    const pts = `SELECT t.ts, t.slot, x.seq, t.idx, div(t.virtual_sol * 18446744073709551616, t.virtual_tokens) AS q
+                   FROM trades t JOIN transactions x ON x.signature = t.signature WHERE t.mint = $1 AND t.virtual_tokens > 0 AND t.ts %OP% $2
+                 UNION ALL
+                 SELECT s.ts, x.slot, x.seq, s.idx, s.price_q64 AS q
+                   FROM samples s JOIN transactions x ON x.signature = s.signature WHERE s.mint = $1 AND NOT s.fallback AND s.ts %OP% $2`;
+    const [buckets, before] = await Promise.all([
+      this.db.query<{ b: string; n: number; o: string; h: string; l: string; c: string }>(
+        `SELECT (ts / $3::bigint) AS b, count(*)::int AS n, max(q)::text AS h, min(q)::text AS l,
+                (array_agg(q ORDER BY ts, slot, seq, idx))[1]::text AS o, (array_agg(q ORDER BY ts DESC, slot DESC, seq DESC, idx DESC))[1]::text AS c
+           FROM (${pts.replaceAll("%OP%", ">=")}) p WHERE q > 0 AND ts < $4 GROUP BY 1 ORDER BY 1`,
+        [c.mint, from, iv, nowB + iv],
+      ),
+      created < from
+        ? this.db.query<{ q: string }>(`SELECT q::text FROM (${pts.replaceAll("%OP%", "<")}) p WHERE q > 0 ORDER BY ts DESC, slot DESC, seq DESC, idx DESC LIMIT 1`, [c.mint, from])
+        : null,
+    ]);
+    const init = px(await this.initialPriceQ64());
+    const raw: Candle[] = buckets.rows.map((r) => ({ t: Number(r.b) * iv * 1000, o: px(r.o), h: px(r.h), l: px(r.l), c: px(r.c), n: r.n }));
+    let open: number | undefined;
+    if (created < from) open = before?.rows[0] ? px(before.rows[0].q) : init;
+    else {
+      // launched inside the window: the curve's start price is the first point of the launch bucket
+      const t = Math.floor(created / iv) * iv * 1000;
+      const first = raw[0]?.t === t ? raw[0] : null;
+      if (first) Object.assign(first, { o: init, h: Math.max(first.h, init), l: Math.min(first.l, init), n: first.n + 1 });
+      else raw.unshift({ t, o: init, h: init, l: init, c: init, n: 1 });
+    }
+    return { interval, from: from * 1000, ...(open !== undefined ? { open } : {}), candles: chainCandles(raw, open) };
   }
 
   /** The last price point per `bucket`-second bucket since `since`, oldest first (same float bucket rule as the JS). */

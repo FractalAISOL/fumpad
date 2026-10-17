@@ -29,36 +29,11 @@ import * as f from "@/design/format";
 import { X_URL } from "../prelaunch/links";
 import { useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Launch.module.css";
+import { IMG_TYPES, imageFileError, type LaunchFormErrors as Errors, validateLaunch } from "./validate";
 
 /** The live API (same switch as the data layer); unset = mock, launches are simulated and never gated. */
 const API = process.env.NEXT_PUBLIC_FUMPAD_API?.replace(/\/+$/, "");
 
-const MAX_IMG = 4 * 1024 * 1024;
-const IMG_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
-
-interface Errors {
-  name?: string;
-  symbol?: string;
-  description?: string;
-  image?: string;
-  x?: string;
-  telegram?: string;
-  website?: string;
-}
-
-function validate(v: { name: string; symbol: string; description: string; x: string; telegram: string; website: string; hasImage: boolean }): Errors {
-  const e: Errors = {};
-  if (!v.name.trim()) e.name = "Give the coin a name.";
-  else if (v.name.length > 32) e.name = "Keep the name to 32 characters.";
-  if (!v.symbol) e.symbol = "Pick a ticker.";
-  else if (!/^[A-Z0-9]{2,10}$/.test(v.symbol)) e.symbol = "Use 2 to 10 letters or digits.";
-  if (v.description.length > 280) e.description = "Keep it to 280 characters.";
-  if (!v.hasImage) e.image = "Add an image. It's the coin's face everywhere.";
-  if (v.x && !/^@?[A-Za-z0-9_]{1,15}$/.test(v.x)) e.x = "Use an X handle, like @fumpad.";
-  if (v.telegram && !/^(https:\/\/t\.me\/)?[A-Za-z0-9_]{4,}$/.test(v.telegram)) e.telegram = "Use a t.me link or group name.";
-  if (v.website && !/^https:\/\/\S+\.\S+/.test(v.website)) e.website = "Use a full https:// address.";
-  return e;
-}
 
 export function LaunchView() {
   const { isDemo } = useViewer();
@@ -116,8 +91,8 @@ export function LaunchView() {
 
   const pickFile = (fl: File | undefined | null) => {
     if (!fl) return;
-    if (!IMG_TYPES.includes(fl.type)) return setImgErr("Use a PNG, JPG, GIF or WebP.");
-    if (fl.size > MAX_IMG) return setImgErr(`That's ${f.fixed(fl.size / 1024 / 1024, 1)} MB. The limit is 4 MB.`);
+    const err = imageFileError(fl);
+    if (err) return setImgErr(err);
     setImgErr(null);
     setFile(fl);
   };
@@ -127,7 +102,8 @@ export function LaunchView() {
     pickFile(e.dataTransfer.files?.[0]);
   };
 
-  const errs = validate({ name, symbol, description, x, telegram, website, hasImage: !!file });
+  // Only the name and the ticker are required; no image is fine (the coin shows its monogram).
+  const errs = validateLaunch({ name, symbol, description, x, telegram, website });
   const shown: Errors = tried ? errs : {};
   if (imgErr) shown.image = imgErr;
   const valid = Object.keys(errs).length === 0;
@@ -284,7 +260,7 @@ export function LaunchView() {
 
               <div className={s.imgField}>
                 <label htmlFor={imgId} className={s.label}>
-                  Image
+                  Image <span className={s.optional}>Optional</span>
                 </label>
                 <div
                   className={cx(s.drop, drag && s.dragging, shown.image && s.dropErr)}
@@ -310,6 +286,20 @@ export function LaunchView() {
                   <Button variant="line" size="sm" onClick={() => fileRef.current?.click()}>
                     {file ? "Replace" : "Choose"}
                   </Button>
+                  {file && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setFile(null);
+                        setPreview(null);
+                        setImgErr(null);
+                        if (fileRef.current) fileRef.current.value = "";
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  )}
                   <input
                     ref={fileRef}
                     id={imgId}
@@ -322,7 +312,7 @@ export function LaunchView() {
                   />
                 </div>
                 <p id={`${imgId}-msg`} className={shown.image ? s.err : s.hint}>
-                  {shown.image ?? "Uploaded with the coin's metadata when you launch."}
+                  {shown.image ?? `Without one, $${tick} shows its letters, as in the preview.`}
                 </p>
               </div>
             </div>
@@ -456,7 +446,7 @@ export function LaunchView() {
         open={review}
         onClose={closeReview}
         title={`Launch $${symbol}?`}
-        description="Launching is permanent. The name, ticker and image can't be changed later."
+        description={file ? "Launching is permanent. The name, ticker and image can't be changed later." : "Launching is permanent. The name and ticker can't be changed later."}
         footer={
           <>
             <Button variant="ghost" onClick={closeReview}>

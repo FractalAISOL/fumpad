@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { type ChartRange, type CoinDetail, type PricePoint, type ProtocolParams, type TradeRow, getFumpadData, keepSnapshot } from "@/data";
+import { useCallback, useEffect, useState } from "react";
+import { type CandleSeries, type CoinDetail, type ProtocolParams, type TradeRow, getFumpadData, keepSnapshot } from "@/data";
 import { graduationSolOf } from "@/data/chain";
 import { coinFeeView } from "@/data/fees";
 import {
@@ -17,7 +17,7 @@ import {
   PanelHead,
   PanelNote,
   Price,
-  PriceChart,
+  CandleChart,
   Segmented,
   Skeleton,
   Sol,
@@ -28,16 +28,11 @@ import {
 } from "@/design";
 import * as f from "@/design/format";
 import { MintTag } from "../coin/MintTag";
+import { INTERVAL_ITEMS, useCandles } from "../coin/useCandles";
 import { useClock, useLatest } from "./hooks";
 import { solscan, tradeLinks } from "./model";
 import s from "./Checker.module.css";
 
-const RANGES: { value: ChartRange; label: string }[] = [
-  { value: "1h", label: "1h" },
-  { value: "1d", label: "1d" },
-  { value: "all", label: "All" },
-];
-const RANGE_LABEL: Record<ChartRange, string> = { "1h": "last hour", "1d": "last day", "7d": "last 7 days", all: "since launch" };
 
 const VENUE: Record<NonNullable<TradeRow["venue"]>, string> = { dbc: "Curve", damm: "Pool" };
 
@@ -54,17 +49,6 @@ function mergeTrades(add: TradeRow[], prev: TradeRow[] | null): TradeRow[] {
   return out.sort((a, b) => b.ts - a.ts).slice(0, 40);
 }
 
-function extend(points: PricePoint[], add: PricePoint[]): PricePoint[] {
-  if (!add.length) return points;
-  const out = points.slice();
-  for (const p of add) {
-    const last = out[out.length - 1];
-    if (!last || p.t > last.t) out.push(p);
-    else if (p.t === last.t) out[out.length - 1] = p;
-  }
-  return out.length > 1_500 ? out.slice(out.length - 1_500) : out;
-}
-
 /**
  * The launch-window coin: identity, price and market cap, curve progress (or graduated), a live chart and the
  * latest trades from every app. Pushed state comes over the API's WebSocket (`coin` messages); a light poll is the
@@ -73,7 +57,7 @@ function extend(points: PricePoint[], add: PricePoint[]): PricePoint[] {
 export function CoinWindow({
   mint,
   initialCoin,
-  initialSeries,
+  initialCandles,
   params,
   solUsd: initialSolUsd,
   clusterQuery,
@@ -82,7 +66,8 @@ export function CoinWindow({
 }: {
   mint: string;
   initialCoin: CoinDetail | null;
-  initialSeries: PricePoint[];
+  /** The chart's first candles (1m for a fresh launch, see `defaultInterval`). */
+  initialCandles: CandleSeries;
   params: ProtocolParams;
   solUsd: number;
   clusterQuery: string;
@@ -93,39 +78,24 @@ export function CoinWindow({
   const data = getFumpadData();
   const now = useClock(15_000, serverNow);
   const [coin, setCoin] = useState<CoinDetail | null>(initialCoin);
-  const [range, setRange] = useState<ChartRange>("all");
-  const [series, setSeries] = useState<{ range: ChartRange; points: PricePoint[] }>({ range: "all", points: initialSeries });
+  const candleChart = useCandles(mint, initialCandles, serverNow);
   const [trades, setTrades] = useState<TradeRow[] | null>(null);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [solUsd, setSolUsd] = useState(initialSolUsd);
-  const rangeRef = useRef(range);
   const onCoinRef = useLatest(onCoin);
-  useEffect(() => {
-    rangeRef.current = range;
-  }, [range]);
   useEffect(() => {
     if (coin) onCoinRef.current?.(coin);
   }, [coin, onCoinRef]);
 
-  const loadSeries = useCallback(() => {
-    const want = rangeRef.current;
-    data
-      .getPriceSeries(mint, want)
-      .then((points) => rangeRef.current === want && setSeries({ range: want, points }))
-      .catch(keepSnapshot);
-  }, [data, mint]);
+  const { reload: loadSeries, push } = candleChart;
   const loadAll = useCallback(() => {
     data.getCoin(mint).then((c) => c && c.mint === mint && setCoin(c)).catch(keepSnapshot);
     data.getRecentTrades(mint, 30).then((ts) => setTrades((prev) => mergeTrades(ts, prev))).catch(keepSnapshot);
     data.getSolUsd().then(setSolUsd).catch(keepSnapshot);
   }, [data, mint]);
 
-  useEffect(() => {
-    if (series.range !== range) loadSeries();
-  }, [range, series.range, loadSeries]);
   const indexed = coin !== null;
   useEffect(() => {
-    loadSeries();
     loadAll();
     // Floor under the socket; faster while the coin isn't indexed yet (it registers any second).
     const id = setInterval(
@@ -141,16 +111,19 @@ export function CoinWindow({
   useEffect(
     () =>
       data.subscribeLive((m) => {
-        if (m.type === "resync") return loadAll();
+        if (m.type === "resync") {
+          loadSeries();
+          return loadAll();
+        }
         if (m.type !== "coin" || m.coin.mint !== mint) return;
         setCoin(m.coin);
-        if (m.points.length) setSeries((sr) => (sr.range === rangeRef.current ? { ...sr, points: extend(sr.points, m.points) } : sr));
+        push(m.points);
         if (m.trades.length) {
           setTrades((prev) => mergeTrades(m.trades, prev));
           setFresh(new Set(m.trades.map((t) => t.signature + t.wallet + t.ts)));
         }
       }),
-    [data, mint, loadAll],
+    [data, mint, loadAll, loadSeries, push],
   );
 
   if (!coin) {
@@ -220,15 +193,15 @@ export function CoinWindow({
       <div className={s.windowGrid}>
         <Panel className={s.chartPanel} aria-labelledby="w-chart">
           <PanelHead id="w-chart" title="Price" aside={<span className={s.liveTag}>live</span>}>
-            <Segmented size="sm" label="Chart range" value={range} onChange={setRange} items={RANGES} />
+            <Segmented size="sm" label="Candle size" value={candleChart.interval} onChange={candleChart.setInterval} items={INTERVAL_ITEMS} />
           </PanelHead>
           <div className={s.chartBox}>
-            {series.range !== range ? (
+            {candleChart.loading ? (
               <div className={s.chartSkel}>
                 <Skeleton h="100%" />
               </div>
-            ) : series.points.length > 1 ? (
-              <PriceChart points={series.points} rangeLabel={RANGE_LABEL[range]} symbol={coin.symbol} live height={280} />
+            ) : candleChart.candles.length ? (
+              <CandleChart candles={candleChart.candles} intervalMs={candleChart.intervalMs} intervalLabel={candleChart.label} symbol={coin.symbol} live height={280} />
             ) : (
               <EmptyState title="No trades yet" compact>
                 The chart starts with the first trade.

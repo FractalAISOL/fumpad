@@ -3,11 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   keepSnapshot,
-  type ChartRange,
+  type CandleSeries,
   type CoinDetail,
   type FumbleRow,
   type Holder,
-  type PricePoint,
   type ProtocolParams,
   type QueueEntry,
   type Ticket,
@@ -36,7 +35,7 @@ import {
   PanelNote,
   PoolMeter,
   Price,
-  PriceChart,
+  CandleChart,
   Segmented,
   Skeleton,
   Sol,
@@ -53,37 +52,11 @@ import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import s from "./Coin.module.css";
 import { TradePanel } from "./TradePanel";
+import { INTERVAL_ITEMS, useCandles } from "./useCandles";
 import { coinFeeView } from "@/data/fees";
 import { hasLookalikeChars } from "./ident";
 import { MintTag } from "./MintTag";
 
-const RANGES: { value: ChartRange; label: string }[] = [
-  { value: "1h", label: "1h" },
-  { value: "1d", label: "1d" },
-  { value: "7d", label: "7d" },
-  { value: "all", label: "All" },
-];
-const RANGE_LABEL: Record<ChartRange, string> = { "1h": "last hour", "1d": "last day", "7d": "last 7 days", all: "since launch" };
-const RANGE_MS: Record<ChartRange, number> = { "1h": 3_600_000, "1d": 86_400_000, "7d": 7 * 86_400_000, all: Infinity };
-/** Live points kept on top of a fetched series before the oldest are dropped. */
-const MAX_POINTS = 1_500;
-
-/** Append pushed points (strictly newer than the last; same timestamp replaces) and drop what fell out of the range. */
-function extend(points: PricePoint[], add: PricePoint[], range: ChartRange, now: number): PricePoint[] {
-  if (!add.length) return points;
-  const out = points.slice();
-  for (const p of add) {
-    const last = out[out.length - 1];
-    if (!last || p.t > last.t) out.push(p);
-    else if (p.t === last.t) out[out.length - 1] = p;
-  }
-  const from = now - RANGE_MS[range];
-  let cut = 0;
-  // Keep one point before the window so the line still starts at the left edge.
-  while (cut < out.length - 2 && out[cut + 1].t < from) cut++;
-  const trimmed = cut ? out.slice(cut) : out;
-  return trimmed.length > MAX_POINTS ? trimmed.slice(trimmed.length - MAX_POINTS) : trimmed;
-}
 
 type CoinLink = { href: string; label: string; icon: typeof IconX };
 
@@ -155,14 +128,14 @@ function useStickySide() {
 
 export function CoinView({
   coin: initialCoin,
-  series: initialSeries,
+  candles: initialCandles,
   holders: initialHolders,
   fumbles: initialFumbles,
   queue: initialQueue,
   solUsd,
 }: {
   coin: CoinDetail;
-  series: PricePoint[];
+  candles: CandleSeries;
   holders: { total: number; top: Holder[] };
   fumbles: FumbleRow[];
   queue: { pool: number; owed: number; entries: QueueEntry[] };
@@ -178,16 +151,11 @@ export function CoinView({
   const [queue, setQueue] = useState(initialQueue);
   const [trades, setTrades] = useState<TradeRow[] | null>(null);
   const [freshTrades, setFreshTrades] = useState<Set<string>>(new Set());
-  const [range, setRange] = useState<ChartRange>("7d");
-  const [series, setSeries] = useState<{ range: ChartRange; points: PricePoint[] }>({ range: "7d", points: initialSeries });
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const grad = coin.status === "graduated";
   const target = graduationSolOf(coin);
   const mint = coin.mint;
-  const rangeRef = useRef(range);
-  useEffect(() => {
-    rangeRef.current = range;
-  }, [range]);
+  const candleChart = useCandles(mint, initialCandles, now);
 
   // A new coin page (client navigation between coins) starts from its own server snapshot.
   const [shownMint, setShownMint] = useState(initialCoin.mint);
@@ -198,25 +166,8 @@ export function CoinView({
     setFumbles(initialFumbles);
     setQueue(initialQueue);
     setTrades(null);
-    setSeries({ range: "7d", points: initialSeries });
-    setRange("7d");
     setTickets([]);
   }
-
-  /** (Re)load the series for the shown range: on mount (the server snapshot may be minutes old), on range change, after a reconnect. */
-  const loadSeries = useCallback(() => {
-    const want = rangeRef.current;
-    data
-      .getPriceSeries(mint, want)
-      .then((points) => {
-        if (rangeRef.current === want) setSeries({ range: want, points });
-      })
-      .catch(keepSnapshot);
-  }, [data, mint]);
-  useEffect(() => {
-    if (series.range !== range) loadSeries();
-  }, [range, series.range, loadSeries]);
-  useEffect(loadSeries, [loadSeries]);
 
   // Panels that change when anything touches this coin or the viewer's wallet.
   const loadPanels = useCallback(() => {
@@ -231,10 +182,10 @@ export function CoinView({
 
   // Pushed state: price, market cap, curve, pool and the chart move with every message.
   useLiveMessages((m) => {
-    if (m.type === "resync") return loadSeries();
+    if (m.type === "resync") return candleChart.reload();
     if (m.type !== "coin" || m.coin.mint !== mint) return;
     setCoin(m.coin);
-    if (m.points.length) setSeries((sr) => (sr.range === rangeRef.current ? { ...sr, points: extend(sr.points, m.points, sr.range, data.now()) } : sr));
+    candleChart.push(m.points);
     if (m.trades.length) {
       setTrades((prev) => mergeTrades(m.trades, prev));
       setFreshTrades(new Set(m.trades.map((t) => t.signature + t.wallet + t.ts)));
@@ -247,14 +198,13 @@ export function CoinView({
   }, [tickets]);
 
   const others = useMemo(() => fumbles.filter((r) => !r.isYou && r.owner !== address).map((r) => ({ t: r.ts, p: r.sol / r.tokens })), [fumbles, address]);
-  const loading = series.range !== range;
   const sideRef = useStickySide();
   const description = coin.description?.trim();
   const links = useMemo(() => coinLinks(coin), [coin]);
 
   const head = (
     <header className={s.head}>
-      <CoinTile symbol={coin.symbol} variant={coin.tile} size="lg" />
+      <CoinTile symbol={coin.symbol} variant={coin.tile} size="lg" mint={coin.mint} imageUrl={coin.imageUrl} />
       <div className={s.headText}>
         <h1 className={s.name}>{coin.name}</h1>
         <div className={s.sub}>
@@ -293,29 +243,34 @@ export function CoinView({
   const chart = (
     <Panel className={cx(s.chartPanel, s.oChart)} aria-labelledby="chart-h">
       <PanelHead id="chart-h" title="Price">
-        <Segmented size="sm" label="Chart range" value={range} onChange={setRange} items={RANGES} />
+        <Segmented size="sm" label="Candle size" value={candleChart.interval} onChange={candleChart.setInterval} items={INTERVAL_ITEMS} />
       </PanelHead>
       <div className={s.chartBox}>
-        {loading ? (
+        {candleChart.loading ? (
           <div className={s.chartSkel}>
             <Skeleton h="100%" />
           </div>
-        ) : (
-          <PriceChart
-            points={series.points}
+        ) : candleChart.candles.length ? (
+          <CandleChart
+            candles={candleChart.candles}
+            intervalMs={candleChart.intervalMs}
+            intervalLabel={candleChart.label}
             sell={mine ? { t: mine.sellTs, p: mine.sellPrice } : undefined}
             trigger={mine ? mine.sellPrice * 10 : undefined}
             others={others}
-            rangeLabel={RANGE_LABEL[range]}
             symbol={coin.symbol}
             live
           />
+        ) : (
+          <EmptyState title="No trades yet" compact>
+            The chart starts with the first trade.
+          </EmptyState>
         )}
       </div>
       <div className={s.legend}>
         <span>
-          <i className={s.lgLine} />
-          Price, log scale
+          <i className={s.lgCandle} />
+          {candleChart.label}, log scale
         </span>
         {mine && (
           <>
@@ -334,12 +289,17 @@ export function CoinView({
           Other fumbles
         </span>
       </div>
-      {mine && range !== "all" && series.points.length > 0 && mine.sellTs < series.points[0].t && (
+      {mine && candleChart.candles.length > 0 && mine.sellTs < candleChart.candles[0].t && (
         <p className={s.outOfRange}>
-          Your sell on {f.date(mine.sellTs)} is before this range.{" "}
-          <button type="button" className={s.linkBtn} onClick={() => setRange("all")}>
-            Show all
-          </button>
+          Your sell on {f.date(mine.sellTs)} is before these candles.
+          {candleChart.interval !== "30m" && (
+            <>
+              {" "}
+              <button type="button" className={s.linkBtn} onClick={() => candleChart.setInterval("30m")}>
+                Show 30m
+              </button>
+            </>
+          )}
         </p>
       )}
     </Panel>

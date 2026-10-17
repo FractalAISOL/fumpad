@@ -15,12 +15,15 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { bn, DEFAULT_PARAMS, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type Params, type TxLike } from "@fumpad/sdk";
+import { bn, DEFAULT_PARAMS, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type Params, q64ToSolPerToken, type TxLike } from "@fumpad/sdk";
 import { createLogger, createPool, type Db, Finalizer, Ingestor, MeteoraIngestor, migrate, replayMint, setMeta, storeable } from "@fumpad/indexer";
 import { Repo } from "@fumpad/api";
 import type { ConfirmedTx } from "@fumpad/meteora";
 
 import { type Postgres, startPostgres } from "../../scripts/local/harness.js";
+import { CANDLE_INTERVALS, CANDLE_SECS, CANDLE_WINDOW } from "../../api/src/candles.js";
+// the app's own bucketing is the reference the API's SQL must match
+import { candlesFromPoints, windowStart } from "../../../app/src/data/candles.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const F = JSON.parse(gunzipSync(readFileSync(join(here, "../../engine/test/fixtures/coin_b.history.json.gz"))).toString()) as {
@@ -166,6 +169,49 @@ describe("indexer v0.7 → db → api", () => {
     expect(p.ticketChallengeSecs).toBe(21_600);
     expect(p.feeBps).toBe(125);
     void Connection;
+  });
+
+  it("chart candles (getCandles): Postgres OHLC buckets of the real history = the app's own bucketing", async () => {
+    const repo = new Repo(db);
+    const m = mint.toBase58();
+    const pts = (
+      await db.query<{ ts: string; vs: string | null; vt: string | null; pq: string | null }>(
+        `SELECT t.ts, t.slot, x.seq, t.idx, t.virtual_sol vs, t.virtual_tokens vt, NULL::numeric pq FROM trades t JOIN transactions x USING (signature) WHERE t.mint = $1 AND t.virtual_tokens > 0
+         UNION ALL SELECT s.ts, x.slot, x.seq, s.idx, NULL, NULL, s.price_q64 FROM samples s JOIN transactions x USING (signature) WHERE s.mint = $1 AND NOT s.fallback
+         ORDER BY ts, slot, seq, idx`,
+        [m],
+      )
+    ).rows.map((r) => ({ ts: Number(r.ts), p: q64ToSolPerToken(r.pq ? BigInt(r.pq) : (BigInt(r.vs!) << 64n) / BigInt(r.vt!)) }));
+    const created = Number((await db.query("SELECT created_at FROM coins WHERE mint = $1", [m])).rows[0].created_at);
+    // the curve's start price (what the line chart starts at)
+    const init = q64ToSolPerToken(await (repo as unknown as { initialPriceQ64(): Promise<bigint> }).initialPriceQ64());
+    const last = pts[pts.length - 1].ts;
+    expect(pts.length).toBeGreaterThan(50);
+    // the app's reference: window → points → candlesFromPoints (+ the curve's start price at launch)
+    const reference = (iv: "1m" | "5m" | "30m", now: number) => {
+      const from = windowStart(iv, now * 1000, created * 1000) / 1000;
+      const inWin = pts.filter((x) => x.ts >= from && x.ts < Math.floor(now / CANDLE_SECS[iv]) * CANDLE_SECS[iv] + CANDLE_SECS[iv]).map((x) => ({ t: x.ts * 1000, p: x.p }));
+      const before = pts.filter((x) => x.ts < from);
+      const open = created < from ? (before.length ? before[before.length - 1].p : init) : undefined;
+      const points = created >= from ? [{ t: created * 1000, p: init }, ...inWin] : inWin;
+      return { interval: iv, from: from * 1000, ...(open !== undefined ? { open } : {}), candles: candlesFromPoints(points, iv, open) };
+    };
+    // right after launch (launch candle + start price), mid-history (carried-in open, window cut), long after (flat: no candles)
+    for (const iv of CANDLE_INTERVALS)
+      for (const now of [created + 90, Math.round((created + last) / 2), last + 600, last + 10 * 86_400]) {
+        const got = await repo.getCandles(m, iv, now);
+        const want = reference(iv, now);
+        expect(got.from).toBe(want.from);
+        expect(got.open).toBe(want.open);
+        expect(got.candles).toEqual(want.candles);
+        expect(got.candles.length).toBeLessThanOrEqual(CANDLE_WINDOW);
+      }
+    const mid = await repo.getCandles(m, "1m", last);
+    expect(mid.candles.length).toBeGreaterThan(3);
+    expect(mid.candles.every((c) => c.l <= Math.min(c.o, c.c) && c.h >= Math.max(c.o, c.c) && c.n > 0)).toBe(true);
+    expect(mid.candles.slice(1).every((c, i) => c.o === mid.candles[i].c)).toBe(true); // continuous
+    expect((await repo.getCandles(m, "1m", last + 10 * 86_400)).candles).toEqual([]);
+    expect(await repo.getCandles(k().toBase58(), "5m", last)).toMatchObject({ interval: "5m", candles: [] });
   });
 
   it("Fumble Checker: a real seller's sells from indexed trades, an attested one matched to its ticket", async () => {

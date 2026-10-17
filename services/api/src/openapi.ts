@@ -79,6 +79,14 @@ export const OPENAPI = {
     "/v1/coins/{mint}/prices": {
       get: { summary: "Price series (getPriceSeries)", parameters: [p("mint"), q("range", { enum: ["1h", "1d", "7d", "all"] }, undefined, true)], responses: ok(arr("PricePoint")) },
     },
+    "/v1/coins/{mint}/candles": {
+      get: {
+        summary:
+          "OHLC candles for the coin chart (getCandles): the latest 150 buckets of `interval` (UTC-aligned), or since launch; only buckets with a price point (trades, oracle samples), each opening at the previous close; `open` = the price going into the window",
+        parameters: [p("mint"), q("interval", { enum: ["1m", "5m", "30m"] }, "Candle size (default 1m).")],
+        responses: ok(ref("CandleSeries")),
+      },
+    },
     "/v1/coins/{mint}/holders": {
       get: {
         summary: "Holders (getHolders) — FUMPAD-observed balances",
