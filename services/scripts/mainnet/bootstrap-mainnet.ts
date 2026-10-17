@@ -9,8 +9,8 @@
  *   $B --cluster mainnet --step program --send --i-understand-this-spends-real-sol   # + typed confirmation
  *   $B --cluster mainnet --step verify
  *
- * Steps: keys | program | config | init | fund | propose-admin | accept-admin | upgrade-authority | verify, a comma
- * list, `all` (= keys, program, config, init, fund, propose-admin, verify: day 0) or `handover` (= accept-admin,
+ * Steps: keys | program | config | init | fund | alt | propose-admin | accept-admin | upgrade-authority | verify, a comma
+ * list, `all` (= keys, program, config, init, fund, alt, propose-admin, verify: day 0) or `handover` (= accept-admin,
  * upgrade-authority, verify: day 2+).
  * SENDING: `--send` only. On `--cluster mainnet` it also needs `--i-understand-this-spends-real-sol` AND an interactive
  * terminal: before each sending step the summary is printed and you must type the step's phrase (e.g.
@@ -30,7 +30,7 @@ import { pathToFileURL } from "node:url";
 import { readEnvValue, redactText } from "../ops/common.js";
 import { ensureHotKeys, expandHome, HOT_KEYS, keyPath, programIdOf } from "./keys.js";
 
-const STEP_NAMES = ["keys", "program", "config", "init", "fund", "propose-admin", "accept-admin", "upgrade-authority", "verify"];
+const STEP_NAMES = ["keys", "program", "config", "init", "fund", "alt", "propose-admin", "accept-admin", "upgrade-authority", "verify"];
 const SPEND_FLAG = "--i-understand-this-spends-real-sol";
 
 export interface CliArgs {
@@ -53,7 +53,7 @@ export function parseCli(argv: string[]): CliArgs {
   const cluster = get("--cluster");
   if (cluster !== "mainnet" && cluster !== "local-fork") throw new Error("--cluster mainnet|local-fork is required");
   const stepArg = get("--step") ?? "verify";
-  const steps = stepArg === "all" ? ["keys", "program", "config", "init", "fund", "propose-admin", "verify"] : stepArg === "handover" ? ["accept-admin", "upgrade-authority", "verify"] : stepArg.split(",").map((s) => s.trim());
+  const steps = stepArg === "all" ? ["keys", "program", "config", "init", "fund", "alt", "propose-admin", "verify"] : stepArg === "handover" ? ["accept-admin", "upgrade-authority", "verify"] : stepArg.split(",").map((s) => s.trim());
   for (const s of steps) if (!STEP_NAMES.includes(s)) throw new Error(`unknown step ${s} (${STEP_NAMES.join("|")}|all|handover)`);
   const simulate = argv.includes("--simulate");
   const send = argv.includes("--send");

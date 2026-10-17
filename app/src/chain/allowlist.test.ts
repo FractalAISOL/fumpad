@@ -31,6 +31,7 @@ import {
   dbcBuyIx,
   dbcInitializePoolToken2022Ix,
   FUMPAD_PROGRAM_ID,
+  launchAltAddresses,
   launchInstructions,
   registerCoinIx as sdkRegisterCoinIx,
   routerBuyIx as sdkRouterBuyIx,
@@ -598,5 +599,93 @@ describe("vetWithdrawTx", () => {
     refused(() => vetWithdrawTx(tx([send(mint, 5_000)]), wallet, other, BigInt(5_000)), /destination/);
     refused(() => vetWithdrawTx(tx([send(other, 5_000), send(other, 5_000)]), wallet, other, BigInt(5_000)), /single transfer/);
     refused(() => vetWithdrawTx(tx([routerBuy()]), wallet, other, BigInt(5_000)), /System transfer/);
+  });
+});
+
+describe("vetFumpadTx: a launch through the FUMPAD launch lookup table", () => {
+  const ALT = Keypair.generate().publicKey;
+  const A = ALT.toBase58();
+  const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
+  const table = (key = ALT, addresses = launchAltAddresses(), o: { authority?: PublicKey; deactivationSlot?: bigint } = {}) =>
+    new AddressLookupTableAccount({ key, state: { deactivationSlot: o.deactivationSlot ?? U64_MAX, lastExtendedSlot: 1, lastExtendedSlotStartIndex: 0, authority: o.authority, addresses } });
+  const NAME = "W".repeat(32);
+  const SYMBOL = "W".repeat(10);
+  const URI = "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+  /** The API's worst-case launch (@fumpad/sdk `launchInstructions`): max metadata, https uri, first buy, co-signer, priority fee. */
+  function altLaunch(mintKp: Keypair, signerKp: Keypair, alt = table(), o: { registerCfg?: PublicKey; extra?: TransactionInstruction[] } = {}) {
+    const ixs = launchInstructions({ creator: wallet, mint: mintKp.publicKey, dbcConfig: config, name: NAME, symbol: SYMBOL, uri: URI, buyLamports: TENTH, minTokensOut: BigInt(1), launchSigner: signerKp.publicKey, priorityMicroLamports: 1_000_000 });
+    if (o.registerCfg) {
+      const i = ixs.findIndex((x) => x.programId.equals(FUMPAD_PROGRAM_ID));
+      ixs[i] = sdkRegisterCoinIx({ creator: wallet, mint: mintKp.publicKey, dbcConfig: o.registerCfg, launchSigner: signerKp.publicKey });
+    }
+    const t = tx([...ixs, ...(o.extra ?? [])], wallet, [alt]);
+    t.sign([mintKp, signerKp]);
+    return t;
+  }
+  const policy = (mintKp: Keypair, signerKp: Keypair, lookupTable: AddressLookupTableAccount | undefined = table()): SilentPolicy => ({
+    ...launchPolicy(mintKp, TENTH),
+    launchSigner: signerKp.publicKey.toBase58(),
+    lookupTable,
+  });
+
+  it("accepts the configured, verified table: every account resolved and checked as for an inline launch (≤ 1,232 B)", () => {
+    const k = Keypair.generate();
+    const s = Keypair.generate();
+    const t = altLaunch(k, s);
+    assert.equal(t.message.addressTableLookups.length, 1);
+    assert.ok(t.serialize().length <= 1_232, `${t.serialize().length} B`);
+    const r = vetFumpadTx(t, wallet, policy(k, s), A);
+    assert.equal(r.solInLamports, TENTH);
+    assert.equal(r.launch?.name, NAME);
+    assert.equal(r.launch?.symbol, SYMBOL);
+    assert.equal(r.launch?.uri, URI);
+    assert.ok(r.launch?.config.equals(config));
+    assert.equal(r.launch?.firstBuy?.amountIn, TENTH);
+  });
+
+  it("refuses another table address, even with the right contents, and a table when the app has none configured", () => {
+    const k = Keypair.generate();
+    const s = Keypair.generate();
+    const otherTable = table(Keypair.generate().publicKey);
+    refused(() => vetFumpadTx(altLaunch(k, s, otherTable), wallet, policy(k, s, otherTable), A), /isn't FUMPAD's launch table/);
+    refused(() => vetFumpadTx(altLaunch(k, s), wallet, policy(k, s), undefined), /no launch table configured/);
+    refused(() => vetFumpadTx(altLaunch(k, s), wallet, { ...policy(k, s), lookupTable: undefined }, A), /couldn't be loaded/);
+    // the policy's table must be the configured one too (a caller can't hand in its own)
+    refused(() => vetFumpadTx(altLaunch(k, s), wallet, policy(k, s, otherTable), A), /isn't the expected one/);
+  });
+
+  it("refuses the configured address when its contents were altered, reordered, extended, or it isn't frozen / active", () => {
+    const k = Keypair.generate();
+    const s = Keypair.generate();
+    const w = launchAltAddresses();
+    const evil = Keypair.generate().publicKey;
+    const variants: [string, AddressLookupTableAccount][] = [
+      ["a key swapped", table(ALT, [...w.slice(0, 5), evil, ...w.slice(6)])],
+      ["reordered", table(ALT, [w[1], w[0], ...w.slice(2)])],
+      ["an extra key", table(ALT, [...w, evil])],
+      ["not frozen", table(ALT, w, { authority: evil })],
+      ["deactivated", table(ALT, w, { deactivationSlot: BigInt(5) })],
+    ];
+    for (const [what, bad] of variants) {
+      // compiled against the bad table (what a compromised API would do) or against the good one: both refused
+      assert.throws(() => vetFumpadTx(altLaunch(k, s, bad), wallet, policy(k, s, bad), A), (e: unknown) => e instanceof SilentSignRefused && /isn't the expected one/.test(e.message), what);
+      assert.throws(() => vetFumpadTx(altLaunch(k, s), wallet, policy(k, s, bad), A), (e: unknown) => e instanceof SilentSignRefused && /isn't the expected one/.test(e.message), what);
+    }
+  });
+
+  it("keeps every launch tamper check through the table; only a launch may use one", () => {
+    const k = Keypair.generate();
+    const s = Keypair.generate();
+    refused(() => vetFumpadTx(altLaunch(k, s, table(), { registerCfg: other }), wallet, policy(k, s), A), /registers a different coin/);
+    refused(() => vetFumpadTx(altLaunch(k, s, table(), { extra: [routerBuy()] }), wallet, policy(k, s), A), /doesn't use|repeats/);
+    refused(() => vetFumpadTx(altLaunch(k, s), wallet, { ...policy(k, s), maxSolInLamports: TENTH - BigInt(1) }, A), /more SOL/);
+    refused(() => vetFumpadTx(altLaunch(k, s), wallet, { ...policy(k, s), launchSigner: undefined }, A), /unexpected signers/);
+    // an index past the table's end
+    const t = altLaunch(k, s);
+    t.message.addressTableLookups[0].readonlyIndexes.push(40);
+    refused(() => vetFumpadTx(t, wallet, policy(k, s), A), /don't exist/);
+    // a buy through the table, or a table handed to a non-launch policy
+    refused(() => vetFumpadTx(tx([...cb(), routerBuy()], wallet, [table()]), wallet, buyPolicy(), A), /lookup tables/);
+    refused(() => vetFumpadTx(buyTx(), wallet, { ...buyPolicy(), lookupTable: table() }, A), /only a launch/);
   });
 });

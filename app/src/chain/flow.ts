@@ -7,8 +7,9 @@
  *
  * No React, no `@/` imports.
  */
-import { type Connection, type PublicKey, VersionedTransaction } from "@solana/web3.js";
+import { type AddressLookupTableAccount, type Connection, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import type { SilentPolicy } from "./allowlist";
+import { LAUNCH_ALT_ADDRESS } from "./cluster";
 import type { BuiltTx, FumpadClient, PreparedTrade } from "./build";
 import { checkLaunchBinding, LAUNCH_SLIPPAGE_BPS } from "./launch";
 import { dropLaunchAuth, getLaunchAuth, type LaunchAuth } from "./launchAuth";
@@ -182,6 +183,23 @@ export async function sendBuilt(
   return { signature, tx: signed };
 }
 
+/**
+ * The configured launch lookup table (NEXT_PUBLIC_LAUNCH_ALT) from chain when `tx` uses a table, else undefined. Never
+ * the table the transaction (or the API) names: a launch through any other table is refused by the allow-list.
+ */
+export async function launchLookupTable(connection: Pick<Connection, "getAddressLookupTable">, tx: VersionedTransaction, configured: string | undefined = LAUNCH_ALT_ADDRESS): Promise<AddressLookupTableAccount | undefined> {
+  if (!tx.message.addressTableLookups.length) return undefined;
+  if (!configured) throw new Error("Refusing to sign: the launch uses a lookup table and this app has none configured.");
+  let table: AddressLookupTableAccount | null = null;
+  try {
+    table = (await connection.getAddressLookupTable(new PublicKey(configured), { commitment: "confirmed" })).value;
+  } catch {
+    throw new Error("Couldn't read FUMPAD's launch lookup table to check this launch. Try again.");
+  }
+  if (!table) throw new Error("Refusing to sign: FUMPAD's launch lookup table isn't on chain.");
+  return table;
+}
+
 export interface PreparedTx {
   mint: string;
   suffix: string;
@@ -206,6 +224,9 @@ export async function signAndSendLaunch(
   const tx = VersionedTransaction.deserialize(Uint8Array.from(atob(p.transaction), (ch) => ch.charCodeAt(0)));
   // §8.1: the launch co-signer the program requires, from the chain's Global (not from the API).
   const launchSigner = await o.client.launchSigner();
+  // The launch lookup table: OUR configured one (NEXT_PUBLIC_LAUNCH_ALT), read from chain; the allow-list refuses any
+  // other table and checks this one's contents (exact launch accounts, frozen) before resolving the message.
+  const lookupTable = await launchLookupTable(o.connection, tx);
   // §5.9: the first-coin config only when the user chose it AND the API says it prepared it (checked on chain next).
   let firstCoinConfig: string | undefined;
   if (args.launchConfig === "first_coin") {
@@ -225,6 +246,7 @@ export async function signAndSendLaunch(
       launchSigner,
       firstCoinConfig,
       expectedFeeBps: args.expectedFeeBps,
+      lookupTable,
     },
     (config) => o.client.dbcConfig(config),
     (config) => o.client.configPolicy(config),
@@ -232,7 +254,7 @@ export async function signAndSendLaunch(
   await o.beforeSign?.(tx);
   o.onSigning?.();
   // A wallet that rewrites the message would void the mint's signature: signFumpadTx refuses it.
-  const signed = await signFumpadTx(s, tx, { action: "launch", mint: p.mint, coSigner: p.mint, maxSolInLamports: args.initialBuyLamports, launchSigner }, o.instant);
+  const signed = await signFumpadTx(s, tx, { action: "launch", mint: p.mint, coSigner: p.mint, maxSolInLamports: args.initialBuyLamports, launchSigner, lookupTable }, o.instant);
   o.onConfirming?.();
   const signature = await o.connection.sendRawTransaction(signed.serialize(), { maxRetries: 3 });
   o.onSent?.(signature);

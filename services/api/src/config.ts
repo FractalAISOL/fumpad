@@ -42,6 +42,14 @@ export interface ApiConfig {
   /** Launch binding key (L1): co-signs register_coin when Global.params.launch_signer is set. Separate from MINT_POOL_KEY. */
   launchSignerKey?: string;
   /**
+   * LAUNCH_ALT: the FUMPAD launch address lookup table (bootstrap `--step alt`; @fumpad/sdk `launchAltAddresses`).
+   * Prepare builds every launch through it (room for the https metadata uri). Required on every cluster but
+   * localnet (`launchAltRequired`): unset there = launches answer 503 (fail closed); localnet without it builds
+   * inline launches (tests / the local stack before its ALT exists).
+   */
+  launchAlt?: string;
+  launchAltRequired: boolean;
+  /**
    * LAUNCH_FIRST_COIN=true: `POST /v1/launch/prepare` accepts `launchConfig: "first_coin"` (the one-off first-coin
    * DBC config: 3% fee, wallet-split fee policy, INTERFACE §5.9). Off by default; turn it off again after the first
    * launch (the admin also removes the config from the allow-list, services/LAUNCH-DAY.md).
@@ -169,6 +177,16 @@ export function metadataConfig(env: NodeJS.ProcessEnv): Pick<ApiConfig, "pinataJ
   };
 }
 
+/**
+ * LAUNCH_ALT (base58, validated at boot) and whether this cluster needs it: every cluster but localnet (unset
+ * FUMPAD_CLUSTER = devnet, as in @fumpad/sdk). A malformed value is a startup error, never a guess.
+ */
+export function launchAltConfig(env: NodeJS.ProcessEnv): Pick<ApiConfig, "launchAlt" | "launchAltRequired"> {
+  const raw = env.LAUNCH_ALT?.trim() || undefined;
+  if (raw && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(raw)) throw new Error(`api: LAUNCH_ALT=${JSON.stringify(raw)} is not a base58 address`);
+  return { launchAlt: raw, launchAltRequired: (env.FUMPAD_CLUSTER?.trim().toLowerCase() ?? "") !== "localnet" };
+}
+
 export function loadApiConfig(env = process.env): ApiConfig {
   const prod = isProduction(env);
   requireEnv(env, "api", prod ? ["DATABASE_URL", "RPC_URL", "CORS_ORIGINS", "API_SSR_SECRET"] : ["DATABASE_URL"]);
@@ -199,6 +217,7 @@ export function loadApiConfig(env = process.env): ApiConfig {
     logLevel: env.LOG_LEVEL ?? "info",
     mintPoolKey: env.MINT_POOL_KEY || undefined,
     launchSignerKey: env.LAUNCH_SIGNER_KEY || undefined,
+    ...launchAltConfig(env),
     launchFirstCoin: env.LAUNCH_FIRST_COIN === "true",
     launchesOpen: launchesOpenFromEnv(env),
     vanitySuffix: env.VANITY_SUFFIX || "fmbL",

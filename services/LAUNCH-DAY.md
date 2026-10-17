@@ -25,7 +25,7 @@ SPEND="--send --i-understand-this-spends-real-sol"
 | when | what | irreversible? |
 |---|---|---|
 | T−7 d … T−1 d | providers, keys, multisigs, build, rehearsal, Railway mainnet project (services stopped) | no |
-| **Day 0, morning (H0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
+| **Day 0, morning (H0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → launch lookup table (frozen) → `propose_admin` | program id + Global params/cluster_tag: yes; the frozen launch ALT: yes (a new one = env rotation) |
 | H0 … H0 + 6 h | 6 h: voters approve `accept_admin` in Squads (right away — the Squads 6 h lock starts at the 2nd approval); services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
 | **≥ H0 + 6 h (same day)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
 | **T0 (same evening or next morning)** | pre-flight re-check → first coin on the first-coin config (app still gated) → set the mint: fumpad.app's page goes live (coin + checker) → remove that config → open the app (gate off) | the first coin's 3% fee + routing: yes (snapshotted) |
@@ -128,13 +128,13 @@ Opening the app only after the handover means no hot key holds admin power while
     reaches all three attestor keys + the operator key, so its 2FA is the 2-of-3 boundary (keep the recovery codes
     offline). The waitlist is retired: no `waitlist-db` / `WAITLIST_*` on mainnet (the API logs `WAITLIST DISABLED`
     and answers 503 on `POST /v1/waitlist` only). Created 2026-10-17 (IDs, env set vs pending, day-0 order:
-    `$K/RAILWAY-MAINNET.md`); only Postgres + grinder run before day 0. Services as DEPLOY-v07.md §4, differences:
+    `$K/RAILWAY-MAINNET.md`; add there: api `LAUNCH_ALT` **pending until day 0** `--step alt`); only Postgres + grinder run before day 0. Services as DEPLOY-v07.md §4, differences:
     | service | mainnet env |
     |---|---|
     | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
     | `Postgres` | new, empty (migrations run at the indexer's start) |
     | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan), `PINATA_GATEWAY` (optional, = the api's) |
-    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`), **`PINATA_JWT`** (from `$K/pinata.env`, item 16: without it on mainnet `POST /v1/launch/metadata` answers 503, the api logs `launch metadata uploads DISABLED` at boot and no coin can launch from the app), `PINATA_GATEWAY` (optional, dedicated gateway domain) |
+    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`), **`PINATA_JWT`** (from `$K/pinata.env`, item 16: without it on mainnet `POST /v1/launch/metadata` answers 503, the api logs `launch metadata uploads DISABLED` at boot and no coin can launch from the app), `PINATA_GATEWAY` (optional, dedicated gateway domain), **`LAUNCH_ALT`** (PENDING until day 0: the launch lookup table from `$B --step alt`, `$K/launch-alt.json`; required on mainnet — without it the api logs `launches DISABLED … LAUNCH_ALT` and answers 503 on every prepare and metadata upload) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
     | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
     | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=onchain` (no key; price read via the same `RPC_URL`), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
@@ -151,6 +151,7 @@ Opening the app only after the handover means no hot key holds admin power while
     | `NEXT_PUBLIC_FUMPAD_API` | the mainnet API URL |
     | `API_SSR_SECRET` | the new one (= the mainnet API's) |
     | `NEXT_PUBLIC_SITE_URL` | `https://fumpad.app` |
+    | `NEXT_PUBLIC_LAUNCH_ALT` | the launch lookup table (day 0, `$K/launch-alt.json`; = the api's `LAUNCH_ALT`). Unset, the app refuses every launch the api prepares (they all use the table): set it, then redeploy, before anyone launches |
     `app/next.config.ts` hands the id/cluster to the vendored SDK; the silent-signing allow-list signs for that id only
     and the app refuses to load if the SDK and the app disagree (`app/src/chain/deployment.test.ts`). Check on the
     preview: the footer's program link = `$FUMPAD_PROGRAM_ID`, no "Devnet" badge. Keep `NEXT_PUBLIC_PRELAUNCH` unset
@@ -183,11 +184,19 @@ $B --step config        $SPEND                       # DBC create_config ×2: st
 $B --step init          $SPEND                       # initialize_global: IRREVERSIBLE params/cluster_tag/keepers + both configs with their fee
                                                      # policies (first coin: 1.0% buyback / 1.4% → firstCoin.feeWallet, max 1) — read the summary
 $B --step fund          $SPEND                       # operator 2 SOL, attestor-1/2/3 0.3 SOL
+$B --step alt           $SPEND                       # the launch lookup table: create + extend (11 static launch accounts)
+                                                     # + FREEZE in one tx (~0.0027 SOL rent, locked for good); address →
+                                                     # $K/launch-alt.json → api LAUNCH_ALT + Vercel NEXT_PUBLIC_LAUNCH_ALT
 $B --step propose-admin $SPEND                       # admin → admin vault, guardian → guardian vault (6 h)
 $B --step verify                                     # all ✓; "next: after <eta> … accept-admin"
 $B --step accept-admin  $SPEND                       # ops key creates the accept_admin vault tx (no approval)
 $M show-tx $C --config $K/multisig/admin.json --index <N>   # voters check: accept_admin, signer = admin vault
 ```
+Run `$B --step alt --simulate` before its `$SPEND` (the summary lists the 11 accounts; the table must simulate as
+frozen with exactly those). Why frozen and not owned by the admin vault: services/scripts/ops/launch-alt.ts and
+audit/THREAT-MODEL.md (an authority could only append — which breaks every launch, the app and api require the exact
+list — or deactivate/close it: a DoS key with no upside). Set `LAUNCH_ALT` on the api and `NEXT_PUBLIC_LAUNCH_ALT` on
+Vercel (redeploy) before the api deploy below.
 Then deploy the Railway services in DEPLOY-v07.md §4 order (indexer → api → keeper → board roles → attestors →
 watcher). Check: API `/v1/status`, attestor logs "3 active keepers", board RLS on, watcher `/v1/verification` empty,
 keeper heartbeat in Telegram. The app stays gated; the team can test on `fumpad.vercel.app` (a small real coin —

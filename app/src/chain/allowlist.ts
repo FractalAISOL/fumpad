@@ -3,7 +3,7 @@
  *
  * Silent signing is only safe if the transaction is exactly what our builders make. This
  * module checks the compiled message, not our intentions: an unexpected program, an
- * unexpected signer, a lookup table, an instruction acting for someone else or on another
+ * unexpected signer, a lookup table (but THE launch table on a launch, below), an instruction acting for someone else or on another
  * coin, an account list that isn't the canonical one, a buy larger than the amount the user
  * typed or an outsized priority fee all refuse. The patterns are the app's builders (`./build.ts`)
  * and the API's launch prepare, both @fumpad/sdk v0.7 (`contracts/INTERFACE-v0.7.md`); real
@@ -25,13 +25,19 @@
  * The wallet never signs a DAMM v2 instruction directly, nor any Token-2022 instruction, nor a
  * Token instruction other than SyncNative / CloseAccount on its own WSOL account.
  *
+ * Lookup tables: only a launch may use one, and only THE launch table — the address this build is configured with
+ * (NEXT_PUBLIC_LAUNCH_ALT, never the API's word), loaded from chain by the caller and passed in `policy.lookupTable`,
+ * whose contents must be exactly @fumpad/sdk `launchAltAddresses()` and which must be frozen and active
+ * (`launchAltProblems`: nobody can change what an index points at). The message's keys are resolved through it, then
+ * every check below runs on the resolved accounts exactly as for an inline launch. Signers are always static keys.
+ *
  * The withdraw flow (Trading wallet → an address) is the one plain System transfer we sign, and
  * it has its own exact pattern (`vetWithdrawTx`), only after the user confirmed it on screen.
  *
  * No React, no `@/` imports: unit-tested by `allowlist.test.ts` with `npm test`.
  */
 import { ed25519 } from "@noble/curves/ed25519";
-import { ComputeBudgetProgram, PublicKey, SystemProgram, type TransactionInstruction, type VersionedTransaction } from "@solana/web3.js";
+import { type AddressLookupTableAccount, ComputeBudgetProgram, PublicKey, SystemProgram, type TransactionInstruction, type VersionedTransaction } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID as ATA_PROGRAM_ID,
   claimIx,
@@ -45,6 +51,7 @@ import {
   FUMPAD_IDL,
   FUMPAD_PROGRAM_ID,
   globalPda,
+  launchAltProblems,
   registerCoinIx,
   routerBuyIx,
   routerSellIx,
@@ -56,7 +63,7 @@ import {
   WSOL_MINT,
   wsolAta,
 } from "@fumpad/sdk";
-import { FUMPAD_PROGRAM_ADDRESS } from "./cluster";
+import { FUMPAD_PROGRAM_ADDRESS, LAUNCH_ALT_ADDRESS } from "./cluster";
 
 export { ATA_PROGRAM_ID, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID };
 
@@ -138,6 +145,11 @@ export interface SilentPolicy {
   minOut?: bigint;
   /** Claims and escrow withdrawals (required): the ticket the user picked (base58). */
   ticket?: string;
+  /**
+   * Launch only, when the transaction uses a lookup table: the configured launch table as loaded from chain by the
+   * app (`connection.getAddressLookupTable(NEXT_PUBLIC_LAUNCH_ALT)`), never from the API. Re-verified here.
+   */
+  lookupTable?: AddressLookupTableAccount;
 }
 
 export class SilentSignRefused extends Error {
@@ -170,15 +182,40 @@ interface Ix {
   data: Uint8Array;
 }
 
+/**
+ * The launch table's addresses, in message order (writable lookups, then read-only), after checking it is the one
+ * configured launch table, verified (`launchAltProblems`: exact contents, frozen, active) and that every index exists.
+ */
+function launchTableKeys(lookups: VersionedTransaction["message"]["addressTableLookups"], table: AddressLookupTableAccount | undefined, configured: string | undefined): PublicKey[] {
+  if (lookups.length !== 1) refuse("it uses more than one address lookup table");
+  if (!configured) refuse("it uses an address lookup table and this app has no launch table configured");
+  const want = new PublicKey(configured!);
+  if (!lookups[0].accountKey.equals(want)) refuse("it uses an address lookup table that isn't FUMPAD's launch table");
+  if (!table) refuse("the launch lookup table couldn't be loaded to check it");
+  const problems = launchAltProblems(table, want, PROGRAM);
+  if (problems.length) refuse(`the launch lookup table isn't the expected one (${problems[0]})`);
+  const addrs = table!.state.addresses;
+  const pick = (i: number) => addrs[i] ?? refuse("it references lookup table entries that don't exist");
+  return [...lookups[0].writableIndexes.map(pick), ...lookups[0].readonlyIndexes.map(pick)];
+}
+
 /** Message → plain instructions, after the checks every silent transaction must pass. */
-function open(tx: VersionedTransaction, wallet: PublicKey, coSigners: string[]): { ixs: Ix[]; isSigner: (k: PublicKey) => boolean } {
+function open(
+  tx: VersionedTransaction,
+  wallet: PublicKey,
+  coSigners: string[],
+  alt: { allowed: boolean; table?: AddressLookupTableAccount; configured?: string } = { allowed: false },
+): { ixs: Ix[]; isSigner: (k: PublicKey) => boolean } {
   const m = tx.message;
   const lookups = "addressTableLookups" in m ? m.addressTableLookups : [];
-  if (lookups.length) refuse("it uses address lookup tables");
-  const keys = m.staticAccountKeys;
-  if (!keys.length || !keys[0].equals(wallet)) refuse("your wallet isn't the fee payer");
+  if (lookups.length && !alt.allowed) refuse("it uses address lookup tables");
+  const statics = m.staticAccountKeys;
+  // Signers are static keys only (the runtime never takes a signer from a table); `n` below indexes `statics`.
+  const keys = lookups.length ? [...statics, ...launchTableKeys(lookups, alt.table, alt.configured)] : statics;
+  if (!statics.length || !statics[0].equals(wallet)) refuse("your wallet isn't the fee payer");
   const n = m.header.numRequiredSignatures;
-  const signers = keys.slice(0, n);
+  if (n > statics.length) refuse("it asks for unexpected signers");
+  const signers = statics.slice(0, n);
   const others = signers.slice(1).map((k) => k.toBase58());
   if (others.length !== coSigners.length || others.some((k) => !coSigners.includes(k))) refuse("it asks for unexpected signers");
   // Co-signers sign before us; a blank slot means someone wants our signature first. L-7: the
@@ -188,7 +225,7 @@ function open(tx: VersionedTransaction, wallet: PublicKey, coSigners: string[]):
     for (let i = 1; i < n; i++) {
       const sig = tx.signatures[i];
       if (!sig || sig.every((b) => b === 0)) refuse("a co-signer hasn't signed");
-      if (!verifySignature(sig, msg, keys[i])) refuse("a co-signer's signature doesn't match the transaction");
+      if (!verifySignature(sig, msg, statics[i])) refuse("a co-signer's signature doesn't match the transaction");
     }
   }
   const ixs = m.compiledInstructions.map((c) => {
@@ -415,9 +452,10 @@ function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_
 /**
  * Throws `SilentSignRefused` unless `tx` is one of our FUMPAD transactions for `wallet`,
  * `policy.action` and `policy.mint`. Returns the SOL the transaction commits to buys (lamports)
- * and, for a launch, what it launches.
+ * and, for a launch, what it launches. `launchAlt`: the launch lookup table this build accepts
+ * (NEXT_PUBLIC_LAUNCH_ALT; a parameter for the tests only).
  */
-export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy: SilentPolicy): { solInLamports: bigint; launch?: LaunchShape } {
+export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy: SilentPolicy, launchAlt: string | undefined = LAUNCH_ALT_ADDRESS): { solInLamports: bigint; launch?: LaunchShape } {
   if (!FUMPAD_PROGRAM_ID.equals(PROGRAM)) refuse("the app and its SDK disagree on the FUMPAD program");
   const action = policy.action;
   if (!(action in ACTION_IX)) refuse("unknown action");
@@ -450,7 +488,12 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
     }
   }
   // Co-signers: the reserved mint and, when configured, the launch signer; each signature verified (L-7).
-  const { ixs, isSigner } = open(tx, wallet, [...(policy.coSigner ? [policy.coSigner] : []), ...(launchSigner ? [launchSigner.toBase58()] : [])]);
+  if (policy.lookupTable && action !== "launch") refuse("only a launch may use a lookup table");
+  const { ixs, isSigner } = open(tx, wallet, [...(policy.coSigner ? [policy.coSigner] : []), ...(launchSigner ? [launchSigner.toBase58()] : [])], {
+    allowed: action === "launch",
+    table: policy.lookupTable,
+    configured: launchAlt,
+  });
   const rest = vetComputeBudget(ixs);
   if (!isSigner(wallet)) refuse("your wallet isn't a signer");
 

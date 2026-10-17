@@ -4,11 +4,11 @@
  * image checks (type sniffing, size, dimensions, EXIF / text stripping), auth, rate limits, gates, the devnet
  * placeholder fallback and the mainnet 503, and that a launch tx still fits with the real-length URI.
  */
-import { Keypair, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { AddressLookupTableAccount, ComputeBudgetProgram, Keypair, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { launchInstructions } from "@fumpad/sdk";
+import { launchAltAddresses, launchInstructions } from "@fumpad/sdk";
 
 import { loadApiConfig, metadataConfig } from "../src/config.js";
 import { signLaunchAuth } from "../src/launch/auth.js";
@@ -156,7 +156,33 @@ describe("metadata body + JSON shape", () => {
     expect(buildTokenMetadata({ name: "Sad Pigeon", symbol: "PIGN" })).toEqual({ name: "Sad Pigeon", symbol: "PIGN", description: "", showName: true, createdOn: "https://fumpad.app" });
   });
 
-  it("uri form: https gateway when the launch tx has room, else ipfs://, else refused (1,232-byte launch tx)", () => {
+  it("through the launch ALT: always the https gateway, even max name + ticker + first buy + co-signer + priority fee", () => {
+    const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+    const https = `${METADATA_URI_GATEWAY}${cid}`;
+    for (const firstBuy of [true, false])
+      for (const [name, symbol] of [["W".repeat(32), "W".repeat(10)], ["Sad Pigeon", "PIGN"], ["A", "A"], ["é".repeat(16), "Ω".repeat(5)]])
+        expect(metadataUriFor(cid, { name, symbol, firstBuy, alt: true }), `${name}/${symbol}/${firstBuy}`).toBe(https);
+    // the size model matches an independent build through a table with the launch ALT's contents, and the worst case
+    // the API can build (max metadata, https uri, first buy, launch co-signer, CU limit + priority price) still fits
+    const me = Keypair.generate().publicKey;
+    const alt = new AddressLookupTableAccount({ key: Keypair.generate().publicKey, state: { deactivationSlot: (1n << 64n) - 1n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, addresses: launchAltAddresses() } });
+    const build = (priorityMicroLamports?: number) =>
+      new VersionedTransaction(
+        new TransactionMessage({
+          payerKey: me,
+          recentBlockhash: PublicKey.default.toBase58(),
+          instructions: launchInstructions({ creator: me, mint: Keypair.generate().publicKey, dbcConfig: Keypair.generate().publicKey, name: "W".repeat(32), symbol: "W".repeat(10), uri: https, buyLamports: 5n, minTokensOut: 1n, launchSigner: Keypair.generate().publicKey, priorityMicroLamports }),
+        }).compileToV0Message([alt]),
+      );
+    const size = build().serialize().length;
+    expect(launchTxSize({ name: "W".repeat(32), symbol: "W".repeat(10), uri: https, firstBuy: true, alt: true })).toBe(size);
+    expect(build(5_000_000).serialize().length).toBeLessThanOrEqual(LAUNCH_TX_MAX_BYTES);
+    expect(build(5_000_000).message.compiledInstructions.some((i) => build(5_000_000).message.staticAccountKeys[i.programIdIndex].equals(ComputeBudgetProgram.programId))).toBe(true);
+    // the same worst case inline doesn't fit: the reason for the table
+    expect(launchTxSize({ name: "W".repeat(32), symbol: "W".repeat(10), uri: https, firstBuy: true })).toBeGreaterThan(LAUNCH_TX_MAX_BYTES);
+  });
+
+  it("inline (localnet without LAUNCH_ALT): https when the launch tx has room, else ipfs://, else refused (1,232-byte launch tx)", () => {
     const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
     // no first buy: always room for the https form, even at max name + ticker
     expect(metadataUriFor(cid, { name: "W".repeat(32), symbol: "W".repeat(10), firstBuy: false })).toBe(`${METADATA_URI_GATEWAY}${cid}`);
@@ -230,6 +256,7 @@ describe("POST /v1/launch/metadata", () => {
     app = undefined;
   });
 
+  const ALT = Keypair.generate().publicKey.toBase58();
   class FakePinner implements IpfsPinner {
     files: PinFile[] = [];
     fail = false;
@@ -242,7 +269,8 @@ describe("POST /v1/launch/metadata", () => {
   }
 
   async function server(e: Record<string, string> = {}, o: { pinner?: IpfsPinner | null; balance?: number; pool?: boolean } = {}) {
-    const cfg = loadApiConfig(env({ DATABASE_URL: "postgres://stub/stub", LOG_LEVEL: "silent", LAUNCH_SWEEP_SECS: "0", ...e }));
+    // LAUNCH_ALT is required on every cluster but localnet (the metadata route only checks it's configured)
+    const cfg = loadApiConfig(env({ DATABASE_URL: "postgres://stub/stub", LOG_LEVEL: "silent", LAUNCH_SWEEP_SECS: "0", LAUNCH_ALT: ALT, ...e }));
     const built = await buildServer(cfg, {
       db: { query: async () => ({ rows: [], rowCount: 0 }), end: async () => {} } as never,
       conn: { getBalance: async () => o.balance ?? 1_000_000_000 } as never,
@@ -279,8 +307,8 @@ describe("POST /v1/launch/metadata", () => {
     expect(Buffer.from(pinner.files[0].bytes).includes(Buffer.from("Jane Doe"))).toBe(false);
     expect(pinner.files[0].keyvalues).toEqual({ app: "fumpad", creator, symbol: "PIGN", kind: "image" });
     expect(pinner.files[1].cidVersion).toBe("v0");
-    // a first buy (the default) leaves room only for the short form
-    expect(out.uri).toMatch(/^ipfs:\/\/Qm[1-9A-HJ-NP-Za-km-z]{44}$/);
+    // through the launch ALT a first buy (the default) still leaves room for the https form
+    expect(out.uri).toMatch(/^https:\/\/ipfs\.io\/ipfs\/Qm[1-9A-HJ-NP-Za-km-z]{44}$/);
     expect(out.image).toMatch(/^https:\/\/ipfs\.io\/ipfs\/b[a-z2-7]+$/);
     expect(out.placeholder).toBeUndefined();
     const json = JSON.parse(Buffer.from(pinner.files[1].bytes).toString("utf8"));
@@ -368,9 +396,30 @@ describe("POST /v1/launch/metadata", () => {
     expect((await post(b, body({}, "PIGN", kp()), "8.8.8.8")).statusCode).toBe(200);
   });
 
-  it("a name + ticker too long for any IPFS uri with a first buy: 400 before pinning; fine without the buy", async () => {
+  it("max name + ticker + first buy: the https uri through the launch ALT", async () => {
     const pinner = new FakePinner();
     const a = await server({}, { pinner });
+    const r = await post(a, body({ name: "W".repeat(32) }, "WWWWWWWWWW"));
+    expect(r.statusCode).toBe(200);
+    expect(r.json().uri).toMatch(/^https:\/\/ipfs\.io\/ipfs\/Qm/);
+  });
+
+  it("LAUNCH_ALT missing where it's required (devnet / mainnet): 503 before anything is pinned", async () => {
+    const pinner = new FakePinner();
+    for (const e of [{ LAUNCH_ALT: "" }, { FUMPAD_CLUSTER: "devnet", LAUNCH_ALT: "" }, { FUMPAD_CLUSTER: "mainnet", PINATA_JWT: "x", LAUNCHES_OPEN: "true", LAUNCH_ALT: "" }] as Record<string, string>[]) {
+      const a = await server(e, { pinner });
+      const r = await post(a, body());
+      expect(r.statusCode).toBe(503);
+      expect(r.json().error).toMatch(/lookup table/);
+      await a.close();
+    }
+    expect(pinner.files).toHaveLength(0);
+    expect(() => loadApiConfig(env({ DATABASE_URL: "postgres://stub/stub", LAUNCH_ALT: "not-an-address!" }))).toThrow(/LAUNCH_ALT/);
+  });
+
+  it("inline (localnet, no LAUNCH_ALT): a name + ticker too long for any IPFS uri with a first buy is 400 before pinning; fine without the buy", async () => {
+    const pinner = new FakePinner();
+    const a = await server({ FUMPAD_CLUSTER: "localnet", LAUNCH_ALT: "" }, { pinner });
     const long = { name: "W".repeat(32) };
     const r = await post(a, body({ ...long }, "WWWWWWWWWW"));
     expect(r.statusCode).toBe(400);

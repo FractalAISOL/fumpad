@@ -18,7 +18,7 @@ import { Connection, Keypair, LAMPORTS_PER_SOL, type PublicKey } from "@solana/w
 import { type ClusterName, DBC_POOL_AUTHORITY, FEE_POLICY, STANDARD_FEE_POLICY } from "@fumpad/sdk";
 import { createPool, migrate } from "@fumpad/indexer";
 
-import { airdrop, createFumpadConfig, LOCAL_PARAMS, transferSol } from "./actors.js";
+import { airdrop, createFumpadConfig, createLaunchAlt, LOCAL_PARAMS, transferSol } from "./actors.js";
 import { buildGrinder, keypair, keypairPath, LOCAL, type Postgres, readKeypairFile, type Service, startBinary, startPostgres, startService, startValidator, type Validator, waitFor } from "./harness.js";
 
 /**
@@ -38,6 +38,9 @@ export interface ExistingChain {
   cluster: ClusterName;
   /** price the attestors / watcher / API use (PYTH_SOURCE=constant) */
   solUsd: number;
+  /** The bootstrap's launch ALT (`--step alt`); unset = the stack creates one (payer: `altPayer`). */
+  launchAlt?: PublicKey;
+  altPayer?: Keypair;
 }
 
 export interface StackOpts {
@@ -66,6 +69,8 @@ export interface Stack {
   firstCoin?: { config: PublicKey; wallet: PublicKey };
   /** The API's launch key = `Params.launch_signer` (off-chain review L1): the API co-signs every launch. */
   launchKey: Keypair;
+  /** The FUMPAD launch ALT the API builds every launch through (LAUNCH_ALT). */
+  launchAlt: PublicKey;
   api: string;
   ports: { api: number; indexer: number; keeper: number; watcher: number };
   ssrSecret: string;
@@ -163,6 +168,14 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       log("✓ chain ready: Global seeded (local windows, 3 attestors + 1 operator, standard + first-coin configs allow-listed), configs created");
     }
     const conn = new Connection(v.rpcUrl, "confirmed");
+    // The launch ALT (frozen; every launch goes through it, like on devnet / mainnet).
+    let launchAlt = opts.chain?.launchAlt;
+    if (!launchAlt) {
+      const payer = opts.chain?.altPayer ?? admin;
+      if (!payer) throw new Error("existing chain without a launch ALT: pass chain.launchAlt or chain.altPayer");
+      launchAlt = await createLaunchAlt(conn, payer);
+      log(`✓ launch ALT ${launchAlt.toBase58()} (frozen)`);
+    }
 
     // the services refuse to start unless Global.cluster_tag = FUMPAD_CLUSTER (program id: inherited FUMPAD_PROGRAM_ID)
     const dep = { FUMPAD_CLUSTER: opts.chain?.cluster ?? "localnet" };
@@ -182,7 +195,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }),
     );
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${ports.indexer}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false", LAUNCHES_OPEN: "true" }));
+    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false", LAUNCHES_OPEN: "true", LAUNCH_ALT: launchAlt.toBase58() }));
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
@@ -247,7 +260,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }
       return dir;
     };
-    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, firstCoin, launchKey, api, ports, ssrSecret, get, dumpLogs, stop };
+    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, firstCoin, launchKey, launchAlt, api, ports, ssrSecret, get, dumpLogs, stop };
   } catch (e) {
     const dir = join(LOCAL, "stack-logs");
     mkdirSync(dir, { recursive: true });

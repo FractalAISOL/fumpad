@@ -44,6 +44,7 @@ import {
   type FeesClaimedEvent,
   globalPda,
   inspectLaunchTx,
+  launchTxLookupTables,
   isFumpadVanityMint,
   launchInstructions,
   quoteDbcBuy,
@@ -204,7 +205,7 @@ class Run {
     if (!r.ok) throw new Error(`prepare(${kind}) → ${r.status} ${await r.text()}`);
     const p = (await r.json()) as { mint: string; transaction: string; lastValidBlockHeight: number; config: { kind: string; dbcConfig: string; feeBps: number; snipeStartBps: number; snipeWindowSlots: number; migratedPoolFeeBps: number; feePolicy: { kind: number; buybackShareBps: number; walletShareBps: number; wallet: string | null; maxCoins: number; coinsRegistered: number } } };
     const ltx = VersionedTransaction.deserialize(Buffer.from(p.transaction, "base64"));
-    const info = inspectLaunchTx(ltx);
+    const info = inspectLaunchTx(ltx, await launchTxLookupTables(this.conn, ltx));
     ltx.sign([who]);
     const raw = ltx.serialize();
     const sig = await this.conn.sendRawTransaction(raw, { maxRetries: 0 });

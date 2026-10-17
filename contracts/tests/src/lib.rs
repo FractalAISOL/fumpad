@@ -596,6 +596,8 @@ pub mod flow;
 #[cfg(test)]
 mod admin_tests;
 #[cfg(test)]
+mod alt_launch_tests;
+#[cfg(test)]
 mod audit_prep_tests;
 #[cfg(test)]
 mod attest_tests;

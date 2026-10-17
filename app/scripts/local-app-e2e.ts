@@ -13,7 +13,9 @@
  * signer) and the chain accounts the tests need are written to src/chain/fixtures/local-v07.json
  * (public data only: addresses, transactions, account bytes; no keys, no RPC URLs).
  *
- *   npx tsx scripts/local-app-e2e.ts [--capture]
+ *   NEXT_PUBLIC_LAUNCH_ALT=<app-stack.json launchAlt> npx tsx scripts/local-app-e2e.ts [--capture]
+ *
+ * (the app only signs launches through ITS configured launch lookup table: the stack's, printed by `npm run local:app`)
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,7 +32,8 @@ import { baseToTokens, solToLamports } from "../src/data/chain";
 const CAPTURE = process.argv.includes("--capture");
 const STACK = join(import.meta.dirname, "../../services/.local/app-stack.json");
 const OUT = join(import.meta.dirname, "../src/chain/fixtures/local-v07.json");
-const info = JSON.parse(readFileSync(STACK, "utf8")) as { rpcUrl: string; api: string; dbcConfig: string; wallets: Record<string, { address: string; keypair: string }> };
+const info = JSON.parse(readFileSync(STACK, "utf8")) as { rpcUrl: string; api: string; dbcConfig: string; launchAlt: string; wallets: Record<string, { address: string; keypair: string }> };
+if (process.env.NEXT_PUBLIC_LAUNCH_ALT !== info.launchAlt) throw new Error(`run with NEXT_PUBLIC_LAUNCH_ALT=${info.launchAlt} (the stack's launch lookup table)`);
 const load = (name: string) => Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(info.wallets[name].keypair, "utf8")) as number[]));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const b64 = (u: Uint8Array) => Buffer.from(u).toString("base64");

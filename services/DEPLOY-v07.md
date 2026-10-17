@@ -97,13 +97,16 @@ npx tsx scripts/devnet/bootstrap-v07.ts --step init --yes       # initialize_glo
 npx tsx scripts/devnet/bootstrap-v07.ts --step operators --yes  # existing pre-operators Global only: migrate_global + set_operators (§10)
 npx tsx scripts/devnet/bootstrap-v07.ts --step fund             # prints the funding plan only
 npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes       # sends it (one tx)
+npx tsx scripts/devnet/bootstrap-v07.ts --step alt --simulate   # the launch lookup table (create + extend + freeze, one tx)
+npx tsx scripts/devnet/bootstrap-v07.ts --step alt --yes        # → ~/fumpad-keys/devnet/v07/launch-alt.json → LAUNCH_ALT / NEXT_PUBLIC_LAUNCH_ALT
 npx tsx scripts/devnet/bootstrap-v07.ts --step verify           # checklist; exit 1 on any ✗
 ```
 `verify` checks: program deployed + upgrade authority + **deployed bytecode == local .so**, DBC/DAMM programs, DAMM
 migration config, DBC pool authority flash rent, config §5.4 + devnet numbers, Global (cluster_tag 1, admin =
 guardian = deployer, treasury, keepers = attestor-1/2/3 with `keeper_added_at = 0` and all 3 active NOW, operators =
 [operator] disjoint from the keepers, configs =
-[config], nothing pending, not paused, params field by field incl. `launch_signer`), wallet balances.
+[config], nothing pending, not paused, params field by field incl. `launch_signer`), the launch ALT (frozen, exact
+contents), wallet balances.
 
 ## 3. Postgres reset (fresh schema; keep the vanity pool)
 
@@ -150,7 +153,7 @@ One image (`services/Dockerfile`, `SERVICE_ENTRY` picks the entry; `keeper/dist/
 | service | new? | `SERVICE_ENTRY` / mode | env (★ = secret, piped) | RPC | public |
 |---|---|---|---|---|---|
 | `indexer` | existing | `indexer/dist/main.js` | `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `RPC_URL`★, (`WS_URL`★), Meteora indexing is on by default (`METEORA_INDEXER_ENABLED` must not be `false`); **unset** `BACKFILL_FROM_SLOT` (or set it to the deploy slot) and the Helius webhook vars unless you re-point the webhook at `5YMF…`; `PINATA_GATEWAY` (optional, same value as the api: coin metadata JSON is fetched through it first) | provider A (Helius, `rpc.env`) | no |
-| `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `LAUNCH_FIRST_COIN=false` (true only to launch the first coin, §11 / LAUNCH-DAY §5), `LAUNCHES_OPEN` (unset = open on devnet; **mainnet defaults to closed**: set `false` until the public opening, then `true`, LAUNCH-DAY §1/§5), `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional), **`PINATA_JWT`★ (new: coin metadata to IPFS, `POST /v1/launch/metadata`; required with `FUMPAD_CLUSTER=mainnet`, else uploads answer 503 and the app can't launch; devnet without it = placeholder uri `ipfs://pending`)**, `PINATA_GATEWAY` (optional, dedicated gateway domain `<name>.mypinata.cloud`: our image proxy tries it before `IPFS_GATEWAY`) | A | yes (`api-production-66441.up.railway.app`) |
+| `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `LAUNCH_FIRST_COIN=false` (true only to launch the first coin, §11 / LAUNCH-DAY §5), `LAUNCHES_OPEN` (unset = open on devnet; **mainnet defaults to closed**: set `false` until the public opening, then `true`, LAUNCH-DAY §1/§5), `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional), **`PINATA_JWT`★ (new: coin metadata to IPFS, `POST /v1/launch/metadata`; required with `FUMPAD_CLUSTER=mainnet`, else uploads answer 503 and the app can't launch; devnet without it = placeholder uri `ipfs://pending`)**, `PINATA_GATEWAY` (optional, dedicated gateway domain `<name>.mypinata.cloud`: our image proxy tries it before `IPFS_GATEWAY`), **`LAUNCH_ALT` (new: the launch lookup table, §13; required: unset = every launch 503)** | A | yes (`api-production-66441.up.railway.app`) |
 | `grinder` | existing | `grinder/Dockerfile` | unchanged (`DATABASE_URL`, `MINT_POOL_KEY`★, `POOL_TARGET`) | — | no |
 | `keeper` | existing | `keeper/dist/main.js`, `KEEPER_MODE=jobs` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (owner: `meta` table + advisory lock), `RPC_URL`★, **`KEEPER_SECRET_KEY`★ = operator** (never an attestor key: it refuses to start), `KEEPER_DAILY_BUDGET_SOL=3` (graduation setup ≈ 0.5 SOL/coin on devnet), `TELEGRAM_BOT_TOKEN`★/`TELEGRAM_CHAT_ID`, `PORT=8082` | A | no |
 | `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider B's **mainnet** endpoint), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | **B** | no |
@@ -299,6 +302,8 @@ No Vercel env var has to change for v0.7 devnet:
 - `NEXT_PUBLIC_SOLANA_RPC` unchanged as long as it is the domain-restricted **devnet** frontend key (the app infers
   the cluster from the URL: it must contain `devnet`).
 - The DBC config and `launch_signer` are read from the chain's Global (no env).
+- **`NEXT_PUBLIC_LAUNCH_ALT`** (new, §13): the launch lookup table, = the api's `LAUNCH_ALT`. Without it the app
+  refuses to sign every launch the api prepares (they all go through the table).
 - `NEXT_PUBLIC_PRIVY_APP_ID`, `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_X_URL`, `NEXT_PUBLIC_PRELAUNCH` / `PRELAUNCH_HOSTS`
   unchanged.
 Action: redeploy the v0.7 app from main (`cd ~/fumpad/app && vercel deploy --prod`), after the API is on v0.7.
@@ -595,3 +600,35 @@ attested Oct 13 15:40 / 15:49 UTC. They can NOT be voided: both are `queued` (vo
 challenge windows closed Oct 13 16:40 / 16:49 UTC (`scripts/ops/void-ticket.ts` simulation → `TicketNotOpen`).
 Guardian tool for future cases (simulates by default, refuses mainnet):
 `npx tsx scripts/ops/void-ticket.ts <ticket> … [--reopen] [--reason n] [--yes]`.
+
+## 13. 2026-10-17 launch address lookup table (room for the https metadata uri)
+
+Every launch is now a v0 message through the FUMPAD **launch ALT**: a lookup table holding the 11 accounts that are
+the same for every launch (`@fumpad/sdk` `launchAltAddresses()`: Global, reward pool, fumpad event authority, DBC pool
+authority + event authority, WSOL mint, Token / Token-2022 / ATA / System programs, instructions sysvar), created,
+extended and **frozen in one transaction** (no authority left: nobody can extend, deactivate or close it). Worst case
+(32-byte name, 10-byte symbol, `https://ipfs.io/ipfs/<CIDv0>`, first buy, launch co-signer, priority fee): 1,103 B
+(129 B spare) instead of 1,317 B inline, so `POST /v1/launch/metadata` always returns the https uri.
+The api verifies the table on chain before building (exact contents, frozen, active; cached once verified) and fails
+closed: `LAUNCH_ALT` unset on devnet / mainnet → 503 on prepare + metadata (and `launches DISABLED` at boot). Only
+`FUMPAD_CLUSTER=localnet` without it builds inline launches. The app accepts only the table it is built with
+(`NEXT_PUBLIC_LAUNCH_ALT`), loads it from chain and re-checks the contents before signing.
+
+**Devnet table: `D7FRDjziN1XninqtCLZrJz55TE27ZU2bQzX5SG85dTBF`** (created 2026-10-17, tx
+`32TziPfDj1yKorXaQUTxEkaWW45UVUdZLUfA1X27URmJMaG1KwZgLkkx6E34MzTi4rGiRnxbAv4LjMtjc91HUTWT`; record
+`~/fumpad-keys/devnet/v07/launch-alt.json`). To roll out (in this order, launches pause between 1 and 3 only if the
+api is deployed first without the variable):
+```sh
+# 1. api: the variable, then deploy this branch's api (it refuses to build launches without it)
+railway variables --service api --skip-deploys --set "LAUNCH_ALT=D7FRDjziN1XninqtCLZrJz55TE27ZU2bQzX5SG85dTBF"
+railway up --service api --detach
+# 2. app (Vercel, Production + Preview): NEXT_PUBLIC_LAUNCH_ALT=D7FRDjziN1XninqtCLZrJz55TE27ZU2bQzX5SG85dTBF, then
+cd ~/fumpad/app && vercel deploy --prod
+# 3. check: a devnet launch from the app with a long name + logo → the coin's metadata uri is https://ipfs.io/ipfs/…
+```
+| service | variable | value |
+|---|---|---|
+| `api` | `LAUNCH_ALT` | the table address (devnet above; mainnet: `$B --step alt`, LAUNCH-DAY §2). Required unless `FUMPAD_CLUSTER=localnet` |
+| app (Vercel) | `NEXT_PUBLIC_LAUNCH_ALT` | the same address (build-time: redeploy after a change) |
+A different account list needs a NEW table (`--step alt` after moving the old `launch-alt.json` aside) and both
+variables rotated together; the old frozen table just stays unused.

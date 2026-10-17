@@ -16,6 +16,8 @@ import {
   decodeTokenAccount,
   firstCoinConfigParams,
   fumpadConfigParams,
+  launchAltCreateIxs,
+  loadLaunchAlt,
   type Params,
   routerBuyIx,
   routerSellIx,
@@ -25,6 +27,8 @@ import {
   wrapSolIxs,
   wsolAta,
 } from "@fumpad/sdk";
+
+import { recentAltSlot } from "../ops/launch-alt.js";
 
 /**
  * Short windows for the local stack (outside `Params::is_valid`; seeded into the genesis): 5 s hold,
@@ -62,6 +66,20 @@ export async function send(conn: Connection, payer: Keypair, ixs: TransactionIns
 export async function createFumpadConfig(conn: Connection, admin: Keypair, config: Keypair, kind: "standard" | "first_coin" = "standard") {
   const params = kind === "first_coin" ? firstCoinConfigParams("devnet") : fumpadConfigParams("devnet");
   return send(conn, admin, [dbcCreateConfigIx({ config: config.publicKey, payer: admin.publicKey, params })], [config]);
+}
+
+/**
+ * The FUMPAD launch ALT (create + extend + freeze in one tx, the bootstrap's `--step alt`), verified, once usable
+ * (addresses appended in slot N resolve from slot N+1). Returns its address.
+ */
+export async function createLaunchAlt(conn: Connection, payer: Keypair): Promise<PublicKey> {
+  const recentSlot = await recentAltSlot(conn);
+  const { address, ixs } = launchAltCreateIxs({ authority: payer.publicKey, payer: payer.publicKey, recentSlot });
+  await send(conn, payer, ixs);
+  const landed = await conn.getSlot("confirmed");
+  for (let i = 0; i < 100 && (await conn.getSlot("confirmed")) <= landed; i++) await new Promise((r) => setTimeout(r, 200));
+  await loadLaunchAlt(conn, address);
+  return address;
 }
 
 export const tokenBalance = async (conn: Connection, owner: PublicKey, mint: PublicKey) => {

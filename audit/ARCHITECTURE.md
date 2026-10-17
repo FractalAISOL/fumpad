@@ -64,6 +64,19 @@ per-mint `Coin` account and everything FUMPAD holds for that mint.
 - **B3 (off-chain inputs):** each attestor uses only its own RPC at `finalized`; Hermes is common to all.
   The indexer / API / DB are never chain truth for keepers or the watcher.
 - **B4 (wallet):** see README §2.3.
+- **Launch lookup table (2026-10-17).** The launch transaction (DBC init → creator `swap2` → `register_coin`,
+  API-built, co-signed by the mint and the launch signer) is a v0 message through ONE address lookup table, the FUMPAD
+  launch ALT: 11 accounts identical for every launch of the deployment (`@fumpad/sdk` `launchAltAddresses()`: Global,
+  reward_pool, fumpad event authority, DBC pool + event authority, WSOL mint, Token / Token-2022 / ATA / System,
+  instructions sysvar). It exists only to fit max-length metadata + the https uri + first buy + co-signature in 1,232
+  bytes (1,103 B vs 1,317 B inline). Trust: the table is created, extended and **frozen in one transaction** by the
+  bootstrap (`--step alt`), so it has no authority and is immutable (no extend / deactivate / close). The program does
+  not know about it: lookups are resolved by the runtime before execution, signers and invoked program ids are always
+  static keys, and introspection (DBC's first-swap check via the instructions sysvar) sees resolved keys —
+  `contracts/tests/src/alt_launch_tests.rs` proves the worst-case v0 + ALT launch registers and gets the min fee.
+  Off chain, the api (`LAUNCH_ALT`) and the app (`NEXT_PUBLIC_LAUNCH_ALT`) each pin the address, load it and refuse
+  unless the contents equal that list exactly and it is frozen + active; the app never takes the table from the API
+  or the transaction, and runs every allow-list check on the resolved accounts (THREAT-MODEL C1, R11).
 
 ## 3. PDAs and other program-controlled accounts
 

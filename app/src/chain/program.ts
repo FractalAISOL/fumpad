@@ -3,9 +3,10 @@
  * vanity-mint helpers (the SDK's check plus the display split), and the shape check of the API's
  * prepared launch transaction before the wallet signs it. Instruction encoders are @fumpad/sdk's.
  */
-import type { PublicKey, VersionedTransaction } from "@solana/web3.js";
+import type { AddressLookupTableAccount, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { FUMPAD_VANITY_SUFFIX, isFumpadVanityMint as sdkIsVanity } from "@fumpad/sdk";
 import { type LaunchShape, vetFumpadTx } from "./allowlist";
+import { LAUNCH_ALT_ADDRESS } from "./cluster";
 
 export { FUMPAD_PROGRAM_ID } from "@fumpad/sdk";
 
@@ -27,6 +28,8 @@ export function splitVanity(address: string, suffix = VANITY_SUFFIX): { head: st
  * register_coin (the allow-list's launch pattern, `./allowlist.ts`). The API signs only as the
  * mint, so this is what stands between a compromised API and the user's wallet; `./launch.ts`
  * then binds the details (name, symbol, uri, first-buy amount and minimum) to what the user asked for.
+ * `lookupTable`: the configured launch table as read from chain (a launch through it; `./allowlist.ts` verifies it);
+ * `launchAlt`: the table this build accepts (NEXT_PUBLIC_LAUNCH_ALT; a parameter for the tests only).
  */
 export function checkPreparedLaunch(
   tx: VersionedTransaction,
@@ -35,8 +38,10 @@ export function checkPreparedLaunch(
   suffix = VANITY_SUFFIX,
   maxSolInLamports = BigInt(0),
   launchSigner?: string,
+  lookupTable?: AddressLookupTableAccount,
+  launchAlt: string | undefined = LAUNCH_ALT_ADDRESS,
 ): LaunchShape {
   if (!isFumpadVanityMint(mint, suffix)) throw new Error("Refusing to sign: the mint address isn't a FUMPAD address.");
-  const { launch } = vetFumpadTx(tx, wallet, { action: "launch", mint, coSigner: mint, maxSolInLamports, launchSigner });
+  const { launch } = vetFumpadTx(tx, wallet, { action: "launch", mint, coSigner: mint, maxSolInLamports, launchSigner, lookupTable }, launchAlt);
   return launch!;
 }

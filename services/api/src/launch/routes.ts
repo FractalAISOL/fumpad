@@ -11,17 +11,21 @@
  * smuggled instructions, lookup tables, extra writable accounts, or another fee payer
  * riding on the mint signature), and the client needs no SDK. The message can't be
  * altered afterwards without invalidating the mint signature.
+ *
+ * The message is v0 through the FUMPAD launch lookup table (LAUNCH_ALT, ./alt.ts): its address, verified on chain
+ * (exact contents, frozen), is the only table a launch uses; inline only on localnet without LAUNCH_ALT.
  */
 import { type Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { FastifyInstance } from "fastify";
 
-import { decodeDbcConfig, type DbcVirtualPool, FEE_POLICY, type FeePolicy, type GlobalAccount, isFumpadVanityMint, launchInstructions, launchMetadataError, quoteDbcBuy } from "@fumpad/sdk";
+import { decodeDbcConfig, type DbcVirtualPool, FEE_POLICY, type FeePolicy, type GlobalAccount, isFumpadVanityMint, LAUNCH_TX_MAX_BYTES, launchInstructions, launchMetadataError, quoteDbcBuy } from "@fumpad/sdk";
 
 import type { ChainReader } from "../chain.js";
 
 import type { Db } from "@fumpad/indexer";
 
 import type { ApiConfig } from "../config.js";
+import { LaunchAltCache } from "./alt.js";
 import { launchAuthError } from "./auth.js";
 import { LaunchError, type MintPool, withTimeout } from "./pool.js";
 import { launchSignerFor, parseLaunchSignerKey } from "./signer.js";
@@ -87,6 +91,11 @@ export interface PrepareResponse {
   firstBuy?: { solIn: string; tokensOut: string; minTokensOut: string };
   /** The DBC config + fee policy this launch uses (always present; `kind` "first_coin" only when asked for). */
   config: LaunchConfigInfo;
+  /**
+   * The launch lookup table the transaction uses (LAUNCH_ALT), absent for an inline launch (localnet). Informational:
+   * the app resolves and verifies its OWN configured table (NEXT_PUBLIC_LAUNCH_ALT) and refuses any other.
+   */
+  lookupTable?: string;
 }
 
 const bad = (msg: string) => new LaunchError(400, msg);
@@ -156,8 +165,10 @@ export class WindowLimiter {
   }
 }
 
-export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; chain: ChainReader; pool: MintPool | null; db: Db }) {
+export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps: { conn: Connection; chain: ChainReader; pool: MintPool | null; db: Db; alt?: LaunchAltCache }) {
   const perWallet = new WindowLimiter(cfg.launchWalletLimitPerMin);
+  const alts = deps.alt ?? new LaunchAltCache(deps.conn, cfg);
+  if (alts.disabledReason) app.log.error({ reason: alts.disabledReason }, "launches DISABLED: POST /v1/launch/prepare answers 503");
   const launchKey = parseLaunchSignerKey(cfg.launchSignerKey);
   const t = cfg.launchRpcTimeoutMs;
 
@@ -194,6 +205,11 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
       const cfgAcc = await withTimeout(deps.conn.getAccountInfo(dbcConfig, "confirmed"), t, "config lookup");
       if (!cfgAcc) throw new LaunchError(503, "the FUMPAD DBC config is missing");
       const config = decodeDbcConfig(new Uint8Array(cfgAcc.data));
+      // The launch lookup table, verified (fail closed: 503 before anything is reserved).
+      const alt = await withTimeout(alts.get(), t, "lookup table lookup").catch((e: unknown) => {
+        if (alts.lastError) req.log.error({ alt: cfg.launchAlt, err: alts.lastError }, "launch lookup table check failed");
+        throw e;
+      });
       const bf = config.baseFee;
       const configInfo: LaunchConfigInfo = {
         kind: p.launchConfig,
@@ -234,10 +250,10 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
           launchSigner: launchSigner?.publicKey,
         });
         const { blockhash, lastValidBlockHeight } = await deps.conn.getLatestBlockhash("confirmed");
-        const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message();
+        const msg = new TransactionMessage({ payerKey: p.creator, recentBlockhash: blockhash, instructions }).compileToV0Message(alt ? [alt] : []);
         const tx = new VersionedTransaction(msg);
-        // 1,232-byte packet limit (no lookup tables in a launch tx): refuse before reserving a signature on it
-        if (tx.serialize().length > 1_232) throw new LaunchError(400, "name, symbol and uri are too long to fit in one launch transaction; shorten the uri");
+        // 1,232-byte packet limit: refuse before reserving a signature on it
+        if (tx.serialize().length > LAUNCH_TX_MAX_BYTES) throw new LaunchError(400, "name, symbol and uri are too long to fit in one launch transaction; shorten the uri");
         if (launchSigner) tx.sign([launchSigner]); // the mint signs next (pool.prepare), the creator last
         return { tx, lastValidBlockHeight };
       }, { established });
@@ -251,6 +267,7 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
         suffix: pool.cfg.suffix,
         firstBuy,
         config: configInfo,
+        ...(alt ? { lookupTable: alt.key.toBase58() } : {}),
       };
     },
   );

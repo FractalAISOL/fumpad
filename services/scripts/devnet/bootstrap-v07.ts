@@ -12,10 +12,13 @@
  *                                                                         # then queue → (timelock) → execute the first-coin config add
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step first-coin-done --yes  # after the first coin: queue → (timelock) → execute its removal
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step fund --yes           # top up wallets (plan printed first)
+ *   npx tsx scripts/devnet/bootstrap-v07.ts --step alt --simulate       # the launch lookup table (create + extend + freeze)
+ *   npx tsx scripts/devnet/bootstrap-v07.ts --step alt --yes            #   → keys dir launch-alt.json; set LAUNCH_ALT + NEXT_PUBLIC_LAUNCH_ALT
  *   npx tsx scripts/devnet/bootstrap-v07.ts --step verify               # read back Global/config/balances, checklist
  *
- * Steps: keys | config | init | operators | policies | fund | verify | first-coin-done
- *   all = keys, config, init, operators, policies, fund, verify (first-coin-done only on its own, after the first coin).
+ * Steps: keys | config | init | operators | policies | fund | alt | verify | first-coin-done
+ *   all = keys, config, init, operators, policies, fund, alt, verify (first-coin-done only on its own, after the first coin).
+ * `alt` (scripts/ops/launch-alt.ts): the FUMPAD launch ALT, frozen in its creation tx; idempotent on launch-alt.json.
  * Configs (INTERFACE §5.9): `dbc-config` = the standard config (99% → 1.25% / 8 slots), `dbc-config-first-coin` = the
  *   one-off first-coin config (99% → 3% / 25 slots, 3% DAMM v2) allow-listed with the wallet-split policy {buyback 100,
  *   wallet 140 (bps of volume), max_coins 1, wallet = `first-coin-wallet`} (mainnet: config firstCoin.feeWallet).
@@ -96,6 +99,8 @@ import {
   WSOL_MINT,
 } from "@fumpad/sdk";
 
+import { launchAltCheck, launchAltStep } from "../ops/launch-alt.js";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const SERVICES = resolve(here, "../..");
 const SO_PATH = resolve(SERVICES, "../contracts/target/deploy/fumpad.so");
@@ -105,10 +110,10 @@ const sol = (l: bigint | number) => (Number(l) / LAMPORTS_PER_SOL).toFixed(4);
 
 export type Cluster = "devnet" | "local";
 export type Mode = "plan" | "simulate" | "send";
-export type Step = "keys" | "config" | "init" | "operators" | "policies" | "fund" | "verify" | "first-coin-done";
-export const STEPS: Step[] = ["keys", "config", "init", "operators", "policies", "fund", "verify", "first-coin-done"];
+export type Step = "keys" | "config" | "init" | "operators" | "policies" | "fund" | "alt" | "verify" | "first-coin-done";
+export const STEPS: Step[] = ["keys", "config", "init", "operators", "policies", "fund", "alt", "verify", "first-coin-done"];
 /** `--step all`: everything but `first-coin-done` (that one runs after the first coin launched). */
-export const ALL_STEPS: Step[] = ["keys", "config", "init", "operators", "policies", "fund", "verify"];
+export const ALL_STEPS: Step[] = ["keys", "config", "init", "operators", "policies", "fund", "alt", "verify"];
 
 /** Global account length since the fee policies (2026-10-14); a 1,044-byte Global is the previous layout. */
 export const GLOBAL_LEN = 1_491;
@@ -307,7 +312,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
     const raw = tx.serialize();
     if (o.mode === "plan") {
       log(`  PLAN ${name}: ${ixs.length} ix, ${raw.length} bytes, signers ${[deployer, ...signers].map((s) => s.publicKey.toBase58().slice(0, 8)).join(", ")} (add --simulate or --yes)`);
-      return { ok: true as const, accounts: [] as ({ owner: PublicKey; data: Uint8Array } | null)[] };
+      return { ok: true as const, accounts: [] as ({ owner: PublicKey; data: Uint8Array } | null)[], sig: undefined as string | undefined };
     }
     if (o.mode === "simulate") {
       const r = await conn.simulateTransaction(tx, { sigVerify: true, commitment: "confirmed", accounts: { encoding: "base64", addresses: accounts.map((a) => a.toBase58()) } });
@@ -316,12 +321,12 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       if (!ok) for (const l of (r.value.logs ?? []).slice(-12)) log(`       ${l}`);
       if (!ok) failures.push(`simulate ${name}`);
       const accs = (r.value.accounts ?? []).map((a) => (a ? { owner: new PublicKey(a.owner), data: Uint8Array.from(Buffer.from((a.data as unknown as [string, string])[0], "base64")) } : null));
-      return { ok, accounts: accs };
+      return { ok, accounts: accs, sig: undefined };
     }
     const sig = await conn.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 3 });
     await confirmSignature(conn, sig, lastValidBlockHeight, "confirmed", raw);
     log(`  SENT ${name}: ${explorer(sig)}`);
-    return { ok: true as const, accounts: [] };
+    return { ok: true as const, accounts: [], sig };
   };
 
   // ── keys ────────────────────────────────────────────────────────────────
@@ -547,6 +552,12 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
     }
   }
 
+  // ── alt (the launch lookup table) ─────────────────────────────────────────
+  if (o.steps.includes("alt")) {
+    const addr = await launchAltStep({ conn, dir: o.keysDir, cluster: o.cluster, authority: deployer, mode: o.mode, exec: (name, ixs, accounts) => execute(name, ixs, [], accounts), say: log, failures });
+    if (addr) pubkeys["launch-alt"] = addr.toBase58();
+  }
+
   // ── verify ──────────────────────────────────────────────────────────────
   if (o.steps.includes("verify")) {
     log("\n▶ verify");
@@ -598,6 +609,7 @@ export async function runBootstrap(o: BootstrapOpts): Promise<BootstrapResult> {
       const pd = paramsDiff(g.params, expectedParams());
       checks.push(["params = devnet bootstrap params (launch_signer = launch-signer)", pd.length === 0, pd.join("; ") || undefined]);
     }
+    checks.push(await launchAltCheck(conn, o.keysDir));
     for (const [name, target] of Object.entries(FUND_TARGETS) as [KeyName, bigint][]) {
       if (!keys.has(name)) continue;
       const have = BigInt(await conn.getBalance(keys.pub(name), "confirmed"));
@@ -636,7 +648,7 @@ function parseArgs(argv: string[]) {
   if (cluster !== "devnet" && cluster !== "local") throw new Error("--cluster devnet|local");
   const stepArg = get("--step") ?? "verify";
   const steps = stepArg === "all" ? ALL_STEPS : stepArg.split(",").map((s) => s.trim() as Step);
-  for (const s of steps) if (!STEPS.includes(s)) throw new Error(`unknown step ${s} (keys|config|init|operators|policies|fund|verify|first-coin-done|all)`);
+  for (const s of steps) if (!STEPS.includes(s)) throw new Error(`unknown step ${s} (keys|config|init|operators|policies|fund|alt|verify|first-coin-done|all)`);
   const simulate = argv.includes("--simulate");
   const yes = argv.includes("--yes");
   if (simulate && yes) throw new Error("--simulate and --yes are exclusive");
