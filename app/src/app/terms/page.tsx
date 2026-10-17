@@ -1,14 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CLUSTER_LABEL } from "@/chain/cluster";
-import { DocPage, DocSection, DraftNotice } from "@/components/docs/Doc";
+import { DocPage, DocSection, UpdatedNotice } from "@/components/docs/Doc";
 
-export const metadata: Metadata = { title: "Terms", description: "Draft terms of use for FUMPAD, pending legal review." };
+export const metadata: Metadata = { title: "Terms", description: "Terms of use for FUMPAD." };
 
 const NETWORK = CLUSTER_LABEL ? `Solana ${CLUSTER_LABEL.toLowerCase()}` : "Solana";
 
 const TOC = [
-  { id: "status", label: "Status of these terms" },
   { id: "service", label: "What FUMPAD is" },
   { id: "eligibility", label: "Eligibility and regions" },
   { id: "wallets", label: "Your wallet and keys" },
@@ -25,15 +24,9 @@ export default function TermsPage() {
     <DocPage
       title="Terms of use"
       lede="The rules for using FUMPAD's website and app. By using FUMPAD you agree to them."
-      notice={<DraftNotice updated="October 13, 2026" />}
+      notice={<UpdatedNotice updated="October 13, 2026" />}
       toc={TOC}
     >
-      <DocSection id="status" title="Status of these terms">
-        <p>
-          These terms are a working draft, pending legal review. They describe how FUMPAD is meant to be used today and will be replaced by reviewed
-          terms before any mainnet launch.
-        </p>
-      </DocSection>
       <DocSection id="service" title="What FUMPAD is">
         <p>
           FUMPAD is experimental software: an interface to smart contracts on {NETWORK} for launching and trading tokens, and for filing and claiming fumble
@@ -46,7 +39,10 @@ export default function TermsPage() {
           <li>You must be old enough to form a binding contract where you live, and at least 18.</li>
           <li>
             You may not use FUMPAD from, or on behalf of anyone in, a country or region under comprehensive sanctions (including those maintained by the
-            US, UK, EU or UN), or anywhere using it would be unlawful. The full list of restricted regions is pending legal review.
+            US, UK, EU or UN), or anywhere using it would be unlawful. You may not use FUMPAD if you are a U.S. person, or if you live in or are
+            in the United States, the United Kingdom, Canada, Cuba, Iran, North Korea, Syria, Russia, Belarus, Myanmar, or the Crimea, Donetsk,
+            Luhansk, Kherson or Zaporizhzhia regions of Ukraine, or if you are on a sanctions list. You may not use a VPN or any other tool to hide
+            where you are.
           </li>
           <li>You are responsible for knowing and following the laws, tax rules and reporting duties that apply to you.</li>
         </ul>

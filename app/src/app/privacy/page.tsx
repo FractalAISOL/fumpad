@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { DocPage, DocSection, DraftNotice } from "@/components/docs/Doc";
+import { DocPage, DocSection, UpdatedNotice } from "@/components/docs/Doc";
 
-export const metadata: Metadata = { title: "Privacy", description: "Draft privacy notice for FUMPAD, pending legal review." };
+export const metadata: Metadata = { title: "Privacy", description: "Privacy notice for FUMPAD." };
 
 const TOC = [
   { id: "public", label: "Public by design" },
@@ -18,7 +18,7 @@ export default function PrivacyPage() {
     <DocPage
       title="Privacy"
       lede="What FUMPAD knows about you, where it comes from and who else sees it."
-      notice={<DraftNotice updated="October 12, 2026" />}
+      notice={<UpdatedNotice updated="October 12, 2026" />}
       toc={TOC}
     >
       <DocSection id="public" title="Public by design">

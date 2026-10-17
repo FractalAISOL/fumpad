@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CLUSTER_LABEL } from "@/chain/cluster";
-import { DocPage, DocSection, DraftNotice } from "@/components/docs/Doc";
+import { DocPage, DocSection, UpdatedNotice } from "@/components/docs/Doc";
 
-export const metadata: Metadata = { title: "Risk disclosure", description: "Draft risk disclosure for FUMPAD, pending legal review." };
+export const metadata: Metadata = { title: "Risk disclosure", description: "Risk disclosure for FUMPAD." };
 
 const TOC = [
   { id: "experimental", label: "Experimental software" },
@@ -23,7 +23,7 @@ export default function RiskPage() {
     <DocPage
       title="Risk disclosure"
       lede="What can go wrong when you use FUMPAD. Read it before you trade; only use money you can afford to lose."
-      notice={<DraftNotice updated="October 13, 2026" />}
+      notice={<UpdatedNotice updated="October 13, 2026" />}
       toc={TOC}
     >
       <DocSection id="experimental" title="Experimental software">

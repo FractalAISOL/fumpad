@@ -79,11 +79,11 @@ export function Facts({ rows, label }: { rows: { k: ReactNode; v: ReactNode; key
   );
 }
 
-/** Legal pages ship as drafts until reviewed; the notice says so above the text. */
-export function DraftNotice({ updated }: { updated: string }) {
+/** The "last updated" line above a legal page's text. */
+export function UpdatedNotice({ updated }: { updated: string }) {
   return (
     <p className={s.draft} role="note">
-      <b>Draft, pending legal review.</b> This text is a placeholder, not final terms. Last edited {updated}.
+      Last updated {updated}.
     </p>
   );
 }
