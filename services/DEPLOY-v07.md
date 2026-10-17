@@ -435,6 +435,14 @@ another plan, or Chainstack). Different companies for A/B/C, not just different 
 Files: `~/fumpad-keys/<cluster>/telegram.env` (`TELEGRAM_BOT_TOKEN=…`) and `~/fumpad-keys/<cluster>/pyth.env`
 (`PYTH_API_KEY=…`), mode 600. Never `echo`/`cat` them; edit with an editor, push with `envval | setsecret`.
 
+**One bot, one chat, both clusters.** The devnet and mainnet services use the same bot token and the same
+`TELEGRAM_CHAT_ID` (a DM to the user). Every message from the keeper (jobs), attestors and watcher starts with a
+cluster tag taken from `FUMPAD_CLUSTER`: `[MAINNET]`, `[DEVNET]` (unset = devnet), `[LOCALNET]`, then the service
+prefix as before, e.g. `[MAINNET] [fumpad-watcher] …`. Optional `TELEGRAM_PREFIX` replaces the tag with a custom label
+(e.g. `[MAINNET-canary]`). Because the token is shared, a `/revoke` breaks both clusters' alerts until the new token
+is pushed to the devnet **and** the mainnet services (repeat step 4 in each Railway project, from
+`~/fumpad-keys/mainnet/telegram.env` there).
+
 **Telegram** (keeper, attestor-1/2/3, watcher). `/revoke` kills the old token at once, so do it in one go:
 1. Telegram → @BotFather → `/revoke` → pick the bot → copy the new token.
 2. `(umask 077; ${EDITOR:-nano} ~/fumpad-keys/devnet/telegram.env)` → replace the `TELEGRAM_BOT_TOKEN=` value.

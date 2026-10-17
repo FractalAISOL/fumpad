@@ -1,7 +1,7 @@
 // Derivation-failure alerts: at most once per hour per (coin, error signature); a new distinct error alerts at once.
 import { describe, expect, it } from "vitest";
 
-import { Alerter, deriveAlert, errorSignature } from "../src/alerts.js";
+import { Alerter, deriveAlert, errorSignature, telegramClusterTag, telegramText } from "../src/alerts.js";
 import { Watcher } from "../src/watch/run.js";
 
 const MINT = "HAwjL35BQrqKCFpmguuHshY39RwgzJNTPFVwzfEfmbL";
@@ -57,5 +57,46 @@ describe("derivation alert deduplication", () => {
     clock.t = 3_600_000;
     await w.tick();
     expect(sent.filter((s) => s.key.startsWith("watch:"))).toHaveLength(2);
+  });
+});
+
+describe("telegram cluster tag (one bot + chat for devnet and mainnet)", () => {
+  it("tag from FUMPAD_CLUSTER, TELEGRAM_PREFIX overrides, unset = devnet", () => {
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: "mainnet" })).toBe("[MAINNET]");
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: " Devnet " })).toBe("[DEVNET]");
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: "localnet" })).toBe("[LOCALNET]");
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: "testnet" })).toBe("[TESTNET]");
+    expect(telegramClusterTag({})).toBe("[DEVNET]");
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: "" })).toBe("[DEVNET]");
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: "mainnet", TELEGRAM_PREFIX: " [MAINNET-canary] " })).toBe("[MAINNET-canary]");
+    expect(telegramClusterTag({ FUMPAD_CLUSTER: "mainnet", TELEGRAM_PREFIX: "  " })).toBe("[MAINNET]");
+  });
+
+  it("message = tag + service prefix + text, otherwise unchanged", () => {
+    expect(telegramText("[MAINNET]", "[fumpad-watcher]", "pending change")).toBe("[MAINNET] [fumpad-watcher] pending change");
+    expect(telegramText("[DEVNET]", "[fumpad-keeper]", "x".repeat(5_000))).toHaveLength(4000);
+  });
+
+  it("every sent Telegram message starts with the tag (keeper, attestor, watcher prefixes)", async () => {
+    const bodies: { chat_id: string; text: string }[] = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: { body: string }) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response("{}", { status: 200 });
+    }) as never;
+    try {
+      const log = { warn: () => {} } as never;
+      const opts = { botToken: "t", chatId: "c" };
+      await new Alerter(log, { ...opts, env: { FUMPAD_CLUSTER: "mainnet" } }).alert("balance", "keeper balance low: 0.1 SOL");
+      await new Alerter(log, { ...opts, prefix: "[fumpad-attestor AbCdEf]", env: { FUMPAD_CLUSTER: "devnet" } }).alert("k", "derivation failed");
+      await new Alerter(log, { ...opts, prefix: "[fumpad-watcher]", env: { FUMPAD_CLUSTER: "mainnet", TELEGRAM_PREFIX: "[MAIN-B]" } }).alert("k", "mismatch");
+      expect(bodies.map((b) => b.text)).toEqual([
+        "[MAINNET] [fumpad-keeper] keeper balance low: 0.1 SOL",
+        "[DEVNET] [fumpad-attestor AbCdEf] derivation failed",
+        "[MAIN-B] [fumpad-watcher] mismatch",
+      ]);
+    } finally {
+      globalThis.fetch = orig;
+    }
   });
 });
