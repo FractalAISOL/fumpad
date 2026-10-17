@@ -632,3 +632,17 @@ cd ~/fumpad/app && vercel deploy --prod
 | app (Vercel) | `NEXT_PUBLIC_LAUNCH_ALT` | the same address (build-time: redeploy after a change) |
 A different account list needs a NEW table (`--step alt` after moving the old `launch-alt.json` aside) and both
 variables rotated together; the old frozen table just stays unused.
+
+**Devnet rollout done 2026-10-17** (main `ee81a1d`): api `LAUNCH_ALT` + `PINATA_JWT`; indexer + api
+`PINATA_GATEWAY=scarlet-generous-armadillo-291.mypinata.cloud` (the account's dedicated gateway, `restrict` = serves only
+our pins); indexer, api, keeper, attestor-1/2/3, watcher redeployed (`railway up`); Vercel Production
+`NEXT_PUBLIC_LAUNCH_ALT` set (app redeploy still needed). Live check: `npx tsx scripts/devnet/live-metadata.ts`
+(logo + 32-char name + socials → `POST /v1/launch/metadata` → prepare with a first buy through the ALT, 1,045 B →
+on-chain uri, JSON, image, API, `/v1/img`, Helius DAS; `--verify <mint>` re-checks). Coin
+`27AKrEeJZdBNjCEBEbhWv3DNqF4sAwezMU1ppzUgfmbL`.
+
+**ipfs.io is retired** (brownouts from 2026-09-01, gone 2026-09-21: every request answers 429 "switching to a service
+worker gateway", `sunset` header; dweb.link too, and Helius' CDN image proxy of an ipfs.io URL also 429s). pump.fun
+still writes `https://ipfs.io/ipfs/<cid>` uris today, so consumers that matter rewrite `/ipfs/<cid>` to their own
+gateway (Helius DAS resolved our JSON). Our own fetches must not depend on it: **set `PINATA_GATEWAY` on the indexer
+and api on every cluster** (without it the indexer stored no image/socials and `/v1/img/<mint>` answered 404).
