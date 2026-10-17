@@ -65,8 +65,11 @@ Opening the app only after the handover means no hot key holds admin power while
    `determinism: N/N identical across providers` (it compares with the public RPC; it rewrites the test fixture, so
    `git checkout engine/test/fixtures/pyth-onchain.mainnet.json.gz` afterwards). All three attestors and the watcher
    must use the same source (`hermes` remains an option with a paid key in `$K/pyth.env`, DEPLOY-v07.md §9).
-5. **Telegram**: `$K/telegram.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — a separate mainnet chat; check
-   `getMe` → `"ok":true` (DEPLOY-v07.md §9). Guardians and the ops person are in the chat.
+5. **Telegram**: `$K/telegram.env` (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) — the **same bot and chat as devnet**
+   (a DM to the user); check `getMe` → `"ok":true` (DEPLOY-v07.md §9). Every message from the keeper, attestors and
+   watcher starts with the cluster tag from `FUMPAD_CLUSTER` — `[MAINNET]` here, `[DEVNET]` from the devnet stack —
+   so set `FUMPAD_CLUSTER=mainnet` on every mainnet service (it is required anyway) and tell them apart by the tag.
+   Optional `TELEGRAM_PREFIX` replaces the tag with a custom label (e.g. `[MAINNET-canary]`).
 6. **Governance parties** (MULTISIG.md §2–3; decision 2026-10-16): the same 3 member wallets (normal wallets,
    MULTISIG.md "Hot-wallet hygiene") in admin (2-of-3, 6 h Squads time lock) and guardian (2-of-3, no time lock)
    + the ops key (`$K/ops.json`, initiate + execute only). Create both multisigs
@@ -263,8 +266,9 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
 
 ## 6. Monitoring (first 72 h, then daily)
 
-- Telegram: keeper heartbeat (every 8 min), low balance (`MIN_KEEPER_LAMPORTS`), daily budget, attestor
-  disagreements, watcher mismatches. Watcher `/v1/verification`: any `mismatch` = page the guardians.
+- Telegram (only `[MAINNET]` messages are this deployment; `[DEVNET]` ones come from the devnet stack): keeper
+  heartbeat (every 8 min), low balance (`MIN_KEEPER_LAMPORTS`), daily budget, attestor disagreements, watcher
+  mismatches. Watcher `/v1/verification`: any `mismatch` = page the guardians.
 - Balances: operator (jobs keeper) ≥ 1 SOL, attestor-1/2/3 ≥ 0.1 SOL each; top up from the treasury. Graduations
   are paid from the 0.85 SOL migration fee (rehearsed: the keeper's net cost per graduation is fees only).
 - `/v1/status`: indexer lag, vanity pool. Railway metrics: memory/CPU of indexer + api.

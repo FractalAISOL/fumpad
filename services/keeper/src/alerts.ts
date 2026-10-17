@@ -1,6 +1,7 @@
 /** Optional Telegram alert hook (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID), deduplicated per key. */
 import { createHash } from "node:crypto";
 
+import { DEFAULT_FUMPAD_CLUSTER } from "@fumpad/sdk";
 import type { Logger } from "pino";
 
 /** A failing coin derivation re-alerts at most once per hour per (coin, error signature). */
@@ -22,11 +23,39 @@ export function deriveAlert(scope: string, mint: string, e: unknown): { key: str
   return { key: `${scope}:${mint}:${errorSignature(e)}`, opts: { cooldownMs: DERIVE_ALERT_COOLDOWN_MS } };
 }
 
+export interface TelegramTagEnv {
+  FUMPAD_CLUSTER?: string;
+  TELEGRAM_PREFIX?: string;
+}
+
+/**
+ * Tag that starts every Telegram message, so one bot + chat can serve the devnet and mainnet services side by side:
+ * TELEGRAM_PREFIX when set (a custom label, used verbatim), else `[<FUMPAD_CLUSTER>]` upper-cased — "[MAINNET]",
+ * "[DEVNET]", "[LOCALNET]", … (unset = the SDK's default cluster, devnet, as resolveFumpadConfig does).
+ */
+export function telegramClusterTag(env: TelegramTagEnv = process.env): string {
+  const custom = env.TELEGRAM_PREFIX?.trim();
+  if (custom) return custom;
+  return `[${(env.FUMPAD_CLUSTER?.trim() || DEFAULT_FUMPAD_CLUSTER).toUpperCase()}]`;
+}
+
+/** The exact Telegram message: cluster tag, service prefix, text (capped at 4000 chars). */
+export function telegramText(clusterTag: string, prefix: string, text: string): string {
+  return `${clusterTag} ${prefix} ${text}`.slice(0, 4000);
+}
+
 export class Alerter {
   private last = new Map<string, number>();
   sent = 0;
+  /** Starts every Telegram message (telegramClusterTag of `opts.env`, default process.env); fixed at construction. */
+  readonly clusterTag: string;
 
-  constructor(private log: Logger, private opts: { botToken?: string; chatId?: string; cooldownMs?: number; prefix?: string; now?: () => number }) {}
+  constructor(
+    private log: Logger,
+    private opts: { botToken?: string; chatId?: string; cooldownMs?: number; prefix?: string; now?: () => number; env?: TelegramTagEnv },
+  ) {
+    this.clusterTag = telegramClusterTag(opts.env ?? process.env);
+  }
 
   get enabled() {
     return !!(this.opts.botToken && this.opts.chatId);
@@ -46,7 +75,7 @@ export class Alerter {
       const res = await fetch(`https://api.telegram.org/bot${this.opts.botToken}/sendMessage`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ chat_id: this.opts.chatId, text: `${this.opts.prefix ?? "[fumpad-keeper]"} ${text}`.slice(0, 4000), disable_web_page_preview: true }),
+        body: JSON.stringify({ chat_id: this.opts.chatId, text: telegramText(this.clusterTag, this.opts.prefix ?? "[fumpad-keeper]", text), disable_web_page_preview: true }),
         signal: AbortSignal.timeout(5_000),
       });
       if (!res.ok) this.log.warn({ status: res.status }, "telegram alert failed");
