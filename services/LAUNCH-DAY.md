@@ -28,7 +28,7 @@ SPEND="--send --i-understand-this-spends-real-sol"
 | **Day 0, morning (H0)** | deploy program → DBC configs (standard + first-coin) → `initialize_global` → fund keepers → `propose_admin` | program id + Global params/cluster_tag: yes |
 | H0 … H0 + 6 h | 6 h: voters approve `accept_admin` in Squads (right away — the Squads 6 h lock starts at the 2nd approval); services run against mainnet with the app still gated | no (guardian = deployer can `cancel_admin`) |
 | **≥ H0 + 6 h (same day)** | execute `accept_admin` (admin/guardian → vaults) → upgrade authority → admin vault → guardian drill | **yes** |
-| **T0 (same evening or next morning)** | pre-flight re-check → first coin on the first-coin config (app still gated) → launch-window checker on fumpad.app → remove that config → open the app (gate off) | the first coin's 3% fee + routing: yes (snapshotted) |
+| **T0 (same evening or next morning)** | pre-flight re-check → first coin on the first-coin config (app still gated) → set the mint: fumpad.app's page goes live (coin + checker) → remove that config → open the app (gate off) | the first coin's 3% fee + routing: yes (snapshotted) |
 
 (Was a 3-day schedule with the 48 h timelocks; since SPEC v0.7 clarification 29 the handover is 6 h on chain and the
 recommended Squads time lock is 6 h, so day 0 fits in one working day if 2 of the 3 members approve within ~an hour of
@@ -146,7 +146,7 @@ Opening the app only after the handover means no hot key holds admin power while
     `app/next.config.ts` hands the id/cluster to the vendored SDK; the silent-signing allow-list signs for that id only
     and the app refuses to load if the SDK and the app disagree (`app/src/chain/deployment.test.ts`). Check on the
     preview: the footer's program link = `$FUMPAD_PROGRAM_ID`, no "Devnet" badge. Keep `NEXT_PUBLIC_PRELAUNCH` unset
-    (gate on) until T0. Preview deployment first; check CSP (app/LAUNCH.md).
+    and `NEXT_PUBLIC_CHECKER_MINT` unset (fumpad.app = the launch page, "The first coin launches soon.") until T0. Preview deployment first; check CSP (app/LAUNCH.md).
 15. **Verified program on explorers** (OtterSec / solana-verify, §10 step 6): needs a **PUBLIC GitHub repo** containing
     the release commit `REL` (mount path `contracts`), so `solana-verify verify-from-repo` can rebuild it and the
     remote job (`solana-verify remote submit-job`) can publish the "verified" badge. Create/publish the repo before
@@ -200,7 +200,8 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
 1. Morning re-checks: `npm run mainnet:compare` (✓), `$B --step verify` (✓), `rpc-check` on the four providers,
    keeper/attestor balances (operator ≥ 1 SOL), Telegram heartbeat, watcher feed clean, Railway services healthy,
    vanity pool ≥ 20, `/v1/status` green.
-2. fumpad.app stays the waiting room (gate on) while the first coin launches; the app is reachable on
+2. fumpad.app stays the pre-launch page ("The first coin launches soon.", `NEXT_PUBLIC_PRELAUNCH` and
+   `NEXT_PUBLIC_CHECKER_MINT` unset) while the first coin launches; the app is reachable on
    `https://fumpad.vercel.app` (never gated), but with the api's `LAUNCHES_OPEN=false` its `/launch` shows
    "Launches open soon." and `POST /v1/launch/prepare` refuses standard launches (403 `launches_closed`); check:
    `curl -s https://<api>/v1/launch/options` → `"launchesOpen":false`. The API runs the build with
@@ -241,12 +242,12 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       (`CONFIG_TIMELOCK_SECS`) rerun `$B --step remove-first-coin-config $SPEND` → `execute_config` (permissionless).
       `$B --step verify`: "first-coin config … not allow-listed (removed)". The first coin keeps its 3% routing (its
       snapshot is in its own account).
-   6. **Launch-window checker (app/LAUNCH.md "the 3-step flip", step 2), right after the coin registers** (its
+   6. **Coin live on fumpad.app (app/LAUNCH.md "the 3-step flip", step 2), right after the coin registers** (its
       `https://fumpad.vercel.app/coin/<mint>` page loads): Vercel Production `NEXT_PUBLIC_CHECKER_MINT=<mint>`, optionally
-      `NEXT_PUBLIC_APP_OPENS_AT=<ISO>`, `NEXT_PUBLIC_PRELAUNCH=checker` → redeploy. fumpad.app now shows the first coin
-      live + the Fumble Checker (read-only; nothing to sign). Check `https://fumpad.app/?wallet=<first seller>`: its sells,
+      `NEXT_PUBLIC_APP_OPENS_AT=<ISO>` (leave `NEXT_PUBLIC_PRELAUNCH` unset) → redeploy. The same page at fumpad.app now
+      shows the first coin live + the Fumble Checker (read-only; nothing to sign). Check `https://fumpad.app/?wallet=<first seller>`: its sells,
       "Verifying" then "6-hour check" with the countdown once `TicketAttested` lands, and the claim target.
-4. **Open the app** (~30–60 min after the checker, step 3 of the flip), both at the same time:
+4. **Open the app** (~30–60 min after the coin went live, step 3 of the flip), both at the same time:
    - Railway `api` variable `LAUNCHES_OPEN=true` → redeploy → `curl -s https://<api>/v1/launch/options` shows
      `"launchesOpen":true` (standard launches open; until then `/launch` says "Launches open soon.").
    - Vercel Production `NEXT_PUBLIC_PRELAUNCH=off` → redeploy → `curl -sI https://fumpad.app/launches` = `200`.
@@ -275,7 +276,7 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 - `set_pause` lapses after 7 days (re-pause to extend). Trading on Meteora itself can't be paused by us (DBC/DAMM
   pools are permissionless); `PAUSE_TRADE` stops the FUMPAD router only.
 - Bad attestation: `PAUSE_ATTEST` (16) + `void_ticket` by the guardian (Squads transaction builder).
-- App: `NEXT_PUBLIC_PRELAUNCH` back on (unset, or `checker` to keep the read-only first-coin page) + redeploy hides the app (the chain keeps running).
+- App: `NEXT_PUBLIC_PRELAUNCH` back on (unset) + redeploy hides the app behind the launch page (the read-only first-coin page while `NEXT_PUBLIC_CHECKER_MINT` is set; the chain keeps running).
 - Stop new launches only, without touching trading (no multisig, ~1 min): Railway `api` `LAUNCHES_OPEN=false` →
   redeploy. The API refuses standard launches (403 `launches_closed`, `/launch` shows "Launches open soon.") and, since
   every launch needs its co-signature, no launch lands on chain either; buys, sells, tickets and claims keep working.

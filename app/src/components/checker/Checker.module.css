@@ -65,6 +65,21 @@
   border: 1px solid var(--ink);
   animation: ping 1.8s var(--ease-out) infinite;
 }
+/* Coming soon: the dot stays beside its text on phones (the banner's text wraps instead). */
+.bannerSoon {
+  flex-wrap: nowrap;
+}
+.bannerSoon .bannerText {
+  min-width: 0;
+}
+/* Coming soon: a hollow, still dot (the filled, pinging one means live). */
+.soonDot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--ink-2);
+}
 @keyframes ping {
   from {
     transform: scale(0.5);

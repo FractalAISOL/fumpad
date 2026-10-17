@@ -39,3 +39,22 @@
     max-width: none;
   }
 }
+
+/* Coming-soon state: what FUMPAD is, the caveat, and the one action (follow on X). */
+.intro {
+  margin-top: var(--s-6);
+}
+.caveat {
+  margin-top: var(--s-3);
+  max-width: 62ch;
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+  margin-top: var(--s-6);
+}

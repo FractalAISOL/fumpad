@@ -532,10 +532,10 @@ function LaunchesClosed({ loading }: { loading: boolean }) {
         <Panel className={s.closed}>
           <h2 className={s.closedTitle}>Launches open soon.</h2>
           <p className={s.hint}>
-            Coin launches aren&apos;t open yet. Join the waiting room or follow FUMPAD on X to hear the moment they are. Nothing to do or sign here until then.
+            Coin launches aren&apos;t open yet. See the launch page or follow FUMPAD on X to hear the moment they are. Nothing to do or sign here until then.
           </p>
           <div className={s.closedActions}>
-            <Button href="/soon">Join the waiting room</Button>
+            <Button href="/live">See the launch page</Button>
             <Button href={X_URL} variant="line" target="_blank" rel="noopener noreferrer">
               Follow on X
             </Button>

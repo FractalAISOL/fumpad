@@ -2,10 +2,11 @@
 
 import { Suspense, useState } from "react";
 import type { CoinDetail, PricePoint, ProtocolParams } from "@/data";
-import { Skeleton } from "@/design";
+import { Skeleton, cx } from "@/design";
 import { CoinWindow } from "./CoinWindow";
 import { FumbleCheck } from "./FumbleCheck";
 import { useClock } from "./hooks";
+import { SOON_BANNER } from "./launchState";
 import { countdown, opensInText } from "./model";
 import s from "./Checker.module.css";
 
@@ -25,6 +26,19 @@ export function OpensBanner({ opensAt, serverNow, cluster }: { opensAt: number |
           <span className="num">{countdown(left)}</span>
         </span>
       )}
+      {cluster && <span className={s.clusterTag}>{cluster}</span>}
+    </div>
+  );
+}
+
+/** The coming-soon state's banner: no live dot, no countdown (nothing is live yet). */
+export function SoonBanner({ cluster }: { cluster: string | null }) {
+  return (
+    <div className={cx(s.banner, s.bannerSoon)}>
+      <span className={s.soonDot} aria-hidden="true" />
+      <span className={s.bannerText}>
+        <b>{SOON_BANNER.strong}</b> {SOON_BANNER.rest}
+      </span>
       {cluster && <span className={s.clusterTag}>{cluster}</span>}
     </div>
   );

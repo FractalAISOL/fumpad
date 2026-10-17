@@ -1,30 +1,36 @@
 import type { Metadata } from "next";
+import { META, launchState } from "@/components/checker/launchState";
 import { RoomFooter, RoomHeader } from "@/components/prelaunch/Frame";
 import { ROOM_THEME_SCRIPT } from "@/components/prelaunch/ThemeSwitch";
 import s from "@/components/prelaunch/Room.module.css";
 
 /**
- * The launch-window page's frame (between the first coin's launch and the full app). Public URL: `/` on fumpad.app
- * when NEXT_PUBLIC_PRELAUNCH=checker (`prelaunch/gate.ts`). Same chrome as the waiting room: no app shell, wallet,
- * Privy or signing code; the root layout drops the shell for this segment (`ShellGate`).
+ * The launch-window page's frame: fumpad.app's only page until the full app opens. Public URL: `/` on fumpad.app
+ * unless NEXT_PUBLIC_PRELAUNCH=off (`prelaunch/gate.ts`). Its own chrome: no app shell, wallet, Privy or signing
+ * code; the root layout drops the shell for this segment (`ShellGate`) and keeps the disclaimer gate.
+ * Metadata follows the page's state (coming soon / live, `launchState.ts`); NEXT_PUBLIC_CHECKER_MINT is inlined at
+ * build, so it's fixed per deployment. The OG/Twitter image is the Fumi card next to this file (absolute via the
+ * root layout's metadataBase, NEXT_PUBLIC_SITE_URL).
  */
 
+const meta = META[launchState(process.env.NEXT_PUBLIC_CHECKER_MINT).state];
+
 export const metadata: Metadata = {
-  title: { absolute: "FUMPAD — The first coin is live. Did you fumble?", template: "%s | FUMPAD" },
-  description: "The first FUMPAD coin is live on Solana. Paste a wallet to see which sells count, where each ticket stands, and the market cap it claims at.",
+  title: { absolute: meta.title, template: "%s | FUMPAD" },
+  description: meta.description,
   alternates: { canonical: "https://fumpad.app/" },
   openGraph: {
     type: "website",
     siteName: "FUMPAD",
     url: "https://fumpad.app/",
-    title: "The first FUMPAD coin is live. Did you fumble?",
-    description: "Sell on any app. If the coin later holds 10× your price, claim 10% of what you sold. Check any wallet.",
+    title: meta.socialTitle,
+    description: meta.socialDescription,
   },
   twitter: {
     card: "summary_large_image",
     site: "@Fumblepad",
-    title: "The first FUMPAD coin is live. Did you fumble?",
-    description: "Sell on any app. If the coin later holds 10× your price, claim 10% of what you sold. Check any wallet.",
+    title: meta.socialTitle,
+    description: meta.socialDescription,
   },
 };
 
