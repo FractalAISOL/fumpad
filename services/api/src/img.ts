@@ -50,6 +50,8 @@ export interface ImageProxyOpts {
   /** Concurrent upstream fetches; beyond it requests fail fast with `busy`. */
   maxConcurrent?: number;
   ipfsGateway?: string;
+  /** IPFS gateways tried in order (dedicated Pinata gateway first), see safeFetch. */
+  ipfsGateways?: string[];
   /** Tests only (forwarded to safeFetch). */
   fetchOpts?: Pick<SafeFetchOptions, "allowHttp" | "isAllowedAddress">;
 }
@@ -62,7 +64,7 @@ export class ImageProxy {
   private inflight = new Map<string, Promise<ImageResult>>();
   private active = 0;
   stats = { hits: 0, misses: 0, fetched: 0, failed: 0, busy: 0 };
-  readonly o: Required<Omit<ImageProxyOpts, "fetchOpts" | "ipfsGateway">> & Pick<ImageProxyOpts, "fetchOpts" | "ipfsGateway">;
+  readonly o: Required<Omit<ImageProxyOpts, "fetchOpts" | "ipfsGateway" | "ipfsGateways">> & Pick<ImageProxyOpts, "fetchOpts" | "ipfsGateway" | "ipfsGateways">;
 
   constructor(
     /** mint → the coin's creator image URL (metadata.image), or null. */
@@ -78,6 +80,7 @@ export class ImageProxy {
       negativeTtlMs: opts.negativeTtlMs ?? 5 * 60_000,
       maxConcurrent: opts.maxConcurrent ?? 8,
       ipfsGateway: opts.ipfsGateway,
+      ipfsGateways: opts.ipfsGateways,
       fetchOpts: opts.fetchOpts,
     };
   }
@@ -118,7 +121,7 @@ export class ImageProxy {
   private async fetch(url: string): Promise<ImageResult> {
     let result: ImageResult;
     try {
-      const r = await safeFetch(url, { maxBytes: this.o.maxBytes, timeoutMs: this.o.timeoutMs, maxRedirects: 3, ipfsGateway: this.o.ipfsGateway, accept: "image/png,image/jpeg,image/gif,image/webp", ...this.o.fetchOpts });
+      const r = await safeFetch(url, { maxBytes: this.o.maxBytes, timeoutMs: this.o.timeoutMs, maxRedirects: 3, ipfsGateway: this.o.ipfsGateway, ipfsGateways: this.o.ipfsGateways, accept: "image/png,image/jpeg,image/gif,image/webp", ...this.o.fetchOpts });
       if (r.status !== 200) result = { ok: false, reason: "upstream" };
       else {
         const type = sniffImage(r.body);

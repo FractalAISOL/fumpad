@@ -49,6 +49,9 @@ export interface PrepareBody {
 
 export type LaunchConfigKind = "standard" | "first_coin";
 
+/** What the app launched with before metadata uploads existed; still the devnet fallback without PINATA_JWT (./metadata.ts). */
+export const PLACEHOLDER_URI = "ipfs://pending";
+
 /** 403 code + message when standard launches are closed (LAUNCHES_OPEN=false); the app shows a "launches open soon" state. */
 export const LAUNCHES_CLOSED_CODE = "launches_closed";
 export const LAUNCHES_CLOSED_MESSAGE = "Launches open soon";
@@ -165,6 +168,8 @@ export function registerLaunchRoutes(app: FastifyInstance, cfg: ApiConfig, deps:
       const p = parsePrepareBody(req.body, cfg);
       // LAUNCHES_OPEN: no standard launch before the public opening (nothing reserved, nothing signed).
       assertLaunchAllowed(p.launchConfig, cfg.launchesOpen);
+      // Mainnet: a coin's metadata is permanent, so never launch one with the placeholder (no logo, no socials).
+      if (cfg.metadataRequired && p.uri.trim() === PLACEHOLDER_URI) throw new LaunchError(400, "the coin's metadata wasn't uploaded, try again");
       if (!deps.pool) throw new LaunchError(503, "launches are not enabled on this server");
       const pool = deps.pool;
       const creator = p.creator.toBase58();

@@ -19,6 +19,7 @@ import { OPENAPI } from "./openapi.js";
 import { AmbiguousSymbolError, Repo } from "./repo.js";
 import { systemStatus } from "./status.js";
 import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
+import { type IpfsPinner, logMetadataMode, PinataPinner, registerMetadataRoute } from "./launch/metadata.js";
 import { registerLaunchRoutes } from "./launch/routes.js";
 import { MintVault } from "./launch/vault.js";
 import { clientIpTrust, ssrAuthorized, SSR_HEADER } from "./net.js";
@@ -73,6 +74,8 @@ export interface ApiDeps {
   waitlist: WaitlistStore | null;
   /** Coin image proxy (V7-L6). */
   images: ImageProxy;
+  /** IPFS pinning for launch metadata (Pinata); null when PINATA_JWT is unset. */
+  pinner: IpfsPinner | null;
 }
 
 export async function buildServer(
@@ -136,8 +139,9 @@ export async function buildServer(
         : null;
   const waitlist = openWaitlistStore(cfg, db, deps?.waitlist);
   // The image URL of a coin rarely changes (metadata is set at launch): a short TTL bounds DB lookups.
-  const images = deps?.images ?? new ImageProxy((mint) => cache.get(`img:${mint}`, 60_000, () => repo.coinImageUrl(mint)), { maxBytes: cfg.imgMaxBytes, cacheBytes: cfg.imgCacheBytes, ipfsGateway: cfg.ipfsGateway });
-  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool, waitlist, images };
+  const images = deps?.images ?? new ImageProxy((mint) => cache.get(`img:${mint}`, 60_000, () => repo.coinImageUrl(mint)), { maxBytes: cfg.imgMaxBytes, cacheBytes: cfg.imgCacheBytes, ipfsGateway: cfg.ipfsGateway, ipfsGateways: cfg.ipfsGateways });
+  const pinner = deps?.pinner !== undefined ? deps.pinner : cfg.pinataJwt ? new PinataPinner(cfg.pinataJwt) : null;
+  const all: ApiDeps = { db, conn, repo, chain, cache, live, pool, waitlist, images, pinner };
 
   await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "POST", "OPTIONS"] });
   // SSR requests (shared secret header, H-2) are exempt; everyone else is limited per real IP.
@@ -462,6 +466,8 @@ export async function buildServer(
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────
   registerLaunchRoutes(app, cfg, { conn, chain, pool, db });
+  registerMetadataRoute(app, cfg, { conn, pinner, launchesEnabled: !!pool });
+  logMetadataMode(cfg, pinner, app.log);
 
   // ── Pre-launch waitlist ─────────────────────────────────────────────────────
   registerWaitlistRoutes(app, cfg, waitlist);

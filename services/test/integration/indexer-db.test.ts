@@ -7,6 +7,8 @@
  *  - idempotency, replay to the same state, rollback of a dropped tx, and the API mapping.
  */
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
@@ -16,7 +18,7 @@ import bs58 from "bs58";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { bn, DEFAULT_PARAMS, EVENT_IX_TAG, eventAuthorityPda, FUMPAD_IDL, FUMPAD_PROGRAM_ID, fumpadCoder, type Params, q64ToSolPerToken, type TxLike } from "@fumpad/sdk";
-import { createLogger, createPool, type Db, Finalizer, Ingestor, MeteoraIngestor, migrate, replayMint, setMeta, storeable } from "@fumpad/indexer";
+import { ChainSync, createLogger, createPool, type Db, Finalizer, Ingestor, MeteoraIngestor, migrate, replayMint, setMeta, storeable } from "@fumpad/indexer";
 import { Repo } from "@fumpad/api";
 import type { ConfirmedTx } from "@fumpad/meteora";
 
@@ -268,5 +270,35 @@ describe("indexer v0.7 → db → api", () => {
     // Unknown wallet / coin.
     expect(await repo.walletFumbles(k().toBase58(), mint.toBase58(), 150)).toMatchObject({ found: false, coins: [{ sells: [] }] });
     expect(await repo.walletFumbles(k().toBase58(), k().toBase58(), 150)).toMatchObject({ found: false, coins: [] });
+  });
+
+  it("metadata that failed to load is retried through the IPFS gateways and reaches the API (logo, socials)", async () => {
+    const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+    const gateway = createServer((req, res) => {
+      if (req.url === `/ipfs/${cid}`)
+        return void res
+          .writeHead(200, { "content-type": "application/json" })
+          .end(JSON.stringify({ name: "X", symbol: "X", description: "from ipfs", image: `https://ipfs.io/ipfs/${cid}x`, showName: true, createdOn: "https://fumpad.app", twitter: "https://x.com/sadpigeon", website: "https://pigeon.fun/" }));
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => gateway.listen(0, "127.0.0.1", r));
+    const before = (await db.query<{ uri: string; metadata: unknown }>("SELECT uri, metadata FROM coins WHERE mint = $1", [mint.toBase58()])).rows[0];
+    try {
+      // as the launch left it: an ipfs:// uri whose first fetch failed (the pin wasn't on the gateway yet)
+      await db.query("UPDATE coins SET uri = $2, metadata = $3 WHERE mint = $1", [mint.toBase58(), `ipfs://${cid}`, JSON.stringify({ fetchedAt: 0, error: "http", attempts: 1 })]);
+      const port = (gateway.address() as AddressInfo).port;
+      const sync = new ChainSync({} as never, db, log, { debounceMs: 0, fetchMetadata: true, metadataFetch: { allowHttp: true, isAllowedAddress: (ip) => ip === "127.0.0.1", ipfsGateways: [`http://127.0.0.1:${port}/ipfs/`] } });
+      expect(await sync.retryMetadata()).toBe(1);
+      const md = (await db.query<{ metadata: Record<string, unknown> }>("SELECT metadata FROM coins WHERE mint = $1", [mint.toBase58()])).rows[0].metadata;
+      expect(md).toMatchObject({ description: "from ipfs", twitter: "https://x.com/sadpigeon", website: "https://pigeon.fun/" });
+      expect(md.error).toBeUndefined();
+      expect(await sync.retryMetadata()).toBe(0); // loaded: nothing left to retry
+      const repo = new Repo(db);
+      expect(await repo.coinImageUrl(mint.toBase58())).toBe(`https://ipfs.io/ipfs/${cid}x`);
+      expect((await repo.getCoinByMint(mint.toBase58()))?.socials).toEqual({ x: "https://x.com/sadpigeon", website: "https://pigeon.fun/" });
+    } finally {
+      gateway.close();
+      await db.query("UPDATE coins SET uri = $2, metadata = $3 WHERE mint = $1", [mint.toBase58(), before.uri, before.metadata === null ? null : JSON.stringify(before.metadata)]);
+    }
   });
 });

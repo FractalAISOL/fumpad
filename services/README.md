@@ -77,6 +77,37 @@ program accepts any fresh mint, like pump.fun's `pump`).
 - SDK: `isFumpadVanityMint(pubkey, suffix = "fmbL")`, `launchMetadataError`, `inspectLaunchTx`; `buildLaunch` accepts a
   mint `PublicKey` (co-signed elsewhere) as well as a `Keypair`.
 
+### Coin metadata (IPFS via Pinata)
+The app uploads the coin's image + details **before** prepare: `POST /v1/launch/metadata` (`api/src/launch/metadata.ts`)
+`{creator, name, symbol, description?, website?, twitter?, telegram?, image? (base64), firstBuy?, launchConfig?, auth}`
+→ `{uri, image?, placeholder?}`; the app then prepares with that `uri` (and `checkLaunchBinding` checks it).
+- **Server-side pinning** (Pinata Files API v3, `network=public`): the `PINATA_JWT` never reaches a browser, and the
+  browser never loads a gateway (our pages show logos through `GET /v1/img/:mint`). Same signed `auth` message as
+  prepare (one wallet signature for both), same LAUNCHES_OPEN / first-coin gates, funded wallets only, limits per IP
+  (`LAUNCH_METADATA_RATE_LIMIT_PER_MIN`, 6) and per wallet (3/min, 20/h): no free IPFS hosting.
+- **Image** (`api/src/launch/image.ts`): PNG / JPEG / GIF / WebP by magic bytes (the declared type is ignored), ≤ 4 MB
+  (route body ≤ 6 MiB), 16…8192 px a side, ≤ 40 MP. JPEG: EXIF (GPS) / XMP APP1 dropped, a non-default orientation
+  kept as a one-tag EXIF; PNG: `eXIf` / `tEXt` / `zTXt` / `iTXt` / `tIME` chunks dropped. Pixels are never re-encoded.
+- **JSON** (pump.fun's shape, which Axiom / Jupiter / Phantom / Dexscreener already parse, plus Metaplex fields):
+  `{name, symbol, description, image?, showName: true, createdOn: "https://fumpad.app", twitter?, telegram?, website?,
+  external_url?, extensions?: {website, twitter, telegram}, properties?: {files: [{uri, type}], category: "image"}}`;
+  socials normalized to full URLs (`https://x.com/<handle>`, `https://t.me/<name>`), empty fields left out. The image
+  is pinned first (`image` = `https://ipfs.io/ipfs/<cid>`), the JSON as **CIDv0** (46 chars, the shortest).
+- **URI form**: `https://ipfs.io/ipfs/<CIDv0>` (fetched directly by every wallet / aggregator; the neutral public
+  gateway, not our Pinata account) **when the launch tx has room**, else `ipfs://<CIDv0>`. The launch tx has no lookup
+  table and must fit 1,232 bytes: with the launch co-signer (mainnet) and a first buy, name + ticker + uri get ≈ 77
+  bytes, so a first-buy launch gets `ipfs://…` (53 bytes) and one whose name + ticker exceed ≈ 24 bytes can't carry
+  any IPFS uri: 400 before anything is pinned ("shorten them, or launch without a first buy"). `firstBuy: false`
+  always fits the https form. `metadataUriFor` measures the real prepare transaction.
+- **Without `PINATA_JWT`**: devnet/localnet answer the old placeholder `ipfs://pending` (`placeholder: true`, logged);
+  mainnet (`FUMPAD_CLUSTER=mainnet`) answers 503 and logs `DISABLED` at boot, and prepare refuses `ipfs://pending`.
+- **Our display path**: the indexer and `/v1/img/:mint` fetch IPFS content (`ipfs://…` **and** any
+  `https://<host>/ipfs/<cid>` URL) through `PINATA_GATEWAY` (dedicated) first, then `IPFS_GATEWAY` (ipfs.io), then
+  the original URL, each under the SSRF policy (`indexer/src/safeFetch.ts` `fetchCandidates`). Metadata that failed to
+  load is retried (1, 2, 4, 8, 16 min; `ChainSync.retryMetadata`): a fresh pin can take a moment to reach a gateway.
+  Socials are read from top-level fields, then `extensions`, then `external_url`.
+- Ops: `npm run pinata-check -- --env <file>` verifies a `PINATA_JWT` (Pinata `testAuthentication`, never printed).
+
 ### D19 / D20 (v0.5) — and the still-live v0.4 devnet program
 - **Older layouts decode.** `decodeTransactionEvents` / `decodeEventRaw` accept pre-v0.5 `Trade`, `Graduated`,
   `ParamsQueued`/`ParamsUpdated` (fields appended in v0.5 read as 0; `FumpadEvent.legacy = true`), with a strict length
@@ -308,6 +339,9 @@ local validator.
 | `LAUNCH_REQUIRE_SIGNATURE` (true), `LAUNCH_SIGNATURE_MAX_AGE_SECS` (600), `LAUNCH_MIN_BALANCE_LAMPORTS` (0.01 SOL), `LAUNCH_POOL_RESERVE` (5), `LAUNCH_RPC_TIMEOUT_MS` (5000) | api | M-2 drain guards |
 | `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20), `WAITLIST_IP_SALT` | api | pre-launch waitlist |
 | `IMG_RATE_LIMIT_PER_MIN` (600), `IMG_MAX_BYTES` (2 MiB), `IMG_CACHE_MB` (64), `IPFS_GATEWAY` (`https://ipfs.io/ipfs/`) | api | coin image proxy `GET /v1/img/:mint` (V7-L6): SSRF-safe fetch of the coin's metadata image, PNG/JPEG/GIF/WebP only, bounded in-memory LRU |
+| `PINATA_JWT` | api | **sealed**. Coin metadata pinning (`POST /v1/launch/metadata`). **Required on mainnet** (unset: 503, the app can't launch); unset on devnet = placeholder uri `ipfs://pending`. Check: `npm run pinata-check -- --env <file>` |
+| `PINATA_GATEWAY` | api, indexer | optional dedicated gateway domain (`<name>.mypinata.cloud`; a bare domain or `https://…`, anything else fails startup): our IPFS fetches try it before `IPFS_GATEWAY` |
+| `LAUNCH_METADATA_RATE_LIMIT_PER_MIN` (6), `LAUNCH_METADATA_WALLET_LIMIT_PER_MIN` (3), `LAUNCH_METADATA_WALLET_LIMIT_PER_HOUR` (20) | api | metadata upload limits (per IP; per wallet) |
 | `KEEPER_KEYPAIR` (path) or `KEEPER_SECRET_KEY` (JSON array / base58) | keeper | **required**, sealed. Jobs mode: an **operator** key (`set_operators`; refuses to start with an attestor key). Attestor mode: a keeper key (`set_keepers`; refuses an operator key). Never the same key in both |
 | `KEEPER_DAILY_BUDGET_SOL` (2) | keeper | over budget: alert, essential jobs only |
 | `PRIORITY_MIN_MICROLAMPORTS` (1000), `PRIORITY_MAX_MICROLAMPORTS` (1,000,000), `PRIORITY_MAX_LAMPORTS_PER_TX` (200,000), `PRIORITY_PERCENTILE` (75) | keeper | priority fee clamps |
@@ -456,7 +490,6 @@ loop. API: quotes/balances fail (5xx) while list pages keep serving from Postgre
   are kept for wallets with FUMPAD history. If the pool is empty the app shows "try again in a minute"; a fallback
   to a random (non-`fmbL`) mint is deliberately not offered.
 - `sdk` `FumpadClient.buildProcessQueue` still passes the first 13 entries (the keeper no longer uses it; see H-4).
-- Coin metadata JSON upload is still a placeholder in the app (`uri: ipfs://pending`).
 - `escrowed` tickets map to the app's `claimed` state (the app types have no escrow state / withdraw action yet).
 - Holders are FUMPAD-observed balances (trades + claims), not full SPL holder lists.
 - Funding-graph heuristic is first-funder only; no exchange allow-list.

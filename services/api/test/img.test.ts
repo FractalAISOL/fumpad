@@ -31,6 +31,8 @@ beforeAll(async () => {
     hits[path] = (hits[path] ?? 0) + 1;
     const send = (type: string, body: Buffer) => res.writeHead(200, { "content-type": type, "content-length": body.length }).end(body);
     switch (path) {
+      case "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG": // a gateway that has the CID (the dedicated one)
+        return send("image/png", PNG);
       case "/a.png":
         return send("image/png", PNG);
       case "/a.jpg":
@@ -126,6 +128,17 @@ describe("ImageProxy", () => {
     expect(await p.get("priv")).toEqual({ ok: false, reason: "blocked" });
     expect(await p.get("meta")).toEqual({ ok: false, reason: "blocked" });
     expect(await p.get("file")).toEqual({ ok: false, reason: "blocked" });
+  });
+
+  it("IPFS images (ipfs:// or a public-gateway URL) come through the configured gateways in order", async () => {
+    const base = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+    // the first gateway 404s (not pinned there), the second has it; ipfs.io (named in the URI) is never contacted
+    const p = proxy({ a: `https://ipfs.io/ipfs/${cid}`, b: `ipfs://${cid}` }, { ipfsGateways: [`${base}/missing/ipfs/`, `${base}/ipfs/`] });
+    for (const m of ["a", "b"]) {
+      const r = await p.get(m);
+      expect(r.ok && r.type, m).toBe("image/png");
+    }
   });
 
   it("upstream errors and coins without an image", async () => {

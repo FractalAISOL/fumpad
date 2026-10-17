@@ -118,24 +118,83 @@ export class ChainSync {
   /**
    * Off-chain metadata JSON (M-3): any coin can carry any `uri`, so it is fetched under the
    * SSRF policy (safeFetch: https/ipfs/ar only, public addresses only incl. every redirect
-   * hop, 64 KiB, 5 s). Only short strings are kept; failures store a coarse error code
-   * (never the network error text, which would map internal hosts/ports).
+   * hop, 64 KiB, 5 s; IPFS content through the configured gateways in order). Only short strings are kept;
+   * failures store a coarse error code (never the network error text, which would map internal hosts/ports)
+   * and are retried with backoff (`retryMetadata`, at most METADATA_MAX_ATTEMPTS fetches in all): a freshly pinned
+   * IPFS file can take a while to reach a public gateway.
    */
-  private async fetchMetadata(mint: string) {
+  private async fetchMetadata(mint: string, force = false) {
     const r = await this.db.query<{ uri: string; metadata: unknown }>("SELECT uri, metadata FROM coins WHERE mint = $1", [mint]);
     const row = r.rows[0];
-    if (!row || row.metadata || !row.uri || !/^(https?|ipfs|ar):\/\//i.test(row.uri)) return;
+    if (!row || !row.uri || !/^(https?|ipfs|ar):\/\//i.test(row.uri)) return;
+    const prev = row.metadata && typeof row.metadata === "object" ? (row.metadata as Record<string, unknown>) : null;
+    const attempts = prev && typeof prev.attempts === "number" ? prev.attempts : prev ? 1 : 0;
+    if (prev && !(prev.error && (force || metadataRetryDue(prev, Date.now())))) return;
+    if (attempts >= METADATA_MAX_ATTEMPTS) return;
     let meta: Record<string, unknown> = { fetchedAt: Date.now() };
     try {
       const res = await safeFetch(row.uri, { timeoutMs: 5_000, maxBytes: 64 * 1024, maxRedirects: 3, ...this.opts.metadataFetch });
       if (res.status !== 200) throw new SafeFetchError("http", "status");
       const j = JSON.parse(res.body.toString("utf8")) as Record<string, unknown>;
       if (!j || typeof j !== "object" || Array.isArray(j)) throw new SafeFetchError("http", "not an object");
-      const pickStr = (k: string) => (typeof j[k] === "string" ? (j[k] as string).slice(0, 500) : undefined);
-      meta = { ...meta, description: pickStr("description"), image: pickStr("image"), website: pickStr("website"), twitter: pickStr("twitter"), telegram: pickStr("telegram") };
+      meta = { ...meta, ...pickMetadata(j) };
     } catch (e) {
       meta.error = e instanceof SafeFetchError ? e.code : e instanceof SyntaxError ? "invalid_json" : "failed";
+      meta.attempts = attempts + 1;
     }
     await this.db.query("UPDATE coins SET metadata = $2 WHERE mint = $1", [mint, JSON.stringify(meta)]);
   }
+
+  /** Re-fetch metadata that failed, once its backoff is due (a few coins per run). */
+  async retryMetadata(limit = 20): Promise<number> {
+    if (!this.opts.fetchMetadata) return 0;
+    const r = await this.db.query<{ mint: string; metadata: Record<string, unknown> }>(
+      `SELECT mint, metadata FROM coins
+        WHERE metadata ? 'error' AND COALESCE((metadata->>'attempts')::int, 1) < $1
+        ORDER BY (metadata->>'fetchedAt')::bigint ASC LIMIT $2`,
+      [METADATA_MAX_ATTEMPTS, limit * 4],
+    );
+    const now = Date.now();
+    let n = 0;
+    for (const row of r.rows) {
+      if (n >= limit) break;
+      if (!metadataRetryDue(row.metadata, now)) continue;
+      n++;
+      try {
+        await this.fetchMetadata(row.mint, true);
+      } catch (e) {
+        this.log.warn({ mint: row.mint, err: String(e) }, "metadata retry failed");
+      }
+    }
+    return n;
+  }
+}
+
+/** Fetches per coin before a failing metadata URI is given up on (≈ 1 + 2 + 4 + 8 + 16 min of backoff). */
+export const METADATA_MAX_ATTEMPTS = 6;
+
+/** A failed fetch is retried after 1, 2, 4, 8, 16 min. */
+export function metadataRetryDue(md: Record<string, unknown>, now: number): boolean {
+  if (!md.error) return false;
+  const attempts = typeof md.attempts === "number" ? md.attempts : 1;
+  if (attempts >= METADATA_MAX_ATTEMPTS) return false;
+  const at = typeof md.fetchedAt === "number" ? md.fetchedAt : 0;
+  return now - at >= 60_000 * 2 ** Math.max(0, attempts - 1);
+}
+
+/**
+ * The fields we keep from a coin's metadata JSON (strings only, ≤ 500 chars). Socials: top-level `website` /
+ * `twitter` / `telegram` (pump.fun / FUMPAD), else `extensions.*` (older Solana token-list convention), else
+ * Metaplex `external_url` for the website.
+ */
+export function pickMetadata(j: Record<string, unknown>): Record<string, string | undefined> {
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.slice(0, 500) : undefined);
+  const ext = j.extensions && typeof j.extensions === "object" && !Array.isArray(j.extensions) ? (j.extensions as Record<string, unknown>) : {};
+  return {
+    description: str(j.description),
+    image: str(j.image),
+    website: str(j.website) ?? str(ext.website) ?? str(j.external_url),
+    twitter: str(j.twitter) ?? str(ext.twitter) ?? str(j.x),
+    telegram: str(j.telegram) ?? str(ext.telegram),
+  };
 }

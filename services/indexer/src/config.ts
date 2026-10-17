@@ -36,6 +36,11 @@ export interface IndexerConfig {
   fetchMetadata: boolean;
   /** ipfs:// URIs are fetched through this https gateway (path appended). */
   ipfsGateway: string;
+  /**
+   * Gateways tried in order for IPFS content (ipfs:// or an https `/ipfs/<cid>` URL): the dedicated Pinata gateway
+   * (`PINATA_GATEWAY`) when set, then `ipfsGateway`. See `ipfsGatewaysFromEnv`.
+   */
+  ipfsGateways: string[];
   /** Finalizer: consecutive "unknown to the cluster" checks before a row is rolled back. */
   finalizeDropMisses: number;
   finalizeDropAfterSecs: number;
@@ -66,6 +71,27 @@ export function rpcUrlFromEnv(env = process.env): string {
   return "http://127.0.0.1:8899";
 }
 
+export const PUBLIC_IPFS_GATEWAY = "https://ipfs.io/ipfs/";
+
+/**
+ * `PINATA_GATEWAY`: a dedicated gateway domain (`<name>.mypinata.cloud`, or a custom domain; a full `https://…`
+ * URL is accepted too) → `https://<domain>/ipfs/`. Unset/empty → undefined. Anything else is a startup error.
+ */
+export function pinataGatewayFromEnv(env: NodeJS.ProcessEnv): string | undefined {
+  const raw = env.PINATA_GATEWAY?.trim();
+  if (!raw) return undefined;
+  const host = raw.replace(/^https:\/\//i, "").replace(/\/(ipfs\/?)?$/i, "").toLowerCase();
+  if (!/^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host)) throw new Error(`PINATA_GATEWAY must be a gateway domain like <name>.mypinata.cloud (got ${JSON.stringify(raw)})`);
+  return `https://${host}/ipfs/`;
+}
+
+/** IPFS gateways in the order our own fetches use them: the dedicated one (if set), then IPFS_GATEWAY / ipfs.io. */
+export function ipfsGatewaysFromEnv(env: NodeJS.ProcessEnv): string[] {
+  const pub = env.IPFS_GATEWAY?.trim() || PUBLIC_IPFS_GATEWAY;
+  const dedicated = pinataGatewayFromEnv(env);
+  return dedicated && dedicated !== pub ? [dedicated, pub] : [pub];
+}
+
 export function loadIndexerConfig(env = process.env): IndexerConfig {
   requireEnv(env, "indexer", isProduction(env) ? ["DATABASE_URL", "RPC_URL"] : ["DATABASE_URL"]);
   const rpcUrl = rpcUrlFromEnv(env);
@@ -92,7 +118,8 @@ export function loadIndexerConfig(env = process.env): IndexerConfig {
     deriveIntervalMs: num(env.DERIVE_INTERVAL_MS, 10_000),
     fundingLookupsPerCycle: num(env.FUNDING_LOOKUPS_PER_CYCLE, 10),
     fetchMetadata: env.FETCH_METADATA !== "false",
-    ipfsGateway: env.IPFS_GATEWAY || "https://ipfs.io/ipfs/",
+    ipfsGateway: env.IPFS_GATEWAY || PUBLIC_IPFS_GATEWAY,
+    ipfsGateways: ipfsGatewaysFromEnv(env),
     finalizeDropMisses: num(env.FINALIZE_DROP_MISSES, 3),
     finalizeDropAfterSecs: num(env.FINALIZE_DROP_AFTER_SECS, 180),
     healthPort: env.PORT ? Number(env.PORT) : env.HEALTH_PORT ? Number(env.HEALTH_PORT) : undefined,

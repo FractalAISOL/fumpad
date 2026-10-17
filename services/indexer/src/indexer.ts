@@ -49,7 +49,7 @@ export class Indexer {
     this.log = log ?? createLogger("indexer", cfg.logLevel);
     this.db = createPool(cfg.databaseUrl);
     this.conn = new Connection(cfg.rpcUrl, { commitment: cfg.commitment, wsEndpoint: cfg.wsUrl, disableRetryOnRateLimit: false });
-    this.chainSync = new ChainSync(this.conn, this.db, this.log, { debounceMs: 500, fetchMetadata: cfg.fetchMetadata, metadataFetch: { ipfsGateway: cfg.ipfsGateway } });
+    this.chainSync = new ChainSync(this.conn, this.db, this.log, { debounceMs: 500, fetchMetadata: cfg.fetchMetadata, metadataFetch: { ipfsGateway: cfg.ipfsGateway, ipfsGateways: cfg.ipfsGateways } });
     this.ingestor = new Ingestor({
       db: this.db,
       log: this.log,
@@ -112,6 +112,8 @@ export class Indexer {
     loop("finalize", this.cfg.finalizeIntervalMs, () => this.finalizer.runOnce());
     loop("derive", this.cfg.deriveIntervalMs, () => this.deriver.runOnce());
     loop("params", 60_000, () => this.reloadParams());
+    // Metadata that failed to load (a fresh IPFS pin not yet on the gateway, a timeout) is retried with backoff.
+    if (this.cfg.fetchMetadata) loop("metadata-retry", 60_000, () => this.chainSync.retryMetadata(), 60_000);
     loop("heartbeat", 15_000, () => this.heartbeat());
     if (this.meteora && this.cfg.meteora) {
       const m = this.meteora;

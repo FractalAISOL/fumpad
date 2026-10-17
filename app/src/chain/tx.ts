@@ -29,6 +29,7 @@ import { getConnection } from "./connection";
 import { txErrorMessage as programErrorMessage } from "./errors";
 import { type LaunchConfigInfo, type PrepareArgs, PrepareError, prepareLaunchSigned, sendBuilt as sendBuiltTx, signAndSendLaunch } from "./flow";
 import { instantDecision, lamportsSol, simulateSpend, worstCaseSpend } from "./limits";
+import { type LaunchMetadataInput, MetadataUploadError, uploadLaunchMetadata } from "./metadata";
 import { VANITY_SUFFIX } from "./program";
 import type { FumpadSigner } from "./signer";
 
@@ -41,10 +42,14 @@ export interface TxOk {
 export type TxStatus = "idle" | "building" | "signing" | "confirming" | "done" | "error";
 
 /**
- * Where a launch is, for the progress list: prove wallet ownership (M-2 signed message),
- * reserve the `…fmbL` mint (prepare), approve the transaction, confirm on chain.
+ * Where a launch is, for the progress list: prove wallet ownership (M-2 signed message), store
+ * the coin's image and details on IPFS (metadata upload), reserve the `…fmbL` mint (prepare),
+ * approve the transaction, confirm on chain.
  */
-export type LaunchStep = "auth" | "reserve" | "sign" | "confirm" | "done";
+export type LaunchStep = "auth" | "upload" | "reserve" | "sign" | "confirm" | "done";
+
+/** `lastErrorCode()` after a failed metadata upload (the launch form offers "Try again"). */
+export const METADATA_FAILED_CODE = "metadata_failed";
 
 export interface BuyArgs {
   mint: string;
@@ -70,8 +75,13 @@ export interface ClaimArgs {
 export interface LaunchArgs {
   name: string;
   symbol: string;
-  /** Metadata JSON URI (image + description), uploaded before the transaction. */
+  /**
+   * Metadata JSON URI. With `metadata`, `prepareLaunch` uploads it first and replaces this with the returned uri
+   * (the prepared launch's `args.uri` is what gets signed); without, it is used as given (scripts, tests).
+   */
   uri: string;
+  /** The form's image / description / links, pinned to IPFS by the API before the launch is prepared. */
+  metadata?: LaunchMetadataInput;
   initialBuySol: number;
   /** The one-off first-coin launch config (3% fee; contracts INTERFACE §5.9). Only the API decides if it is offered. */
   launchConfig?: "first_coin";
@@ -409,26 +419,44 @@ export function useFumpadTx({ requireWallet = false }: { requireWallet?: boolean
           // Mock: the same steps, simulated (the demo wallet signs nothing).
           setLaunchStep("auth");
           await wait(450);
+          if (args.metadata) {
+            setLaunchStep("upload");
+            await wait(400);
+          }
           setLaunchStep("reserve");
           await wait(350);
           setLaunchStep(null);
           setStatus("idle");
           return { mint: fakeMint(), suffix: VANITY_SUFFIX, simulated: true, args, preparedAt: Date.now() };
         }
-        const r = await prepareSigned(signer!, args);
+        let a = args;
+        if (args.metadata) {
+          // Pin the image + details first (same signed ownership message as prepare; cached per form content).
+          const m = await uploadLaunchMetadata(API!, signer!, { name: args.name, symbol: args.symbol, input: args.metadata, firstBuy: args.initialBuySol > 0, launchConfig: args.launchConfig }, instant, setLaunchStep);
+          if (m.placeholder) console.warn("FUMPAD API has no IPFS pinning configured (devnet): launching with the placeholder metadata uri");
+          a = { ...args, uri: m.uri };
+        }
+        const r = await prepareSigned(signer!, a);
         setLaunchStep(null);
         setStatus("idle");
-        return { mint: r.mint, suffix: r.suffix, simulated: false, args, preparedAt: Date.now(), transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, config: r.config };
+        return { mint: r.mint, suffix: r.suffix, simulated: false, args: a, preparedAt: Date.now(), transaction: r.transaction, lastValidBlockHeight: r.lastValidBlockHeight, config: r.config };
       } catch (e) {
         setLaunchStep(null);
         setStatus("error");
         errorRef.current = e instanceof Error ? e.message : "Couldn't prepare the launch.";
-        errorCodeRef.current = e instanceof PrepareError ? (e.code ?? null) : null;
+        // The upload answers the same gates as prepare (e.g. "launches_closed"); a network / server / rate-limit
+        // failure of the upload is retryable as is ("Try again" on the form).
+        errorCodeRef.current =
+          e instanceof PrepareError
+            ? (e.code ?? null)
+            : e instanceof MetadataUploadError
+              ? (e.code ?? (e.status === 0 || e.status >= 500 || e.status === 429 ? METADATA_FAILED_CODE : null))
+              : null;
         setError(errorRef.current);
         return null;
       }
     },
-    [live, signer, prepareSigned],
+    [live, signer, prepareSigned, instant],
   );
 
   /**

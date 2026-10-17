@@ -70,6 +70,13 @@ export const OPENAPI = {
         responses: { "200": { description: "OK" }, "401": { description: "Missing/invalid wallet signature" }, "403": { description: "Standard launches closed (code 'launches_closed', LAUNCHES_OPEN=false) / first_coin not enabled" }, "409": { description: "first_coin not available" }, "429": { description: "Rate limited" }, "503": { description: "Pool empty / launches disabled" } },
       },
     },
+    "/v1/launch/metadata": {
+      post: {
+        summary:
+          "Pin the coin's metadata to IPFS (Pinata, server-side) before prepare. JSON body (≤ 6 MiB) {creator, name, symbol, description?, website?, twitter?, telegram?, image?: base64 PNG/JPEG/GIF/WebP ≤ 4 MB, firstBuy?: boolean (default true), launchConfig?, auth: same signed message as prepare}; response {uri, image?, placeholder?}. uri = https://ipfs.io/ipfs/<CIDv0> when the launch tx has room, else ipfs://<CIDv0>; placeholder ipfs://pending (placeholder: true) on devnet without PINATA_JWT. Same LAUNCHES_OPEN / first-coin gates, funded wallets only.",
+        responses: { "200": { description: "OK" }, "400": { description: "Invalid field / image, or name + ticker too long to launch with an IPFS uri" }, "401": { description: "Missing/invalid wallet signature" }, "403": { description: "Launches closed / first_coin not enabled" }, "413": { description: "Body too large" }, "429": { description: "Rate limited (IP or wallet)" }, "502": { description: "Pinning failed, retry" }, "503": { description: "Launches or metadata uploads not configured" } },
+      },
+    },
     "/v1/launch/options": {
       get: {
         summary: "Launch configs this server offers: {launchesOpen: boolean, firstCoin: null | {dbcConfig, wallet, buybackShareBps, walletShareBps, launchesLeft}} (launchesOpen = LAUNCHES_OPEN: false means standard launches are refused until the public opening; first_coin only with LAUNCH_FIRST_COIN=true and while allow-listed with launches left)",
