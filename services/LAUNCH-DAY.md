@@ -120,7 +120,12 @@ Opening the app only after the handover means no hot key holds admin power while
     `waitlist-db`) **+ one project per attestor** (`fumpad-attestor-1/2/3`, attestor-2 and attestor-3 under other
     Railway accounts — ideally other people's — and attestor-3 ideally on another cloud; DEPLOY-v07.md §1 topology:
     one cloud-account compromise must never yield two attestation keys, and the operator key never sits next to an
-    attestor key). Services as DEPLOY-v07.md §4, differences:
+    attestor key). **Decision 2026-10-17: ONE Railway account (strong 2FA), no teammate accounts, but a SEPARATE
+    PROJECT per attestor** (`fumpad-mainnet`, `fumpad-attestor-1/2/3`). Accepted risk: that one account's login
+    reaches all three attestor keys + the operator key, so its 2FA is the 2-of-3 boundary (keep the recovery codes
+    offline). The waitlist is retired: no `waitlist-db` / `WAITLIST_*` on mainnet (the API logs `WAITLIST DISABLED`
+    and answers 503 on `POST /v1/waitlist` only). Created 2026-10-17 (IDs, env set vs pending, day-0 order:
+    `$K/RAILWAY-MAINNET.md`); only Postgres + grinder run before day 0. Services as DEPLOY-v07.md §4, differences:
     | service | mainnet env |
     |---|---|
     | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
