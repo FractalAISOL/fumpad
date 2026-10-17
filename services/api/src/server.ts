@@ -11,7 +11,8 @@ import { TtlCache } from "./cache.js";
 import { IMAGE_CACHE, IMAGE_MISS_CACHE, IMAGE_SECURITY_HEADERS, ImageProxy } from "./img.js";
 import { ChainReader } from "./chain.js";
 import type { ApiConfig } from "./config.js";
-import type { Board, ChartRange, FeedKind, Side } from "./generated/app-types.js";
+import { CANDLE_INTERVALS } from "./candles.js";
+import type { Board, CandleInterval, ChartRange, FeedKind, Side } from "./generated/app-types.js";
 import type { CoinSort } from "./generated/app-interface.js";
 import { LiveHub } from "./live.js";
 import { OPENAPI } from "./openapi.js";
@@ -219,6 +220,11 @@ export async function buildServer(
     const mint = addr((req.params as { mint: string }).mint, "mint");
     const range = oneOf<ChartRange>((req.query as Record<string, string>).range, ["1h", "1d", "7d", "all"], "range", "1d");
     return cached(`prices:${mint}:${range}`, 5_000, () => repo.getPriceSeries(mint, range));
+  });
+  app.get("/v1/coins/:mint/candles", { schema: { params: mintParam, querystring: { type: "object", properties: { interval: { type: "string", enum: [...CANDLE_INTERVALS] } } } } }, async (req) => {
+    const mint = addr((req.params as { mint: string }).mint, "mint");
+    const interval = oneOf<CandleInterval>((req.query as Record<string, string>).interval, CANDLE_INTERVALS, "interval", "1m");
+    return cached(`candles:${mint}:${interval}`, 5_000, () => repo.getCandles(mint, interval));
   });
   app.get("/v1/coins/:mint/holders", { schema: { params: mintParam, querystring: viewerQs } }, async (req) => {
     const mint = addr((req.params as { mint: string }).mint, "mint");

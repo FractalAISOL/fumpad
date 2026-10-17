@@ -1,0 +1,175 @@
+.wrap {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.axis {
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" var(--wdth-numTight);
+  font-size: 10px;
+  fill: var(--ink-3);
+}
+.zone {
+  fill: var(--flare);
+  opacity: 0.06;
+}
+.ten {
+  stroke: var(--flare);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+
+/* Candles: up = solid ink, down = hollow graphite. Shape carries the direction, tone reinforces it; no colour. */
+.wick {
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.body {
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.up .wick {
+  stroke: var(--ink);
+}
+.up .body {
+  fill: var(--ink);
+  stroke: var(--ink);
+}
+.down .wick {
+  stroke: var(--ink-3);
+}
+.down .body {
+  fill: var(--surface);
+  stroke: var(--ink-3);
+}
+/* The candle still forming: it moves with each pushed trade. */
+.forming .body,
+.forming .wick {
+  transition:
+    y var(--dur-base) var(--ease-out),
+    height var(--dur-base) var(--ease-out),
+    y1 var(--dur-base) var(--ease-out),
+    y2 var(--dur-base) var(--ease-out);
+}
+/* A bucket without a trade: the price held, a short flat tick. */
+.flat {
+  stroke: var(--rule-2);
+  stroke-width: 1.5;
+}
+
+.lastLine {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+.lastLineHit {
+  stroke: var(--flare);
+}
+.lastTag {
+  position: absolute;
+  min-width: 54px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 5px;
+  font-size: 10px;
+  font-family: var(--f-num);
+  font-variation-settings: "wdth" var(--wdth-numTight);
+  background: var(--ink);
+  color: var(--on-ink);
+  border-radius: 2px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.lastTagHit {
+  background: var(--flare);
+  color: var(--on-flare);
+}
+
+.crossLine {
+  stroke: var(--flare);
+  stroke-width: 1;
+}
+.other {
+  fill: var(--ink-3);
+}
+.ring {
+  fill: var(--surface);
+  stroke: var(--ink);
+  stroke-width: 2.5;
+}
+.xband {
+  fill: var(--ink);
+  opacity: 0.06;
+}
+
+.lbl {
+  position: absolute;
+  font-size: 10.5px;
+  font-variation-settings: "wdth" var(--wdth-numTight);
+  padding: 1px 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--surface);
+  border-radius: 2px;
+}
+.lblTen {
+  color: var(--flare-text);
+  font-weight: 600;
+}
+.lblMe {
+  color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+
+.tip {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: var(--r-1);
+  pointer-events: none;
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1.35;
+  z-index: 1;
+}
+.ohlc {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  gap: 0 10px;
+  text-align: left;
+}
+.tipT {
+  display: block;
+  opacity: 0.7;
+  font-size: 10px;
+  font-family: var(--f-num);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .forming .body,
+  .forming .wick {
+    transition: none;
+  }
+}

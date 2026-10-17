@@ -12,6 +12,8 @@ export { Price, Sol, Usd, Tokens, Multiple, Change, Pct, Int } from "./component
 export { Tooltip, InfoTip, Dialog, ToastProvider, useToast } from "./components/Overlay";
 export { PriceChart, Sparkline } from "./components/PriceChart";
 export type { ChartPoint } from "./components/PriceChart";
+export { CandleChart } from "./components/CandleChart";
+export type { ChartCandle } from "./components/CandleChart";
 export { Panel, PanelHead, PanelBody, PanelNote, Stat, KV, Badge, Skeleton, Loading, EmptyState, SplitBar } from "./components/Surface";
 export type { BadgeTone } from "./components/Surface";
 export { Table } from "./components/Table";

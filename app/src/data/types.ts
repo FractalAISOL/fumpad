@@ -135,6 +135,32 @@ export interface PricePoint {
   p: number; // SOL per token
 }
 
+/** Candle size on the coin chart (trading-terminal style: the button sets the candle, not a date range). */
+export type CandleInterval = "1m" | "5m" | "30m";
+/** One OHLC candle, prices in SOL per token. Buckets start on UTC boundaries of the interval. */
+export interface Candle {
+  /** Bucket start. */
+  t: Millis;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  /** Price points in the bucket (trades, pool price samples); 0 = no trade, a flat filler at the previous close. */
+  n: number;
+}
+/**
+ * `getCandles`: the latest 150 buckets of `interval` (or since launch, when that's later). `candles` holds only buckets
+ * with at least one price point, oldest first; the app fills the empty ones flat (`app/src/data/candles.ts`).
+ */
+export interface CandleSeries {
+  interval: CandleInterval;
+  /** First bucket of the window (a bucket boundary): the window's start, or the launch's bucket. */
+  from: Millis;
+  /** The price going into the window (the last one before `from`); absent when the coin launched inside it. */
+  open?: number;
+  candles: Candle[];
+}
+
 export interface Holder {
   address: Address;
   label?: string;

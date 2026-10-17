@@ -5,7 +5,8 @@ import { Rules } from "@/components/checker/Rules";
 import s from "@/components/checker/Checker.module.css";
 import { X_URL } from "@/components/prelaunch/links";
 import { CLUSTER_LABEL, SOLSCAN_QUERY } from "@/chain/cluster";
-import { cachedCoin, cachedPriceSeries, shellSnapshot } from "@/data/server";
+import { defaultInterval, windowStart } from "@/data/candles";
+import { cachedCandles, cachedCoin, shellSnapshot } from "@/data/server";
 import { Button } from "@/design";
 import { IconX } from "@/design/components/Icons";
 import { cx } from "@/design/cx";
@@ -29,8 +30,10 @@ export default async function LivePage() {
   const hero = HERO[ls.state];
   const opensAt = parseOpensAt(process.env.NEXT_PUBLIC_APP_OPENS_AT);
   const { solUsd, now, params } = await shellSnapshot();
-  const [coin, series] = ls.mint ? await Promise.all([cachedCoin(ls.mint), cachedPriceSeries(ls.mint, "all")]) : [null, []];
+  const coin = ls.mint ? await cachedCoin(ls.mint) : null;
   const first = coin && coin.mint === ls.mint ? coin : null;
+  // A fresh launch opens on 1-minute candles (`defaultInterval`); not indexed yet: an empty 1m window.
+  const candles = first ? await cachedCandles(first.mint, defaultInterval(first.createdAt, now)) : { interval: "1m" as const, from: windowStart("1m", now), candles: [] };
 
   return (
     <div className={s.page}>
@@ -72,7 +75,7 @@ export default async function LivePage() {
         </div>
       </div>
       {show.coin && ls.mint && (
-        <LaunchWindow mint={ls.mint} coin={first} series={first ? series : []} params={params} solUsd={solUsd} clusterQuery={SOLSCAN_QUERY} serverNow={now} />
+        <LaunchWindow mint={ls.mint} coin={first} candles={candles} params={params} solUsd={solUsd} clusterQuery={SOLSCAN_QUERY} serverNow={now} />
       )}
       <section className={s.section} aria-labelledby="rules-h">
         <div className={s.sectionHead}>

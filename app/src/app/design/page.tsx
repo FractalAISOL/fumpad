@@ -8,6 +8,6 @@ export const metadata: Metadata = { title: "Design system", robots: { index: fal
 /** Specimens always come from the deterministic mock, whichever data source the app runs on. */
 export default async function DesignPage() {
   const coin = await mockData.getCoin("MIDC");
-  const [tickets, series] = await Promise.all([mockData.getTickets(DEMO_WALLET), mockData.getPriceSeries(coin!.mint, "all")]);
-  return <DesignView tickets={tickets} series={series} />;
+  const [tickets, candles] = await Promise.all([mockData.getTickets(DEMO_WALLET), mockData.getCandles(coin!.mint, "30m")]);
+  return <DesignView tickets={tickets} candles={candles} />;
 }

@@ -157,6 +157,21 @@
   height: 2px;
   background: var(--ink);
 }
+.lgCandle {
+  position: relative;
+  width: 5px;
+  height: 9px;
+  background: var(--ink);
+}
+.lgCandle::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--ink);
+}
 .lgTen {
   width: 14px;
   height: 0;

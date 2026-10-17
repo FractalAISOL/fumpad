@@ -107,8 +107,17 @@
 }
 
 .label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
   font-size: var(--fs-sm);
   font-weight: var(--w-medium);
+}
+/* Same as the inputs' "Optional" tag (design/components/Input). */
+.optional {
+  color: var(--ink-3);
+  font-weight: var(--w-regular);
+  font-size: var(--fs-xs);
 }
 .imgField {
   display: grid;

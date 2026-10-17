@@ -17,7 +17,7 @@
 import { cacheLife } from "next/cache";
 import { serverData } from "./ssr";
 import type { CoinSort } from "./interface";
-import type { Address, Board, ChartRange, FeedKind, ProtocolParams } from "./types";
+import type { Address, Board, CandleInterval, ChartRange, FeedKind, ProtocolParams } from "./types";
 
 /** Floor to the minute: the shell's clock must not churn the cache key or the HTML. */
 const minute = (ms: number) => Math.floor(ms / 60_000) * 60_000;
@@ -75,6 +75,12 @@ export async function cachedPriceSeries(mint: Address, range: ChartRange) {
   "use cache";
   cacheLife("minutes");
   return serverData().getPriceSeries(mint, range);
+}
+
+export async function cachedCandles(mint: Address, interval: CandleInterval) {
+  "use cache";
+  cacheLife("minutes");
+  return serverData().getCandles(mint, interval);
 }
 
 export async function cachedHolders(mint: Address, viewer?: Address) {

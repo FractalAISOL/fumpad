@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_FUMPAD_PROGRAM_ID, FEE_POLICY, FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchMetadataError, STANDARD_FEE_POLICY } from "@fumpad/sdk";
+import { DEFAULT_FUMPAD_PROGRAM_ID, FEE_POLICY, FUMPAD_IDL, FUMPAD_PROGRAM_ID, FUMPAD_VANITY_SUFFIX, idlInstruction, isFumpadVanityMint, launchInstructions, launchMetadataError, STANDARD_FEE_POLICY } from "@fumpad/sdk";
 
 import { parsePrepareBody, pickLaunchConfig, WindowLimiter } from "../src/launch/routes.js";
+import { Repo } from "../src/repo.js";
 import { keyFingerprint, MintVault, parsePoolKey } from "../src/launch/vault.js";
 
 const KEY_HEX = "11".repeat(32);
@@ -68,6 +69,23 @@ describe("POST /v1/launch/prepare body", () => {
     expect(bad({ ...ok, priorityMicroLamports: 10_000_000 })).toThrow(/priority/);
     expect(bad({ ...ok, name: "" })).toThrow(/name/);
     expect(bad("x" as unknown as object)).toThrow(/JSON/);
+  });
+  it("a launch without an image: name + ticker + the metadata uri only (no image, description, socials or first buy)", async () => {
+    // exactly what the app sends when only the required fields are filled (its metadata uri is the placeholder)
+    const bare = { creator: wallet, name: "Sad Pigeon", symbol: "PIGN", uri: "ipfs://pending" };
+    const p = parsePrepareBody(bare, cfg);
+    expect(p).toMatchObject({ name: "Sad Pigeon", symbol: "PIGN", uri: "ipfs://pending", initialBuyLamports: 0n, launchConfig: "standard" });
+    // the launch transaction builds (no first-buy swap) and fits in one packet
+    const ixs = launchInstructions({ creator: p.creator, mint: Keypair.generate().publicKey, dbcConfig: Keypair.generate().publicKey, name: p.name, symbol: p.symbol, uri: p.uri, buyLamports: p.initialBuyLamports });
+    const tx = new VersionedTransaction(new TransactionMessage({ payerKey: p.creator, recentBlockhash: PublicKey.default.toBase58(), instructions: ixs }).compileToV0Message());
+    expect(tx.serialize().length).toBeLessThanOrEqual(1_232);
+    // on-chain metadata always carries a valid uri; an image is never part of the request
+    expect(() => parsePrepareBody({ creator: wallet, name: "Sad Pigeon", symbol: "PIGN" }, cfg)).toThrow(/uri/);
+    // such a coin has no image for the proxy (GET /v1/img/:mint → 404 no_image; the app shows its monogram)
+    for (const metadata of [{ description: "no image here" }, { image: "" }, { image: "   " }, null]) {
+      const db = { query: async () => ({ rows: [{ image: (metadata as { image?: string } | null)?.image ?? null }] }) };
+      expect(await new Repo(db as never).coinImageUrl(wallet)).toBeNull();
+    }
   });
   it("launchConfig: standard by default, first_coin on request, anything else refused", () => {
     expect(parsePrepareBody(ok, cfg).launchConfig).toBe("standard");

@@ -1,10 +1,13 @@
 import { PARAMS, curvePriceAt } from "../chain";
 import { curveReservesAt, feeBpsAtSlot, quoteBuy, quoteSell, splitFee } from "../meteora";
+import { bucketOf, candlesFromPoints, INTERVAL_MS, windowStart } from "../candles";
 import type { CoinSort, FumpadData, Unsubscribe } from "../interface";
 import type {
   Achievement,
   Address,
   Board,
+  CandleInterval,
+  CandleSeries,
   ChartRange,
   CloseCall,
   ClosedPosition,
@@ -309,6 +312,30 @@ function series(c: CoinSpec, range: ChartRange): PricePoint[] {
   const last = path[path.length - 1];
   if (out[out.length - 1]?.t !== last.t) out.push({ t: last.t, p: last.p });
   return [...out, ...(sim.points.get(c.symbol) ?? [])];
+}
+
+/**
+ * Candles: four synthetic ticks per bucket around the coin's price path (seeded, so a refetch draws the same
+ * candles), plus this session's simulated trades, bucketed by the app's own `candlesFromPoints`.
+ */
+function candlesFor(c: CoinSpec, interval: CandleInterval): CandleSeries {
+  const now = mockNow();
+  const ms = INTERVAL_MS[interval];
+  const from = windowStart(interval, now, c.createdAt);
+  const r = rng(`candles:${c.symbol}:${interval}`);
+  const vol = interval === "1m" ? 0.008 : interval === "5m" ? 0.015 : 0.03;
+  const pts: PricePoint[] = [];
+  for (let b = from; b <= bucketOf(now, ms); b += ms) {
+    for (let k = 0; k < 4; k++) {
+      const t = b + ((k + 0.5) * ms) / 4;
+      const p = priceAt(c.symbol, t) * Math.exp(vol * gauss(r));
+      if (t >= c.createdAt && t <= now) pts.push({ t, p });
+    }
+  }
+  for (const p of sim.points.get(c.symbol) ?? []) if (p.t >= from) pts.push(p);
+  pts.sort((a, b) => a.t - b.t);
+  const open = from > c.createdAt ? priceAt(c.symbol, from - 1) : undefined;
+  return { interval, from, ...(open !== undefined ? { open } : {}), candles: candlesFromPoints(pts, interval, open) };
 }
 
 /* ── Tickets ──────────────────────────────────────────────────────────────── */
@@ -1167,6 +1194,12 @@ export class MockFumpadData implements FumpadData {
     const c = specOf(mint);
     watch(c);
     return c ? series(c, range) : [];
+  }
+
+  async getCandles(mint: Address, interval: CandleInterval): Promise<CandleSeries> {
+    const c = specOf(mint);
+    watch(c);
+    return c ? candlesFor(c, interval) : { interval, from: windowStart(interval, mockNow()), candles: [] };
   }
 
   async getHolders(mint: Address, viewer?: Address) {

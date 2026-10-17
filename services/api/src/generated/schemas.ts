@@ -49,6 +49,79 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "string"
   },
+  "Candle": {
+    "additionalProperties": false,
+    "description": "One OHLC candle, prices in SOL per token. Buckets start on UTC boundaries of the interval.",
+    "properties": {
+      "c": {
+        "type": "number"
+      },
+      "h": {
+        "type": "number"
+      },
+      "l": {
+        "type": "number"
+      },
+      "n": {
+        "description": "Price points in the bucket (trades, pool price samples); 0 = no trade, a flat filler at the previous close.",
+        "type": "number"
+      },
+      "o": {
+        "type": "number"
+      },
+      "t": {
+        "$ref": "#/components/schemas/Millis",
+        "description": "Bucket start."
+      }
+    },
+    "required": [
+      "t",
+      "o",
+      "h",
+      "l",
+      "c",
+      "n"
+    ],
+    "type": "object"
+  },
+  "CandleInterval": {
+    "description": "Candle size on the coin chart (trading-terminal style: the button sets the candle, not a date range).",
+    "enum": [
+      "1m",
+      "5m",
+      "30m"
+    ],
+    "type": "string"
+  },
+  "CandleSeries": {
+    "additionalProperties": false,
+    "description": "`getCandles`: the latest 150 buckets of `interval` (or since launch, when that's later). `candles` holds only buckets with at least one price point, oldest first; the app fills the empty ones flat (`app/src/data/candles.ts`).",
+    "properties": {
+      "candles": {
+        "items": {
+          "$ref": "#/components/schemas/Candle"
+        },
+        "type": "array"
+      },
+      "from": {
+        "$ref": "#/components/schemas/Millis",
+        "description": "First bucket of the window (a bucket boundary): the window's start, or the launch's bucket."
+      },
+      "interval": {
+        "$ref": "#/components/schemas/CandleInterval"
+      },
+      "open": {
+        "description": "The price going into the window (the last one before `from`); absent when the coin launched inside it.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "interval",
+      "from",
+      "candles"
+    ],
+    "type": "object"
+  },
   "ChartRange": {
     "enum": [
       "1h",

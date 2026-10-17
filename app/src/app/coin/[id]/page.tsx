@@ -6,7 +6,8 @@ import { CoinView } from "@/components/coin/CoinView";
 import { coinHref, isMintAddress, normalizeSymbol } from "@/components/coin/ident";
 import { SymbolChooser } from "@/components/coin/SymbolChooser";
 import { DEMO_WALLET } from "@/data";
-import { cachedClaimQueue, cachedCoin, cachedCoins, cachedCoinsBySymbol, cachedHolders, cachedPriceSeries, cachedRecentFumbles, cachedSolUsd } from "@/data/server";
+import { defaultInterval } from "@/data/candles";
+import { cachedCandles, cachedClaimQueue, cachedCoin, cachedCoins, cachedCoinsBySymbol, cachedHolders, cachedRecentFumbles, cachedSolUsd, shellSnapshot } from "@/data/server";
 
 /**
  * `/coin/<mint>` is the coin page; every link in the app uses it (H-3). `/coin/<SYMBOL>` (and the
@@ -63,12 +64,14 @@ async function Coin({ params }: { params: Params }) {
   const coin = await cachedCoin(id);
   // The API also matches symbols; a mint URL must resolve to exactly that mint.
   if (!coin || coin.mint !== id) notFound();
-  const [series, holders, fumbles, queue, solUsd] = await Promise.all([
-    cachedPriceSeries(coin.mint, "7d"),
+  // The chart opens on 1m for a fresh coin, 5m otherwise (`defaultInterval`), by the data source's clock.
+  const { now } = await shellSnapshot();
+  const [candles, holders, fumbles, queue, solUsd] = await Promise.all([
+    cachedCandles(coin.mint, defaultInterval(coin.createdAt, now)),
     cachedHolders(coin.mint, DEMO_WALLET),
     cachedRecentFumbles(coin.mint, DEMO_WALLET),
     cachedClaimQueue(coin.mint, DEMO_WALLET),
     cachedSolUsd(),
   ]);
-  return <CoinView coin={coin} series={series} holders={holders} fumbles={fumbles} queue={queue} solUsd={solUsd} />;
+  return <CoinView coin={coin} candles={candles} holders={holders} fumbles={fumbles} queue={queue} solUsd={solUsd} />;
 }

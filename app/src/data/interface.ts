@@ -1,6 +1,8 @@
 import type {
   Address,
   Board,
+  CandleInterval,
+  CandleSeries,
   ChartRange,
   CloseCall,
   ClosedPosition,
@@ -51,6 +53,8 @@ export interface FumpadData {
   /** Every coin whose symbol matches (case-insensitive), newest first. For `/coin/<SYMBOL>` lookups. */
   findCoinsBySymbol(symbol: string): Promise<CoinSummary[]>;
   getPriceSeries(mint: Address, range: ChartRange): Promise<PricePoint[]>;
+  /** OHLC candles of `interval` for the coin chart: the latest 150 buckets, buckets without a trade left out. */
+  getCandles(mint: Address, interval: CandleInterval): Promise<CandleSeries>;
   getHolders(mint: Address, viewer?: Address): Promise<{ total: number; top: Holder[] }>;
   getRecentFumbles(mint: Address, viewer?: Address): Promise<FumbleRow[]>;
   getClaimQueue(mint: Address, viewer?: Address): Promise<{ pool: number; owed: number; entries: QueueEntry[] }>;
