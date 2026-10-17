@@ -222,7 +222,7 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       | field | value |
       |---|---|
       | name | `Fumble Pad` |
-      | ticker | `FUMPAD` |
+      | ticker | `FMBL` |
       | image | `marketing/brand/logo/png/fumpad-mark-on-dark-1024.png` (copy: `~/Desktop/FUMPAD-X-assets/first-coin/FUMPAD-logo-1024.png`) |
       | description | FUMPAD's own coin. Fumble Pad pays you for selling too early: sell $50+ of a FUMPAD coin on any app and you get a Fumble Ticket. If the coin graduates and holds 10× your sell price, you can claim back 10% of what you sold. |
       | creator wallet | `EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc` — must be the wallet **logged into the app** when launching; needs ≥ ~1.05 SOL (first buy + launch fees/rent) |
