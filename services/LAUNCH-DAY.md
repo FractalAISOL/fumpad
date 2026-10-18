@@ -50,7 +50,7 @@ Opening the app only after the handover means no hot key holds admin power while
    mainnet) and the contracts' mainnet-binary tests before going on. Run it again on T0 morning.
 3. **RPC providers** (MAINNET-COSTS.md §5): four different companies, env files mode 600 in `$K`:
    `rpc.env` (A: indexer, api, keeper), `rpc-b.env` (attestor-1), `rpc-c.env` (attestor-2), `rpc-d.env` (attestor-3),
-   `rpc-e.env` (watcher) — five different companies if you can, never one shared by two attestors or by an attestor
+   `rpc-e.env` (watcher; decision 2026-10-18: the watcher uses Helius = A, allowed since no attestor uses Helius) — five different companies if you can, never one shared by two attestors or by an attestor
    and the watcher (DEPLOY-v07.md §1 topology) — `RPC_URL=…` (+ `RPC_MIN_GAP_MS` if rate-limited). The current shared Helius key 429s at 1 req/s on
    mainnet: **not usable** for any service. Check all four (archive history, v1 txs, pagination, rate limit,
    cross-provider identical records):
