@@ -8,7 +8,7 @@ publish = false
 # LiteSVM uses solana v4 crates; Anchor 1.2 uses v3. The harness converts at the
 # boundary (pubkeys/metas by bytes), so tests never mix the two type families.
 [dependencies]
-anchor-lang = "1.2.1"
+anchor-lang = "=1.2.1"
 fumpad = { path = "../programs/fumpad", features = ["no-entrypoint"] }
 litesvm = { version = "0.18", features = ["precompiles"] }
 solana-keypair = "3"

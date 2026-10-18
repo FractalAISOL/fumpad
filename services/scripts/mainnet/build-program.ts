@@ -7,7 +7,8 @@
  * The local (non-docker) path of the mainnet build mechanism (LAUNCH-DAY.md "Verifiable build"): copies contracts/
  * (sources only, no target/) into services/.local/program-build/<id>/, writes the id into the copy's
  * program-ids/mainnet.txt (unless the committed file already holds it) and runs the same build as `anchor build -p
- * fumpad` plus `--features mainnet` (`cargo build-sbf --tools-version v1.57 --arch v3 --features mainnet`,
+ * fumpad` plus `--features mainnet` (`cargo build-sbf --tools-version v1.57 --arch v3 --features mainnet -- --locked`:
+ * exactly the committed Cargo.lock, §9;
  * contracts/.cargo/config.toml included) with a shared target dir; programs/fumpad/build.rs compiles the id in.
  * Nothing else in the program depends on its id (PDAs use `crate::ID`). The checked-in sources are never modified.
  * Prints the .so path, size, sha256 and the solana-verify executable hash (sha256 with trailing zero bytes trimmed);
@@ -70,7 +71,7 @@ export function buildProgram(programId: PublicKey, o: { outDir?: string; log?: (
   const target = join(root, "target");
   log(`building fumpad.so for program id ${id} (cargo build-sbf --features mainnet, platform-tools v1.57, sbpf v3; shared target ${target})`);
   const t0 = Date.now();
-  execFileSync("cargo", ["build-sbf", "--tools-version", "v1.57", "--arch", "v3", "--manifest-path", join(src, "programs/fumpad/Cargo.toml"), "--sbf-out-dir", join(src, "deploy"), "--features", "mainnet"], {
+  execFileSync("cargo", ["build-sbf", "--tools-version", "v1.57", "--arch", "v3", "--manifest-path", join(src, "programs/fumpad/Cargo.toml"), "--sbf-out-dir", join(src, "deploy"), "--features", "mainnet", "--", "--locked"], {
     cwd: src,
     env: { ...process.env, PATH, CARGO_TARGET_DIR: target },
     stdio: ["ignore", "ignore", "pipe"],

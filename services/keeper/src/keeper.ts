@@ -38,6 +38,7 @@ import { pino, type Logger } from "pino";
 
 import {
   accountDiscriminator,
+  ata,
   BPS_DENOM,
   claimFeesIx,
   claimForIx,
@@ -134,6 +135,8 @@ interface CoinState {
   nextBuybackAt?: number;
   /** L5: this keeper's own pre-graduation spot observations (chain time, Q64), oldest first. */
   pregradObs?: SpotObservation[];
+  /** ONC-4 / L-9: this coin's next sample is due after interval × this factor (1 − U[0, jitter)), redrawn per sample. */
+  sampleFactor?: number;
   lastQueueAt: number;
   lastAutoClaimAt: number;
   queueSkip?: number;
@@ -226,6 +229,41 @@ export function spotTwapQ64(obs: readonly SpotObservation[], now: bigint, minSam
 /** L5: next buyback time — interval × (1 + U[0, jitter)), from a CSPRNG (not guessable by a sandwicher). */
 export function nextBuybackDelayMs(intervalSecs: number, jitter: number, rand: () => number = () => randomInt(0, 1_000_000) / 1_000_000): number {
   return Math.round(intervalSecs * 1000 * (1 + Math.max(0, jitter) * rand()));
+}
+
+const csprng = () => randomInt(0, 1_000_000) / 1_000_000;
+
+/**
+ * ONC-4 / L-9: factor applied to a coin's sample interval, U(1 − jitter, 1] from a CSPRNG: samples come at
+ * unpredictable times but never later than the schedule (the heartbeat must stay under keeper_stale_secs; the full
+ * rate feeds claim coverage). The on-chain oracle_min_spacing still bounds how often samples land.
+ */
+export function sampleJitterFactor(jitter: number, rand: () => number = csprng): number {
+  return 1 - Math.min(0.5, Math.max(0, jitter)) * rand();
+}
+
+/**
+ * S-3: the slice actually sent: a random U[minFrac, 1] share of what the program allows (`maxIn`, already ≤ the
+ * program's slice cap and the pre-grad room), at most `maxSlice` when > 0. Never above `maxIn`; ≥ 1 when maxIn ≥ 1.
+ * A sandwicher's cost (pool fees on the push, both legs) doesn't shrink with the slice; its take does.
+ */
+export function randomizedSlice(maxIn: bigint, minFrac: number, maxSlice: bigint, rand: () => number = csprng): bigint {
+  if (maxIn <= 0n) return 0n;
+  const cap = maxSlice > 0n && maxSlice < maxIn ? maxSlice : maxIn;
+  const f = Math.min(1, Math.max(0, minFrac));
+  const ppm = BigInt(Math.min(1_000_000, Math.round((f + (1 - f) * rand()) * 1_000_000)));
+  const s = (cap * ppm) / 1_000_000n;
+  return s > 0n ? s : 1n;
+}
+
+/**
+ * L-10: whether claim_for should create the owner's token account. Existing ATA → no. Missing, and this keeper never
+ * created one for this (owner, mint) → create it once (the common case: a seller who sold everything and has no
+ * account). Missing again after the keeper created it → the owner closed it and pocketed the keeper-paid rent: never
+ * pay again; claim_for then pays into the ticket's escrow, whose rent withdraw_escrow refunds to the keeper.
+ */
+export function shouldCreateOwnerAta(a: { ataExists: boolean; keeperCreatedBefore: boolean }): boolean {
+  return !a.ataExists && !a.keeperCreatedBefore;
 }
 
 // DAMM v2 (cp-amm) zero-copy layouts, verified against a devnet pool + locked position:
@@ -333,7 +371,9 @@ export class Keeper {
   constructor(readonly cfg: KeeperConfig, log?: Logger) {
     this.log = log ?? pino({ name: "keeper", level: cfg.logLevel, base: { service: "keeper" }, timestamp: pino.stdTimeFunctions.isoTime, formatters: { level: (l) => ({ level: l }) } });
     this.conn = new Connection(cfg.rpcUrl, "confirmed");
-    this.sender = new Sender(this.conn, cfg.keeper, cfg, this.log);
+    // S-3 / L-9: sends go through the private send RPC (defaults to RPC_URL; config refuses a public one in prod)
+    const sendConn = cfg.sendRpcUrl && cfg.sendRpcUrl !== cfg.rpcUrl ? new Connection(cfg.sendRpcUrl, "confirmed") : this.conn;
+    this.sender = new Sender(this.conn, cfg.keeper, { ...cfg, sendConn, jito: cfg.jito }, this.log);
     this.alerts = new Alerter(this.log, { botToken: cfg.telegramBotToken, chatId: cfg.telegramChatId });
     if (cfg.databaseUrl) this.store = new KeeperStore(cfg.databaseUrl, this.log);
   }
@@ -704,7 +744,9 @@ export class Keeper {
         if (!c.obs || !c.damm || c.damm.poolStatus !== DAMM_POOL_STATUS_ENABLED) continue;
         const last = c.obs.keeperSampled ? c.obs.lastKeeperSampleTs : 0n;
         const since = now - last;
-        if (since >= g.params.oracleMinSpacingSecs && since >= BigInt(this.sampleInterval(c))) due.push({ c, pool: k.dammPool });
+        c.sampleFactor ??= sampleJitterFactor(this.cfg.sampleJitter);
+        const interval = BigInt(Math.max(1, Math.floor(this.sampleInterval(c) * c.sampleFactor)));
+        if (since >= g.params.oracleMinSpacingSecs && since >= interval) due.push({ c, pool: k.dammPool });
       } else if (k.status === "curve" && c.dbc && k.buybackLamports >= this.cfg.buybackMinLamports && k.launchFeesSettled && !this.paused(PAUSE.trade)) {
         // pre-grad buyback guard: keep a keeper sample ≤ 60 s old — but only anchor it at a spot that agrees
         // with this keeper's own TWAP (L5), so a pushed spot never becomes the on-chain guard
@@ -719,7 +761,10 @@ export class Keeper {
     for (let i = 0; i < due.length; i += MAX_SAMPLE_COINS) {
       const batch = due.slice(i, i + MAX_SAMPLE_COINS);
       sent += await this.guard(`sample:${batch.map((b) => b.c.coin.mint.toBase58()).join(",")}`, async () => {
+        // record_samples is isolated on chain (no Jito tip possible): private send RPC, preflight on
         const r = await this.sender.send("record_samples", { instructions: [cu(60_000 + 25_000 * batch.length), recordSamplesIx(this.keeperKey, batch.map((b) => ({ mint: b.c.coin.mint, pool: b.pool })))] });
+        // ONC-4 / L-9: redraw each coin's jitter so the next sample time isn't predictable from this one
+        for (const b of batch) b.c.sampleFactor = sampleJitterFactor(this.cfg.sampleJitter);
         if (!r.ok) {
           if (r.code === FUMPAD_ERROR.SampleTooSoon) return 0;
           throw new Error(`record_samples failed: ${r.error}`);
@@ -751,18 +796,23 @@ export class Keeper {
     let n = 0;
     for (const c of this.coins.values()) {
       const k = c.coin;
-      if (k.buybackLamports < this.cfg.buybackMinLamports || Date.now() < (c.nextBuybackAt ?? c.lastBuybackAt + this.cfg.buybackIntervalSecs * 1000)) continue;
+      if (k.buybackLamports < this.cfg.buybackMinLamports) continue;
+      // S-3 / L5: a coin's first buyback is jittered too (not "the tick the balance crosses the minimum")
+      c.nextBuybackAt ??= Date.now() + nextBuybackDelayMs(this.cfg.buybackIntervalSecs, this.cfg.buybackJitter) - this.cfg.buybackIntervalSecs * 1000;
+      if (Date.now() < c.nextBuybackAt) continue;
+      // S-3: the keeper only buys while spot is inside a tighter band than the program's (BUYBACK_BAND_FRACTION of it)
+      const keeperBand = Math.max(1, Math.floor(p.buybackMaxDeviationBps * this.cfg.buybackBandFraction));
       let maxIn: bigint;
       let venue: "dbc" | "damm_v2";
       const spot = this.spotQ64(c);
       if (spot === null) continue;
       if (k.status === "curve") {
         if (!c.dbc || this.slot < k.launchSlot + k.launchWindowSlots) continue;
-        if (this.chainNow - k.pregradSampleTs > 60n || !withinBand(spot, k.pregradSamplePriceQ64, p.buybackMaxDeviationBps)) continue;
+        if (this.chainNow - k.pregradSampleTs > 60n || !withinBand(spot, k.pregradSamplePriceQ64, keeperBand)) continue;
         // L5 (on-chain): spot must also be within the band of the median of the coin's recent keeper samples
         // (≥ 4 within 5 min spanning ≥ 60 s) — skip until the ring is warm instead of paying for InsufficientSamples
         const median = pregradMedianQ64(k.pregradRing, this.chainNow);
-        if (median === null || !withinBand(spot, median, p.buybackMaxDeviationBps)) continue;
+        if (median === null || !withinBand(spot, median, keeperBand)) continue;
         // L5: the live spot and the on-chain sample must both agree with the TWAP of our last N observations
         this.observePregrad(c);
         const twap = this.pregradTwap(c);
@@ -773,16 +823,19 @@ export class Keeper {
       } else if (k.status === "graduated") {
         if (!c.obs || !c.damm || c.damm.poolStatus !== DAMM_POOL_STATUS_ENABLED) continue; // D38: PoolDisabled
         const med = medianPriceQ64(c.obs, this.chainNow, p.oracleWindowSecs, p.oracleMinSamples);
-        if (!med || !withinBand(spot, med, p.buybackMaxDeviationBps)) continue;
+        if (!med || !withinBand(spot, med, keeperBand)) continue;
         const cap = (c.damm.tokenBAmount * BigInt(p.buybackMaxPoolBps)) / BPS_DENOM;
         maxIn = k.buybackLamports < cap ? k.buybackLamports : cap;
         venue = "damm_v2";
       } else continue;
       if (maxIn <= 0n) continue;
+      // S-3: random slice size within the program's limit (and BUYBACK_MAX_SLICE_LAMPORTS)
+      maxIn = randomizedSlice(maxIn, this.cfg.buybackSliceMinFrac, this.cfg.buybackMaxSliceLamports);
       n += await this.guard(`buyback:${k.mint.toBase58()}`, async () => {
         c.lastBuybackAt = Date.now();
         c.nextBuybackAt = c.lastBuybackAt + nextBuybackDelayMs(this.cfg.buybackIntervalSecs, this.cfg.buybackJitter);
-        const r = await this.sender.send("execute_buyback", { instructions: [cu(250_000), executeBuybackIx({ cranker: this.keeperKey, coin: this.refs(c), venue, maxIn })] });
+        // S-3: sandwichable → private submission (Jito bundleOnly when JITO_URL is set, else the private send RPC)
+        const r = await this.sender.send("execute_buyback", { instructions: [cu(250_000), executeBuybackIx({ cranker: this.keeperKey, coin: this.refs(c), venue, maxIn })] }, { mev: true });
         if (!r.ok) {
           if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
           throw new Error(`execute_buyback failed: ${r.error}`);
@@ -829,11 +882,20 @@ export class Keeper {
       const queuedPerOwner = new Map<string, number>();
       for (const e of queue.entries) queuedPerOwner.set(e.owner.toBase58(), (queuedPerOwner.get(e.owner.toBase58()) ?? 0) + 1);
       const picks = planAutoClaims({ tickets: open, optedOut, queuedPerOwner, medianQ64: median, now: this.chainNow, rewards: k.rewards, challengeSecs: g.params.ticketChallengeSecs, poolTokens: pool });
-      for (const t of picks.slice(0, this.cfg.autoClaimMaxPerRun)) {
+      const batch = picks.slice(0, this.cfg.autoClaimMaxPerRun);
+      const atas = batch.length ? await this.conn.getMultipleAccountsInfo(batch.map((t) => ata(t.ticket.owner, k.mint, TOKEN_2022_PROGRAM_ID))) : [];
+      for (const [i, t] of batch.entries()) {
         n += await this.guard(`autoclaim:${t.key.toBase58()}`, async () => {
+          // L-10: pay an owner's ATA rent at most once per (owner, mint); closed again → claim_for's escrow path
+          const createAta = shouldCreateOwnerAta({ ataExists: !!atas[i], keeperCreatedBefore: await this.ataCreatedBefore(k.mint, t.ticket.owner) });
           const r = await this.sender.send("claim_for", {
-            instructions: [cu(250_000), createAtaIdempotentIx(this.keeperKey, t.ticket.owner, k.mint, TOKEN_2022_PROGRAM_ID), claimForIx({ keeper: this.keeperKey, mint: k.mint, ticket: t.key, owner: t.ticket.owner })],
+            instructions: [
+              cu(250_000),
+              ...(createAta ? [createAtaIdempotentIx(this.keeperKey, t.ticket.owner, k.mint, TOKEN_2022_PROGRAM_ID)] : []),
+              claimForIx({ keeper: this.keeperKey, mint: k.mint, ticket: t.key, owner: t.ticket.owner }),
+            ],
           });
+          if (createAta && r.ok && !r.simulated) await this.markAtaCreated(k.mint, t.ticket.owner);
           if (!r.ok) {
             if (r.code !== undefined && r.code !== null && skip.has(r.code)) return 0;
             throw new Error(`claim_for failed: ${r.error}`);
@@ -844,6 +906,26 @@ export class Keeper {
       }
     }
     return n;
+  }
+
+  /** L-10: (mint, owner) pairs whose ATA this keeper already paid for (memory + Postgres `meta`, survives restarts). */
+  private atasCreated = new Set<string>();
+  private ataKey(mint: PublicKey, owner: PublicKey) {
+    return `${this.metaKey}:ata:${mint.toBase58()}:${owner.toBase58()}`;
+  }
+  private async ataCreatedBefore(mint: PublicKey, owner: PublicKey): Promise<boolean> {
+    const key = this.ataKey(mint, owner);
+    if (this.atasCreated.has(key)) return true;
+    if (this.store && (await this.store.getMeta<boolean>(key))) {
+      this.atasCreated.add(key);
+      return true;
+    }
+    return false;
+  }
+  private async markAtaCreated(mint: PublicKey, owner: PublicKey) {
+    const key = this.ataKey(mint, owner);
+    this.atasCreated.add(key);
+    await this.store?.setMeta(key, true);
   }
 
   /** claim_for queues the ticket when the pool can't pay it now: say which of paid / escrowed / queued happened. */

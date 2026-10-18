@@ -1,7 +1,7 @@
 node_modules
 **/node_modules
 **/dist
-*.tsbuildinfo
+**/*.tsbuildinfo
 grinder/target
 sdk/test-vectors/target
 .local

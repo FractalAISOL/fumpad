@@ -358,6 +358,10 @@ local validator.
 | `FULL_RATE_SECS` (15), `HEARTBEAT_SECS` (480), `BUYBACK_MIN_LAMPORTS`, `SKIM_INTERVAL_SECS`, `PLATFORM_FEES_MIN_LAMPORTS`, `USE_LOOKUP_TABLE`, `JOB_*` (=false to disable), `MIN_KEEPER_LAMPORTS` | keeper | policy |
 | `JOB_AUTOCLAIM`, `AUTOCLAIM_INTERVAL_SECS` (15), `AUTOCLAIM_MAX_PER_RUN` (20) | keeper | D17 |
 | `BUYBACK_JITTER` (1), `PREGRAD_TWAP_SAMPLES` (8), `PREGRAD_TWAP_SPACING_SECS` (15) | keeper | L5 pre-grad buyback guard |
+| `SEND_RPC_URL` (default `RPC_URL`) | keeper (jobs) | S-3 / ONC-4 / L-9: every transaction and rebroadcast goes through this **private, keyed** endpoint (preflight on). In production a public endpoint (`api.*.solana.com`, publicnode, ankr public, …) as the send URL refuses to start; `ALLOW_PUBLIC_SEND_RPC=true` overrides on devnet/testnet only, never with `FUMPAD_CLUSTER=mainnet` |
+| `JITO_URL` (unset), `JITO_TIP_LAMPORTS` (10000, min 1000) | keeper (jobs) | S-3: `execute_buyback` goes to Jito's block engine (e.g. `https://mainnet.block-engine.jito.wtf/api/v1/transactions`) as a revert-protected single-tx bundle (`bundleOnly=true`) with a tip to a random Jito tip account; the keeper runs the preflight itself first (Jito skips it) and never rebroadcasts it through an RPC. Unset = buybacks use `SEND_RPC_URL`. `record_samples` can't carry a tip (`require_isolated`): always `SEND_RPC_URL` |
+| `BUYBACK_SLICE_MIN_FRAC` (0.5), `BUYBACK_MAX_SLICE_LAMPORTS` (0 = none), `BUYBACK_BAND_FRACTION` (0.5) | keeper | S-3: each buyback spends U[min_frac, 1] of the program's allowed slice (≤ the cap when set); the keeper only sends while spot is within `BAND_FRACTION` × `buyback_max_deviation_bps` of the guard. The program's `min_tokens` haircut is unchanged (on-chain) |
+| `SAMPLE_JITTER` (0.3, max 0.5) | keeper | ONC-4 / L-9: each coin's next `record_samples` is due after interval × U(1 − jitter, 1] (CSPRNG, redrawn per sample): unpredictable, never later than the schedule |
 | `ATTEST_COIN_CONCURRENCY` (4), `ATTEST_TICK_BUDGET_MS` (60000), `ATTEST_COIN_RPC_BUDGET` (5000), `ATTEST_TX_CACHE` (200k), `ATTEST_BLOCK_CACHE` (50k), `ATTEST_PRICE_CACHE` (100k) | attestor, watcher | V7-M6 liveness |
 | `ATTEST_BOARD_REQUIRE_RLS` | attestor | `1` = refuse to start without per-keeper roles (mainnet) |
 | `PYTH_SOURCE` (`onchain` in production; `hermes`; `constant` local only) | attestor, watcher | SOL/USD source for the $50 minimum. **Same source on every attestor + the watcher** |
@@ -370,7 +374,7 @@ local validator.
 | `LAUNCH_FIRST_COIN` | api | `true` = `POST /v1/launch/prepare` accepts `launchConfig: "first_coin"` (the one-off first-coin DBC config: 3% fee, wallet-split fee policy, contracts INTERFACE §5.9) and `/v1/launch/options` advertises it while it is allow-listed with launches left. Default off; on only for the first coin, then off again (LAUNCH-DAY.md §5) |
 | `LAUNCHES_OPEN` | api | Whether `POST /v1/launch/prepare` accepts standard launches. `false` = 403 `{error: "Launches open soon", code: "launches_closed"}` (every launch needs the API's co-signature, so none lands on chain either) and `/v1/launch/options` says `launchesOpen: false` (the app shows "Launches open soon." on `/launch`); the first-coin path (`LAUNCH_FIRST_COIN`) is not affected. Default: `true` on devnet/testnet/localnet (or `FUMPAD_CLUSTER` unset), **`false` on mainnet** (fail-safe); `true`/`false` (also `1`/`0`, `yes`/`no`) set it explicitly, anything else fails startup. LAUNCH-DAY.md §5: `true` when the app opens |
 | `POOL_TARGET` (200), `GRINDER_THREADS` (cores), `POOL_POLL_SECS` (30) | grinder | |
-| `DATABASE_SSL` (`prefer`), `DATABASE_SSL_ROOT_CERT` | grinder | `disable` / `prefer` / `require` (TLS, cert unverified: Railway's self-signed Postgres) / `verify-full` (+ CA bundle) |
+| `DATABASE_SSL` (`auto`), `DATABASE_SSL_ROOT_CERT` (PEM path) / `DATABASE_SSL_ROOT_CERT_PEM` (inline PEM, `\n` escapes ok) | grinder | S-10: a server certificate is never accepted unverified. `auto`: private host (localhost, `*.railway.internal`) → plaintext over the private network (`verify-full` if a CA is pinned); other hosts → `verify-ca` with a pinned CA, else `verify-full` on the system roots. `verify-ca`: chain checked against the pinned CA only, hostname not checked (Railway Postgres via its public TCP proxy). `verify-full`: chain + hostname. Legacy `require` = `verify-ca` (needs the pin), `prefer` = `auto` |
 | `PORT` | indexer, api, keeper | health (indexer/keeper; indexer also serves `/helius` when enabled) / HTTP (api) |
 | `LIVE_COALESCE_MS` (250), `WS_MAX_BUFFERED_BYTES` (4 MiB) | api | WebSocket: per-coin coalescing window; drop clients with this much unsent |
 | `STATUS_KEEPER_URL` | api | optional keeper `/health` (private network) probed by `/v1/status` |
@@ -444,7 +448,12 @@ GRANT SELECT, INSERT ON vanity_mints TO fumpad_grinder;         -- nothing else
 ```
 (`LISTEN` needs no grant; re-run the API `SELECT` grant after migrations that add tables, or use
 `ALTER DEFAULT PRIVILEGES FOR ROLE fumpad_indexer IN SCHEMA public GRANT SELECT ON TABLES TO fumpad_api`.)
-The grinder connects with TLS by default (`DATABASE_SSL=prefer`; `require` on Railway's SSL Postgres).
+The grinder never accepts an unverified certificate (S-10). Railway's Postgres (`postgres-ssl` template) issues its
+server certificate from a per-database CA (`/var/lib/postgresql/data/certs/root.crt`, `CN=root-ca`; server `CN=localhost`,
+SAN `localhost` + the private domain on current templates — never the `*.proxy.rlwy.net` name), so: in the database's
+own project use `${{Postgres.DATABASE_URL}}` (private network, `DATABASE_SSL` unset = plaintext over Railway's
+WireGuard network); from anywhere else (public TCP proxy) pin that CA — `railway ssh -s Postgres cat
+/var/lib/postgresql/data/certs/root.crt` → `DATABASE_SSL_ROOT_CERT_PEM` — and set `DATABASE_SSL=verify-ca`.
 
 ## Runbooks
 

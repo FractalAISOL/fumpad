@@ -5,6 +5,16 @@ import bs58 from "bs58";
 
 export interface KeeperConfig {
   rpcUrl: string;
+  /**
+   * S-3 / L-9: every transaction (and every rebroadcast) goes out through this RPC — the keeper's private, keyed
+   * provider endpoint; defaults to RPC_URL. A public cluster endpoint is refused in production (`publicRpcProblem`).
+   */
+  sendRpcUrl: string;
+  /**
+   * S-3: optional Jito private submission for the MEV-sensitive buyback (bundleOnly=true: revert-protected, never
+   * forwarded through the public path). Unset = buybacks go through `sendRpcUrl` like everything else.
+   */
+  jito?: { url: string; tipLamports: number };
   keeper: Keypair;
   dryRun: boolean;
   loopMs: number;
@@ -18,6 +28,21 @@ export interface KeeperConfig {
   buybackIntervalSecs: number;
   /** L5: each next buyback waits interval × (1 + U[0, jitter)) — unpredictable timing. */
   buybackJitter: number;
+  /**
+   * S-3: each buyback spends a random U[minFrac, 1] share of what the program allows (and at most
+   * BUYBACK_MAX_SLICE_LAMPORTS when set), so slice sizes are unpredictable and small enough that a sandwich's fixed
+   * cost (2 × pool fee on the attacker's push) outweighs what it can take from one slice.
+   */
+  buybackSliceMinFrac: number;
+  buybackMaxSliceLamports: bigint;
+  /**
+   * S-3: keeper-side band, as a fraction of the program's buyback_max_deviation_bps: the keeper only sends when spot is
+   * within this tighter band of the guard (the on-chain min_tokens haircut stays the program's; this keeps the keeper
+   * from buying into an already-pushed price).
+   */
+  buybackBandFraction: number;
+  /** ONC-4 / L-9: each coin's next sample is due after interval × (1 − U[0, jitter)) — never later than the schedule. */
+  sampleJitter: number;
   /** L5: pre-grad guard = TWAP of the keeper's last N spot observations (spaced ≥ spacing), not one sample. */
   pregradTwapSamples: number;
   pregradTwapSpacingSecs: number;
@@ -81,6 +106,23 @@ export function loadKeypair(env = process.env): Keypair {
   throw new Error("KEEPER_KEYPAIR (path) or KEEPER_SECRET_KEY is required");
 }
 
+/**
+ * Known public (unauthenticated, shared) Solana RPC hosts. Sending through them exposes keeper transactions to
+ * anyone watching those nodes, and they rate-limit / drop sends under load.
+ */
+const PUBLIC_RPC_HOSTS = [/^api\.(mainnet-beta|devnet|testnet)\.solana\.com$/, /(^|\.)publicnode\.com$/, /^solana\.public-rpc\.com$/, /^rpc\.ankr\.com$/, /^solana-api\.projectserum\.com$/];
+
+/** Why `url` is a public RPC endpoint, or null (a keyed provider URL, a private host, or a local validator). */
+export function publicRpcProblem(url: string): string | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return "is not a valid URL";
+  }
+  return PUBLIC_RPC_HOSTS.some((r) => r.test(host)) ? `is a public endpoint (${host})` : null;
+}
+
 const n = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
 const on = (v: string | undefined) => v !== "false" && v !== "0";
 
@@ -93,8 +135,26 @@ export function loadKeeperConfig(env = process.env): KeeperConfig {
   }
   // The cluster is never inferred: explicit RPC_URL (local validator outside production).
   const rpcUrl = env.RPC_URL || "http://127.0.0.1:8899";
+  const sendRpcUrl = env.SEND_RPC_URL?.trim() || rpcUrl;
+  const cluster = (env.FUMPAD_CLUSTER ?? "").trim().toLowerCase();
+  const pub = publicRpcProblem(sendRpcUrl);
+  if (pub) {
+    // ONC-4 / L-9 / S-3: never send through a public endpoint in production; an explicit override exists for
+    // devnet/testnet only (mainnet has none).
+    const name = env.SEND_RPC_URL?.trim() ? "SEND_RPC_URL" : "RPC_URL (used for sends: SEND_RPC_URL unset)";
+    const override = env.ALLOW_PUBLIC_SEND_RPC === "true" && cluster !== "mainnet";
+    if (prod && !override) throw new Error(`keeper: ${name} ${pub}: transactions must go through a private (keyed) RPC; set SEND_RPC_URL`);
+    console.warn(`keeper: ${name} ${pub}; allowed only outside production or by ALLOW_PUBLIC_SEND_RPC on a non-mainnet cluster`);
+  }
+  const jitoUrl = env.JITO_URL?.trim();
   return {
     rpcUrl,
+    sendRpcUrl,
+    jito: jitoUrl ? { url: jitoUrl, tipLamports: Math.max(1_000, n(env.JITO_TIP_LAMPORTS, 10_000)) } : undefined, // Jito's minimum tip: 1000
+    buybackSliceMinFrac: Math.min(1, Math.max(0.05, n(env.BUYBACK_SLICE_MIN_FRAC, 0.5))),
+    buybackMaxSliceLamports: BigInt(env.BUYBACK_MAX_SLICE_LAMPORTS ?? 0),
+    buybackBandFraction: Math.min(1, Math.max(0.1, n(env.BUYBACK_BAND_FRACTION, 0.5))),
+    sampleJitter: Math.min(0.5, Math.max(0, n(env.SAMPLE_JITTER, 0.3))),
     keeper: loadKeypair(env),
     dryRun: env.DRY_RUN === "true" || env.DRY_RUN === "1",
     loopMs: n(env.LOOP_MS, 2_000),
