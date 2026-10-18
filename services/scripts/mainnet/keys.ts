@@ -14,7 +14,8 @@
  *   fumpad-program-keypair.json  the MAINNET program id: back it up OFFLINE (it only matters until the first deploy,
  *                              but a lost keypair before that = a new id and a rebuild)
  * NOT generated (public keys in the config file; the deployer keypair is provided by you): admin, guardian,
- * treasury, upgrade authority = Squads multisig vaults or hardware wallets.
+ * treasury, upgrade authority = Squads multisig vaults or hardware wallets ("hardware" = any single wallet that signs
+ * itself, e.g. the wallet-app admin of the single-wallet decision 2026-10-18; it signs via admin-sign.ts + the page).
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -99,10 +100,9 @@ export function loadConfig(path: string): { cfg: MainnetConfig; dir: string; rel
   }
   pk("treasury", cfg.treasury);
   if (!cfg.deployerKeypair) problems.push("deployerKeypair missing");
-  // One wallet as admin AND guardian is allowed only as an explicit, documented choice (user decision 2026-10-18):
-  // the program accepts it, but the guardian's veto over admin rotation then protects nothing.
-  if (cfg.admin && cfg.guardian && cfg.admin.address === cfg.guardian.address && cfg.singleWalletGovernance !== true)
-    problems.push("admin and guardian must differ (set \"singleWalletGovernance\": true to accept one wallet for both)");
+  // Single-wallet admin (user decision 2026-10-18, LAUNCH-DAY.md): ONE wallet-app wallet is admin AND guardian —
+  // allowed only as kind "hardware" on both (two Squads parties sharing a vault would be a config mistake).
+  if (cfg.admin && cfg.guardian && cfg.admin.address === cfg.guardian.address && !(cfg.admin.kind === "hardware" && cfg.guardian.kind === "hardware")) problems.push("admin and guardian must differ (unless both are the same single wallet, kind \"hardware\")");
   if (problems.length) throw new Error(`config ${file}: ${problems.join("; ")}`);
   return { cfg, dir, rel };
 }

@@ -565,8 +565,8 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
     else if (g.admin.equals(admin)) say("  Global.admin = admin vault already (skip)");
     else if (g.pendingAdminEta === 0n || !g.pendingAdmin.equals(admin)) failures.push("accept-admin: no pending propose_admin for the configured admin (run propose-admin)");
     else if (cfg.admin.kind !== "squads") {
-      say(`  admin is a hardware wallet: it signs accept_admin itself after ${new Date(Number(g.pendingAdminEta) * 1000).toISOString()} (not automated here)`);
-      next.push("hardware admin signs accept_admin");
+      say(`  admin is a single wallet: it signs accept_admin itself after ${new Date(Number(g.pendingAdminEta) * 1000).toISOString()} on the local signing page (LAUNCH-DAY.md "single-wallet admin")`);
+      next.push(`single-wallet admin: npx tsx scripts/mainnet/admin-sign.ts --cluster ${o.cluster === "mainnet" ? "mainnet" : "local"} --config ${o.configPath} --action accept-admin (after the eta), then admin-sign-server.ts --proposal <file>`);
     } else {
       const ms = new PublicKey(cfg.admin.multisig!);
       const ops = cfg.opsKeypair ? readKeypairFile(rel(cfg.opsKeypair)) : null;
@@ -744,6 +744,8 @@ export async function runMainnetBootstrap(o: MainnetBootstrapOpts): Promise<Main
           const index = await proposeVaultTx(conn, ms, ops, { kind: "custom", name: "queue_config(remove first-coin config)", ixs: (vault) => [ix(vault)] }, o.mode === "send" ? "send" : "simulate", say);
           next.push(`voters approve admin multisig tx #${index}, then execute it (Squads app or multisig.ts execute); rerun this step after the config timelock`);
         }
+      } else if (cfg.admin.kind === "hardware" && g.admin.equals(admin)) {
+        next.push(`single-wallet admin: npx tsx scripts/mainnet/admin-sign.ts --cluster ${o.cluster === "mainnet" ? "mainnet" : "local"} --config ${o.configPath} --action queue-config-remove, sign it on the local page (admin-sign-server.ts), then rerun this step after the config timelock`);
       } else next.push(`the admin (${g.admin.toBase58()}) queues queue_config(${firstKey.publicKey.toBase58()}, remove)`);
     }
   }

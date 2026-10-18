@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>FUMPAD admin signing</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="bar">
+      <span class="brand">FUMPAD admin</span>
+      <span id="cluster" class="badge">…</span>
+      <span class="muted">local signing page · 127.0.0.1 · one action per page load · this page never holds a key</span>
+    </header>
+    <main>
+      <section class="card">
+        <h1 id="title">Loading proposal…</h1>
+        <ul id="summary" class="summary"></ul>
+        <dl id="values" class="values"></dl>
+      </section>
+
+      <section class="card">
+        <h2>Signer</h2>
+        <p class="signer">Only this wallet can sign (it also pays the fee): <code id="signer" class="addr big"></code> <span id="role" class="muted"></span></p>
+        <h2>Accounts</h2>
+        <table class="accounts">
+          <thead><tr><th>account</th><th>address</th><th>signer</th><th>writable</th></tr></thead>
+          <tbody id="accounts"></tbody>
+        </table>
+        <details>
+          <summary>Raw instructions (program, keys, data)</summary>
+          <pre id="raw"></pre>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>1 · Connect the wallet</h2>
+        <div id="wallets" class="row"></div>
+        <p id="wallet-status" class="status"></p>
+        <h2>2 · Simulate &amp; sign</h2>
+        <p class="muted">At the click: fresh blockhash → simulation → your wallet asks you to approve → sent → confirmed. Nothing is signed without your approval in the wallet.</p>
+        <button id="sign" class="primary" disabled>Simulate &amp; sign</button>
+        <div id="log" class="log" aria-live="polite"></div>
+        <p id="result" class="result"></p>
+      </section>
+    </main>
+  </body>
+</html>

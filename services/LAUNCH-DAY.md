@@ -36,6 +36,9 @@ recommended Squads time lock is 6 h, so day 0 fits in one working day if 2 of th
 
 Opening the app only after the handover means no hot key holds admin power while users have money in.
 
+**Governance = ONE wallet-app wallet (user decision 2026-10-18): §4a.** The Squads rows above become: accept_admin is
+signed by that wallet on the local signing page after the 6 h eta (no approvals to collect); the rest is the same.
+
 ## 1. Pre-flight (T−7 d … T−1 d)
 
 1. **Release commit.** Tag it. Gates on that commit: `npm run typecheck`, `npm test`, `npm run local` (20/20),
@@ -222,6 +225,76 @@ $M execute $C --config $K/multisig/guardian.json --index <G> --member-key $K/ops
 ```
 Drain the deployer (`solana transfer` to the treasury) once nothing else needs it.
 
+## 4a. Single-wallet admin (user decision 2026-10-18)
+
+The admin **and** guardian (and, by default, the program upgrade authority) are ONE fresh wallet that lives only in a
+wallet app (Phantom / Solflare / Backpack; a Ledger behind it is supported — the page sends legacy transactions). Its
+key never touches this machine: the scripts prepare an action, a local page shows it, the wallet signs it. This
+replaces the Squads flow of §2–§4 and §7 (MULTISIG.md §0); everything else in this runbook is unchanged.
+
+**Set up (T−1 d)**
+1. In the wallet app, create a NEW wallet (its own recovery phrase, written down offline; never imported elsewhere)
+   used only for FUMPAD admin — no tokens, no dApps, no other signing. Copy its address.
+2. `bootstrap.json`: the same address as both parties (allowed only as `kind: "hardware"`), no `upgradeAuthority` (=
+   admin), no `opsKeypair`:
+   ```json
+   "admin":    { "kind": "hardware", "address": "<ADMIN_WALLET>", "label": "single admin wallet (wallet app), FUMPAD only" },
+   "guardian": { "kind": "hardware", "address": "<ADMIN_WALLET>", "label": "same wallet" },
+   ```
+   `$B --step verify` then warns "single hardware wallet (MULTISIG.md recommends a Squads multisig)": expected.
+3. Send the wallet **~0.02 SOL**. It is the fee payer of every admin action (≈ 0.000006–0.00003 SOL each at the
+   default 20,000 µlamports/CU); `admin-sign.ts` refuses below 0.005 SOL, the page below the action's max fee.
+
+**How an action works** (every one the same way)
+```sh
+S="npx tsx scripts/mainnet/admin-sign.ts --cluster mainnet --config $K/bootstrap.json"     # + --rpc-env $K/rpc.env (default)
+SRV="npx tsx scripts/mainnet/admin-sign-server.ts --rpc-env $K/rpc.env --proposal"
+$S --action <action> …          # reads Global, checks the role/eta, builds the instruction with @fumpad/sdk, SIMULATES it
+                                # with the wallet as signer + fee payer, writes $K/proposals/<action>-<time>.json
+                                # (no secrets); refuses with the reason and writes nothing if it would fail
+$SRV $K/proposals/<file>.json   # prints http://127.0.0.1:<random port>/ — open it in the browser with the wallet
+```
+On the page: read the title, the summary and every account (your wallet is marked); **Connect** (an account other than
+the proposal's signer is refused); **Simulate & sign**: fresh blockhash at the click (no expiry while you read) →
+simulation → the wallet pops up — check it shows the FUMPAD program (`$FUMPAD_PROGRAM_ID`) and a fee in the
+0.0000x SOL range, then approve → sent → confirmed → finalized, with the signature and a Solscan link. One action per
+page load and per server run (the server forwards only that signed transaction, Ctrl-C it afterwards). If it never
+lands within 150 s: check Solscan; if absent, reload and sign again. The server is bound to 127.0.0.1, refuses any other
+Host / origin, serves only its own bundled script (strict CSP, no CDN), and proxies only `getLatestBlockhash`,
+`simulateTransaction`, `sendTransaction`, `getSignatureStatuses`, `getAccountInfo`, `getBalance` — the RPC URL stays in
+`rpc.env`.
+
+**Day 0 / T0 with a single wallet** (replaces the Squads commands of §2 end, §3, §4, §5 removal, §7)
+```sh
+$B --step propose-admin $SPEND               # H0, as in §2: admin = guardian = <ADMIN_WALLET>, treasury (6 h); skip `--step accept-admin` there
+#   until the eta the guardian is still the deployer: a wrong proposal → cancel_admin by the deployer (§3)
+# ≥ H0 + 6 h
+$S --action accept-admin                     # refuses before the eta ("eta not reached: … h … min to go")
+$SRV $K/proposals/accept-admin-….json        # sign → Global.admin = guardian = <ADMIN_WALLET>, treasury set
+$B --step upgrade-authority $SPEND           # the DEPLOYER signs (BPF loader SetAuthority, unchecked: the new authority
+                                             # does not sign — the wallet needs nothing here); refused until Global.admin =
+                                             # the wallet; IRREVERSIBLE: upgrades then need the wallet
+$B --step verify                             # "✓ governance handover complete"
+$S --action set-pause --bits 0               # guardian drill: changes nothing when nothing is paused
+$SRV $K/proposals/set-pause-….json
+# T0, right after the first coin (§5.3): remove the first-coin config
+$S --action queue-config-remove              # default: dbc-config-first-coin.json's address; checks it is allow-listed
+$SRV $K/proposals/queue-config-remove-….json
+$B --step remove-first-coin-config $SPEND    # ≥ 1 h later: execute_config (permissionless, the deployer pays)
+```
+Incident (§7): `$S --action set-pause --bits all` (or `launch`, `trade`, `claims`, `graduate`, `attest`, a comma list,
+or 0–31) → page → sign; unpause with `--bits 0`; lapses after 7 days. `$S --action cancel-admin` cancels a pending
+`propose_admin` (guardian). Anything else the admin signs (`set_keepers`, `set_operators`, `queue_params`, a program
+upgrade instruction, …): build the instruction, save `{programId, keys: [{pubkey, isSigner, isWritable}], data
+(base64)}` (or a list, or `{instructions, summary}`) and `$S --action ix-json --ix-json ix.json --title "what it does"`:
+the only signer allowed is the wallet, and it is simulated like the others.
+
+Trade-off (recorded with the decision): one wallet = one key with every power (immediate `set_keepers`, 1 h params /
+configs, program upgrades). Keep the wallet dedicated, the recovery phrase offline, and if needed move to the Squads
+setup later with `propose_admin` (6 h; MULTISIG.md §4) signed through this same page (`ix-json`).
+Tests: `test/ops/admin-sign*.test.ts` (unit) and `test/integration/admin-sign-page.test.ts` (local validator +
+headless Chromium + mock wallets: accept_admin and set_pause signed, sent and confirmed through the page).
+
 ## 5. T0: open
 
 1. Morning re-checks: `npm run mainnet:compare` (✓), `$B --step verify` (✓), `rpc-check` on the four providers,
@@ -300,6 +373,8 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
 - Weekly: `npm run mainnet:compare` (Meteora upgrades), waitlist export (DEPLOY-v07.md §7).
 
 ## 7. Incident: pause (minutes)
+
+**Single-wallet admin (§4a, user decision 2026-10-18):** `$S --action set-pause --bits all` (or the flags you need) → `$SRV <file>` → sign in the wallet. The Squads variant:
 
 Guardian multisig, no time lock (MULTISIG.md §4):
 ```sh

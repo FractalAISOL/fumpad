@@ -91,6 +91,10 @@ export interface GlobalPreload {
   configs: PublicKey[];
   /** Fee policy of `configs[i]` (INTERFACE §5.9); missing = standard. */
   policies?: FeePolicy[];
+  /** default: the admin */
+  guardian?: PublicKey;
+  /** a propose_admin already pending (the admin-sign page test: accept_admin with eta in the past) */
+  pendingAdmin?: { admin: PublicKey; guardian: PublicKey; treasury: PublicKey; eta: bigint };
 }
 
 export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
@@ -109,7 +113,7 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
     bump: PublicKey.findProgramAddressSync([Buffer.from("global")], FUMPAD_PROGRAM_ID)[1],
     admin: g.admin,
     platform_treasury: g.platformTreasury,
-    guardian: g.admin,
+    guardian: g.guardian ?? g.admin,
     keepers,
     keeper_added_at: [bn(0n), bn(0n), bn(0n)],
     cluster_tag: CLUSTER_TAG.localnet,
@@ -118,10 +122,10 @@ export async function writeGlobalFixture(g: GlobalPreload): Promise<string> {
     params: paramsToIdl(g.params),
     pending_params: paramsToIdl(DEFAULT_PARAMS),
     pending_eta: bn(0n),
-    pending_admin: PublicKey.default,
-    pending_treasury: PublicKey.default,
-    pending_guardian: PublicKey.default,
-    pending_admin_eta: bn(0n),
+    pending_admin: g.pendingAdmin?.admin ?? PublicKey.default,
+    pending_treasury: g.pendingAdmin?.treasury ?? PublicKey.default,
+    pending_guardian: g.pendingAdmin?.guardian ?? PublicKey.default,
+    pending_admin_eta: bn(g.pendingAdmin?.eta ?? 0n),
     configs,
     pending_config: PublicKey.default,
     pending_config_add: 0,
@@ -187,6 +191,7 @@ export async function startValidator(opts: {
   const probe = new Connection(`http://127.0.0.1:${rpcPort}`);
   if (await probe.getSlot().then(() => true, () => false)) throw new Error(`something is already serving RPC on port ${rpcPort} (stop the other validator first)`);
   const authPath = join(LOCAL, "upgrade-authority.json");
+  mkdirSync(LOCAL, { recursive: true });
   writeFileSync(authPath, JSON.stringify(Array.from(opts.upgradeAuthority.secretKey)));
   const base = [
     "--quiet",
