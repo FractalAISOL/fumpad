@@ -1,6 +1,6 @@
 {
-  "takenAt": "2026-10-16T20:28:04.247Z",
-  "slot": 457770194,
+  "takenAt": "2026-10-18T04:28:47.686Z",
+  "slot": 458301777,
   "genesis": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
   "programs": [
     {
@@ -85,13 +85,13 @@
       "owner": "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
       "lamports": 1825031,
       "space": 134,
-      "sha256": "7d5a5be9e46c92c36d9287478c04e384f3cfbd4466c1bdd89a9660dead5c29e5"
+      "sha256": "7329258a323746658655ad21d182270502f46f0bf23bde8968abe03e3a02fb6e"
     },
     {
       "name": "wsol_mint",
       "id": "So11111111111111111111111111111111111111112",
       "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-      "lamports": 1853325059072,
+      "lamports": 1853342363740,
       "space": 82,
       "sha256": "b0f919425a529f4971ef8dabd535aec34947d5c8c4885df80dae91635b98c5f3",
       "fixture": "wsol_mint.json",
@@ -109,7 +109,7 @@
       "name": "damm_v2_pool_authority",
       "id": "HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC",
       "owner": "11111111111111111111111111111111",
-      "lamports": 177917485309,
+      "lamports": 177993133639,
       "space": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
@@ -182,21 +182,21 @@
       "p50": 0,
       "p75": 0,
       "p90": 0,
-      "max": 50000
+      "max": 1000
     },
     {
       "program": "damm_v2 (program + pool authority)",
       "samples": 150,
       "p50": 0,
       "p75": 0,
-      "p90": 3319,
-      "max": 1516324
+      "p90": 0,
+      "max": 200000
     }
   ],
   "pyth": {
-    "priceUsd": 103.47104974,
-    "publishTime": 1792182422,
-    "ageSecs": 30
+    "priceUsd": 104.07722965,
+    "publishTime": 1792297680,
+    "ageSecs": 15
   },
   "features": {
     "checked": 280,
