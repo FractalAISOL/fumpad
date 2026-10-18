@@ -7,12 +7,25 @@
  * so the mock build and /design never load Privy at all.
  */
 import type { VersionedTransaction } from "@solana/web3.js";
+import type { SignPolicy } from "@/chain/silentGuard";
 import { useSyncExternalStore } from "react";
 import { DEMO_WALLET } from "@/data";
+import { addSpent, INSTANT_WINDOW_MS, parseSpent } from "@/chain/instantWindow";
 import { type LoginNotice, type LoginNoticeKind, NOTICES } from "./loginErrors";
+import { resolvePrivyAppId } from "./privyConfig";
 
+/**
+ * APP-10: NEXT_PUBLIC_PRIVY_APP_ID, no fallback. Null (unset or malformed) = the wallet stays off and login says the
+ * build isn't configured; a production build of the live app fails without it (`next.config.ts`).
+ */
+export const PRIVY_APP_ID: string | null = (() => {
+  try {
+    return resolvePrivyAppId(process.env.NEXT_PUBLIC_PRIVY_APP_ID);
+  } catch {
+    return null;
+  }
+})();
 /** Privy only when the live API is configured; the mock world signs nothing. */
-export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "cmv4vuj3k01c60ejxmuyns783";
 export const WALLET_MODE: "privy" | "mock" = process.env.NEXT_PUBLIC_FUMPAD_API ? "privy" : "mock";
 
 export type WalletKind = "embedded" | "external";
@@ -49,10 +62,11 @@ export interface WalletActions {
   /** Privy's export window (key shown in an iframe on Privy's origin; FUMPAD never sees it). */
   exportKey(address: string): Promise<void>;
   /**
-   * Sign with the account at `address`. `silent` hides the embedded wallet's prompt; it
-   * has no effect on external wallets, which always ask.
+   * Sign with the account at `address`. `silent` hides the embedded wallet's prompt (no effect on external wallets,
+   * which always ask), and only when `policy` allows exactly this transaction: the bridge re-runs the allow-list on
+   * the bytes it signs (APP-1, `@/chain/silentGuard`); refused → nothing signed, no policy → the wallet's window.
    */
-  signTransaction(address: string, tx: VersionedTransaction, opts: { silent: boolean }): Promise<VersionedTransaction>;
+  signTransaction(address: string, tx: VersionedTransaction, opts: { silent: boolean; policy?: SignPolicy }): Promise<VersionedTransaction>;
   /**
    * `signMessage` with the account at `address` (64-byte ed25519 signature). `silent` is only
    * honoured for a FUMPAD launch message that passes `vetLaunchAuthMessage`; anything else
@@ -144,6 +158,12 @@ const mockActions: WalletActions = {
 /** Current actions, or a stub that explains the wallet is still loading. */
 export function walletActions(): WalletActions {
   if (WALLET_MODE === "mock") return mockActions;
+  if (!PRIVY_APP_ID) {
+    const off = () => {
+      throw new Error("Login isn't configured on this build (NEXT_PUBLIC_PRIVY_APP_ID is missing).");
+    };
+    return { login: () => console.error("FUMPAD: NEXT_PUBLIC_PRIVY_APP_ID is unset: wallet login is off"), logout: async () => {}, connectExternal: () => {}, createEmbedded: async () => off(), exportKey: async () => off(), signTransaction: async () => off(), signMessage: async () => off() };
+  }
   if (actions) return actions;
   const loading = () => {
     throw new Error("The wallet is still loading. Try again in a second.");
@@ -159,14 +179,14 @@ export function useWallet() {
 /* ── Instant trading settings (per browser) ──────────────────────────────── */
 
 export interface InstantSettings {
-  /** Sign FUMPAD transactions from the Trading wallet without a prompt. */
+  /** Sign FUMPAD transactions from the Trading wallet without a prompt. APP-6: off until the user turns it on. */
   enabled: boolean;
   /** Above this many SOL (fee and account rent included) a trade asks first, instant or not. */
   maxSol: number;
-  /** L-8: once instant trades have spent this much SOL in this browser session, every trade asks. */
+  /** L-8 / APP-6: once instant trades have spent this much SOL in this browser (all tabs, `INSTANT_WINDOW_MS`), every trade asks. */
   sessionCapSol: number;
 }
-export const DEFAULT_INSTANT: InstantSettings = { enabled: true, maxSol: 1, sessionCapSol: 5 };
+export const DEFAULT_INSTANT: InstantSettings = { enabled: false, maxSol: 1, sessionCapSol: 5 };
 const INSTANT_KEY = "fumpad.instant.v1";
 /** Settings inputs accept (0, 1000] SOL. */
 export const validLimit = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 1000;
@@ -176,7 +196,8 @@ function readInstant(): InstantSettings {
     const v = JSON.parse(localStorage.getItem(INSTANT_KEY) ?? "null") as Partial<InstantSettings> | null;
     if (!v) return DEFAULT_INSTANT;
     return {
-      enabled: v.enabled !== false,
+      // APP-6: on only when the user switched it on (older stored settings without the flag stay off).
+      enabled: v.enabled === true,
       maxSol: validLimit(v.maxSol) ? v.maxSol : DEFAULT_INSTANT.maxSol,
       sessionCapSol: validLimit(v.sessionCapSol) ? v.sessionCapSol : DEFAULT_INSTANT.sessionCapSol,
     };
@@ -209,48 +230,64 @@ export function useInstantSettings(): InstantSettings {
 export { getInstant as getInstantSettings };
 
 /*
- * L-8: SOL spent by instant (no-popup) transactions in this browser session, in lamports.
- * sessionStorage: per tab, gone when the tab closes.
+ * L-8 / APP-6: SOL spent by instant (no-popup) transactions, in lamports, per browser origin: localStorage, so every
+ * tab adds to (and checks) the same budget, over a rolling window from the first instant spend (`INSTANT_WINDOW_MS`,
+ * `@/chain/instantWindow`). Read fresh on every check, so a spend in another tab counts at once.
  */
-const SPENT_KEY = "fumpad.instant.spent.v1";
-let spent: bigint | null = null;
+const SPENT_KEY = "fumpad.instant.spent.v2";
+/** Fallback when localStorage is unavailable (private mode): this page only. */
+let memSpent: string | null = null;
 const spentListeners = new Set<() => void>();
-const readSpent = (): bigint => {
+const rawSpent = (): string | null => {
   try {
-    const v = sessionStorage.getItem(SPENT_KEY);
-    return v && /^\d{1,20}$/.test(v) ? BigInt(v) : BigInt(0);
+    return localStorage.getItem(SPENT_KEY);
   } catch {
-    return BigInt(0);
+    return memSpent;
   }
 };
 export function getInstantSpent(): bigint {
-  return (spent ??= readSpent());
+  return parseSpent(rawSpent(), Date.now())?.lamports ?? BigInt(0);
 }
-function writeSpent(v: bigint) {
-  spent = v;
+/** When the current instant-spend window ends (ms), or null when nothing was spent in it. */
+export function getInstantWindowEnd(): number | null {
+  const r = parseSpent(rawSpent(), Date.now());
+  return r ? r.since + INSTANT_WINDOW_MS : null;
+}
+function writeSpent(v: string | null) {
+  memSpent = v;
   try {
-    sessionStorage.setItem(SPENT_KEY, v.toString());
+    if (v === null) localStorage.removeItem(SPENT_KEY);
+    else localStorage.setItem(SPENT_KEY, v);
   } catch {
-    /* kept in memory for this visit */
+    /* kept in memory for this page */
   }
   spentListeners.forEach((l) => l());
 }
 export function addInstantSpent(lamports: bigint) {
-  if (lamports > BigInt(0)) writeSpent(getInstantSpent() + lamports);
+  if (lamports > BigInt(0)) writeSpent(addSpent(rawSpent(), lamports, Date.now()));
 }
 export function resetInstantSpent() {
-  writeSpent(BigInt(0));
+  writeSpent(null);
 }
-/** Instant spend this session, SOL. */
+/** Other tabs' spends arrive as `storage` events. */
+function subscribeSpent(l: () => void) {
+  spentListeners.add(l);
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === SPENT_KEY || e.key === null) l();
+  };
+  window.addEventListener("storage", onStorage);
+  return () => {
+    spentListeners.delete(l);
+    window.removeEventListener("storage", onStorage);
+  };
+}
+/** Instant spend in the current window (all tabs of this browser), SOL. */
 export function useInstantSpentSol(): number {
-  return useSyncExternalStore(
-    (l) => {
-      spentListeners.add(l);
-      return () => spentListeners.delete(l);
-    },
-    () => Number(getInstantSpent()) / 1e9,
-    () => 0,
-  );
+  return useSyncExternalStore(subscribeSpent, () => Number(getInstantSpent()) / 1e9, () => 0);
+}
+/** When the current instant-spend window ends (ms), or null. */
+export function useInstantWindowEnd(): number | null {
+  return useSyncExternalStore(subscribeSpent, getInstantWindowEnd, () => null);
 }
 
 /* ── Confirm dialog (rendered by the wallet button) ──────────────────────── */

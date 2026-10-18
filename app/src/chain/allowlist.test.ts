@@ -13,6 +13,7 @@ import {
   type AccountMeta,
   AddressLookupTableAccount,
   ComputeBudgetProgram,
+  MessageV0,
   Keypair,
   PublicKey,
   SystemProgram,
@@ -687,5 +688,63 @@ describe("vetFumpadTx: a launch through the FUMPAD launch lookup table", () => {
     // a buy through the table, or a table handed to a non-launch policy
     refused(() => vetFumpadTx(tx([...cb(), routerBuy()], wallet, [table()]), wallet, buyPolicy(), A), /lookup tables/);
     refused(() => vetFumpadTx(buyTx(), wallet, { ...buyPolicy(), lookupTable: table() }, A), /only a launch/);
+  });
+});
+
+describe("APP-9: signer / writable flags, not just keys", () => {
+  /** The same compiled message with its header / static keys changed (instructions untouched). */
+  const reheader = (t: VersionedTransaction, f: (h: MessageV0["header"], keys: PublicKey[]) => void): VersionedTransaction => {
+    const m = t.message as MessageV0;
+    const header = { ...m.header };
+    const keys = [...m.staticAccountKeys];
+    f(header, keys);
+    return new VersionedTransaction(
+      new MessageV0({ header, staticAccountKeys: keys, recentBlockhash: m.recentBlockhash, compiledInstructions: m.compiledInstructions, addressTableLookups: m.addressTableLookups }),
+    );
+  };
+  /** An instruction with account `i` marked writable (same keys, same data: only the message's flags change). */
+  const writableAt = (ix: TransactionInstruction, i: number) =>
+    new TransactionInstruction({ programId: ix.programId, data: ix.data, keys: ix.keys.map((m, j) => (j === i ? { ...m, isWritable: true } : m)) });
+  const transfer = () => tx([SystemProgram.transfer({ fromPubkey: wallet, toPubkey: other, lamports: 5_000 })]);
+
+  it("accepts every allowed shape with the flags the SDK builds (baseline)", () => {
+    vetFumpadTx(buyTx(), wallet, buyPolicy());
+    vetFumpadTx(sellTx("damm"), wallet, sellPolicy);
+    vetWithdrawTx(transfer(), wallet, other, BigInt(5_000));
+  });
+
+  it("refuses an account marked writable that no instruction writes (same keys, same data)", () => {
+    // the router's global PDA (read-only for a buy) and the DBC config
+    for (const i of [1, 7])
+      refused(() => vetFumpadTx(tx([...cb(), coinAtaIx(), ...wrapSolIxs(wallet, TENTH), writableAt(routerBuy(), i), unwrapSolIx(wallet)]), wallet, buyPolicy()), /writable/);
+    // the coin mint in a claim
+    const c = claimIx({ owner: wallet, mint, ticket });
+    const mintAt = c.keys.findIndex((k) => k.pubkey.equals(mint) && !k.isWritable);
+    assert.ok(mintAt >= 0);
+    refused(() => vetFumpadTx(tx([...cb(), coinAtaIx(), writableAt(c, mintAt)]), wallet, { action: "claim", mint: M, ticket: T }), /writable/);
+    // the coin ATA instruction's mint marked writable
+    refused(() => vetFumpadTx(tx([...cb(), writableAt(coinAtaIx(), 3), claimIx({ owner: wallet, mint, ticket })]), wallet, { action: "claim", mint: M, ticket: T }), /writable/);
+  });
+
+  it("refuses a tampered header: any read-only account (or program) flipped to writable", () => {
+    const t = buyTx();
+    const n = (t.message as MessageV0).header.numReadonlyUnsignedAccounts;
+    for (let drop = 1; drop <= n; drop++) {
+      refused(() => vetFumpadTx(reheader(t, (h) => void (h.numReadonlyUnsignedAccounts = n - drop)), wallet, buyPolicy()), /writable/);
+    }
+    refused(() => vetWithdrawTx(reheader(transfer(), (h) => void (h.numReadonlyUnsignedAccounts = 0)), wallet, other, BigInt(5_000)), /writable/);
+  });
+
+  it("refuses a message listing an account none of its instructions use, or one account twice", () => {
+    const t = buyTx();
+    refused(() => vetFumpadTx(reheader(t, (h, k) => void (k.push(other), (h.numReadonlyUnsignedAccounts += 1))), wallet, buyPolicy()), /none of its instructions use/);
+    refused(() => vetFumpadTx(reheader(t, (h, k) => void (k.push(wallet), (h.numReadonlyUnsignedAccounts += 1))), wallet, buyPolicy()), /twice/);
+    refused(() => vetWithdrawTx(reheader(transfer(), (h, k) => void (k.push(mint), (h.numReadonlyUnsignedAccounts += 1))), wallet, other, BigInt(5_000)), /none of its instructions use/);
+  });
+
+  it("refuses an extra signer flag", () => {
+    const ix = routerBuy();
+    const signed = new TransactionInstruction({ programId: ix.programId, data: ix.data, keys: [...ix.keys, { pubkey: other, isSigner: true, isWritable: false }] });
+    refused(() => vetFumpadTx(tx([...cb(), coinAtaIx(), ...wrapSolIxs(wallet, TENTH), signed, unwrapSolIx(wallet)]), wallet, buyPolicy()), /signers/);
   });
 });

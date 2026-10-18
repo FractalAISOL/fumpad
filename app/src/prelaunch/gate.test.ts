@@ -1,7 +1,7 @@
 /** Pre-launch gate decisions. `npm test` */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { decide, gateMode, gatedHosts } from "./gate";
+import { decide, gateMode, gatedHosts, redirectLocation } from "./gate";
 
 const on = {};
 const go = (host: string, path: string, env = on) => decide(host, path, env);
@@ -62,5 +62,25 @@ describe("prelaunch gate", () => {
   it("parses custom host lists", () => {
     assert.deepEqual([...gatedHosts({ PRELAUNCH_HOSTS: " A.com , b.io:8080 ,," })], ["a.com", "b.io"]);
     assert.deepEqual(go("staging.fumpad.app", "/x", { PRELAUNCH_HOSTS: "staging.fumpad.app" }), { action: "redirect", pathname: "/" });
+  });
+});
+
+describe("redirectLocation (APP-5: never from x-forwarded-host)", () => {
+  it("goes to the gated host that was asked for, over https", () => {
+    assert.equal(redirectLocation("fumpad.app", "/", "", on), "https://fumpad.app/");
+    assert.equal(redirectLocation("WWW.fumpad.app:443", "/", "?wallet=abc", on), "https://www.fumpad.app/?wallet=abc");
+    // the configured site URL's origin when it is that host
+    assert.equal(redirectLocation("fumpad.app", "/terms", "", { NEXT_PUBLIC_SITE_URL: "https://fumpad.app/" }), "https://fumpad.app/terms");
+    assert.equal(redirectLocation("www.fumpad.app", "/", "", { NEXT_PUBLIC_SITE_URL: "https://fumpad.app" }), "https://www.fumpad.app/");
+  });
+  it("never builds a URL on a host outside PRELAUNCH_HOSTS, nor over http, nor to another origin", () => {
+    assert.equal(redirectLocation("evil.example", "/", "", on), null);
+    assert.equal(redirectLocation("fumpad.app.evil.example", "/", "", on), null);
+    assert.equal(redirectLocation("", "/", "", on), null);
+    assert.equal(redirectLocation(null, "/", "", on), null);
+    assert.equal(redirectLocation("fumpad.app", "/", "", { NEXT_PUBLIC_SITE_URL: "http://fumpad.app" }), "https://fumpad.app/");
+    assert.equal(redirectLocation("fumpad.app", "/", "", { NEXT_PUBLIC_SITE_URL: "not a url" }), "https://fumpad.app/");
+    assert.equal(redirectLocation("fumpad.app", "//evil.example/x", "", on), "https://fumpad.app/");
+    assert.equal(redirectLocation("fumpad.app", "/", "#x", on), "https://fumpad.app/");
   });
 });

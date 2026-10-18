@@ -7,15 +7,22 @@
  * sign. The policy only lets scripts load from our own origin (plus Cloudflare Turnstile,
  * which Privy's login uses) and only lets the page talk to our API, our Solana RPC and Privy.
  *
- * `script-src` keeps `'unsafe-inline'` and no nonce, on purpose: the app uses Cache Components,
- * so every page is a prerendered static shell (PPR) whose inline scripts (the RSC payload
- * `self.__next_f.push(…)`, the theme script) are written at build time. A nonce must be fresh
- * per request, which forces every page to render dynamically and turns PPR off (Next's own CSP
- * guide: "PPR is incompatible with nonce-based CSP"). Hashes don't work either: the RSC payload
- * differs per page and per revalidation. What still holds without a nonce: no script from any
- * other origin, no `eval` in production, no plugins, no <base> hijack, no framing, and
- * `connect-src` limits where an injected script could send anything. React escapes all
- * rendered text and the review found no HTML injection, so `'unsafe-inline'` has no sink.
+ * `script-src` keeps `'unsafe-inline'` and no nonce, on purpose (APP-1 investigation, app/LAUNCH.md
+ * "CSP: why script-src keeps 'unsafe-inline'"): the app uses Cache Components, so every page is a
+ * prerendered static shell (PPR) whose inline scripts (the RSC flight payload `self.__next_f.push(…)`,
+ * the Turbopack chunk bootstrap, the theme and disclaimer pre-paint scripts) are written at build
+ * time, and PPR pages stream more `__next_f.push` scripts per request. A nonce must be fresh per
+ * request, which forces every page to render dynamically and turns PPR off (Next's own CSP guide:
+ * "PPR is incompatible with nonce-based CSP"). Hashes can't cover the flight payload: it differs
+ * per page, per revalidation (every minute) and per request for the streamed holes. And hashing only
+ * our own known scripts isn't an option either: as soon as `script-src` lists a hash or nonce,
+ * browsers ignore `'unsafe-inline'` (CSP2+), so the payload scripts would be blocked and the app
+ * wouldn't hydrate. What still holds: no script from any other origin, no `eval` in production, no
+ * inline event-handler attributes (`script-src-attr 'none'`: the usual HTML-injection-to-script path,
+ * `<img onerror=…>`; React, Next, Privy and Turnstile use none), no plugins, no <base> hijack, no
+ * framing, and `connect-src` limits where an injected script could send anything. React escapes all
+ * rendered text and the review found no HTML injection. The wallet bridge re-checks every silent
+ * signature itself (`chain/silentGuard.ts`).
  *
  * `img-src` (V7-L6): only our origin, data:/blob: (wallet icons, the launch form's local preview), our API
  * (coin images come through its proxy, `GET /v1/img/<mint>`, see `design/image.ts`) and the WalletConnect
@@ -97,6 +104,8 @@ export function contentSecurityPolicy(env: SecurityEnv): string {
     ["default-src", ["'self'"]],
     // 'unsafe-eval' only in development (React's dev tooling reconstructs server stacks with eval).
     ["script-src", ["'self'", "'unsafe-inline'", TURNSTILE, ...(dev ? ["'unsafe-eval'"] : [])]],
+    // No inline event handlers (onerror=, onclick=…): injected markup can't run script through an attribute.
+    ["script-src-attr", ["'none'"]],
     ["style-src", ["'self'", "'unsafe-inline'"]],
     // next/font self-hosts the fonts; Privy's modal uses data: fonts/icons.
     ["font-src", ["'self'", "data:"]],

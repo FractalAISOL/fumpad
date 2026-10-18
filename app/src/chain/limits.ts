@@ -6,8 +6,10 @@
  * silently on top. The limit now applies to the wallet's actual outflow: simulated from the
  * built transaction when the RPC answers, else a worst case.
  *
- * L-8: Instant trading also has a session cap (default 5 SOL): once the instant outflow in this
- * browser session reaches it, every trade asks on screen, whatever its size.
+ * L-8: Instant trading also has a session cap (default 5 SOL): once the instant outflow reaches it,
+ * every trade asks on screen, whatever its size. APP-6: the "session" is this browser origin over a
+ * rolling window (`INSTANT_WINDOW_MS`, from the first instant spend), kept in localStorage so every
+ * tab shares one budget — a new tab no longer starts from zero (`./instantWindow.ts`).
  *
  * No React, no `@/` imports: unit-tested by `limits.test.ts` with `npm test`.
  */

@@ -48,3 +48,28 @@ export function coinFeeView(params: Params, coin: Pick<CoinDetail, "status" | "f
     ],
   };
 }
+
+/** Solana's target slot time, seconds. */
+const SLOT_SECS = 0.4;
+/** Slack on top of the launch window when judging by the coin's age (clock skew, indexer lag). */
+const WINDOW_AGE_SLACK_SECS = 15;
+
+/**
+ * APP-3: does a one-click buy have to stop and ask because of the launch-window fee? Yes when the buy's own quote says
+ * it lands in the window at a fee above the coin's standard fee (`snipeTaxBps`, up to 99%), or — failing safe when a
+ * quote carries no window info — when the coin is on its curve and younger than the window (+ slack). Returns what to
+ * tell the user, or null for a normal buy.
+ */
+export function launchWindowGuard(
+  quote: { snipeTaxBps?: number; snipeTaxSol?: number },
+  coin: { status: string; createdAt: number },
+  p: { feeBps: number; snipeStartBps: number; snipeWindowSlots: number },
+  now: number,
+): { bps: number; extraSol?: number; byAge: boolean } | null {
+  if (quote.snipeTaxBps !== undefined && quote.snipeTaxBps > p.feeBps) return { bps: quote.snipeTaxBps, extraSol: quote.snipeTaxSol, byAge: false };
+  if (quote.snipeTaxBps === undefined && coin.status === "curve") {
+    const windowMs = (Math.max(1, p.snipeWindowSlots) * SLOT_SECS + WINDOW_AGE_SLACK_SECS) * 1000;
+    if (now - coin.createdAt < windowMs) return { bps: p.snipeStartBps, byAge: true };
+  }
+  return null;
+}

@@ -11,7 +11,9 @@ import * as f from "@/design/format";
 import { useLiveMessages, useRefresh } from "../shell/live";
 import { useNow, useProtocolParams, useViewer } from "../shell/Providers";
 import { requestWalletConnect } from "../shell/Wallet";
-import { useInstantSettings } from "../wallet/store";
+import { requestConfirm, useInstantSettings } from "../wallet/store";
+import { launchWindowGuard } from "@/data/fees";
+import { EXTERNAL_LINK_REL, safeSocialHref } from "@/design/socialLinks";
 import { FilterPanel } from "./Filters";
 import {
   type BoardFilters,
@@ -116,7 +118,8 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
   const target = graduationSol || graduationSolOf(c);
   const raised = c.status === "curve" ? c.curveSol : target;
   const href = coinHref(c);
-  const so = c.socials;
+  // APP-7: creator links sanitised here too (https only, X / Telegram on their own hosts), not only by the API.
+  const so = { x: safeSocialHref("x", c.socials?.x), telegram: safeSocialHref("telegram", c.socials?.telegram), website: safeSocialHref("website", c.socials?.website) };
   return (
     <article className={cx(s.row, arrival && s.arrived)} data-mint={c.mint}>
       <CoinTile symbol={c.symbol} variant={c.tile} mint={c.mint} imageUrl={c.imageUrl} size="md" className={s.tile} />
@@ -157,18 +160,18 @@ const Row = memo(function Row({ coin: c, lane, solUsd, graduationSol, buyLabel, 
           <span className="sr-only">Mint address ending </span>…{c.mint.slice(-4)}
         </span>
         <CopyButton value={c.mint} label={`Copy $${c.symbol} mint address`} />
-        {so?.x && (
-          <a className={s.social} href={so.x} target="_blank" rel="noopener noreferrer nofollow" aria-label={`$${c.symbol} on X`}>
+        {so.x && (
+          <a className={s.social} href={so.x} target="_blank" rel={EXTERNAL_LINK_REL} aria-label={`$${c.symbol} on X`}>
             <IconX width={13} height={13} />
           </a>
         )}
-        {so?.telegram && (
-          <a className={s.social} href={so.telegram} target="_blank" rel="noopener noreferrer nofollow" aria-label={`$${c.symbol} on Telegram`}>
+        {so.telegram && (
+          <a className={s.social} href={so.telegram} target="_blank" rel={EXTERNAL_LINK_REL} aria-label={`$${c.symbol} on Telegram`}>
             <IconTelegram width={14} height={14} />
           </a>
         )}
-        {so?.website && (
-          <a className={s.social} href={so.website} target="_blank" rel="noopener noreferrer nofollow" aria-label={`$${c.symbol} website`}>
+        {so.website && (
+          <a className={s.social} href={so.website} target="_blank" rel={EXTERNAL_LINK_REL} aria-label={`$${c.symbol} website`}>
             <IconGlobe width={14} height={14} />
           </a>
         )}
@@ -552,6 +555,22 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
       setBusyMint(c.mint);
       try {
         const quote = await data.quoteTrade({ mint: c.mint, side: "buy", amount, wallet: address });
+        // APP-3: a one-click buy never pays the launch-window fee (up to 99%) without saying so first, whatever the wallet.
+        const windowFee = launchWindowGuard(quote, c, params, Date.now());
+        if (windowFee) {
+          const pct = f.fixed(windowFee.bps / 100, windowFee.bps >= 1_000 ? 0 : 1);
+          const ok = await requestConfirm({
+            title: windowFee.byAge ? `$${c.symbol} launched seconds ago` : `Launch-window fee: ${pct}%`,
+            body: windowFee.byAge
+              ? `It may still be in its launch window, where the trading fee starts at ${pct}% and falls to the normal fee within seconds. Wait a moment, or buy now and pay up to that fee.`
+              : `$${c.symbol} is in its launch window: this buy pays a ${pct}% fee${windowFee.extraSol ? ` (about ${f.sol(windowFee.extraSol)} SOL above the normal fee)` : ""} instead of ${f.fixed(params.feeBps / 100, 2)}%. It falls to the normal fee within seconds.`,
+            confirmLabel: `Buy anyway, ${pct}% fee`,
+          });
+          if (!ok) {
+            toast("Not bought. The launch-window fee falls within seconds.");
+            return;
+          }
+        }
         // M-9: the bound is this quote (fetched on click) minus the slippage, not a later re-quote.
         const res = await buy({ mint: c.mint, solIn: amount, minTokensOut: minOutFromQuote(quote.amountOut), expectedOut: quote.amountOut });
         if (res) toast(quote.partialFill ? `Bought the last ${f.tokens(quote.amountOut)} ${c.symbol}. That completed the curve.` : `Bought ${f.tokens(quote.amountOut)} ${c.symbol}.`);
@@ -564,7 +583,7 @@ export function LaunchesBoard({ curve, graduated, solUsd }: { curve: CoinSummary
         reset();
       }
     },
-    [connected, amount, data, address, buy, reset, lastError, toast],
+    [connected, amount, data, address, buy, reset, lastError, toast, params],
   );
 
   const busyCoin = busyMint ? coins[busyMint] : undefined;

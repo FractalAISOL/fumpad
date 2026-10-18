@@ -7,7 +7,6 @@
  */
 import { PublicKey, SystemProgram, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { useEffect, useState } from "react";
-import { vetWithdrawTx } from "@/chain/allowlist";
 import { BASE_FEE_LAMPORTS, CLUSTER, CLUSTER_LABEL, getConnection, LAMPORTS, RENT_EXEMPT_LAMPORTS } from "@/chain/connection";
 import { sameMessage } from "@/chain/signer";
 import { AmountInput, Button, CopyButton, Dialog, TextInput, cx, parseAmount, useToast } from "@/design";
@@ -204,9 +203,9 @@ export function WithdrawDialog({ open, onClose, trading, external }: { open: boo
       const from = new PublicKey(trading.address);
       const lamports = toLamports(amount);
       const { tx, blockhash, lastValidBlockHeight } = await transferTx(from, destKey, lamports);
-      // Exactly the transfer the user just confirmed, or nothing.
-      vetWithdrawTx(tx, from, destKey, lamports);
-      const signed = await walletActions().signTransaction(trading.address, tx, { silent: true });
+      // Exactly the transfer the user just confirmed, or nothing: the wallet bridge checks the bytes it signs against
+      // this policy (`vetWithdrawTx`, APP-1) before signing without Privy's window.
+      const signed = await walletActions().signTransaction(trading.address, tx, { silent: true, policy: { kind: "withdraw", destination: destKey.toBase58(), lamports } });
       if (!sameMessage(tx, signed)) throw new Error("The wallet changed the transaction, so it wasn't sent.");
       const signature = await sendAndConfirm(signed, blockhash, lastValidBlockHeight);
       announceOwnTx({ kind: "transfer", wallet: trading.address, signature });
