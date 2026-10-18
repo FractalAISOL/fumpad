@@ -235,9 +235,16 @@ export function registerWaitlistRoutes(app: FastifyInstance, cfg: ApiConfig, sto
 
 const CSV_COLUMNS = ["id", "email", "x_handle", "created_at"];
 
-function csvCell(v: unknown): string {
-  const s = v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : String(v);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+/**
+ * One CSV field. Audit S-6: a value starting with `=`, `+`, `-`, `@`, tab or CR is a formula to Excel / Sheets /
+ * LibreOffice (an email like `=HYPERLINK(...)@x.io` passes the email check), so it gets a leading `'` (shown as
+ * text, the OWASP recommendation) and is quoted. Quotes, commas and newlines are quoted as before.
+ */
+export function csvCell(v: unknown): string {
+  let s = v === null || v === undefined ? "" : v instanceof Date ? v.toISOString() : String(v);
+  const formula = /^[=+\-@\t\r]/.test(s);
+  if (formula) s = `'${s}`;
+  return formula || /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /**

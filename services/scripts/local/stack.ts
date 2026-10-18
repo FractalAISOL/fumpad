@@ -65,8 +65,11 @@ export interface Stack {
   /** the jobs keeper's key (Global.operators[0]) */
   operator: Keypair;
   config: { publicKey: PublicKey };
-  /** The one-off first-coin config (slot 1, wallet-split policy, max_coins 1) and its fee wallet; the API offers it (LAUNCH_FIRST_COIN). */
-  firstCoin?: { config: PublicKey; wallet: PublicKey };
+  /**
+   * The one-off first-coin config (slot 1, wallet-split policy, max_coins 1) and its fee wallet; the API offers it
+   * (LAUNCH_FIRST_COIN) to `creator` only (FIRST_COIN_CREATOR, audit S-2): a key generated for this stack.
+   */
+  firstCoin?: { config: PublicKey; wallet: PublicKey; creator: Keypair };
   /** The API's launch key = `Params.launch_signer` (off-chain review L1): the API co-signs every launch. */
   launchKey: Keypair;
   /** The FUMPAD launch ALT the API builds every launch through (LAUNCH_ALT). */
@@ -195,7 +198,9 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }),
     );
     await waitFor("indexer health", async () => (await fetch(`http://127.0.0.1:${ports.indexer}/health`)).status > 0, 60_000);
-    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false", LAUNCHES_OPEN: "true", LAUNCH_ALT: launchAlt.toBase58() }));
+    // S-2: the API prepares the first coin for FIRST_COIN_CREATOR only (required with LAUNCH_FIRST_COIN=true).
+    const firstCoinCreator = firstCoin ? Keypair.generate() : undefined;
+    services.push(startService("api", "api/src/main.ts", { ...common, PORT: String(apiPort), SOL_USD_FALLBACK: usd, API_SSR_SECRET: ssrSecret, RATE_LIMIT_PER_MIN: "100000", LAUNCH_POOL_RESERVE: "0", MINT_POOL_KEY: mintPoolKey, LAUNCH_SIGNER_KEY: JSON.stringify(Array.from(launchKey.secretKey)), LAUNCH_SWEEP_SECS: "5", LAUNCH_FIRST_COIN: firstCoin ? "true" : "false", ...(firstCoinCreator ? { FIRST_COIN_CREATOR: firstCoinCreator.publicKey.toBase58() } : {}), LAUNCHES_OPEN: "true", LAUNCH_ALT: launchAlt.toBase58() }));
     await waitFor("api health", async () => (await fetch(`${api}/health`)).ok, 60_000);
     services.push(
       startService("keeper", "keeper/src/main.ts", {
@@ -260,7 +265,7 @@ export async function startStack(opts: StackOpts = {}): Promise<Stack> {
       }
       return dir;
     };
-    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, firstCoin, launchKey, launchAlt, api, ports, ssrSecret, get, dumpLogs, stop };
+    return { v, pg, conn, services, admin, treasury, keepers, operator: readKeypairFile(operatorPath), config, firstCoin: firstCoin && firstCoinCreator ? { ...firstCoin, creator: firstCoinCreator } : undefined, launchKey, launchAlt, api, ports, ssrSecret, get, dumpLogs, stop };
   } catch (e) {
     const dir = join(LOCAL, "stack-logs");
     mkdirSync(dir, { recursive: true });

@@ -29,6 +29,17 @@ describe("parseLaunchOptions / fetchLaunchOptions", () => {
     }) as unknown as typeof fetch;
     assert.equal(await fetchLaunchOptions("https://api.test", down), null);
   });
+
+  it("asks with the connected wallet (?creator=) so the API can offer it the first-coin config (S-2)", async () => {
+    const urls: string[] = [];
+    const rec = (async (u: string) => {
+      urls.push(u);
+      return new Response(JSON.stringify({ launchesOpen: false, firstCoin: FIRST }), { status: 200 });
+    }) as unknown as typeof fetch;
+    assert.deepEqual(await fetchLaunchOptions("https://api.test", rec, FIRST.wallet), closedFirst);
+    await fetchLaunchOptions("https://api.test", rec);
+    assert.deepEqual(urls, [`https://api.test/v1/launch/options?creator=${FIRST.wallet}`, "https://api.test/v1/launch/options"]);
+  });
 });
 
 describe("launchPageState (what /launch shows)", () => {

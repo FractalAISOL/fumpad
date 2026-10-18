@@ -96,6 +96,20 @@ export function summarize(x: StatusInputs): SystemStatus {
   };
 }
 
+/** Steps the public vanity-pool counts are rounded down to (M-3: exact counts are for the SSR / operators only). */
+const POOL_STEPS = [1_000, 500, 100, 50, VANITY_LOW, 5, 1];
+export const coarseCount = (n: number): number => (n <= 0 ? 0 : (POOL_STEPS.find((s) => n >= s) ?? 0));
+
+/**
+ * `/v1/status` for a public caller: the same levels, but the vanity pool's available / reserved counts rounded down
+ * to a few steps (audit M-3: an exact count told an attacker how many reservations empty the pool). SSR callers
+ * (the shared secret) get the exact figures.
+ */
+export function publicStatus(s: SystemStatus): SystemStatus {
+  if (!s.vanityPool) return s;
+  return { ...s, vanityPool: { ...s.vanityPool, available: coarseCount(s.vanityPool.available), reserved: coarseCount(s.vanityPool.reserved) } };
+}
+
 /** Optional keeper probe (Railway private network, e.g. http://keeper.railway.internal:8080/health). */
 async function probeKeeper(url: string | undefined): Promise<StatusInputs["keeper"]> {
   if (!url) return null;

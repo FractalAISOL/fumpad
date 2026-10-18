@@ -36,7 +36,7 @@ const API = process.env.NEXT_PUBLIC_FUMPAD_API?.replace(/\/+$/, "");
 
 
 export function LaunchView() {
-  const { isDemo } = useViewer();
+  const { isDemo, address, connected } = useViewer();
   const PARAMS = useProtocolParams();
   const tx = useFumpadTx();
   const toast = useToast();
@@ -72,14 +72,16 @@ export function LaunchView() {
    */
   const [options, setOptions] = useState<LaunchOptions | null | undefined>(API ? undefined : null);
   const [closedByApi, setClosedByApi] = useState(false);
+  // The first-coin option is offered to the API's allow-listed wallet only (S-2): ask with the connected wallet.
+  const optionsCreator = firstCoin && connected ? address : undefined;
   useEffect(() => {
     if (!API) return;
     let alive = true;
-    void fetchLaunchOptions(API).then((o) => alive && setOptions(o));
+    void fetchLaunchOptions(API, fetch, optionsCreator).then((o) => alive && setOptions(o));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [optionsCreator]);
   const fileRef = useRef<HTMLInputElement>(null);
   const imgId = useId();
 

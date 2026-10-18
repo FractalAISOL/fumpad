@@ -156,10 +156,12 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
     let fcWalletBefore = 0n;
     if (stack.firstCoin) {
       const fc = stack.firstCoin;
-      const founder = Keypair.generate();
+      const founder = fc.creator; // FIRST_COIN_CREATOR (S-2): the only wallet the API prepares the first coin for
       await airdrop(conn, founder.publicKey, 5);
       fcWalletBefore = BigInt(await conn.getBalance(fc.wallet, "confirmed"));
-      const opts = await get<{ firstCoin: { dbcConfig: string; wallet: string } | null }>("/v1/launch/options");
+      const opts = await get<{ firstCoin: { dbcConfig: string; wallet: string } | null }>(`/v1/launch/options?creator=${founder.publicKey.toBase58()}`);
+      const anon = await get<{ firstCoin: unknown }>("/v1/launch/options");
+      check("S-2: /v1/launch/options shows the first-coin option to FIRST_COIN_CREATOR only", !!opts.firstCoin && anon.firstCoin === null);
       await waitFor("grinder: a second …fmbL mint", async () => {
         const h = await get<{ vanityPool: { available: number } | null }>("/health");
         return h.vanityPool && h.vanityPool.available > 0;
@@ -199,8 +201,10 @@ export async function runE2E(opts: { rpcPort?: number; apiPort?: number; log?: (
         FC,
       );
       await sleep(12_000); // the API caches Global for 10 s: let it see the registration (the program refuses a 2nd coin anyway)
-      const again = await prepareFirst(dave, "AGAIN"); // a funded wallet: only the config's availability can refuse it
+      const again = await prepareFirst(founder, "AGAIN"); // the allow-listed wallet: only the config's availability can refuse it
       check("first-coin config is one launch only (max_coins 1): the next first_coin prepare is refused", again.status === 409, `${again.status} ${again.status === 409 ? "" : await again.text()}`);
+      const stranger = await prepareFirst(dave, "AGAIN"); // a funded wallet that isn't FIRST_COIN_CREATOR
+      check("S-2: a first_coin prepare from any other wallet is refused (403 first_coin_not_allowed)", stranger.status === 403, `${stranger.status}`);
       // a trade after its 25-slot window: 3% fee, of which FUMPAD's 2.4% splits 1.0 / 1.4
       const fslot = (await conn.getTransaction(fsig, { maxSupportedTransactionVersion: 0, commitment: "confirmed" }))!.slot;
       await waitFor("first coin's launch window over", async () => ((await conn.getSlot("confirmed")) > fslot + FIRST_COIN_PERIODS + 2 ? true : null), 60_000);

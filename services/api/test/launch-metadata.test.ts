@@ -438,13 +438,18 @@ describe("POST /v1/launch/metadata", () => {
     expect(pinner.files).toHaveLength(0);
   });
 
-  it("gates: launches closed → 403; first_coin only when enabled; no mint pool → 503", async () => {
+  it("gates: launches closed → 403; first_coin only when enabled AND for FIRST_COIN_CREATOR (S-2); no mint pool → 503", async () => {
     const closed = await server({ FUMPAD_CLUSTER: "mainnet", PINATA_JWT: "x" });
     expect((await post(closed, body())).json()).toEqual({ error: "Launches open soon", code: "launches_closed" });
     expect((await post(closed, body({ launchConfig: "first_coin" }))).statusCode).toBe(403);
     await closed.close();
-    const first = await server({ FUMPAD_CLUSTER: "mainnet", PINATA_JWT: "x", LAUNCH_FIRST_COIN: "true" });
+    const first = await server({ FUMPAD_CLUSTER: "mainnet", PINATA_JWT: "x", LAUNCH_FIRST_COIN: "true", FIRST_COIN_CREATOR: creator });
     expect((await post(first, body({ launchConfig: "first_coin" }))).statusCode).toBe(200);
+    // Any other wallet: refused before anything is pinned, with its own code.
+    const other = Keypair.generate();
+    const r = await post(first, body({ launchConfig: "first_coin" }, "PIGN", other));
+    expect(r.statusCode).toBe(403);
+    expect(r.json()).toEqual({ error: "the first-coin launch config is reserved for the FUMPAD team wallet", code: "first_coin_not_allowed" });
     await first.close();
     const noPool = await server({}, { pool: false });
     expect((await post(noPool, body())).statusCode).toBe(503);
@@ -465,6 +470,39 @@ describe("POST /v1/launch/metadata", () => {
     const p = await a.inject({ method: "POST", url: "/v1/launch/prepare", payload: { ...body(), uri: PLACEHOLDER_URI } });
     expect(p.statusCode).toBe(400);
     expect(p.json().error).toMatch(/metadata wasn't uploaded/);
+  });
+
+  it("L-3: one signature uploads once (single-use nonce); a failed upload gives the nonce back", async () => {
+    const pinner = new FakePinner();
+    const a = await server({}, { pinner });
+    const b = body();
+    expect((await post(a, b)).statusCode).toBe(200);
+    const replay = await post(a, b);
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json().error).toMatch(/already used/);
+    expect(pinner.files).toHaveLength(1);
+    pinner.fail = true;
+    const c = body();
+    expect((await post(a, c)).statusCode).toBe(502);
+    pinner.fail = false;
+    expect((await post(a, c)).statusCode).toBe(200); // the retry with the same signature works
+  });
+
+  it("L-3: domain + cluster bound: another site or cluster is refused; the legacy form only while LAUNCH_AUTH_LEGACY allows it", async () => {
+    const a = await server({ FUMPAD_CLUSTER: "devnet", CORS_ORIGINS: "https://fumpad.app,https://www.fumpad.app" });
+    const signed = (domain: string, cluster: string) => body({ auth: signLaunchAuth(creatorKp.secretKey, { creator, symbol: "PIGN", domain, cluster }) });
+    expect((await post(a, signed("fumpad.app", "devnet"))).statusCode).toBe(200);
+    expect((await post(a, signed("www.fumpad.app", "devnet"))).statusCode).toBe(200);
+    const site = await post(a, signed("evil.example", "devnet"));
+    expect([site.statusCode, site.json().error]).toEqual([401, "auth message is for another site"]);
+    const cl = await post(a, signed("fumpad.app", "mainnet"));
+    expect([cl.statusCode, cl.json().error]).toEqual([401, "auth message is for another cluster"]);
+    expect((await post(a, body())).statusCode).toBe(200); // legacy five lines: accepted by default
+    await a.close();
+    const strict = await server({ FUMPAD_CLUSTER: "devnet", CORS_ORIGINS: "https://fumpad.app", LAUNCH_AUTH_LEGACY: "false" });
+    const legacy = await post(strict, body());
+    expect([legacy.statusCode, legacy.json().error]).toEqual([401, "outdated launch message: reload the page and sign again"]);
+    expect((await post(strict, signed("fumpad.app", "devnet"))).statusCode).toBe(200);
   });
 
   it("a Pinata failure is a 502 with a retry hint and no upstream detail", async () => {

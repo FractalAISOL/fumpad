@@ -134,7 +134,7 @@ Opening the app only after the handover means no hot key holds admin power while
     | all except grinder | **`FUMPAD_PROGRAM_ID=<mainnet id>`** + **`FUMPAD_CLUSTER=mainnet`** (the SDK's id comes from these; each service checks at start that the program exists behind its `RPC_URL` and `Global.cluster_tag` = 0, else logs `✗ refusing to start` and exits 1 — so they can only start after `--step init`) |
     | `Postgres` | new, empty (migrations run at the indexer's start) |
     | `indexer` | `RPC_URL` = A, `BACKFILL_FROM_SLOT` = the deploy slot (from `$B --step verify` / Solscan), `PINATA_GATEWAY` (optional, = the api's) |
-    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app`, `TRUST_PROXY_HOPS=2`, **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`), **`PINATA_JWT`** (from `$K/pinata.env`, item 16: without it on mainnet `POST /v1/launch/metadata` answers 503, the api logs `launch metadata uploads DISABLED` at boot and no coin can launch from the app), `PINATA_GATEWAY` (optional, dedicated gateway domain), **`LAUNCH_ALT`** (PENDING until day 0: the launch lookup table from `$B --step alt`, `$K/launch-alt.json`; required on mainnet — without it the api logs `launches DISABLED … LAUNCH_ALT` and answers 503 on every prepare and metadata upload) |
+    | `api` | `RPC_URL` = A, `LAUNCH_SIGNER_KEY` = `npx tsx …` pipe of `$K/launch-signer.json`, `LAUNCH_REQUIRE_SIGNATURE=true`, new `MINT_POOL_KEY` (`openssl rand -hex 32`, also on the grinder), new `API_SSR_SECRET` (also on Vercel), `CORS_ORIGINS=https://fumpad.app,https://www.fumpad.app` (plus `https://fumpad.vercel.app` while the first coin launches from there, §5.3: its host must be listed, the signed launch message names it, L-3), `TRUST_PROXY_HOPS=2` (also the production default now; set it anyway), **`FIRST_COIN_CREATOR=EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc`** (the only wallet the first-coin config is offered/prepared for, external audit S-2; required whenever `LAUNCH_FIRST_COIN=true`, the api refuses to start without it), `LAUNCH_AUTH_LEGACY=false` once the app build that signs the seven-line launch message is on Vercel (DEPLOY-v07 §14), no `SOL_USD_FALLBACK` (unset = no made-up SOL/USD; `SOL/USD price unavailable` in the api log = alert), **`LAUNCHES_OPEN=false`** (the mainnet default, set it explicitly: no standard launch before T0, even through `fumpad.vercel.app` — every launch needs the API's co-signature; the first coin's `LAUNCH_FIRST_COIN` path isn't affected), **`WAITLIST_DATABASE_URL`** = the existing devnet project's `waitlist-db` public URL (same DB: the list survives) and **the same `WAITLIST_IP_SALT`** (`~/fumpad-keys/waitlist/ip_salt`), **`PINATA_JWT`** (from `$K/pinata.env`, item 16: without it on mainnet `POST /v1/launch/metadata` answers 503, the api logs `launch metadata uploads DISABLED` at boot and no coin can launch from the app), `PINATA_GATEWAY` (optional, dedicated gateway domain), **`LAUNCH_ALT`** (PENDING until day 0: the launch lookup table from `$B --step alt`, `$K/launch-alt.json`; required on mainnet — without it the api logs `launches DISABLED … LAUNCH_ALT` and answers 503 on every prepare and metadata upload) |
     | `grinder` | `DATABASE_URL`, `MINT_POOL_KEY`, `POOL_TARGET` (≥ 20 before T0) |
     | `keeper` (core) | `KEEPER_MODE=jobs`, `KEEPER_SECRET_KEY` = **operator** (`$K/operator.json`; refuses an attestor key), `RPC_URL` = A, `KEEPER_DAILY_BUDGET_SOL=2`, `MIN_KEEPER_LAMPORTS=500000000`, `TELEGRAM_*` (mainnet) |
     | `attestor-1/2/3` (own projects) | `KEEPER_MODE=attestor`, own key (refuses the operator key), own DB role (`secrets-v07.ts db-sql` adapted to `$K`; `db-url attestor-N --public <board TCP proxy>` from its project), `RPC_URL` = B / C / D, `PYTH_SOURCE=onchain` (no key; price read via the same `RPC_URL`), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*` |
@@ -238,11 +238,17 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
    launch-window share → `firstCoin.feeWallet` (`7eXG…jFa3`); no platform / creator share.
    1. Before: `$B --step verify` shows the first-coin config allow-listed (`coins 0/1`, wallet = the config file's).
       The fee wallet holds ≥ 0.001 SOL (claims refuse to leave it below rent exemption — `FeeWalletNotRentExempt`).
-   2. API: Railway `api` variable `LAUNCH_FIRST_COIN=true` (leave `LAUNCHES_OPEN=false`: the first-coin path works
-      while standard launches are closed), redeploy; `curl -s https://<api>/v1/launch/options` shows
-      `"launchesOpen":false` and `firstCoin` with that config and wallet.
-   3. Launch through the app at `https://fumpad.vercel.app/launch?config=first-coin` (Privy wallet, first buy below;
-      fumpad.app is still gated). The
+   2. API: Railway `api` variables `LAUNCH_FIRST_COIN=true` and **`FIRST_COIN_CREATOR=EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc`**
+      (the creator wallet below; external audit 2026-10-17 S-2 / H-3: the API prepares, pins and offers the first-coin
+      config for this wallet only — any other wallet gets 403 `first_coin_not_allowed` — and refuses to start with
+      `LAUNCH_FIRST_COIN=true` but no valid `FIRST_COIN_CREATOR`). Leave `LAUNCHES_OPEN=false`: the first-coin path
+      works while standard launches are closed. Redeploy; `curl -s "https://<api>/v1/launch/options?creator=EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc"`
+      shows `"launchesOpen":false` and `firstCoin` with that config and wallet; without `?creator=` (or with any other
+      wallet) `firstCoin` is `null`. (An on-chain `allowed_creator` on the config would bind it in the program too:
+      program change, not done.)
+   3. Log in to the app with the creator wallet first, then open `https://fumpad.vercel.app/launch?config=first-coin`
+      (Privy wallet, first buy below; fumpad.app is still gated): the page asks the API's options with the connected
+      wallet, so with any other wallet (or logged out) it shows "Launches open soon.". The
       review must show **Trading fee 3%, first-coin config** and the wallet; the app refuses to sign unless the chain
       lists that config with the wallet-split policy and its fee is 3%.
 
@@ -260,7 +266,7 @@ Drain the deployer (`solana transfer` to the treasury) once nothing else needs i
       trades indexed; after ~10 s the keeper's first `claim_fees` pays the launch window to the wallet (`FeesClaimed`
       `to_wallet = claimed`); later claims split 1.0 / 1.4; a matured ≥ $50 sell → `TicketAttested` by 2 of 3, watcher
       `match`.
-   5. **Right after it (same hour)**: Railway `api` `LAUNCH_FIRST_COIN=false`, redeploy (the API stops offering it;
+   5. **Right after it (same hour)**: Railway `api` `LAUNCH_FIRST_COIN=false` (`FIRST_COIN_CREATOR` may stay; unused), redeploy (the API stops offering it;
       `max_coins = 1` already makes the program refuse a second coin, even with the launch co-signature). Then take the
       config off the allow-list: `$B --step remove-first-coin-config $SPEND` — the admin is the admin vault by now, so
       it creates the vault tx `queue_config(<first-coin config>, remove)` with the ops key (or

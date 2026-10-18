@@ -3,7 +3,9 @@
  * launches are closed, `POST /v1/launch/prepare` refuses them with 403 `{code: "launches_closed"}` (every launch
  * needs the API's co-signature, so this holds on chain too) and `GET /v1/launch/options` says
  * `{launchesOpen: false}`. The page then shows "Launches open soon." instead of the form; the one-off first-coin
- * launch (`/launch?config=first-coin`) keeps its form while the API offers it.
+ * launch (`/launch?config=first-coin`) keeps its form while the API offers it. The API offers the first-coin config
+ * only to its allow-listed creator wallet (FIRST_COIN_CREATOR, external audit 2026-10-17 S-2), so the page asks with
+ * the connected wallet (`?creator=`).
  *
  * No React, no `@/` imports: unit-tested by `launchGate.test.ts` with `npm test`.
  */
@@ -33,10 +35,14 @@ export function parseLaunchOptions(json: unknown): LaunchOptions | null {
   };
 }
 
-/** Fetches the launch options; null when the API can't be reached or answers badly (the API still enforces the gate). */
-export async function fetchLaunchOptions(api: string, fetchFn: typeof fetch = fetch): Promise<LaunchOptions | null> {
+/**
+ * Fetches the launch options; null when the API can't be reached or answers badly (the API still enforces the gate).
+ * `creator`: the connected wallet, so the API can show it the first-coin option (it does for FIRST_COIN_CREATOR only).
+ */
+export async function fetchLaunchOptions(api: string, fetchFn: typeof fetch = fetch, creator?: string): Promise<LaunchOptions | null> {
   try {
-    const res = await fetchFn(`${api}/v1/launch/options`, { headers: { accept: "application/json" }, cache: "no-store" });
+    const q = creator ? `?creator=${encodeURIComponent(creator)}` : "";
+    const res = await fetchFn(`${api}/v1/launch/options${q}`, { headers: { accept: "application/json" }, cache: "no-store" });
     if (!res.ok) return null;
     return parseLaunchOptions(await res.json());
   } catch {

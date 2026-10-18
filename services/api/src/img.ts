@@ -13,7 +13,10 @@
  * - Served with `Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`,
  *   CORP cross-origin (the app is another origin) and long cache headers.
  * - Bounded in-memory LRU (entries + bytes) for hits, short negative cache for misses/failures, request
- *   coalescing per URL, and a cap on concurrent upstream fetches.
+ *   coalescing per URL, a cap on concurrent upstream fetches, and (audit L-7) a per-host cap inside it: a creator's
+ *   slow host (grouped by its last two DNS labels, so subdomains don't multiply it) holds at most `maxPerHost`
+ *   slots, so it can't make every other coin's image `busy`. Our IPFS gateways (`trustedHosts`, ipfs://) share half
+ *   of the global cap instead.
  */
 import { createHash } from "node:crypto";
 
@@ -49,6 +52,10 @@ export interface ImageProxyOpts {
   negativeTtlMs?: number;
   /** Concurrent upstream fetches; beyond it requests fail fast with `busy`. */
   maxConcurrent?: number;
+  /** Concurrent upstream fetches per creator host group (L-7, default 2). */
+  maxPerHost?: number;
+  /** Hostnames we run or chose (our Pinata gateway, IPFS gateways): capped at half of `maxConcurrent`, not `maxPerHost`. */
+  trustedHosts?: string[];
   ipfsGateway?: string;
   /** IPFS gateways tried in order (dedicated Pinata gateway first), see safeFetch. */
   ipfsGateways?: string[];
@@ -58,13 +65,34 @@ export interface ImageProxyOpts {
 
 type Entry = { at: number; result: ImageResult; size: number };
 
+/**
+ * The concurrency group of an image URL (L-7): "ipfs:" / "ar:" for those schemes, the exact hostname for a trusted
+ * host, else the last two DNS labels (an IP literal as is).
+ */
+export function imageHostGroup(url: string, trusted: ReadonlySet<string> = new Set()): { key: string; trusted: boolean } {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
+  if (scheme === "ipfs") return { key: "ipfs:", trusted: true };
+  if (scheme === "ar") return { key: "ar:", trusted: false };
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return { key: "invalid:", trusted: false };
+  }
+  if (trusted.has(host)) return { key: host, trusted: true };
+  if (/^[\d.]+$/.test(host) || host.startsWith("[")) return { key: host, trusted: false };
+  return { key: host.split(".").slice(-2).join("."), trusted: false };
+}
+
 export class ImageProxy {
   private cache = new Map<string, Entry>();
   private bytes = 0;
   private inflight = new Map<string, Promise<ImageResult>>();
   private active = 0;
-  stats = { hits: 0, misses: 0, fetched: 0, failed: 0, busy: 0 };
-  readonly o: Required<Omit<ImageProxyOpts, "fetchOpts" | "ipfsGateway" | "ipfsGateways">> & Pick<ImageProxyOpts, "fetchOpts" | "ipfsGateway" | "ipfsGateways">;
+  private activeByHost = new Map<string, number>();
+  private trusted: Set<string>;
+  stats = { hits: 0, misses: 0, fetched: 0, failed: 0, busy: 0, hostBusy: 0 };
+  readonly o: Required<Omit<ImageProxyOpts, "fetchOpts" | "ipfsGateway" | "ipfsGateways" | "trustedHosts">> & Pick<ImageProxyOpts, "fetchOpts" | "ipfsGateway" | "ipfsGateways">;
 
   constructor(
     /** mint → the coin's creator image URL (metadata.image), or null. */
@@ -78,11 +106,20 @@ export class ImageProxy {
       cacheBytes: opts.cacheBytes ?? 64 * 1024 * 1024,
       ttlMs: opts.ttlMs ?? 6 * 3600_000,
       negativeTtlMs: opts.negativeTtlMs ?? 5 * 60_000,
-      maxConcurrent: opts.maxConcurrent ?? 8,
+      maxConcurrent: opts.maxConcurrent ?? 16,
+      maxPerHost: opts.maxPerHost ?? 2,
       ipfsGateway: opts.ipfsGateway,
       ipfsGateways: opts.ipfsGateways,
       fetchOpts: opts.fetchOpts,
     };
+    const hostOf = (u: string) => {
+      try {
+        return new URL(u).hostname.toLowerCase();
+      } catch {
+        return null;
+      }
+    };
+    this.trusted = new Set([...(opts.trustedHosts ?? []), ...(opts.ipfsGateways ?? []), ...(opts.ipfsGateway ? [opts.ipfsGateway] : [])].map((h) => (h.includes("/") ? hostOf(h) : h.toLowerCase())).filter((h): h is string => !!h));
   }
 
   get size() {
@@ -104,13 +141,21 @@ export class ImageProxy {
     this.stats.misses++;
     let p = this.inflight.get(url);
     if (!p) {
-      if (this.active >= this.o.maxConcurrent) {
+      const g = imageHostGroup(url, this.trusted);
+      const hostCap = g.trusted ? Math.max(1, Math.floor(this.o.maxConcurrent / 2)) : this.o.maxPerHost;
+      const onHost = this.activeByHost.get(g.key) ?? 0;
+      if (this.active >= this.o.maxConcurrent || onHost >= hostCap) {
         this.stats.busy++;
+        if (onHost >= hostCap) this.stats.hostBusy++;
         return { ok: false, reason: "busy" }; // not cached: a retry may succeed
       }
       this.active++;
+      this.activeByHost.set(g.key, onHost + 1);
       p = this.fetch(url).finally(() => {
         this.active--;
+        const left = (this.activeByHost.get(g.key) ?? 1) - 1;
+        if (left > 0) this.activeByHost.set(g.key, left);
+        else this.activeByHost.delete(g.key);
         this.inflight.delete(url);
       });
       this.inflight.set(url, p);

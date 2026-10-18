@@ -1,4 +1,8 @@
 /** M-2: the signed launch message (proof of wallet control before a mint is reserved). */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
@@ -38,6 +42,16 @@ describe("launch auth", () => {
   });
 
   it("message format is stable (the app builds the same text)", () => {
+    // legacy five lines (apps before L-3; accepted while LAUNCH_AUTH_LEGACY=true)
     expect(launchAuthMessage({ creator: "C", symbol: "S", nonce: "n".repeat(16), issuedAt: 1 })).toBe(`FUMPAD launch\ncreator: C\nsymbol: S\nnonce: ${"n".repeat(16)}\nissuedAt: 1`);
+    // L-3: what app/src/chain/launchAuth.ts signs now
+    expect(launchAuthMessage({ domain: "fumpad.app", cluster: "mainnet", creator: "C", symbol: "S", nonce: "n".repeat(16), issuedAt: 1 })).toBe(
+      `FUMPAD launch\ndomain: fumpad.app\ncluster: mainnet\ncreator: C\nsymbol: S\nnonce: ${"n".repeat(16)}\nissuedAt: 1`,
+    );
+  });
+
+  it("the app's message builder emits the same seven lines (app/src/chain/launchAuth.ts)", () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../app/src/chain/launchAuth.ts"), "utf8");
+    expect(src).toContain("[LAUNCH_AUTH_HEADER, `domain: ${a.domain}`, `cluster: ${a.cluster}`, `creator: ${a.creator}`, `symbol: ${a.symbol}`, `nonce: ${a.nonce}`, `issuedAt: ${a.issuedAt}`]");
   });
 });
