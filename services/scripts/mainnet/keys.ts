@@ -41,6 +41,8 @@ export interface PartyConfig {
 }
 
 export interface MainnetConfig {
+  /** Explicitly accept admin = guardian = one wallet (no multisig). */
+  singleWalletGovernance?: boolean;
   /** hot key that pays everything and is the initial upgrade authority + admin + guardian until the handover */
   deployerKeypair: string;
   admin: PartyConfig;
@@ -97,7 +99,10 @@ export function loadConfig(path: string): { cfg: MainnetConfig; dir: string; rel
   }
   pk("treasury", cfg.treasury);
   if (!cfg.deployerKeypair) problems.push("deployerKeypair missing");
-  if (cfg.admin && cfg.guardian && cfg.admin.address === cfg.guardian.address) problems.push("admin and guardian must differ");
+  // One wallet as admin AND guardian is allowed only as an explicit, documented choice (user decision 2026-10-18):
+  // the program accepts it, but the guardian's veto over admin rotation then protects nothing.
+  if (cfg.admin && cfg.guardian && cfg.admin.address === cfg.guardian.address && cfg.singleWalletGovernance !== true)
+    problems.push("admin and guardian must differ (set \"singleWalletGovernance\": true to accept one wallet for both)");
   if (problems.length) throw new Error(`config ${file}: ${problems.join("; ")}`);
   return { cfg, dir, rel };
 }
