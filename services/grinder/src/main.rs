@@ -13,12 +13,19 @@
 //!   --bench SECS     measure keys/sec on this machine (no DB, nothing stored)
 //! Options: --suffix S (VANITY_SUFFIX, default fmbL) --threads T (GRINDER_THREADS,
 //! default = cores) --target N (POOL_TARGET, default 200).
-//! Env: DATABASE_URL, MINT_POOL_KEY, POOL_POLL_SECS (30), DATABASE_SSL (L-4):
+//! Env: DATABASE_URL, MINT_POOL_KEY, POOL_POLL_SECS (30), DATABASE_SSL (L-4, S-10). A server certificate is never
+//! accepted unverified:
+//!   auto         (default) private-network host (localhost, 127.0.0.0/8, ::1, *.railway.internal — Railway's private
+//!                network is WireGuard-encrypted) → `verify-full` if a CA is pinned, else plaintext; any other host →
+//!                `verify-ca` if a CA is pinned, else `verify-full` against the system roots
 //!   disable      plaintext (only for a trusted private network / local dev)
-//!   prefer       (default) TLS when the server offers it, certificate not verified
-//!   require      TLS mandatory, certificate not verified (self-signed, e.g. Railway Postgres)
-//!   verify-full  TLS mandatory, certificate chain + hostname verified (DATABASE_SSL_ROOT_CERT
-//!                = optional PEM CA bundle path)
+//!   verify-ca    TLS mandatory, chain verified against the PINNED CA only (DATABASE_SSL_ROOT_CERT = PEM path, or
+//!                DATABASE_SSL_ROOT_CERT_PEM = the PEM itself); the hostname is not checked. For Railway Postgres
+//!                through its public TCP proxy: the server cert is issued by a per-database CA
+//!                (`/var/lib/postgresql/data/certs/root.crt`, CN=root-ca) with SAN localhost (+ the private domain on
+//!                current templates), never the `*.proxy.rlwy.net` name — so pin root.crt and use verify-ca.
+//!   verify-full  TLS mandatory, chain + hostname verified (pinned CA if set, else the system roots)
+//!   require      legacy: = verify-ca (a pinned CA is then required);  prefer  legacy: = auto
 //! Run the grinder under its own Postgres role limited to `vanity_mints` (see README).
 
 mod crypto;
@@ -181,30 +188,102 @@ impl Pool {
     }
 }
 
-/// Postgres connection honouring DATABASE_SSL (see the module docs).
-fn connect_db(url: &str) -> Result<Client, String> {
-    let mode = env::var("DATABASE_SSL").unwrap_or_else(|_| "prefer".into());
-    let mut cfg: postgres::Config = url.parse().map_err(|e| format!("DATABASE_URL: {e}"))?;
-    let mut tls = TlsConnector::builder();
-    match mode.as_str() {
-        "disable" => {
-            cfg.ssl_mode(SslMode::Disable);
-        }
-        "prefer" | "require" => {
-            cfg.ssl_mode(if mode == "require" { SslMode::Require } else { SslMode::Prefer });
-            tls.danger_accept_invalid_certs(true).danger_accept_invalid_hostnames(true);
-        }
-        "verify-full" => {
-            cfg.ssl_mode(SslMode::Require);
-            if let Ok(path) = env::var("DATABASE_SSL_ROOT_CERT") {
-                let pem = std::fs::read(&path).map_err(|e| format!("DATABASE_SSL_ROOT_CERT: {e}"))?;
-                tls.add_root_certificate(Certificate::from_pem(&pem).map_err(|e| format!("DATABASE_SSL_ROOT_CERT: {e}"))?);
+/// TLS policy actually applied (see the module docs).
+#[derive(Debug, PartialEq, Eq)]
+enum Tls {
+    Disable,
+    /// Chain verified against the pinned CA only; hostname not checked.
+    VerifyCa,
+    /// Chain + hostname verified (pinned CA if any, else the system roots).
+    VerifyFull,
+}
+
+/// A host on a trusted private network: loopback, or Railway's (WireGuard-encrypted) private network.
+fn private_host(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    h == "localhost" || h == "::1" || h.starts_with("127.") || h.ends_with(".railway.internal") || h.starts_with('/')
+}
+
+/// S-10: DATABASE_SSL + host + whether a CA is pinned → the policy (never "TLS without verification").
+fn tls_policy(mode: &str, host: &str, pinned: bool) -> Result<Tls, String> {
+    match mode {
+        "disable" => Ok(Tls::Disable),
+        "verify-full" => Ok(Tls::VerifyFull),
+        "verify-ca" | "require" => {
+            if pinned {
+                Ok(Tls::VerifyCa)
+            } else {
+                Err(format!(
+                    "DATABASE_SSL={mode} needs the server's CA pinned: DATABASE_SSL_ROOT_CERT (PEM path) or DATABASE_SSL_ROOT_CERT_PEM \
+                     (Railway Postgres: /var/lib/postgresql/data/certs/root.crt of the database service)"
+                ))
             }
         }
-        other => return Err(format!("DATABASE_SSL must be disable|prefer|require|verify-full, got {other}")),
+        "auto" | "prefer" => Ok(match (private_host(host), pinned) {
+            (true, true) => Tls::VerifyFull,
+            (true, false) => Tls::Disable,
+            (false, true) => Tls::VerifyCa,
+            (false, false) => Tls::VerifyFull,
+        }),
+        other => Err(format!("DATABASE_SSL must be auto|disable|verify-ca|verify-full (legacy: prefer, require), got {other}")),
+    }
+}
+
+/// The pinned CA PEM, from DATABASE_SSL_ROOT_CERT_PEM (inline) or DATABASE_SSL_ROOT_CERT (path).
+fn pinned_ca() -> Result<Option<Vec<u8>>, String> {
+    if let Ok(pem) = env::var("DATABASE_SSL_ROOT_CERT_PEM") {
+        if !pem.trim().is_empty() {
+            return Ok(Some(pem.replace("\\n", "\n").into_bytes()));
+        }
+    }
+    match env::var("DATABASE_SSL_ROOT_CERT") {
+        Ok(path) if !path.trim().is_empty() => std::fs::read(&path).map(Some).map_err(|e| format!("DATABASE_SSL_ROOT_CERT: {e}")),
+        _ => Ok(None),
+    }
+}
+
+/// Postgres connection honouring DATABASE_SSL (see the module docs).
+fn connect_db(url: &str) -> Result<Client, String> {
+    let mode = env::var("DATABASE_SSL").unwrap_or_else(|_| "auto".into());
+    let mut cfg: postgres::Config = url.parse().map_err(|e| format!("DATABASE_URL: {e}"))?;
+    let host = match cfg.get_hosts().first() {
+        Some(postgres::config::Host::Tcp(h)) => h.clone(),
+        #[cfg(unix)]
+        Some(postgres::config::Host::Unix(p)) => p.to_string_lossy().into_owned(),
+        None => "localhost".into(),
+    };
+    let ca = pinned_ca()?;
+    let policy = tls_policy(mode.as_str(), &host, ca.is_some())?;
+    log(&format!("database TLS: {policy:?} (DATABASE_SSL={mode}, pinned CA: {})", ca.is_some()));
+    let mut tls = TlsConnector::builder();
+    if let Some(pem) = &ca {
+        tls.add_root_certificate(Certificate::from_pem(pem).map_err(|e| format!("pinned CA: {e}"))?);
+    }
+    match policy {
+        Tls::Disable => {
+            cfg.ssl_mode(SslMode::Disable);
+        }
+        Tls::VerifyCa => {
+            cfg.ssl_mode(SslMode::Require);
+            // Only the pinned CA is trusted; the chain is still fully verified. Hostname unchecked: Railway's
+            // per-database certificate never names the public proxy host.
+            tls.disable_built_in_roots(true).danger_accept_invalid_hostnames(true);
+        }
+        Tls::VerifyFull => {
+            cfg.ssl_mode(SslMode::Require);
+        }
     }
     let connector = MakeTlsConnector::new(tls.build().map_err(|e| format!("tls: {e}"))?);
-    cfg.connect(connector).map_err(|e| format!("postgres connect: {e}"))
+    cfg.connect(connector).map_err(|e| {
+        // the TLS cause (e.g. "certificate verify failed") is in the source chain, not the top-level message
+        let mut msg = format!("postgres connect: {e}");
+        let mut src = std::error::Error::source(&e);
+        while let Some(s) = src {
+            msg.push_str(&format!(": {s}"));
+            src = s.source();
+        }
+        msg
+    })
 }
 
 struct Opts {
@@ -331,5 +410,38 @@ fn main() {
     if let Err(e) = run() {
         log(&format!("fatal: {e}"));
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::{private_host, tls_policy, Tls};
+
+    #[test]
+    fn never_unverified_tls() {
+        // public host (e.g. Railway's TCP proxy): pinned CA → verify-ca, else verify-full on the system roots
+        assert_eq!(tls_policy("auto", "x.proxy.rlwy.net", true), Ok(Tls::VerifyCa));
+        assert_eq!(tls_policy("auto", "x.proxy.rlwy.net", false), Ok(Tls::VerifyFull));
+        // private network: plaintext (WireGuard) unless a CA is pinned
+        assert_eq!(tls_policy("auto", "postgres.railway.internal", false), Ok(Tls::Disable));
+        assert_eq!(tls_policy("auto", "postgres.railway.internal", true), Ok(Tls::VerifyFull));
+        assert_eq!(tls_policy("prefer", "127.0.0.1", false), Ok(Tls::Disable));
+        // legacy require = verify-ca and needs a pinned CA
+        assert!(tls_policy("require", "x.proxy.rlwy.net", false).is_err());
+        assert_eq!(tls_policy("require", "x.proxy.rlwy.net", true), Ok(Tls::VerifyCa));
+        assert!(tls_policy("verify-ca", "h", false).is_err());
+        assert_eq!(tls_policy("verify-full", "h", false), Ok(Tls::VerifyFull));
+        assert_eq!(tls_policy("disable", "h", false), Ok(Tls::Disable));
+        assert!(tls_policy("allow", "h", false).is_err());
+    }
+
+    #[test]
+    fn private_hosts() {
+        for h in ["localhost", "127.0.0.1", "::1", "[::1]", "postgres.railway.internal", "/tmp/pg"] {
+            assert!(private_host(h), "{h}");
+        }
+        for h in ["roundhouse.proxy.rlwy.net", "db.example.com", "10.0.0.1"] {
+            assert!(!private_host(h), "{h}");
+        }
     }
 }
