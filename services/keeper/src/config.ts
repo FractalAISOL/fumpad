@@ -110,17 +110,20 @@ export function loadKeypair(env = process.env): Keypair {
  * Known public (unauthenticated, shared) Solana RPC hosts. Sending through them exposes keeper transactions to
  * anyone watching those nodes, and they rate-limit / drop sends under load.
  */
-const PUBLIC_RPC_HOSTS = [/^api\.(mainnet-beta|devnet|testnet)\.solana\.com$/, /(^|\.)publicnode\.com$/, /^solana\.public-rpc\.com$/, /^rpc\.ankr\.com$/, /^solana-api\.projectserum\.com$/];
+const PUBLIC_RPC_HOSTS = [/^api\.(mainnet-beta|devnet|testnet)\.solana\.com$/, /(^|\.)publicnode\.com$/, /^solana\.public-rpc\.com$/, /^solana-api\.projectserum\.com$/];
+/** Ankr serves its public endpoint and its paid (keyed) endpoints from the same host: public = no key segment. */
+const isAnkrPublic = (u: URL) => u.hostname.toLowerCase() === "rpc.ankr.com" && u.pathname.split("/").filter(Boolean).length < 2;
 
 /** Why `url` is a public RPC endpoint, or null (a keyed provider URL, a private host, or a local validator). */
 export function publicRpcProblem(url: string): string | null {
-  let host: string;
+  let u: URL;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    u = new URL(url);
   } catch {
     return "is not a valid URL";
   }
-  return PUBLIC_RPC_HOSTS.some((r) => r.test(host)) ? `is a public endpoint (${host})` : null;
+  const host = u.hostname.toLowerCase();
+  return PUBLIC_RPC_HOSTS.some((r) => r.test(host)) || isAnkrPublic(u) ? `is a public endpoint (${host})` : null;
 }
 
 const n = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));

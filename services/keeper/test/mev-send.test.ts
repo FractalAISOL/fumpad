@@ -17,6 +17,8 @@ describe("ONC-4 / L-9: sends never go through a public RPC", () => {
   it("recognizes the public cluster endpoints, not keyed providers or a local validator", () => {
     expect(publicRpcProblem("https://api.mainnet-beta.solana.com")).toMatch(/public/);
     expect(publicRpcProblem("https://api.devnet.solana.com/")).toMatch(/public/);
+    expect(publicRpcProblem("https://rpc.ankr.com/solana")).toMatch(/public/);
+    expect(publicRpcProblem("https://rpc.ankr.com/solana/0123456789abcdef0123456789abcdef")).toBeNull();
     expect(publicRpcProblem("https://solana-rpc.publicnode.com")).toMatch(/public/);
     expect(publicRpcProblem("https://mainnet.helius-rpc.com/?api-key=x")).toBeNull();
     expect(publicRpcProblem("http://127.0.0.1:8899")).toBeNull();
