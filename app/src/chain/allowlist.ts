@@ -31,8 +31,17 @@
  * (`launchAltProblems`: nobody can change what an index points at). The message's keys are resolved through it, then
  * every check below runs on the resolved accounts exactly as for an inline launch. Signers are always static keys.
  *
+ * Account flags (APP-9): every account the message lists must be used by one of its instructions (and only once), its
+ * signer flag must be exactly what those instructions need, and it may be writable only if one of them writes it — the
+ * union of the SDK-rebuilt metas, or the fixed metas of the ATA / System / Token instructions below; program ids
+ * read-only, the fee payer a writable signer. A message that marks an extra account writable or a signer, or lists one
+ * nobody uses, refuses. (A writable account demoted to read-only is let through: it can only make the tx fail.)
+ *
  * The withdraw flow (Trading wallet → an address) is the one plain System transfer we sign, and
  * it has its own exact pattern (`vetWithdrawTx`), only after the user confirmed it on screen.
+ *
+ * The wallet bridge (`components/wallet/PrivyIsland.tsx` via `./silentGuard.ts`) runs these checks again on the exact
+ * bytes it hands Privy for EVERY silent signature (APP-1), so a caller that skips them can't get a silent signature.
  *
  * No React, no `@/` imports: unit-tested by `allowlist.test.ts` with `npm test`.
  */
@@ -183,6 +192,46 @@ interface Ix {
 }
 
 /**
+ * APP-9: the signer / writable flags each account needs, as the union over the vetted instructions (filled while one
+ * `vetFumpadTx` / `vetWithdrawTx` runs; both are synchronous, so one collector at a time).
+ */
+type Flags = Map<string, { s: boolean; w: boolean }>;
+let wanted: Flags | null = null;
+type Meta = { pubkey: PublicKey; isSigner: boolean; isWritable: boolean };
+function need(metas: readonly Meta[]): void {
+  if (!wanted) return;
+  for (const m of metas) {
+    const k = m.pubkey.toBase58();
+    const f = wanted.get(k);
+    wanted.set(k, { s: (f?.s ?? false) || m.isSigner, w: (f?.w ?? false) || m.isWritable });
+  }
+}
+const ro = (pubkey: PublicKey): Meta => ({ pubkey, isSigner: false, isWritable: false });
+const rw = (pubkey: PublicKey): Meta => ({ pubkey, isSigner: false, isWritable: true });
+const payerMeta = (pubkey: PublicKey): Meta => ({ pubkey, isSigner: true, isWritable: true });
+
+/** Run `fn` collecting the flags the vetted instructions need, then compare them with the message's, account by account. */
+function withFlagCheck<T>(tx: VersionedTransaction, fn: () => { keys: PublicKey[]; result: T }): T {
+  const prev = wanted;
+  wanted = new Map();
+  try {
+    const { keys, result } = fn();
+    const m = tx.message;
+    keys.forEach((k, i) => {
+      const f = wanted!.get(k.toBase58());
+      if (!f) refuse("it lists an account none of its instructions use");
+      if (m.isAccountSigner(i) !== f!.s) refuse("an account's signer flag doesn't match what its instructions need");
+      // Writable: never more than the instructions need. Less can only make the transaction fail on chain (e.g. the
+      // captured launch fixture, from before register_coin's `global` became mut), never move anything.
+      if (m.isAccountWritable(i) && !f!.w) refuse("it marks an account writable that none of its instructions writes");
+    });
+    return result;
+  } finally {
+    wanted = prev;
+  }
+}
+
+/**
  * The launch table's addresses, in message order (writable lookups, then read-only), after checking it is the one
  * configured launch table, verified (`launchAltProblems`: exact contents, frozen, active) and that every index exists.
  */
@@ -205,7 +254,7 @@ function open(
   wallet: PublicKey,
   coSigners: string[],
   alt: { allowed: boolean; table?: AddressLookupTableAccount; configured?: string } = { allowed: false },
-): { ixs: Ix[]; isSigner: (k: PublicKey) => boolean } {
+): { ixs: Ix[]; keys: PublicKey[]; isSigner: (k: PublicKey) => boolean } {
   const m = tx.message;
   const lookups = "addressTableLookups" in m ? m.addressTableLookups : [];
   if (lookups.length && !alt.allowed) refuse("it uses address lookup tables");
@@ -213,6 +262,8 @@ function open(
   // Signers are static keys only (the runtime never takes a signer from a table); `n` below indexes `statics`.
   const keys = lookups.length ? [...statics, ...launchTableKeys(lookups, alt.table, alt.configured)] : statics;
   if (!statics.length || !statics[0].equals(wallet)) refuse("your wallet isn't the fee payer");
+  if (new Set(keys.map((k) => k.toBase58())).size !== keys.length) refuse("it lists an account twice");
+  need([payerMeta(wallet)]);
   const n = m.header.numRequiredSignatures;
   if (n > statics.length) refuse("it asks for unexpected signers");
   const signers = statics.slice(0, n);
@@ -230,9 +281,10 @@ function open(
   }
   const ixs = m.compiledInstructions.map((c) => {
     if (c.programIdIndex >= keys.length || c.accountKeyIndexes.some((i) => i >= keys.length)) refuse("it references accounts it doesn't list");
+    need([ro(keys[c.programIdIndex])]);
     return { program: keys[c.programIdIndex], keys: c.accountKeyIndexes.map((i) => keys[i]), data: c.data };
   });
-  return { ixs, isSigner: (k) => signers.some((s) => s.equals(k)) };
+  return { ixs, keys, isSigner: (k) => signers.some((s) => s.equals(k)) };
 }
 
 /** ComputeBudget: one limit and one price at most, and a capped total priority fee. */
@@ -266,7 +318,9 @@ const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.e
  * free account the program checks on chain): same program, same accounts in order, same data.
  */
 function isExactly(ix: Ix, want: TransactionInstruction): boolean {
-  return ix.program.equals(want.programId) && sameKeys(ix.keys, want.keys.map((m) => m.pubkey)) && sameBytes(ix.data, want.data);
+  const ok = ix.program.equals(want.programId) && sameKeys(ix.keys, want.keys.map((m) => m.pubkey)) && sameBytes(ix.data, want.data);
+  if (ok) need(want.keys); // APP-9: and the flags the SDK's instruction asks for
+  return ok;
 }
 /** Rebuild with the SDK; arguments decoded from a tampered instruction may make the builder throw. */
 function rebuilt(build: () => TransactionInstruction): TransactionInstruction | null {
@@ -295,6 +349,7 @@ function vetAtaCreate(ix: Ix, wallet: PublicKey, mint: PublicKey, allowWsol: boo
   if (!coin && !wsol) refuse("it creates a token account for another token");
   const [expected] = PublicKey.findProgramAddressSync([owner.toBuffer(), tokenProgram.toBuffer(), ataMint.toBuffer()], ATA_PROGRAM_ID);
   if (!account.equals(expected)) refuse("token account address doesn't match");
+  need([payerMeta(payer), rw(account), ro(owner), ro(ataMint), ro(system), ro(tokenProgram)]);
   return wsol;
 }
 
@@ -303,15 +358,21 @@ function vetWrapTransfer(ix: Ix, wallet: PublicKey): bigint {
   if (ix.data.length !== 12 || u32(ix.data, 0) !== 2) refuse("unexpected System instruction");
   if (ix.keys.length !== 2 || !ix.keys[0].equals(wallet) || !ix.keys[1].equals(wsolAta(wallet)))
     refuse("it moves SOL somewhere other than your own WSOL account");
+  need([payerMeta(wallet), rw(ix.keys[1])]);
   return u64(ix.data, 4);
 }
 
 /** SPL Token: only SyncNative / CloseAccount on the wallet's own WSOL account (SOL back to the wallet). */
 function vetTokenIx(ix: Ix, wallet: PublicKey, allowSync: boolean): "sync" | "close" {
   const acct = wsolAta(wallet);
-  if (allowSync && ix.data.length === 1 && ix.data[0] === 17 && ix.keys.length === 1 && ix.keys[0].equals(acct)) return "sync";
-  if (ix.data.length === 1 && ix.data[0] === 9 && ix.keys.length === 3 && ix.keys[0].equals(acct) && ix.keys[1].equals(wallet) && ix.keys[2].equals(wallet))
+  if (allowSync && ix.data.length === 1 && ix.data[0] === 17 && ix.keys.length === 1 && ix.keys[0].equals(acct)) {
+    need([rw(acct)]);
+    return "sync";
+  }
+  if (ix.data.length === 1 && ix.data[0] === 9 && ix.keys.length === 3 && ix.keys[0].equals(acct) && ix.keys[1].equals(wallet) && ix.keys[2].equals(wallet)) {
+    need([rw(acct), payerMeta(wallet)]);
     return "close";
+  }
   return refuse("unexpected token instruction");
 }
 
@@ -456,6 +517,10 @@ function vetUserIx(ix: Ix, main: "claim" | "set_auto_claim" | "withdraw_creator_
  * (NEXT_PUBLIC_LAUNCH_ALT; a parameter for the tests only).
  */
 export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy: SilentPolicy, launchAlt: string | undefined = LAUNCH_ALT_ADDRESS): { solInLamports: bigint; launch?: LaunchShape } {
+  return withFlagCheck(tx, () => vetFumpadInner(tx, wallet, policy, launchAlt));
+}
+
+function vetFumpadInner(tx: VersionedTransaction, wallet: PublicKey, policy: SilentPolicy, launchAlt: string | undefined): { keys: PublicKey[]; result: { solInLamports: bigint; launch?: LaunchShape } } {
   if (!FUMPAD_PROGRAM_ID.equals(PROGRAM)) refuse("the app and its SDK disagree on the FUMPAD program");
   const action = policy.action;
   if (!(action in ACTION_IX)) refuse("unknown action");
@@ -489,7 +554,7 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
   }
   // Co-signers: the reserved mint and, when configured, the launch signer; each signature verified (L-7).
   if (policy.lookupTable && action !== "launch") refuse("only a launch may use a lookup table");
-  const { ixs, isSigner } = open(tx, wallet, [...(policy.coSigner ? [policy.coSigner] : []), ...(launchSigner ? [launchSigner.toBase58()] : [])], {
+  const { ixs, keys, isSigner } = open(tx, wallet, [...(policy.coSigner ? [policy.coSigner] : []), ...(launchSigner ? [launchSigner.toBase58()] : [])], {
     allowed: action === "launch",
     table: policy.lookupTable,
     configured: launchAlt,
@@ -548,7 +613,7 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
   if (wrapped > BigInt(0) && buys === BigInt(0)) refuse("it wraps SOL without a buy");
   const solIn = buys > wrapped ? buys : wrapped;
   if (policy.maxSolInLamports !== undefined && solIn > policy.maxSolInLamports) refuse("it spends more SOL than you entered");
-  return { solInLamports: solIn, launch: init ? { ...init, firstBuy } : undefined };
+  return { keys, result: { solInLamports: solIn, launch: init ? { ...init, firstBuy } : undefined } };
 }
 
 /**
@@ -556,12 +621,16 @@ export function vetFumpadTx(tx: VersionedTransaction, wallet: PublicKey, policy:
  * `lamports` from `wallet` to `destination`. Nothing else.
  */
 export function vetWithdrawTx(tx: VersionedTransaction, wallet: PublicKey, destination: PublicKey, lamports: bigint): void {
-  const { ixs } = open(tx, wallet, []);
-  const rest = vetComputeBudget(ixs);
-  if (rest.length !== 1) refuse("a withdrawal is a single transfer");
-  const [ix] = rest;
-  if (!ix.program.equals(SystemProgram.programId)) refuse("a withdrawal is a System transfer");
-  if (ix.data.length !== 12 || u32(ix.data, 0) !== 2) refuse("a withdrawal is a plain transfer");
-  if (ix.keys.length !== 2 || !ix.keys[0].equals(wallet) || !ix.keys[1].equals(destination)) refuse("the destination doesn't match");
-  if (u64(ix.data, 4) !== lamports) refuse("the amount doesn't match");
+  withFlagCheck(tx, () => {
+    const { ixs, keys } = open(tx, wallet, []);
+    const rest = vetComputeBudget(ixs);
+    if (rest.length !== 1) refuse("a withdrawal is a single transfer");
+    const [ix] = rest;
+    if (!ix.program.equals(SystemProgram.programId)) refuse("a withdrawal is a System transfer");
+    if (ix.data.length !== 12 || u32(ix.data, 0) !== 2) refuse("a withdrawal is a plain transfer");
+    if (ix.keys.length !== 2 || !ix.keys[0].equals(wallet) || !ix.keys[1].equals(destination)) refuse("the destination doesn't match");
+    if (u64(ix.data, 4) !== lamports) refuse("the amount doesn't match");
+    need([payerMeta(wallet), rw(destination)]);
+    return { keys, result: undefined };
+  });
 }

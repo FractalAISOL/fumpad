@@ -56,37 +56,30 @@ import { INTERVAL_ITEMS, useCandles } from "./useCandles";
 import { coinFeeView } from "@/data/fees";
 import { hasLookalikeChars } from "./ident";
 import { MintTag } from "./MintTag";
+import { EXTERNAL_LINK_REL, safeSocialHref, type SocialKind } from "@/design/socialLinks";
 
 
 type CoinLink = { href: string; label: string; icon: typeof IconX };
 
-/** Only http(s) links from creator metadata are ever rendered. */
-function safeHref(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  try {
-    const u = new URL(raw.trim());
-    return u.protocol === "https:" || u.protocol === "http:" ? u.href : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** The coin's X / Telegram / website from its metadata socials, else its labelled links; deduplicated. */
+/**
+ * The coin's X / Telegram / website from its metadata socials, else its labelled links; deduplicated. APP-7: only
+ * https links, X / Telegram only on their own hosts (`@/design/socialLinks`), whatever the API sent.
+ */
 function coinLinks(coin: CoinDetail): CoinLink[] {
   const out: CoinLink[] = [];
-  const add = (raw: string | undefined, label: string, icon: CoinLink["icon"]) => {
-    const href = safeHref(raw);
+  const add = (kind: SocialKind, raw: string | undefined, label: string, icon: CoinLink["icon"]) => {
+    const href = safeSocialHref(kind, raw);
     if (href && !out.some((l) => l.href === href)) out.push({ href, label, icon });
   };
   const so = coin.socials;
-  add(so?.x, "X", IconX);
-  add(so?.telegram, "Telegram", IconTelegram);
-  if (so?.website) add(so.website, hostOf(so.website), IconGlobe);
+  add("x", so?.x, "X", IconX);
+  add("telegram", so?.telegram, "Telegram", IconTelegram);
+  if (so?.website) add("website", so.website, hostOf(so.website), IconGlobe);
   for (const l of coin.links ?? []) {
-    const k = l.label.toLowerCase();
-    if (k === "x" || k === "twitter") add(l.href, "X", IconX);
-    else if (k === "telegram") add(l.href, "Telegram", IconTelegram);
-    else add(l.href, l.label || hostOf(l.href), IconGlobe);
+    const k = String(l.label ?? "").toLowerCase();
+    if (k === "x" || k === "twitter") add("x", l.href, "X", IconX);
+    else if (k === "telegram") add("telegram", l.href, "Telegram", IconTelegram);
+    else add("website", l.href, l.label || hostOf(l.href), IconGlobe);
   }
   return out;
 }
@@ -489,7 +482,7 @@ export function CoinView({
                 <ul className={s.links} aria-label={`${coin.symbol} links`}>
                   {links.map((l) => (
                     <li key={l.href}>
-                      <a href={l.href} target="_blank" rel="noopener noreferrer nofollow">
+                      <a href={l.href} target="_blank" rel={EXTERNAL_LINK_REL}>
                         <l.icon width={14} height={14} aria-hidden="true" />
                         <span>{l.label}</span>
                       </a>

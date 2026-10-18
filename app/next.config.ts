@@ -1,9 +1,22 @@
 import type { NextConfig } from "next";
+import { resolveDeployment } from "./src/chain/cluster";
+import { privyBuildProblem } from "./src/components/wallet/privyConfig";
 import { securityHeaders } from "./src/security/headers";
 import { rpcWarnings } from "./src/security/rpc";
 
 // M-8: NEXT_PUBLIC_SOLANA_RPC ships to every browser (LAUNCH.md → "Frontend RPC key").
 for (const w of rpcWarnings(process.env)) console.warn(`[fumpad] warning: ${w}`);
+
+// Fail the build, not the users: APP-4 (a mainnet build without NEXT_PUBLIC_FUMPAD_PROGRAM_ID never falls back to the
+// devnet program; src/chain/cluster.ts throws too) and APP-10 (a live production build needs NEXT_PUBLIC_PRIVY_APP_ID).
+resolveDeployment({
+  rpc: process.env.NEXT_PUBLIC_SOLANA_RPC,
+  programId: process.env.NEXT_PUBLIC_FUMPAD_PROGRAM_ID,
+  cluster: process.env.NEXT_PUBLIC_FUMPAD_CLUSTER,
+  live: !!process.env.NEXT_PUBLIC_FUMPAD_API,
+});
+const privyProblem = privyBuildProblem(process.env);
+if (privyProblem) throw new Error(`[fumpad] ${privyProblem}`);
 
 const nextConfig: NextConfig = {
   // The FUMPAD deployment (src/chain/cluster.ts): @fumpad/sdk reads `process.env.FUMPAD_PROGRAM_ID` /

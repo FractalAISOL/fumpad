@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { decide } from "./prelaunch/gate";
+import { decide, redirectLocation } from "./prelaunch/gate";
 
 /**
  * Pre-launch gate (see `prelaunch/gate.ts` and `LAUNCH.md`): on fumpad.app / www.fumpad.app the
@@ -7,21 +7,20 @@ import { decide } from "./prelaunch/gate";
  * every other host serves the app unchanged.
  */
 export function proxy(req: NextRequest) {
-  const d = decide(req.headers.get("host"), req.nextUrl.pathname, {
-    PRELAUNCH_HOSTS: process.env.PRELAUNCH_HOSTS,
-    NEXT_PUBLIC_PRELAUNCH: process.env.NEXT_PUBLIC_PRELAUNCH,
-  });
+  const env = { PRELAUNCH_HOSTS: process.env.PRELAUNCH_HOSTS, NEXT_PUBLIC_PRELAUNCH: process.env.NEXT_PUBLIC_PRELAUNCH, NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL };
+  const host = req.headers.get("host");
+  const d = decide(host, req.nextUrl.pathname, env);
   if (d.action === "next") return NextResponse.next();
   const url = req.nextUrl.clone();
   url.pathname = d.pathname;
   if (d.action === "rewrite") return NextResponse.rewrite(url);
-  // Back to the host that was asked for (behind a proxy, nextUrl can carry an internal one).
-  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
-  const proto = req.headers.get("x-forwarded-proto") ?? req.nextUrl.protocol.replace(":", "");
-  const to = host ? new URL(d.pathname, `${proto}://${host}`) : url;
-  to.search = d.keepQuery ? req.nextUrl.search : "";
-  // 307: temporary, so browsers and crawlers don't remember it past launch.
-  return NextResponse.redirect(to, 307);
+  // APP-5: back to the gated host that was asked for, over https, built from the allow-listed host list (and
+  // NEXT_PUBLIC_SITE_URL), never from x-forwarded-host / x-forwarded-proto. 307: temporary, so browsers and crawlers
+  // don't remember it past launch.
+  const search = d.keepQuery ? req.nextUrl.search : "";
+  const to = redirectLocation(host, d.pathname, search, env);
+  if (to) return NextResponse.redirect(to, 307);
+  return new NextResponse(null, { status: 307, headers: { Location: `${d.pathname}${search}` } });
 }
 
 export const config = {

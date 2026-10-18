@@ -6,6 +6,7 @@
 import type { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { type SilentPolicy, vetFumpadTx } from "./allowlist";
 import { vetLaunchAuthMessage } from "./launchAuth";
+import type { SignPolicy } from "./silentGuard";
 
 export type SignerKind = "embedded" | "external";
 
@@ -14,8 +15,11 @@ export interface FumpadSigner {
   kind: SignerKind;
   /** "Trading wallet", "Phantom", … */
   name: string;
-  /** `silent` hides the embedded wallet's prompt; external wallets prompt regardless. */
-  sign(tx: VersionedTransaction, opts: { silent: boolean }): Promise<VersionedTransaction>;
+  /**
+   * `silent` hides the embedded wallet's prompt; external wallets prompt regardless. `policy` travels to the wallet
+   * bridge, which re-checks the transaction against it before any silent signature (APP-1, `./silentGuard`).
+   */
+  sign(tx: VersionedTransaction, opts: { silent: boolean; policy?: SignPolicy }): Promise<VersionedTransaction>;
   /**
    * `signMessage` over raw bytes (ed25519 signature, 64 bytes). `silent` is honoured only for
    * a vetted FUMPAD launch message (`./launchAuth`); the wallet bridge re-checks it.
@@ -37,7 +41,7 @@ export function sameMessage(a: VersionedTransaction, b: VersionedTransaction): b
  */
 export async function signFumpadTx(signer: FumpadSigner, tx: VersionedTransaction, policy: SilentPolicy, instant: boolean): Promise<VersionedTransaction> {
   vetFumpadTx(tx, signer.publicKey, policy);
-  const signed = await signer.sign(tx, { silent: signer.kind === "embedded" && instant });
+  const signed = await signer.sign(tx, { silent: signer.kind === "embedded" && instant, policy: { kind: "fumpad", policy } });
   if (!sameMessage(tx, signed)) throw new Error("Your wallet changed the transaction, so it wasn't sent. Try again.");
   return signed;
 }

@@ -84,3 +84,24 @@ export function decide(host: string | null | undefined, pathname: string, env: G
   // Everything else is the app, which isn't open yet.
   return { action: "redirect", pathname: "/" };
 }
+
+/**
+ * APP-5 / L-8: where a gate redirect goes, built from configuration, never from `x-forwarded-host` / `-proto`. The
+ * host is the request's `Host`, which `decide` only redirects for when it is one of `PRELAUNCH_HOSTS` (an allow-list),
+ * and the scheme is always https (the gated hosts are the production domains; `NEXT_PUBLIC_SITE_URL`'s origin is used
+ * when it is that same host). Null when the host isn't gated (the caller then sends a relative `Location`).
+ */
+export function redirectLocation(host: string | null | undefined, pathname: string, search: string, env: GateEnv & { NEXT_PUBLIC_SITE_URL?: string }): string | null {
+  const h = (host ?? "").trim().toLowerCase().replace(/:\d+$/, "");
+  if (!h || !gatedHosts(env).has(h)) return null;
+  let origin = `https://${h}`;
+  try {
+    const site = env.NEXT_PUBLIC_SITE_URL ? new URL(env.NEXT_PUBLIC_SITE_URL) : null;
+    if (site && site.protocol === "https:" && site.hostname.toLowerCase() === h) origin = site.origin;
+  } catch {
+    /* a malformed site URL: the gated host over https */
+  }
+  const path = pathname.startsWith("/") && !pathname.startsWith("//") ? pathname : "/";
+  const q = search && search.startsWith("?") ? search : "";
+  return `${origin}${path}${q}`;
+}

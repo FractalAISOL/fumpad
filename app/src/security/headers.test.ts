@@ -54,6 +54,9 @@ describe("security headers", () => {
   it("locks scripts, frames, plugins and the base URL", () => {
     const csp = contentSecurityPolicy(prod);
     assert.deepEqual(directive(csp, "script-src"), ["'self'", "'unsafe-inline'", "https://challenges.cloudflare.com"]);
+    // Inline event-handler attributes are never allowed, even with 'unsafe-inline' for script elements.
+    assert.deepEqual(directive(csp, "script-src-attr"), ["'none'"]);
+    assert.deepEqual(directive(contentSecurityPolicy({ NODE_ENV: "development" }), "script-src-attr"), ["'none'"]);
     assert.deepEqual(directive(csp, "frame-src"), ["https://auth.privy.io", "https://challenges.cloudflare.com"]);
     assert.deepEqual(directive(csp, "frame-ancestors"), ["'none'"]);
     assert.deepEqual(directive(csp, "object-src"), ["'none'"]);

@@ -10,6 +10,7 @@ import {
   setPreferredSigner,
   useInstantSettings,
   useInstantSpentSol,
+  useInstantWindowEnd,
   useWallet,
   walletActions,
 } from "@/components/wallet/store";
@@ -37,6 +38,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
   const toast = useToast();
   const instant = useInstantSettings();
   const spentSol = useInstantSpentSol();
+  const windowEnd = useInstantWindowEnd();
   const [open, setOpen] = useState(false);
   const [sheet, setSheet] = useState<"deposit" | "withdraw" | "export" | null>(null);
   const active = w.active;
@@ -143,7 +145,7 @@ export function WalletButton({ compact }: { compact?: boolean }) {
         <p className={s.acctVia}>
           {isTrading
             ? instant.enabled
-              ? `Signs FUMPAD trades instantly, no popup. Above ${f.sol(instant.maxSol)} SOL a transaction, or ${f.sol(instant.sessionCapSol)} SOL this session, it asks first.`
+              ? `Instant trading is on: FUMPAD trades sign without a popup. Above ${f.sol(instant.maxSol)} SOL a transaction, or ${f.sol(instant.sessionCapSol)} SOL in 24 hours in this browser, it asks first.`
               : "Instant trading is off: Privy asks you to approve each transaction."
             : `${active.name} asks you to approve every transaction.`}
           {!isTrading && trading && tradingBal !== null && <> Trading wallet: {balText(tradingBal)}.</>}
@@ -188,9 +190,14 @@ export function WalletButton({ compact }: { compact?: boolean }) {
               <span className={s.limitUnit}>SOL</span>
             </label>
             <p className={s.fine}>
-              Spent instantly this session: <span className="num">{f.sol(spentSol)}</span> of {f.sol(instant.sessionCapSol)} SOL.
-              {spentSol >= instant.sessionCapSol ? " The cap is reached, so every transaction asks first until you close this tab." : ""}
+              Spent instantly in this browser (all tabs, last 24 hours): <span className="num">{f.sol(spentSol)}</span> of {f.sol(instant.sessionCapSol)} SOL.
+              {spentSol >= instant.sessionCapSol
+                ? ` The cap is reached, so every transaction asks first${windowEnd ? ` until ${new Date(windowEnd).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}.`
+                : ""}
             </p>
+            {!instant.enabled && (
+              <p className={s.fine}>Off by default. Turn it on to sign FUMPAD trades from the Trading wallet without a popup, within the limits above.</p>
+            )}
             <p className={s.fine}>
               Buys, sells, claims and launches from the Trading wallet sign without a popup, and only if they are FUMPAD transactions on the coin you&apos;re trading. The
               per-transaction limit counts the pool fee, network fees and first-time account rent. Withdrawals and key export always ask.

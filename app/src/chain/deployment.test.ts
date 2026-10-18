@@ -36,6 +36,20 @@ describe("resolveDeployment", () => {
     assert.throws(() => resolveDeployment({ rpc: MAINNET_RPC, programId: MAINNET_ID }), /set NEXT_PUBLIC_FUMPAD_CLUSTER/);
     assert.throws(() => resolveDeployment({ rpc: "https://api.devnet.solana.com", programId: MAINNET_ID, cluster: "mainnet" }), /looks like devnet/);
   });
+  it("APP-4: a mainnet build without a program id fails instead of falling back to the devnet program", () => {
+    // explicit mainnet, live or not
+    assert.throws(() => resolveDeployment({ rpc: MAINNET_RPC, cluster: "mainnet" }), /needs NEXT_PUBLIC_FUMPAD_PROGRAM_ID/);
+    assert.throws(() => resolveDeployment({ rpc: MAINNET_RPC, cluster: "mainnet", live: true }), /needs NEXT_PUBLIC_FUMPAD_PROGRAM_ID/);
+    // a live build on a mainnet RPC (or the default public mainnet RPC) with nothing configured
+    assert.throws(() => resolveDeployment({ rpc: MAINNET_RPC, live: true }), /needs NEXT_PUBLIC_FUMPAD_PROGRAM_ID/);
+    assert.throws(() => resolveDeployment({ live: true }), /needs NEXT_PUBLIC_FUMPAD_PROGRAM_ID/);
+    // still fine: devnet (inferred or explicit) and localnet on the default devnet id, a configured mainnet id, the mock (no API)
+    assert.equal(resolveDeployment({ rpc: "https://devnet.helius-rpc.com/?api-key=x", live: true }).program, DEVNET_PROGRAM_ADDRESS);
+    assert.equal(resolveDeployment({ rpc: "https://rpc.example.com", cluster: "devnet", live: true }).cluster, "devnet");
+    assert.equal(resolveDeployment({ rpc: "http://127.0.0.1:8899", cluster: "localnet", live: true }).cluster, "localnet");
+    assert.equal(resolveDeployment({ rpc: MAINNET_RPC, programId: MAINNET_ID, cluster: "mainnet", live: true }).program, MAINNET_ID);
+    assert.equal(resolveDeployment({ rpc: MAINNET_RPC }).program, DEVNET_PROGRAM_ADDRESS);
+  });
   it("this test run uses the default (no NEXT_PUBLIC_FUMPAD_PROGRAM_ID): app and SDK agree", () => {
     if (!process.env.NEXT_PUBLIC_FUMPAD_PROGRAM_ID) assert.equal(FUMPAD_PROGRAM_ADDRESS, DEVNET_PROGRAM_ADDRESS);
     assert.equal(FUMPAD_PROGRAM_ID.toBase58(), FUMPAD_PROGRAM_ADDRESS);

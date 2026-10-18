@@ -12,10 +12,10 @@
 import { PrivyProvider, type User, useLogin, useModalStatus, usePrivy, useToken } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors, useCreateWallet, useExportWallet, useSignMessage, useSignTransaction, useWallets } from "@privy-io/react-auth/solana";
 import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
-import { VersionedTransaction } from "@solana/web3.js";
 import { useEffect, useMemo, useRef } from "react";
 import { CLUSTER, RPC, RPC_WS, SOLANA_CHAIN } from "@/chain/connection";
 import { vetLaunchAuthMessage } from "@/chain/launchAuth";
+import { bridgeSignTransaction } from "@/chain/silentGuard";
 import { colorDark, colorLight } from "@/design/tokens";
 import { classifyLoginError, clearStalePrivyStorage, createSessionRecovery, isStaleSession, type LoginNotice } from "./loginErrors";
 import { PRIVY_APP_ID, registerWalletActions, setWalletSnapshot, showLoginNotice } from "./store";
@@ -209,17 +209,22 @@ function Bridge() {
         await latest.current.createWallet();
       },
       exportKey: (address) => latest.current.exportWallet({ address }),
-      async signTransaction(address, tx, { silent }) {
+      async signTransaction(address, tx, { silent, policy }) {
         const w = latest.current.wallets.find((x) => x.address === address);
         if (!w) throw new Error("That wallet isn't connected. Reconnect it from the wallet menu.");
-        const { signedTransaction } = await latest.current.signTransaction({
-          transaction: tx.serialize(),
-          wallet: w,
-          chain: SOLANA_CHAIN,
-          // Embedded wallet: no Privy window when silent. External wallets always show their own.
-          options: { uiOptions: { showWalletUIs: !silent } },
+        // APP-1: the last line of the transaction allow-list, here and not only in the callers. Every silent signature
+        // is re-checked on the exact bytes handed to Privy (`vetFumpadTx` / `vetWithdrawTx` under the caller's policy);
+        // a refused one is never signed, and a silent request without a policy shows Privy's approval window instead.
+        // External wallets always show their own window.
+        return bridgeSignTransaction({ address, tx, silent, policy }, async (bytes, showWalletUIs) => {
+          const { signedTransaction } = await latest.current.signTransaction({
+            transaction: bytes,
+            wallet: w,
+            chain: SOLANA_CHAIN,
+            options: { uiOptions: { showWalletUIs } },
+          });
+          return signedTransaction;
         });
-        return VersionedTransaction.deserialize(signedTransaction);
       },
       async signMessage(address, message, { silent }) {
         const w = latest.current.wallets.find((x) => x.address === address);
@@ -242,6 +247,12 @@ function Bridge() {
 }
 
 export default function PrivyIsland() {
+  // APP-10: no app id, no Privy (there is no fallback id; production builds fail without one).
+  if (!PRIVY_APP_ID) return null;
+  return <PrivyRoot appId={PRIVY_APP_ID} />;
+}
+
+function PrivyRoot({ appId }: { appId: string }) {
   const config = useMemo(() => {
     const dark =
       document.documentElement.getAttribute("data-theme") === "dark" ||
@@ -271,7 +282,7 @@ export default function PrivyIsland() {
     };
   }, []);
   return (
-    <PrivyProvider appId={PRIVY_APP_ID} config={config}>
+    <PrivyProvider appId={appId} config={config}>
       <Bridge />
     </PrivyProvider>
   );

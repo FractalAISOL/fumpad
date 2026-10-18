@@ -2,7 +2,8 @@
  * The cluster and FUMPAD deployment the app runs on. Build-time config (NEXT_PUBLIC_*, inlined by Next):
  *
  *   NEXT_PUBLIC_SOLANA_RPC          the RPC (mainnet-beta public RPC when unset)
- *   NEXT_PUBLIC_FUMPAD_PROGRAM_ID   the FUMPAD program (unset = the devnet deployment, DEVNET_PROGRAM_ADDRESS)
+ *   NEXT_PUBLIC_FUMPAD_PROGRAM_ID   the FUMPAD program (unset = the devnet deployment, DEVNET_PROGRAM_ADDRESS, but
+ *                                   only off mainnet: APP-4, a live mainnet build without it fails, see below)
  *   NEXT_PUBLIC_FUMPAD_CLUSTER      mainnet | devnet | localnet (unset = inferred from the RPC URL); REQUIRED with a
  *                                   non-default program id, so a mainnet build can't silently run as "devnet"
  *   NEXT_PUBLIC_LAUNCH_ALT          the FUMPAD launch address lookup table (bootstrap `--step alt`, = the API's
@@ -25,9 +26,12 @@ const BASE58_KEY = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 /**
  * Pure resolution of the build-time config (unit-tested). Throws on a malformed program id, an unknown cluster, a
- * non-default program id without an explicit cluster, or a mainnet cluster with a devnet/testnet RPC URL.
+ * non-default program id without an explicit cluster, a mainnet cluster with a devnet/testnet RPC URL, and (APP-4) a
+ * mainnet build without a program id: NEXT_PUBLIC_FUMPAD_CLUSTER=mainnet, or a live build (`live`: the API is
+ * configured, NEXT_PUBLIC_FUMPAD_API) whose RPC is mainnet, never falls back to the devnet program id. Only the mock
+ * build (no API: it signs nothing) may still run with nothing configured.
  */
-export function resolveDeployment(env: { rpc?: string; programId?: string; cluster?: string }): { program: string; cluster: Cluster; explicitCluster: boolean } {
+export function resolveDeployment(env: { rpc?: string; programId?: string; cluster?: string; live?: boolean }): { program: string; cluster: Cluster; explicitCluster: boolean } {
   const rpc = env.rpc || "https://api.mainnet-beta.solana.com";
   const id = (env.programId ?? "").trim();
   if (id && !BASE58_KEY.test(id)) throw new Error(`NEXT_PUBLIC_FUMPAD_PROGRAM_ID=${JSON.stringify(id)} is not a base58 public key`);
@@ -37,10 +41,22 @@ export function resolveDeployment(env: { rpc?: string; programId?: string; clust
   if (program !== DEVNET_PROGRAM_ADDRESS && !c) throw new Error("NEXT_PUBLIC_FUMPAD_PROGRAM_ID is set: set NEXT_PUBLIC_FUMPAD_CLUSTER too (mainnet | devnet | localnet)");
   const inferred: Cluster = /devnet/i.test(rpc) ? "devnet" : /testnet/i.test(rpc) ? "testnet" : "mainnet";
   if (c === "mainnet" && inferred !== "mainnet") throw new Error(`NEXT_PUBLIC_FUMPAD_CLUSTER=mainnet but NEXT_PUBLIC_SOLANA_RPC looks like ${inferred}`);
+  // APP-4: no silent devnet program on mainnet.
+  if (!id && (c === "mainnet" || (!c && env.live && inferred === "mainnet")))
+    throw new Error(
+      c === "mainnet"
+        ? "NEXT_PUBLIC_FUMPAD_CLUSTER=mainnet needs NEXT_PUBLIC_FUMPAD_PROGRAM_ID (no fallback to the devnet program)"
+        : "a live build (NEXT_PUBLIC_FUMPAD_API) on a mainnet RPC needs NEXT_PUBLIC_FUMPAD_PROGRAM_ID + NEXT_PUBLIC_FUMPAD_CLUSTER=mainnet (or NEXT_PUBLIC_FUMPAD_CLUSTER=devnet for the devnet deployment)",
+    );
   return { program, cluster: (c || inferred) as Cluster, explicitCluster: !!c };
 }
 
-const DEPLOYMENT = resolveDeployment({ rpc: RPC, programId: process.env.NEXT_PUBLIC_FUMPAD_PROGRAM_ID, cluster: process.env.NEXT_PUBLIC_FUMPAD_CLUSTER });
+const DEPLOYMENT = resolveDeployment({
+  rpc: RPC,
+  programId: process.env.NEXT_PUBLIC_FUMPAD_PROGRAM_ID,
+  cluster: process.env.NEXT_PUBLIC_FUMPAD_CLUSTER,
+  live: !!process.env.NEXT_PUBLIC_FUMPAD_API,
+});
 
 /** NEXT_PUBLIC_FUMPAD_CLUSTER, else inferred from the RPC URL (anything naming devnet/testnet is that cluster). */
 export const CLUSTER: Cluster = DEPLOYMENT.cluster;
