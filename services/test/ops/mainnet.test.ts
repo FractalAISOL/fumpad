@@ -98,8 +98,12 @@ describe("keys + config", () => {
     const d = mkdtempSync(join(tmpdir(), "fumpad-cfg-"));
     const pk = () => Keypair.generate().publicKey.toBase58();
     const same = pk();
-    writeFileSync(join(d, "c.json"), JSON.stringify({ deployerKeypair: "d.json", admin: { kind: "hardware", address: same }, guardian: { kind: "hardware", address: same }, treasury: "nope" }));
+    const ms = pk();
+    writeFileSync(join(d, "c.json"), JSON.stringify({ deployerKeypair: "d.json", admin: { kind: "squads", multisig: ms, address: same }, guardian: { kind: "squads", multisig: ms, address: same }, treasury: "nope" }));
     expect(() => loadConfig(join(d, "c.json"))).toThrow(/treasury: not a public key.*admin and guardian must differ/);
+    // single-wallet admin (user decision 2026-10-18): the same wallet-app wallet as admin AND guardian is allowed
+    writeFileSync(join(d, "c.json"), JSON.stringify({ deployerKeypair: "d.json", admin: { kind: "hardware", address: same }, guardian: { kind: "hardware", address: same }, treasury: pk() }));
+    expect(loadConfig(join(d, "c.json")).cfg.admin.address).toBe(same);
   });
 });
 

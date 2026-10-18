@@ -5,6 +5,34 @@ Tools: `scripts/ops/multisig.ts` (CLI + library, `@sqds/multisig` 2.1.4 = latest
 Global is unchanged. Every write simulates first and only sends with `--yes`; `--cluster` must match the RPC's genesis
 (a wrong env file can't hit the wrong cluster); RPC URLs are read from env files and never printed.
 
+## 0. Single-wallet admin (user decision 2026-10-18)
+
+**For the mainnet launch the admin and the guardian are ONE fresh wallet held only in the user's wallet app**
+(Phantom / Solflare / Backpack), not the Squads multisigs below. The program upgrade authority follows the admin (no
+`upgradeAuthority` in `bootstrap.json`). The rest of this file stays as the documented alternative (e.g. moving to
+Squads later: `propose_admin` to the vaults, signed by the wallet through the page with `--action ix-json`).
+
+- **The wallet**: newly created in the wallet app (own recovery phrase, offline backup), used for nothing but FUMPAD
+  admin; its key never touches the ops machine. `bootstrap.json`: `admin` and `guardian` both
+  `{ "kind": "hardware", "address": "<ADMIN_WALLET>" }` (the same address is accepted only when both are `hardware`).
+- **Fees**: the wallet pays its own transactions: keep **~0.02 SOL** on it (each action ≈ 0.00001 SOL).
+- **How it signs**: `scripts/mainnet/admin-sign.ts` prepares one action as a proposal file (no secrets; refused with
+  the reason if its simulation with the wallet as signer fails, e.g. the 6 h eta not reached), then
+  `scripts/mainnet/admin-sign-server.ts` serves a local page on `127.0.0.1` where the wallet connects (any other
+  address is refused) and signs; a fresh blockhash is taken at the click, the page simulates, the wallet asks for
+  approval, the page sends through a proxy that forwards only six read/send RPC methods and only that signed
+  transaction, and shows the signature until finalized. Actions: `accept-admin`, `set-pause` (`--bits 0` = the
+  harmless drill), `queue-config-remove` (the first-coin config; `execute_config` is permissionless and run by
+  `bootstrap --step remove-first-coin-config`), `cancel-admin`, and `ix-json` (any instruction the wallet alone signs).
+- **Upgrade authority**: `bootstrap --step upgrade-authority` with `kind: "hardware"` needs **no signature from the
+  wallet**: the deployer signs BPF loader `SetAuthority` (tag 4, the unchecked variant: keys = program data
+  (writable), current authority (signer), new authority (read-only), `scripts/ops/multisig.ts setUpgradeAuthorityIx`),
+  refused until `Global.admin` is the wallet; the target must be on-curve (`partyProblems`).
+- **Flow + exact commands**: LAUNCH-DAY.md §4a. Day 0 is shorter (no approvals to collect): `propose_admin` by the
+  deployer → 6 h → `accept-admin` on the page → upgrade authority by the deployer → drill on the page.
+- **Trade-off**: one key holds every power (immediate `set_keepers` / `set_operators`, 1 h params and configs,
+  program upgrades) — the multisig recommendations in §2 are what this gives up.
+
 ## 1. What moves where
 
 | power (INTERFACE-v0.7) | today | after the handover |
