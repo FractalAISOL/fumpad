@@ -70,7 +70,7 @@ describe("H-2 client IP / rate limits", () => {
     expect(lastIp).toBe("198.51.100.7"); // not the client-chosen leftmost entry
   });
 
-  it("the SSR secret header (not an IP allow-list) exempts server-side rendering", async () => {
+  it("the SSR secret header (not an IP allow-list) lifts server-side rendering to its own (high) ceiling", async () => {
     for (let i = 0; i < 5; i++) {
       const r = await app.inject({ method: "GET", url: "/v1/sol-usd", remoteAddress: "10.0.0.2", headers: { "x-forwarded-for": "198.51.100.7", "x-fumpad-ssr": SSR } });
       expect(r.statusCode).toBe(200);
@@ -190,7 +190,8 @@ describe("M-6 global WebSocket cap", () => {
 describe("production fail-fast", () => {
   const base = { NODE_ENV: "production", DATABASE_URL: "postgres://x/y", RPC_URL: "https://rpc.example", CORS_ORIGINS: "https://fumpad.app", API_SSR_SECRET: SSR };
   it("requires explicit RPC_URL, CORS_ORIGINS and API_SSR_SECRET", () => {
-    expect(loadApiConfig(base as NodeJS.ProcessEnv).trustProxyHops).toBe(1);
+    expect(loadApiConfig(base as NodeJS.ProcessEnv).trustProxyHops).toBe(2); // S-4 / L-2: Railway = 2 hops
+    expect(loadApiConfig({ ...base, TRUST_PROXY_HOPS: "1" } as NodeJS.ProcessEnv).trustProxyHops).toBe(1);
     for (const k of ["RPC_URL", "CORS_ORIGINS", "API_SSR_SECRET", "DATABASE_URL"] as const) {
       const env = { ...base } as Record<string, string>;
       delete env[k];

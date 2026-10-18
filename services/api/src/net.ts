@@ -34,6 +34,25 @@ export function clientIpTrust(hops: number, cidrs: string[] = []): (address: str
   };
 }
 
+/**
+ * The key per-IP launch caps count under (audit S-5): an IPv4 address as is, an IPv6 address as its /64 (one
+ * subscriber's allocation, so rotating addresses inside it doesn't multiply the caps). IPv4-mapped IPv6 → the IPv4.
+ */
+export function ipBucket(ip: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) return mapped[1];
+  if (isIP(ip) !== 6) return ip;
+  const a = ip.toLowerCase().replace(/%.*$/, "");
+  const [head, tail] = a.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? left : [...left, ...Array<string>(Math.max(0, 8 - left.length - right.length)).fill("0"), ...right];
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.replace(/^0+(?=.)/, ""))
+    .join(":")}::/64`;
+}
+
 const digest = (s: string) => createHash("sha256").update(s, "utf8").digest();
 
 /** Constant-time check of the SSR secret header. False when no secret is configured. */

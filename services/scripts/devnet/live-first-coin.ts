@@ -217,7 +217,8 @@ class Run {
     if (this.st.fcMint) return console.log(`  (done) ${this.st.fcMint} ${tx(this.st.fcLaunch.sig)}`);
     const g0 = await this.global();
     const slot0 = configSlot(g0, new PublicKey(FIRST_COIN_CONFIG));
-    const opts = await this.get<{ firstCoin: { dbcConfig: string; wallet: string; buybackShareBps: number; walletShareBps: number; launchesLeft: number | null } | null }>("/v1/launch/options");
+    // S-2: the API offers (and prepares) the first-coin config only for FIRST_COIN_CREATOR = this rehearsal's creator key
+    const opts = await this.get<{ firstCoin: { dbcConfig: string; wallet: string; buybackShareBps: number; walletShareBps: number; launchesLeft: number | null } | null }>(`/v1/launch/options?creator=${this.creator.publicKey.toBase58()}`);
     this.check("before: config allow-listed with the wallet-split policy, 0/1 used; API offers it", !!slot0 && slot0.policy.kind === 1 && slot0.policy.buybackShare === 100 && slot0.policy.walletShare === 140 && slot0.policy.maxCoins === 1 && slot0.coins === 0 && opts.firstCoin?.dbcConfig === FIRST_COIN_CONFIG && opts.firstCoin.launchesLeft === 1, JSON.stringify(opts.firstCoin));
     const wallet = slot0!.policy.wallet;
     this.st.fcWallet = wallet.toBase58();
@@ -269,10 +270,15 @@ class Run {
     } else this.check("in-window buy landed", false, snipeErr ?? "");
     // a second first-coin launch: API (after its 10 s Global cache) and the program itself
     await sleep(12_000);
-    const opts2 = await this.get<{ firstCoin: unknown }>("/v1/launch/options");
-    const again = await this.prepare(this.bob, "AGAIN", "first_coin", 0n);
+    const opts2 = await this.get<{ firstCoin: unknown }>(`/v1/launch/options?creator=${this.creator.publicKey.toBase58()}`);
+    const again = await this.prepare(this.creator, "AGAIN", "first_coin", 0n);
     const againBody = await again.text();
-    this.check("2nd first-coin launch refused by the API (409) and /v1/launch/options no longer offers it", again.status === 409 && opts2.firstCoin === null, `${again.status} ${againBody.slice(0, 140)}; options ${JSON.stringify(opts2)}`);
+    const stranger = await this.prepare(this.bob, "AGAIN", "first_coin", 0n); // S-2: never for another wallet
+    this.check(
+      "2nd first-coin launch refused by the API (409; another wallet: 403) and /v1/launch/options no longer offers it",
+      again.status === 409 && stranger.status === 403 && opts2.firstCoin === null,
+      `${again.status} ${againBody.slice(0, 140)}; stranger ${stranger.status}; options ${JSON.stringify(opts2)}`,
+    );
     // On chain, with the real launch co-signer: simulate a launch on the first-coin config (fresh mint) → ConfigCoinLimit
     const mint = Keypair.generate();
     const ls = kp("launch-signer");

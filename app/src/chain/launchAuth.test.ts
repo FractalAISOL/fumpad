@@ -20,6 +20,7 @@ import {
   parseLaunchAuthMessage,
   vetLaunchAuthMessage,
 } from "./launchAuth";
+import { CLUSTER } from "./cluster";
 import { type FumpadSigner, signLaunchMessage } from "./signer";
 
 const seed = new Uint8Array(32).fill(7);
@@ -28,13 +29,14 @@ const creator = kp.publicKey.toBase58();
 const other = Keypair.generate().publicKey.toBase58();
 const NOW = 1_791_839_490_559;
 const NONCE = "abcDEF0123456789_-xy";
-const msg = (o: Partial<{ creator: string; symbol: string; nonce: string; issuedAt: number }> = {}) =>
-  launchAuthMessage({ creator, symbol: "PIGN", nonce: NONCE, issuedAt: NOW, ...o });
+/** Outside a browser the app's domain is "localhost" (launchAuthDomain); the cluster is this build's. */
+const msg = (o: Partial<{ domain: string; cluster: string; creator: string; symbol: string; nonce: string; issuedAt: number }> = {}) =>
+  launchAuthMessage({ domain: "localhost", cluster: CLUSTER, creator, symbol: "PIGN", nonce: NONCE, issuedAt: NOW, ...o });
 const sign = (m: Uint8Array) => ed25519.sign(m, seed);
 
 describe("launch auth message format", () => {
-  it("is exactly the five lines the API verifies", () => {
-    assert.equal(msg(), `FUMPAD launch\ncreator: ${creator}\nsymbol: PIGN\nnonce: ${NONCE}\nissuedAt: ${NOW}`);
+  it("is exactly the seven lines the API verifies (L-3: domain + cluster)", () => {
+    assert.equal(msg({ domain: "fumpad.app", cluster: "mainnet" }), `FUMPAD launch\ndomain: fumpad.app\ncluster: mainnet\ncreator: ${creator}\nsymbol: PIGN\nnonce: ${NONCE}\nissuedAt: ${NOW}`);
   });
 
   it("nonces are 16-64 chars of [A-Za-z0-9_-] and differ each time", () => {
@@ -44,7 +46,8 @@ describe("launch auth message format", () => {
   });
 
   it("parses only the canonical form", () => {
-    assert.deepEqual(parseLaunchAuthMessage(msg()), { creator, symbol: "PIGN", nonce: NONCE, issuedAt: NOW });
+    assert.deepEqual(parseLaunchAuthMessage(msg()), { domain: "localhost", cluster: CLUSTER, creator, symbol: "PIGN", nonce: NONCE, issuedAt: NOW });
+    assert.equal(parseLaunchAuthMessage(msg({ domain: "localhost:3100" }))?.domain, "localhost:3100");
     const bad = [
       msg().replace("FUMPAD launch", "FUMPAD Launch"),
       msg() + "\n",
@@ -62,6 +65,11 @@ describe("launch auth message format", () => {
       msg().replace(`issuedAt: ${NOW}`, "issuedAt: 1e12"),
       msg().replace(`creator: ${creator}`, "creator: not-a-key"),
       ["FUMPAD launch", `symbol: PIGN`, `creator: ${creator}`, `nonce: ${NONCE}`, `issuedAt: ${NOW}`].join("\n"), // order
+      ["FUMPAD launch", `creator: ${creator}`, `symbol: PIGN`, `nonce: ${NONCE}`, `issuedAt: ${NOW}`].join("\n"), // the old five lines (no domain / cluster)
+      msg({ domain: "FUMPAD.app" }),
+      msg({ domain: "" }),
+      msg({ domain: "fumpad.app/evil" }),
+      msg({ cluster: "mainnet-beta" }),
       "Sign in to FUMPAD",
     ];
     for (const m of bad) assert.equal(parseLaunchAuthMessage(m), null, JSON.stringify(m));
@@ -81,6 +89,9 @@ describe("launch auth message allow-list (silent signMessage)", () => {
     refused(() => vetLaunchAuthMessage(msg() + "\nextra: 1", creator, { now: NOW }), /isn't a FUMPAD launch message/);
     refused(() => vetLaunchAuthMessage(msg(), other, { now: NOW }), /another wallet/);
     refused(() => vetLaunchAuthMessage(msg(), creator, { symbol: "COPE", now: NOW }), /another ticker/);
+    refused(() => vetLaunchAuthMessage(msg({ domain: "evil.example" }), creator, { now: NOW }), /another site/);
+    refused(() => vetLaunchAuthMessage(msg(), creator, { now: NOW, domain: "fumpad.app" }), /another site/);
+    refused(() => vetLaunchAuthMessage(msg({ cluster: CLUSTER === "devnet" ? "mainnet" : "devnet" }), creator, { now: NOW }), /another network/);
     refused(() => vetLaunchAuthMessage(msg(), creator, { now: NOW + LAUNCH_AUTH_MAX_AGE_MS + 1 }), /out of date/);
     refused(() => vetLaunchAuthMessage(msg(), creator, { now: NOW - 61_000 }), /out of date/);
     refused(() => vetLaunchAuthMessage(new Uint8Array([0xff, 0xfe, 0x00]), creator, { now: NOW }), /isn't text/);

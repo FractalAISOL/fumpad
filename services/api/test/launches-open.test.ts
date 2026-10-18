@@ -47,11 +47,15 @@ describe("LAUNCHES_OPEN config (cluster defaults, explicit values)", () => {
     expect(loadApiConfig(env({ DATABASE_URL: "postgres://stub/stub", FUMPAD_CLUSTER: "devnet", LAUNCHES_OPEN: "false" })).launchesOpen).toBe(false);
   });
 
-  it("the gate: closed refuses standard only", () => {
-    expect(() => assertLaunchAllowed("standard", true)).not.toThrow();
-    expect(() => assertLaunchAllowed("first_coin", true)).not.toThrow();
-    expect(() => assertLaunchAllowed("first_coin", false)).not.toThrow();
-    expect(() => assertLaunchAllowed("standard", false)).toThrow(/Launches open soon/);
+  it("the gate: closed refuses standard only; first coin = the allow-listed creator only (S-2)", () => {
+    const team = Keypair.generate().publicKey.toBase58();
+    const gate = { allowedCreator: team };
+    expect(() => assertLaunchAllowed("standard", true, null, team)).not.toThrow();
+    expect(() => assertLaunchAllowed("first_coin", true, gate, team)).not.toThrow();
+    expect(() => assertLaunchAllowed("first_coin", false, gate, team)).not.toThrow();
+    expect(() => assertLaunchAllowed("standard", false, gate, team)).toThrow(/Launches open soon/);
+    expect(() => assertLaunchAllowed("first_coin", false, null, team)).toThrow(/not enabled/);
+    expect(() => assertLaunchAllowed("first_coin", true, gate, Keypair.generate().publicKey.toBase58())).toThrow(/reserved for the FUMPAD team wallet/);
   });
 });
 
@@ -66,7 +70,16 @@ describe("routes: open/closed × standard/first_coin", () => {
     configPolicies: [STANDARD_FEE_POLICY, firstPolicy, ...Array(6).fill(STANDARD_FEE_POLICY)],
     configCoins: [5, 0, 0, 0, 0, 0, 0, 0],
   };
-  const body = (launchConfig?: string) => ({ creator: Keypair.generate().publicKey.toBase58(), name: "Sad Pigeon", symbol: "PIGN", uri: "ipfs://bafy", ...(launchConfig ? { launchConfig } : {}) });
+  /** FIRST_COIN_CREATOR in these servers (S-2): first_coin prepares come from this wallet unless a test says otherwise. */
+  const team = Keypair.generate().publicKey.toBase58();
+  const TEAM = { FIRST_COIN_CREATOR: team };
+  const body = (launchConfig?: string, creator?: string) => ({
+    creator: creator ?? (launchConfig === "first_coin" ? team : Keypair.generate().publicKey.toBase58()),
+    name: "Sad Pigeon",
+    symbol: "PIGN",
+    uri: "ipfs://bafy",
+    ...(launchConfig ? { launchConfig } : {}),
+  });
   let app: FastifyInstance | undefined;
   afterEach(async () => {
     await app?.close();
@@ -90,7 +103,7 @@ describe("routes: open/closed × standard/first_coin", () => {
     app = built.app;
     return app;
   }
-  const prepare = (a: FastifyInstance, launchConfig?: string) => a.inject({ method: "POST", url: "/v1/launch/prepare", payload: body(launchConfig) });
+  const prepare = (a: FastifyInstance, launchConfig?: string, creator?: string) => a.inject({ method: "POST", url: "/v1/launch/prepare", payload: body(launchConfig, creator) });
   const passedGate = { statusCode: 503, error: "the FUMPAD DBC config is missing" };
 
   it("closed (mainnet default): standard → 403 launches_closed, also with launchConfig 'standard'", async () => {
@@ -103,9 +116,13 @@ describe("routes: open/closed × standard/first_coin", () => {
   });
 
   it("closed: first_coin still works with LAUNCH_FIRST_COIN=true, and is still refused without it (not as launches_closed)", async () => {
-    const on = await server({ FUMPAD_CLUSTER: "mainnet", LAUNCH_FIRST_COIN: "true" });
+    const on = await server({ FUMPAD_CLUSTER: "mainnet", LAUNCH_FIRST_COIN: "true", ...TEAM });
     const r = await prepare(on, "first_coin");
     expect({ statusCode: r.statusCode, error: r.json().error }).toEqual(passedGate);
+    // S-2: any other wallet is refused at the gate (before any lookup, reservation or signature)
+    const stranger = await prepare(on, "first_coin", Keypair.generate().publicKey.toBase58());
+    expect(stranger.statusCode).toBe(403);
+    expect(stranger.json().code).toBe("first_coin_not_allowed");
     await on.close();
     const off = await server({ FUMPAD_CLUSTER: "mainnet" });
     const r2 = await prepare(off, "first_coin");
@@ -129,7 +146,7 @@ describe("routes: open/closed × standard/first_coin", () => {
       expect(fc.json().error).toMatch(/not enabled/);
       await a.close();
     }
-    const both = await server({ FUMPAD_CLUSTER: "mainnet", LAUNCHES_OPEN: "true", LAUNCH_FIRST_COIN: "true" });
+    const both = await server({ FUMPAD_CLUSTER: "mainnet", LAUNCHES_OPEN: "true", LAUNCH_FIRST_COIN: "true", ...TEAM });
     const r = await prepare(both, "first_coin");
     expect({ statusCode: r.statusCode, error: r.json().error }).toEqual(passedGate);
   });
@@ -154,8 +171,12 @@ describe("routes: open/closed × standard/first_coin", () => {
     const closed = await server({ FUMPAD_CLUSTER: "mainnet" });
     expect((await closed.inject({ method: "GET", url: "/v1/launch/options" })).json()).toEqual({ launchesOpen: false, firstCoin: null });
     await closed.close();
-    const closedFirst = await server({ FUMPAD_CLUSTER: "mainnet", LAUNCH_FIRST_COIN: "true" });
-    const o = (await closedFirst.inject({ method: "GET", url: "/v1/launch/options" })).json();
+    const closedFirst = await server({ FUMPAD_CLUSTER: "mainnet", LAUNCH_FIRST_COIN: "true", ...TEAM });
+    // S-2: only `?creator=<FIRST_COIN_CREATOR>` sees the option; no creator or any other wallet: null, as when off
+    for (const q of ["", `?creator=${Keypair.generate().publicKey.toBase58()}`, "?creator=nope"]) {
+      expect((await closedFirst.inject({ method: "GET", url: `/v1/launch/options${q}` })).json(), q).toEqual({ launchesOpen: false, firstCoin: null });
+    }
+    const o = (await closedFirst.inject({ method: "GET", url: `/v1/launch/options?creator=${team}` })).json();
     expect(o.launchesOpen).toBe(false);
     expect(o.firstCoin).toMatchObject({ dbcConfig: first.toBase58(), wallet: feeWallet.toBase58(), launchesLeft: 1 });
     await closedFirst.close();

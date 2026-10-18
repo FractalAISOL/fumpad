@@ -47,29 +47,83 @@ import {
 import type { TtlCache } from "./cache.js";
 import type { Side, TradeQuote } from "./generated/app-types.js";
 
+/**
+ * S-11 / I-2: SOL/USD couldn't be read from Pyth (and no recent good price or explicit SOL_USD_FALLBACK stands in).
+ * Routes answer 503 `{ error, code: "price_unavailable" }` instead of a made-up price.
+ */
+export class PriceUnavailableError extends Error {
+  readonly statusCode = 503;
+  readonly code = "price_unavailable";
+  constructor(readonly reason: string) {
+    super("SOL/USD price unavailable right now, try again shortly");
+  }
+}
+
+export interface ChainReaderOpts {
+  /** Explicit fixed price when Pyth can't be read (SOL_USD_FALLBACK, opt-in; local stacks). Unset = none. */
+  solUsdFallback?: number;
+  /** How long the last good Pyth price stands in for failed reads (ms, default 300 s). */
+  solUsdMaxStaleMs?: number;
+  pythAccount?: string;
+  recentAcquired?: (wallet: string, mint: string, sinceTs: number) => Promise<bigint>;
+  /** Where "price unavailable" / fallback use is logged (error level = alert). */
+  log?: { warn(o: object, msg: string): void; error(o: object, msg: string): void };
+}
+
 const tok = (v: bigint) => Number(v) / 1e6;
 const lam = (v: bigint) => Number(v) / 1e9;
 const px = (q: bigint) => q64ToSolPerToken(q);
 
 export class ChainReader {
+  private lastGood: { usd: number; at: number } | null = null;
+  private lastLogAt = 0;
+
   constructor(
     readonly conn: Connection,
     private cache: TtlCache,
-    private opts: { solUsdFallback: number; pythAccount?: string; recentAcquired?: (wallet: string, mint: string, sinceTs: number) => Promise<bigint> },
+    private opts: ChainReaderOpts = {},
   ) {}
 
+  /** At most one log line per minute about a missing price (the cache retries every few seconds). */
+  private note(level: "warn" | "error", o: object, msg: string) {
+    const now = Date.now();
+    if (now - this.lastLogAt < 60_000) return;
+    this.lastLogAt = now;
+    this.opts.log?.[level](o, msg);
+  }
+
+  /**
+   * SOL/USD from Pyth (S-11 / I-2: never a silent constant). A failed read is bridged by the last good Pyth price for
+   * `solUsdMaxStaleMs`, then by SOL_USD_FALLBACK only if the operator set one (logged), else `PriceUnavailableError`
+   * (503 `price_unavailable`, logged at error level: alert on "SOL/USD price unavailable").
+   */
   async solUsd(): Promise<number> {
     return this.cache.get("chain:solusd", 10_000, async () => {
+      let reason = "Pyth account not found";
       try {
         const a = await this.conn.getAccountInfo(this.opts.pythAccount ? new PublicKey(this.opts.pythAccount) : PYTH_SOL_USD_ACCOUNT);
         if (a) {
           const v = pythUsd(decodePythPriceUpdate(new Uint8Array(a.data)));
-          if (v > 0) return v;
+          if (v > 0 && Number.isFinite(v)) {
+            this.lastGood = { usd: v, at: Date.now() };
+            return v;
+          }
+          reason = "Pyth price not positive";
         }
-      } catch {
-        /* fall back */
+      } catch (e) {
+        reason = e instanceof Error ? e.message : String(e);
       }
-      return this.opts.solUsdFallback;
+      const age = this.lastGood ? Date.now() - this.lastGood.at : null;
+      if (this.lastGood && age !== null && age <= (this.opts.solUsdMaxStaleMs ?? 300_000)) {
+        this.note("warn", { reason, ageSecs: Math.round(age / 1000) }, "SOL/USD: Pyth read failed, serving the last good price");
+        return this.lastGood.usd;
+      }
+      if (this.opts.solUsdFallback !== undefined) {
+        this.note("warn", { reason, solUsd: this.opts.solUsdFallback }, "SOL/USD: Pyth read failed, serving SOL_USD_FALLBACK");
+        return this.opts.solUsdFallback;
+      }
+      this.note("error", { reason, lastGoodAgeSecs: age === null ? null : Math.round(age / 1000) }, "SOL/USD price unavailable: USD routes answer 503 price_unavailable");
+      throw new PriceUnavailableError(reason);
     });
   }
 

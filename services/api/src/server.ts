@@ -9,7 +9,7 @@ import { createPool, type Db, serviceInfo } from "@fumpad/indexer";
 
 import { TtlCache } from "./cache.js";
 import { IMAGE_CACHE, IMAGE_MISS_CACHE, IMAGE_SECURITY_HEADERS, ImageProxy } from "./img.js";
-import { ChainReader } from "./chain.js";
+import { ChainReader, PriceUnavailableError } from "./chain.js";
 import type { ApiConfig } from "./config.js";
 import { CANDLE_INTERVALS } from "./candles.js";
 import type { Board, CandleInterval, ChartRange, FeedKind, Side } from "./generated/app-types.js";
@@ -17,9 +17,10 @@ import type { CoinSort } from "./generated/app-interface.js";
 import { LiveHub } from "./live.js";
 import { OPENAPI } from "./openapi.js";
 import { AmbiguousSymbolError, Repo } from "./repo.js";
-import { systemStatus } from "./status.js";
+import { publicStatus, systemStatus } from "./status.js";
 import { type ChainProbe, LaunchError, MintPool } from "./launch/pool.js";
-import { type IpfsPinner, logMetadataMode, PinataPinner, registerMetadataRoute } from "./launch/metadata.js";
+import { NonceStore } from "./launch/auth.js";
+import { type IpfsPinner, logMetadataMode, METADATA_URI_GATEWAY, PinataPinner, registerMetadataRoute } from "./launch/metadata.js";
 import { registerLaunchRoutes } from "./launch/routes.js";
 import { MintVault } from "./launch/vault.js";
 import { clientIpTrust, ssrAuthorized, SSR_HEADER } from "./net.js";
@@ -37,6 +38,14 @@ export function connectionProbe(conn: Connection): ChainProbe {
       return out;
     },
     blockHeight: () => conn.getBlockHeight("confirmed"),
+    async balances(wallets) {
+      const out: bigint[] = [];
+      for (let i = 0; i < wallets.length; i += 100) {
+        const infos = await conn.getMultipleAccountsInfo(wallets.slice(i, i + 100), "confirmed");
+        out.push(...infos.map((a) => BigInt(a?.lamports ?? 0)));
+      }
+      return out;
+    },
   };
 }
 
@@ -100,7 +109,7 @@ export async function buildServer(
       ...(opts.logStream ? { stream: opts.logStream } : {}),
     },
     // H-2: never trust every X-Forwarded-For hop (the leftmost entry is client-controlled).
-    // Trust exactly TRUST_PROXY_HOPS hops (Railway's edge: 1) plus optional private CIDRs.
+    // Trust exactly TRUST_PROXY_HOPS hops (Railway: 2, the production default) plus optional private CIDRs.
     trustProxy: clientIpTrust(cfg.trustProxyHops, cfg.trustProxyCidrs),
     bodyLimit: 64 * 1024,
   });
@@ -108,7 +117,16 @@ export async function buildServer(
   const conn = deps?.conn ?? new Connection(cfg.rpcUrl, "confirmed");
   const cache = deps?.cache ?? new TtlCache();
   const repo = deps?.repo ?? new Repo(db);
-  const chain = deps?.chain ?? new ChainReader(conn, cache, { solUsdFallback: cfg.solUsdFallback, pythAccount: cfg.pythAccount, recentAcquired: (w, m, since) => repo.recentAcquired(w, m, since) });
+  const chain =
+    deps?.chain ??
+    new ChainReader(conn, cache, {
+      solUsdFallback: cfg.solUsdFallback,
+      solUsdMaxStaleMs: cfg.solUsdMaxStaleMs,
+      pythAccount: cfg.pythAccount,
+      recentAcquired: (w, m, since) => repo.recentAcquired(w, m, since),
+      log: app.log,
+    });
+  if (cfg.solUsdFallback !== undefined) app.log.warn({ solUsd: cfg.solUsdFallback }, "SOL_USD_FALLBACK is set: a failed Pyth read serves this fixed price (local stacks only)");
   const live =
     deps?.live ??
     new LiveHub(
@@ -135,18 +153,31 @@ export async function buildServer(
             maxActivePerIp: cfg.launchMaxActivePerIp,
             reserve: cfg.launchPoolReserve,
             rpcTimeoutMs: cfg.launchRpcTimeoutMs,
+            walletReservationsPerHour: cfg.launchWalletReservationsPerHour,
+            ipReservationsPerHour: cfg.launchIpReservationsPerHour,
+            minBalanceLamports: cfg.launchMinBalanceLamports,
           })
         : null;
   const waitlist = openWaitlistStore(cfg, db, deps?.waitlist);
   // The image URL of a coin rarely changes (metadata is set at launch): a short TTL bounds DB lookups.
-  const images = deps?.images ?? new ImageProxy((mint) => cache.get(`img:${mint}`, 60_000, () => repo.coinImageUrl(mint)), { maxBytes: cfg.imgMaxBytes, cacheBytes: cfg.imgCacheBytes, ipfsGateway: cfg.ipfsGateway, ipfsGateways: cfg.ipfsGateways });
+  const images = deps?.images ?? new ImageProxy((mint) => cache.get(`img:${mint}`, 60_000, () => repo.coinImageUrl(mint)), {
+      maxBytes: cfg.imgMaxBytes,
+      cacheBytes: cfg.imgCacheBytes,
+      ipfsGateway: cfg.ipfsGateway,
+      ipfsGateways: cfg.ipfsGateways,
+      maxConcurrent: cfg.imgMaxConcurrent,
+      maxPerHost: cfg.imgMaxPerHost,
+      trustedHosts: [new URL(METADATA_URI_GATEWAY).hostname],
+    });
   const pinner = deps?.pinner !== undefined ? deps.pinner : cfg.pinataJwt ? new PinataPinner(cfg.pinataJwt) : null;
   const all: ApiDeps = { db, conn, repo, chain, cache, live, pool, waitlist, images, pinner };
 
   await app.register(cors, { origin: cfg.corsOrigins === "*" ? true : cfg.corsOrigins, methods: ["GET", "POST", "OPTIONS"] });
-  // SSR requests (shared secret header, H-2) are exempt; everyone else is limited per real IP.
+  // Everyone is limited per real IP (H-2). SSR requests (shared secret header) get a high ceiling, not an exemption
+  // (audit I-1: a leaked secret must not mean unthrottled lookups).
   const isSsr = (req: { headers: Record<string, string | string[] | undefined> }) => ssrAuthorized(req.headers[SSR_HEADER], cfg.ssrSecret);
-  await app.register(rateLimit, { max: cfg.rateLimitPerMin, timeWindow: "1 minute", allowList: (req) => isSsr(req) });
+  const perMin = (max: number) => ({ max: (req: { headers: Record<string, string | string[] | undefined> }) => (isSsr(req) ? Math.max(cfg.ssrRateLimitPerMin, max) : max), timeWindow: "1 minute" });
+  await app.register(rateLimit, perMin(cfg.rateLimitPerMin));
   await app.register(websocket, { options: { maxPayload: 4 * 1024 } });
 
   app.addHook("onSend", async (_req, reply) => {
@@ -282,7 +313,7 @@ export async function buildServer(
   app.get(
     "/v1/wallets/:wallet/fumbles",
     {
-      config: { rateLimit: { max: cfg.fumblesRateLimitPerMin, timeWindow: "1 minute" } },
+      config: { rateLimit: perMin(cfg.fumblesRateLimitPerMin) },
       schema: {
         params: { type: "object", properties: { wallet: { type: "string", pattern: B58 } }, required: ["wallet"] },
         querystring: { type: "object", properties: { mint: { type: "string", pattern: `${B58}|^$` } } },
@@ -308,11 +339,13 @@ export async function buildServer(
       });
       return repo.getPortfolio(wallet, balances);
     });
-  app.get("/v1/wallets/:wallet/positions", async (req) => {
+  // S-7 / L-4: these read the chain for any caller-chosen wallet: their own per-IP limit, below the global one.
+  const walletRpc = { config: { rateLimit: perMin(cfg.walletRpcRateLimitPerMin) } };
+  app.get("/v1/wallets/:wallet/positions", walletRpc, async (req) => {
     const wallet = addr((req.params as { wallet: string }).wallet, "wallet");
     return (await portfolio(wallet)).positions;
   });
-  app.get("/v1/wallets/:wallet/closed", async (req) => {
+  app.get("/v1/wallets/:wallet/closed", walletRpc, async (req) => {
     const wallet = addr((req.params as { wallet: string }).wallet, "wallet");
     return (await portfolio(wallet)).closed;
   });
@@ -342,7 +375,7 @@ export async function buildServer(
   app.get(
     "/v1/quote",
     {
-      config: { rateLimit: { max: cfg.quoteRateLimitPerMin, timeWindow: "1 minute" } },
+      config: { rateLimit: perMin(cfg.quoteRateLimitPerMin) },
       schema: {
         querystring: {
           type: "object",
@@ -368,7 +401,7 @@ export async function buildServer(
       return chain.quote({ mint, side, amount, wallet, symbol: row?.symbol, maturedTokens });
     },
   );
-  app.get("/v1/wallets/:wallet/balances/:mint", async (req) => {
+  app.get("/v1/wallets/:wallet/balances/:mint", walletRpc, async (req) => {
     const { wallet, mint } = req.params as { wallet: string; mint: string };
     addr(wallet, "wallet");
     addr(mint, "mint");
@@ -380,7 +413,7 @@ export async function buildServer(
   app.get(
     "/v1/img/:mint",
     {
-      config: { rateLimit: { max: cfg.imgRateLimitPerMin, timeWindow: "1 minute" } },
+      config: { rateLimit: perMin(cfg.imgRateLimitPerMin) },
       schema: { params: mintParam, querystring: { type: "object", properties: { v: { type: "string", maxLength: 32 } } } },
     },
     async (req, reply) => {
@@ -443,7 +476,11 @@ export async function buildServer(
 
   // ── docs + health ───────────────────────────────────────────────────────────
   app.get("/openapi.json", async () => OPENAPI);
-  app.get("/v1/status", async () => cached("status", 5_000, () => systemStatus(db, pool, cfg.statusKeeperUrl)));
+  // M-3: exact vanity-pool counts only with the SSR secret; the public sees them rounded down (publicStatus).
+  app.get("/v1/status", async (req) => {
+    const s = await cached("status", 5_000, () => systemStatus(db, pool, cfg.statusKeeperUrl));
+    return isSsr(req) ? s : publicStatus(s);
+  });
   // L-5: public /health is a bare liveness answer; the detail (lag, pool, live stats) needs
   // the SSR secret header.
   app.get("/health", async (req, reply) => {
@@ -465,8 +502,10 @@ export async function buildServer(
   });
 
   // ── D18 vanity launches ─────────────────────────────────────────────────────
-  registerLaunchRoutes(app, cfg, { conn, chain, pool, db });
-  registerMetadataRoute(app, cfg, { conn, pinner, launchesEnabled: !!pool });
+  // L-3: one single-use nonce store for both launch routes (scoped per route: one signature covers metadata + prepare).
+  const nonces = new NonceStore();
+  registerLaunchRoutes(app, cfg, { conn, chain, pool, db, nonces });
+  registerMetadataRoute(app, cfg, { conn, pinner, launchesEnabled: !!pool, nonces });
   logMetadataMode(cfg, pinner, app.log);
 
   // ── Pre-launch waitlist ─────────────────────────────────────────────────────
@@ -475,7 +514,7 @@ export async function buildServer(
   if (pool && cfg.launchSweepMs > 0) {
     sweeper = setInterval(() => {
       pool.sweep().then(
-        (r) => (r.released || r.used) && app.log.info(r, "vanity reservations swept"),
+        (r) => (r.released || r.used) && app.log.info(r, "vanity reservations swept"), // r.unfunded: creator balance fell below the minimum (M-3)
         (e: Error) => app.log.warn({ err: e.message }, "vanity sweep failed"),
       );
     }, cfg.launchSweepMs);
@@ -489,6 +528,8 @@ export async function buildServer(
       return reply.code(err.statusCode).send(err.code ? { error: err.message, code: err.code } : { error: err.message });
     }
     if (err instanceof WaitlistError) return reply.code(err.statusCode).send({ error: err.message });
+    // S-11 / I-2: say so instead of serving a made-up SOL/USD (logged at error level by ChainReader).
+    if (err instanceof PriceUnavailableError) return reply.code(503).header("retry-after", "10").send({ error: err.message, code: err.code });
     if ((err as { validation?: unknown }).validation) return reply.code(400).send({ error: err.message });
     const code = err.statusCode && err.statusCode >= 400 && err.statusCode < 600 ? err.statusCode : 500;
     if (code >= 500) app.log.error({ err: { message: err.message, name: err.name, stack: err.stack } }, "request failed");

@@ -124,3 +124,23 @@ PoCs for fixed findings were flipped: each now asserts the attack FAILS (header:
 
 ## Fix order
 V7-H2 · V7-H1 · V7-M1 · V7-M2 · V7-M3 · V7-M6 · V7-M5 · V7-M4 (decision) · Lows.
+
+## External audit 2026-10-17
+
+Source: `fumpad-audit-final-report.md` (AI-assisted, 2026-10-17; first audit at `4e1940d`, re-run at `74da155`).
+Status per finding fixed or touched. Other areas (engine, keeper, app, program) may add their own rows below theirs.
+
+### services/api (off-chain API) + the app's launch-message builder
+
+| ID | Severity | Status | Fix | Tests |
+|---|---|---|---|---|
+| S-2 / H-3 | High | **Fixed (off-chain)** | `launchConfig: "first_coin"` on `POST /v1/launch/prepare` **and** `POST /v1/launch/metadata` only for `FIRST_COIN_CREATOR` (403 `first_coin_not_allowed` before anything is reserved, pinned or co-signed; `pickLaunchConfig` re-checks). `LAUNCH_FIRST_COIN=true` without a valid `FIRST_COIN_CREATOR` = startup error. `GET /v1/launch/options` shows `firstCoin` only to `?creator=<FIRST_COIN_CREATOR>` (the app's `/launch?config=first-coin` asks with the connected wallet). Mainnet creator `EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc` (LAUNCH-DAY §1 / §5.3). **Residual:** the launch key still co-signs whatever this API decides; an on-chain `allowed_creator` on the config would bind it in the program (program change, separate decision) | `api/test/poc-s2-first-coin.test.ts` (the audit PoC, flipped: 1,000 random creators refused, prepare + metadata 403 with nothing prepared/pinned, options hide it; positive control: the team creator gets the co-signed tx), `launches-open.test.ts`, `launch-metadata.test.ts`, `launch.test.ts` |
+| M-3 / S-5 | Medium / Low | **Fixed** | `reserved_at` never refreshed (hard expiry; reuse only within the TTL; `expiresAt` fixed); fresh reservations capped per wallet (`LAUNCH_WALLET_RESERVATIONS_PER_HOUR`, 6) and per IP (`LAUNCH_IP_RESERVATIONS_PER_HOUR`, 20), IPv6 bucketed by /64 (also the DB active-per-IP cap); the sweeper releases a reservation whose creator's balance fell below `LAUNCH_MIN_BALANCE_LAMPORTS` once its signed txs expired (balance bound to the reservation). Verified: `/health` pool counts were SSR-only but **`/v1/status` returned exact counts publicly**; now rounded down for the public, exact with the SSR header. Hourly caps are in memory (per instance) | `test/integration/vanity-pool.test.ts` (real Postgres), `audit-2026-10-17.test.ts` (status, ipBucket) |
+| S-4 / L-2 | Low | **Fixed** | `TRUST_PROXY_HOPS` defaults to 2 in production (Railway, verified live); docs keep it explicit | `security.test.ts` |
+| S-6 | Low | **Fixed** | CSV cells starting with `=` `+` `-` `@` tab or CR get a leading `'` and are quoted | `audit-2026-10-17.test.ts` |
+| S-7 / L-4 | Low | **Fixed** | positions / closed / balances: own per-IP limit (`WALLET_RPC_RATE_LIMIT_PER_MIN`, 60); cache = one bounded LRU per route family (`chain:<kind>` for chain reads), so attacker-chosen keys can't flush other routes; failed loads cached 2 s (negative caching) | `audit-2026-10-17.test.ts` |
+| L-3 | Low | **Fixed** (legacy window) | launch message gains `domain:` (checked against `LAUNCH_AUTH_DOMAINS`, default the `CORS_ORIGINS` hosts) and `cluster:` (= `FUMPAD_CLUSTER`); nonce single use per route (metadata, prepare), kept until expiry, given back when the request fails before reserving/pinning. App builder (`app/src/chain/launchAuth.ts`) signs the seven-line form and its allow-list checks host + cluster. The old five-line form stays accepted (single use too) while `LAUNCH_AUTH_LEGACY=true` (default): set `false` after the app deploy (DEPLOY-v07 §14). Nonces in memory (one instance) | `launch-auth.test.ts`, `launch-metadata.test.ts`, `audit-2026-10-17.test.ts`; app `launchAuth.test.ts` |
+| L-7 | Low | **Fixed** | image proxy: per-host-group cap (`IMG_MAX_PER_HOST`, 2; group = last two DNS labels) inside the global cap (`IMG_MAX_CONCURRENT`, now 16); our Pinata gateway / ipfs:// share half the global cap | `img.test.ts` |
+| S-11 / I-2 | Info | **Fixed** | no default `SOL_USD_FALLBACK`: last good Pyth price for `SOL_USD_MAX_STALE_SECS` (300), then 503 `{code: "price_unavailable"}` and an error-level log `SOL/USD price unavailable` (alert on it); an explicit fallback (local stacks) is logged | `audit-2026-10-17.test.ts` |
+| I-1 | Info | **Fixed** | the SSR secret lifts the per-IP limit to `SSR_RATE_LIMIT_PER_MIN` (6000) instead of exempting it (all routes, incl. route-level limits) | `audit-2026-10-17.test.ts`, `security.test.ts` |
+

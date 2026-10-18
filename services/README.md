@@ -50,18 +50,39 @@ program accepts any fresh mint, like pump.fun's `pump`).
   mint (`FOR UPDATE SKIP LOCKED` inside a per-creator advisory lock: concurrent prepares never share a mint, a wallet
   holds at most one), builds `[compute budget] create_coin [+ creator's first buy]` with the creator as fee payer,
   and signs **only as the mint**. The secret is decrypted into an opaque node `KeyObject` for that one signature and
-  never returned or logged. Preparing again (e.g. the blockhash expired in the review dialog) returns the same mint.
+  never returned or logged. Preparing again (e.g. the blockhash expired in the review dialog) returns the same mint
+  while the reservation is younger than `LAUNCH_RESERVATION_MINUTES` (hard expiry: re-preparing never extends it,
+  audit M-3).
   Validation mirrors the program (UTF-8 bytes: name ≤ 32, symbol ≤ 10, uri ≤ 200, non-empty) + https/ipfs/ar URIs, no
   control chars, creator must be an on-curve wallet. Pool empty → `503` + `Retry-After`. Disabled (503) when
   `MINT_POOL_KEY` is unset.
-  - **Proof of wallet control (M-2)**: the body carries `auth: { message, signature }`, the creator wallet's
+  - **Proof of wallet control (M-2, L-3)**: the body carries `auth: { message, signature }`, the creator wallet's
     ed25519 `signMessage` over exactly
-    `FUMPAD launch\ncreator: <creator>\nsymbol: <symbol>\nnonce: <16-64 [A-Za-z0-9_-]>\nissuedAt: <unix ms>`
+    `FUMPAD launch\ndomain: <app host>\ncluster: <cluster>\ncreator: <creator>\nsymbol: <symbol>\nnonce: <16-64 [A-Za-z0-9_-]>\nissuedAt: <unix ms>`
     (signature base58 or base64; accepted for `LAUNCH_SIGNATURE_MAX_AGE_SECS`, 600). Missing/invalid → `401`,
-    nothing reserved. `api/src/launch/auth.ts` (`launchAuthMessage`, `signLaunchAuth` for scripts/tests).
+    nothing reserved. L-3 (external audit 2026-10-17): `domain` must be one of `LAUNCH_AUTH_DOMAINS` (default: the
+    `CORS_ORIGINS` hosts) and `cluster` this API's `FUMPAD_CLUSTER`; each nonce is accepted **once per route**
+    (metadata, prepare: one signature covers one launch; kept in memory until the message expires; a request that
+    fails before reserving/pinning anything gives it back). A re-prepare after the blockhash expired gets `401 auth
+    message already used`, and the app signs again (silent for the Trading wallet). The old five-line message
+    (without `domain`/`cluster`) is accepted while `LAUNCH_AUTH_LEGACY=true` (default during the app rollout; set
+    `false` once the app that signs the seven-line form is live). `api/src/launch/auth.ts` (`launchAuthMessage`,
+    `signLaunchAuth` for scripts/tests, `NonceStore`).
   - **Drain guards**: creator balance ≥ `LAUNCH_MIN_BALANCE_LAMPORTS` (0.01 SOL); per-IP route limit and max active
-    reservations per IP (on the real client IP, see H-2 below); per-wallet window; one reservation per wallet; the
-    last `LAUNCH_POOL_RESERVE` (5) available mints only go to wallets the indexer already knows (`users`).
+    reservations per IP (on the real client IP, see H-2 below; an IPv6 client counts as its /64); per-wallet window;
+    one reservation per wallet; the last `LAUNCH_POOL_RESERVE` (5) available mints only go to wallets the indexer
+    already knows (`users`). Audit M-3 / S-5 (2026-10-17): `reserved_at` is never refreshed (hard expiry), fresh
+    reservations are capped per wallet (`LAUNCH_WALLET_RESERVATIONS_PER_HOUR`, 6) and per IP
+    (`LAUNCH_IP_RESERVATIONS_PER_HOUR`, 20; in memory, per instance), and the sweeper releases a reservation whose
+    creator's balance fell below `LAUNCH_MIN_BALANCE_LAMPORTS` once its signed transactions expired (the 0.01 SOL
+    can't be moved from wallet to wallet to hold one mint each). Public `/v1/status` shows the pool counts rounded
+    down (0/1/5/20/50/100/500/1000); exact counts need the SSR header.
+  - **First coin (S-2 / H-3)**: `launchConfig: "first_coin"` (prepare **and** metadata) is accepted only with
+    `LAUNCH_FIRST_COIN=true` and only for `FIRST_COIN_CREATOR` (403 `first_coin_not_allowed` for any other wallet,
+    before anything is reserved, pinned or co-signed); `GET /v1/launch/options` shows `firstCoin` only to
+    `?creator=<FIRST_COIN_CREATOR>` (the app asks with the connected wallet). The API refuses to start with
+    `LAUNCH_FIRST_COIN=true` and no valid `FIRST_COIN_CREATOR`. Off-chain only: an on-chain `allowed_creator` on the
+    config would be stronger (program change, separate decision).
   - **No RPC inside a DB transaction**: reserve (short tx) → build with RPC (`LAUNCH_RPC_TIMEOUT_MS`, 5 s) → sign
     (short tx). A fresh reservation whose build fails/times out goes straight back to the pool.
   - *Why prepare (server-built) and not cosign (client-built)?* The server only ever signs bytes it assembled, so
@@ -216,17 +237,29 @@ cache cleared by the indexer's NOTIFY (targeted: the touched mints/wallets and t
 Per-IP rate limits (quote stricter), WS connection caps per IP and global (`MAX_WS_TOTAL`); every query/path param
 is schema-validated (400, L-3).
 
-- **Client IP (H-2)**: `trustProxy` trusts exactly `TRUST_PROXY_HOPS` hops (default 1 in production, **2 on
-  Railway**; 0 locally) plus optional `TRUST_PROXY_CIDRS`; `req.ip` is the first untrusted address from the right, so a
+- **Client IP (H-2)**: `trustProxy` trusts exactly `TRUST_PROXY_HOPS` hops (default **2 in production** = Railway,
+  audit S-4 / L-2; 0 locally) plus optional `TRUST_PROXY_CIDRS`; `req.ip` is the first untrusted address from the right, so a
   client-prepended `X-Forwarded-For` entry is never used. Verified live on Railway (Oct 12 2026): the edge replaces
   any client-sent `X-Forwarded-For` and forwards `<client>, <edge 152.233.47.x>` (2 entries), so
   `TRUST_PROXY_HOPS=2` yields the real client IP (checked against the caller's public IP; spoofed values ignored).
   With a 1-entry path hops=2 still yields the client. Request logs carry `xffHops` to re-check after platform changes. One derivation for everything (rate limits, WS caps,
   launch per-IP caps, waitlist).
 - **SSR (replaces `RATE_LIMIT_ALLOW`)**: the app's server-side renderer sends `x-fumpad-ssr: <API_SSR_SECRET>`; such
-  requests skip rate limits and get the detailed `/health`. IP allow-listing is gone (`RATE_LIMIT_ALLOW` is ignored).
+  requests get a high per-IP ceiling (`SSR_RATE_LIMIT_PER_MIN`, 6000; audit I-1: never unlimited) and the detailed
+  `/health`. IP allow-listing is gone (`RATE_LIMIT_ALLOW` is ignored).
 - **Health (L-5)**: public `/health` = `{ ok }`; with the SSR header: version, indexer lag, WS/live/cache stats,
-  vanity pool. `/v1/status` (public, levels only) is unchanged.
+  vanity pool. `/v1/status` is public (levels; vanity counts rounded down unless the SSR header is sent, M-3).
+- **RPC-amplifying routes (S-7 / L-4)**: `/v1/wallets/:w/positions`, `/closed` and `/balances/:mint` read the chain
+  for any caller-chosen wallet: own per-IP limit `WALLET_RPC_RATE_LIMIT_PER_MIN` (60). The in-process cache is one
+  bounded LRU per route family (`chain:<kind>` for chain reads), so random keys only churn their own family, and a
+  failing load is remembered for 2 s (negative caching) instead of hitting RPC on every request.
+- **SOL/USD (S-11 / I-2)**: from Pyth; a failed read is bridged by the last good price for `SOL_USD_MAX_STALE_SECS`
+  (300), then routes that need it (`/v1/sol-usd`, `/v1/stats`, sell quotes, the Fumble Checker) answer **503
+  `{code: "price_unavailable"}`** and the API logs `SOL/USD price unavailable` at error level (alert on it). No silent
+  $150: `SOL_USD_FALLBACK` is opt-in (local stacks set it) and logged when used.
+- **Coin images (L-7)**: at most `IMG_MAX_PER_HOST` (2) concurrent upstream fetches per creator host (last two DNS
+  labels) within `IMG_MAX_CONCURRENT` (16); our Pinata gateway and ipfs:// share half of the global cap. One slow
+  host can't make every image `busy`.
 - **Coins by mint (H-3)**. Symbols are not unique, so mints are the coin id:
   - `GET /v1/coins/by-mint/:mint` → `CoinDetail` | 404.
   - `GET /v1/coins/by-symbol/:symbol?limit=` → `CoinSummary[]`, every case-insensitive match (leading `$` optional),
@@ -333,18 +366,21 @@ local validator.
 | `FINALIZE_DROP_MISSES` (3), `FINALIZE_DROP_AFTER_SECS` (180) | indexer | rollback only after N consecutive misses + age + getTransaction cross-check |
 | `INDEXER_COMMITMENT`, `BACKFILL_FROM_SLOT`, `POLL_INTERVAL_MS`, `RECONCILE_*`, `FINALIZE_INTERVAL_MS`, `DERIVE_INTERVAL_MS`, `FETCH_METADATA` | indexer | tuning |
 | `CORS_ORIGINS` | api | **required in production**, explicit comma-separated origins (`*` refused). Live: `https://fumpad.app,https://www.fumpad.app,https://fumpad.vercel.app,http://localhost:3100` |
-| `API_SSR_SECRET` | api (+ app server env) | **required in production**, ≥ 32 chars, sealed. Sent by the app's SSR as `x-fumpad-ssr`: no rate limit, detailed `/health` |
-| `TRUST_PROXY_HOPS` (prod 1, else 0) | api | reverse-proxy hops whose `X-Forwarded-For` entries are trusted (**Railway: 2**, verified live) |
+| `API_SSR_SECRET` | api (+ app server env) | **required in production**, ≥ 32 chars, sealed. Sent by the app's SSR as `x-fumpad-ssr`: high rate-limit ceiling (`SSR_RATE_LIMIT_PER_MIN`, 6000/IP; I-1), detailed `/health`, exact `/v1/status` pool counts |
+| `TRUST_PROXY_HOPS` (prod **2**, else 0) | api | reverse-proxy hops whose `X-Forwarded-For` entries are trusted (**Railway: 2**, verified live; the production default since the 2026-10-17 audit, S-4 / L-2) |
+| `WALLET_RPC_RATE_LIMIT_PER_MIN` (60) | api | per-IP limit of the chain-reading wallet routes (positions, closed, balances; S-7 / L-4) |
 | `TRUST_PROXY_CIDRS` | api | optional extra trusted proxy networks |
 | `RATE_LIMIT_PER_MIN` (600), `QUOTE_RATE_LIMIT_PER_MIN` (120), `MAX_WS_PER_IP` (5), `MAX_WS_TOTAL` (5000) | api | per client IP; WS global cap |
 | ~~`RATE_LIMIT_ALLOW`~~ | api | removed (ignored): use `API_SSR_SECRET` |
-| `PYTH_SOL_USD_ACCOUNT`, `SOL_USD_FALLBACK` | api | |
+| `PYTH_SOL_USD_ACCOUNT`, `SOL_USD_MAX_STALE_SECS` (300), `SOL_USD_FALLBACK` (unset) | api | SOL/USD from Pyth; last good price for up to `SOL_USD_MAX_STALE_SECS`, then 503 `price_unavailable` (S-11 / I-2). `SOL_USD_FALLBACK` = opt-in fixed price for stacks without Pyth (local); never set it on mainnet |
 | `MINT_POOL_KEY` | grinder, api | 32 bytes (64 hex or base64), **sealed**; same value in both. Unset on the API = launches disabled |
 | `VANITY_SUFFIX` (`fmbL`) | grinder, api | must match |
 | `LAUNCH_RESERVATION_MINUTES` (10), `LAUNCH_SWEEP_SECS` (15), `LAUNCH_RATE_LIMIT_PER_MIN` (10/IP), `LAUNCH_WALLET_LIMIT_PER_MIN` (6), `LAUNCH_MAX_ACTIVE_PER_IP` (3), `LAUNCH_MAX_INITIAL_BUY_LAMPORTS` (100 SOL), `LAUNCH_MAX_PRIORITY_MICROLAMPORTS` | api | D18 prepare |
 | `LAUNCH_REQUIRE_SIGNATURE` (true), `LAUNCH_SIGNATURE_MAX_AGE_SECS` (600), `LAUNCH_MIN_BALANCE_LAMPORTS` (0.01 SOL), `LAUNCH_POOL_RESERVE` (5), `LAUNCH_RPC_TIMEOUT_MS` (5000) | api | M-2 drain guards |
+| `LAUNCH_WALLET_RESERVATIONS_PER_HOUR` (6), `LAUNCH_IP_RESERVATIONS_PER_HOUR` (20) | api | fresh vanity reservations per wallet / per IP (IPv6 /64) per hour (M-3 / S-5) |
+| `LAUNCH_AUTH_DOMAINS` (default: the `CORS_ORIGINS` hosts), `LAUNCH_AUTH_LEGACY` (true) | api | L-3: hosts a signed launch message may name (`domain:`); whether the old five-line message is still accepted (set `false` once the app signing the seven-line form is deployed). The message's `cluster:` must equal `FUMPAD_CLUSTER` |
 | `WAITLIST_RATE_LIMIT_PER_MIN` (5), `WAITLIST_PER_IP_PER_DAY` (20), `WAITLIST_IP_SALT` | api | pre-launch waitlist |
-| `IMG_RATE_LIMIT_PER_MIN` (600), `IMG_MAX_BYTES` (2 MiB), `IMG_CACHE_MB` (64), `IPFS_GATEWAY` (`https://ipfs.io/ipfs/`) | api | coin image proxy `GET /v1/img/:mint` (V7-L6): SSRF-safe fetch of the coin's metadata image, PNG/JPEG/GIF/WebP only, bounded in-memory LRU |
+| `IMG_RATE_LIMIT_PER_MIN` (600), `IMG_MAX_BYTES` (2 MiB), `IMG_CACHE_MB` (64), `IPFS_GATEWAY` (`https://ipfs.io/ipfs/`), `IMG_MAX_CONCURRENT` (16), `IMG_MAX_PER_HOST` (2) | api | coin image proxy `GET /v1/img/:mint` (V7-L6): SSRF-safe fetch of the coin's metadata image, PNG/JPEG/GIF/WebP only, bounded in-memory LRU; per-host concurrency cap (L-7) |
 | `PINATA_JWT` | api | **sealed**. Coin metadata pinning (`POST /v1/launch/metadata`). **Required on mainnet** (unset: 503, the app can't launch); unset on devnet = placeholder uri `ipfs://pending`. Check: `npm run pinata-check -- --env <file>` |
 | `PINATA_GATEWAY` | api, indexer | optional dedicated gateway domain (`<name>.mypinata.cloud`; a bare domain or `https://…`, anything else fails startup): our IPFS fetches try it before `IPFS_GATEWAY` |
 | `LAUNCH_METADATA_RATE_LIMIT_PER_MIN` (6), `LAUNCH_METADATA_WALLET_LIMIT_PER_MIN` (3), `LAUNCH_METADATA_WALLET_LIMIT_PER_HOUR` (20) | api | metadata upload limits (per IP; per wallet) |
@@ -367,7 +403,8 @@ local validator.
 | `WATCH_ALERT_COOLDOWN_MS` (30 min) | watcher | re-alert interval per item |
 | `LAUNCH_ALT` | api | the FUMPAD launch address lookup table (bootstrap `--step alt`; `launch-alt.json`). **Required** unless `FUMPAD_CLUSTER=localnet`: unset = prepare + metadata answer 503 (`launches DISABLED` at boot). Same value as the app's `NEXT_PUBLIC_LAUNCH_ALT` |
 | `LAUNCH_SIGNER_KEY` | api | **sealed**; 64-byte secret (base58 or JSON array) whose pubkey is `Params.launch_signer`; co-signs `register_coin` (L1). Separate from `MINT_POOL_KEY` |
-| `LAUNCH_FIRST_COIN` | api | `true` = `POST /v1/launch/prepare` accepts `launchConfig: "first_coin"` (the one-off first-coin DBC config: 3% fee, wallet-split fee policy, contracts INTERFACE §5.9) and `/v1/launch/options` advertises it while it is allow-listed with launches left. Default off; on only for the first coin, then off again (LAUNCH-DAY.md §5) |
+| `LAUNCH_FIRST_COIN` | api | `true` = `POST /v1/launch/prepare` and `/v1/launch/metadata` accept `launchConfig: "first_coin"` (the one-off first-coin DBC config: 3% fee, wallet-split fee policy, contracts INTERFACE §5.9) **from `FIRST_COIN_CREATOR` only**, and `/v1/launch/options?creator=<that wallet>` shows it while it is allow-listed with launches left. Default off; on only for the first coin, then off again (LAUNCH-DAY.md §5) |
+| `FIRST_COIN_CREATOR` | api | **required with `LAUNCH_FIRST_COIN=true`** (the API refuses to start without a valid wallet address): the only creator the first-coin config is prepared / pinned / offered for (audit S-2 / H-3). Mainnet: `EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc` |
 | `LAUNCHES_OPEN` | api | Whether `POST /v1/launch/prepare` accepts standard launches. `false` = 403 `{error: "Launches open soon", code: "launches_closed"}` (every launch needs the API's co-signature, so none lands on chain either) and `/v1/launch/options` says `launchesOpen: false` (the app shows "Launches open soon." on `/launch`); the first-coin path (`LAUNCH_FIRST_COIN`) is not affected. Default: `true` on devnet/testnet/localnet (or `FUMPAD_CLUSTER` unset), **`false` on mainnet** (fail-safe); `true`/`false` (also `1`/`0`, `yes`/`no`) set it explicitly, anything else fails startup. LAUNCH-DAY.md §5: `true` when the app opens |
 | `POOL_TARGET` (200), `GRINDER_THREADS` (cores), `POOL_POLL_SECS` (30) | grinder | |
 | `DATABASE_SSL` (`prefer`), `DATABASE_SSL_ROOT_CERT` | grinder | `disable` / `prefer` / `require` (TLS, cert unverified: Railway's self-signed Postgres) / `verify-full` (+ CA bundle) |
@@ -493,8 +530,10 @@ loop. API: quotes/balances fail (5xx) while list pages keep serving from Postgre
 `LAUNCH_RPC_TIMEOUT_MS`.
 
 ## Known gaps
-- Vanity pool drain: now needs funded wallets that sign (M-2) and many real IPs; the last `LAUNCH_POOL_RESERVE` mints
-  are kept for wallets with FUMPAD history. If the pool is empty the app shows "try again in a minute"; a fallback
+- Vanity pool drain: now needs funded wallets that sign (M-2), many real IPs (IPv6 by /64) and SOL that stays in each
+  holding wallet (M-3); the last `LAUNCH_POOL_RESERVE` mints are kept for wallets with FUMPAD history. The hourly
+  per-wallet / per-IP reservation caps and the single-use launch nonces are in memory (one API instance; a restart
+  resets them). If the pool is empty the app shows "try again in a minute"; a fallback
   to a random (non-`fmbL`) mint is deliberately not offered.
 - `sdk` `FumpadClient.buildProcessQueue` still passes the first 13 entries (the keeper no longer uses it; see H-4).
 - `escrowed` tickets map to the app's `claimed` state (the app types have no escrow state / withdraw action yet).

@@ -127,17 +127,20 @@ describe("launch config choice (first-coin config, INTERFACE §5.9)", () => {
       configCoins: order === "std-first" ? [5, coins, 0, 0, 0, 0, 0, 0] : [coins, 5, 0, 0, 0, 0, 0, 0],
     };
   };
+  const team = Keypair.generate().publicKey.toBase58();
+  const gate = { allowedCreator: team };
   it("standard never picks the first-coin config, whatever the slot order", () => {
-    expect(pickLaunchConfig(g(), "standard", true).dbcConfig.equals(std)).toBe(true);
-    expect(pickLaunchConfig(g(0, "first-first"), "standard", true).dbcConfig.equals(std)).toBe(true);
+    expect(pickLaunchConfig(g(), "standard", gate, team).dbcConfig.equals(std)).toBe(true);
+    expect(pickLaunchConfig(g(0, "first-first"), "standard", null, team).dbcConfig.equals(std)).toBe(true);
   });
-  it("first_coin needs the server flag, an allow-listed wallet-split config and a launch left", () => {
-    expect(() => pickLaunchConfig(g(), "first_coin", false)).toThrow(/not enabled/);
-    const s = pickLaunchConfig(g(), "first_coin", true);
+  it("first_coin needs the server flag, the allow-listed creator (S-2), an allow-listed wallet-split config and a launch left", () => {
+    expect(() => pickLaunchConfig(g(), "first_coin", null, team)).toThrow(/not enabled/);
+    expect(() => pickLaunchConfig(g(), "first_coin", gate, Keypair.generate().publicKey.toBase58())).toThrow(/reserved for the FUMPAD team wallet/);
+    const s = pickLaunchConfig(g(), "first_coin", gate, team);
     expect(s.dbcConfig.equals(first) && s.policy.wallet.equals(wallet)).toBe(true);
-    expect(() => pickLaunchConfig(g(1), "first_coin", true)).toThrow(/not available/);
+    expect(() => pickLaunchConfig(g(1), "first_coin", gate, team)).toThrow(/not available/);
     const none = { configs: [std, ...Array(7).fill(PublicKey.default)], configPolicies: Array(8).fill(STANDARD_FEE_POLICY), configCoins: Array(8).fill(0) };
-    expect(() => pickLaunchConfig(none, "first_coin", true)).toThrow(/not available/);
+    expect(() => pickLaunchConfig(none, "first_coin", gate, team)).toThrow(/not available/);
   });
 });
 

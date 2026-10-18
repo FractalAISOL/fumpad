@@ -153,7 +153,7 @@ One image (`services/Dockerfile`, `SERVICE_ENTRY` picks the entry; `keeper/dist/
 | service | new? | `SERVICE_ENTRY` / mode | env (★ = secret, piped) | RPC | public |
 |---|---|---|---|---|---|
 | `indexer` | existing | `indexer/dist/main.js` | `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `RPC_URL`★, (`WS_URL`★), Meteora indexing is on by default (`METEORA_INDEXER_ENABLED` must not be `false`); **unset** `BACKFILL_FROM_SLOT` (or set it to the deploy slot) and the Helius webhook vars unless you re-point the webhook at `5YMF…`; `PINATA_GATEWAY` (optional, same value as the api: coin metadata JSON is fetched through it first) | provider A (Helius, `rpc.env`) | no |
-| `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `LAUNCH_FIRST_COIN=false` (true only to launch the first coin, §11 / LAUNCH-DAY §5), `LAUNCHES_OPEN` (unset = open on devnet; **mainnet defaults to closed**: set `false` until the public opening, then `true`, LAUNCH-DAY §1/§5), `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional), **`PINATA_JWT`★ (new: coin metadata to IPFS, `POST /v1/launch/metadata`; required with `FUMPAD_CLUSTER=mainnet`, else uploads answer 503 and the app can't launch; devnet without it = placeholder uri `ipfs://pending`)**, `PINATA_GATEWAY` (optional, dedicated gateway domain `<name>.mypinata.cloud`: our image proxy tries it before `IPFS_GATEWAY`), **`LAUNCH_ALT` (new: the launch lookup table, §13; required: unset = every launch 503)** | A | yes (`api-production-66441.up.railway.app`) |
+| `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `LAUNCH_FIRST_COIN=false` (true only to launch the first coin, §11 / LAUNCH-DAY §5; **with it `FIRST_COIN_CREATOR`** = the one wallet allowed to, else the api refuses to start, §14), `LAUNCHES_OPEN` (unset = open on devnet; **mainnet defaults to closed**: set `false` until the public opening, then `true`, LAUNCH-DAY §1/§5), `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional), **`PINATA_JWT`★ (new: coin metadata to IPFS, `POST /v1/launch/metadata`; required with `FUMPAD_CLUSTER=mainnet`, else uploads answer 503 and the app can't launch; devnet without it = placeholder uri `ipfs://pending`)**, `PINATA_GATEWAY` (optional, dedicated gateway domain `<name>.mypinata.cloud`: our image proxy tries it before `IPFS_GATEWAY`), **`LAUNCH_ALT` (new: the launch lookup table, §13; required: unset = every launch 503)** | A | yes (`api-production-66441.up.railway.app`) |
 | `grinder` | existing | `grinder/Dockerfile` | unchanged (`DATABASE_URL`, `MINT_POOL_KEY`★, `POOL_TARGET`) | — | no |
 | `keeper` | existing | `keeper/dist/main.js`, `KEEPER_MODE=jobs` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (owner: `meta` table + advisory lock), `RPC_URL`★, **`KEEPER_SECRET_KEY`★ = operator** (never an attestor key: it refuses to start), `KEEPER_DAILY_BUDGET_SOL=3` (graduation setup ≈ 0.5 SOL/coin on devnet), `TELEGRAM_BOT_TOKEN`★/`TELEGRAM_CHAT_ID`, `PORT=8082` | A | no |
 | `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider B's **mainnet** endpoint), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | **B** | no |
@@ -565,8 +565,9 @@ npx tsx scripts/devnet/bootstrap-v07.ts --step policies --yes          # execute
 npx tsx scripts/devnet/bootstrap-v07.ts --step verify                  # bytecode = local .so, Global 1,491 B, standard + first-coin configs + policies
 ```
 Until step 5 the API offers no first-coin config (`/v1/launch/options` → `firstCoin: null`; prepare `first_coin` → 409)
-and standard launches work as before. To try a first-coin launch on devnet: api `LAUNCH_FIRST_COIN=true`, then
-`fumpad.vercel.app/launch?config=first-coin`; afterwards `bootstrap-v07.ts --step first-coin-done --yes` (queues the
+and standard launches work as before. To try a first-coin launch on devnet: api `LAUNCH_FIRST_COIN=true` **and
+`FIRST_COIN_CREATOR=<the wallet you launch with>`** (since §14 only that wallet is offered/prepared the config), then
+`fumpad.vercel.app/launch?config=first-coin` logged in with that wallet; afterwards `bootstrap-v07.ts --step first-coin-done --yes` (queues the
 removal), rerun after 1 h (executes), api `LAUNCH_FIRST_COIN=false`. Tickets attested earlier with Hermes prices may
 show as watcher mismatches (§4 "Pyth", Switching).
 
@@ -646,3 +647,21 @@ worker gateway", `sunset` header; dweb.link too, and Helius' CDN image proxy of 
 still writes `https://ipfs.io/ipfs/<cid>` uris today, so consumers that matter rewrite `/ipfs/<cid>` to their own
 gateway (Helius DAS resolved our JSON). Our own fetches must not depend on it: **set `PINATA_GATEWAY` on the indexer
 and api on every cluster** (without it the indexer stored no image/socials and `/v1/img/<mint>` answered 404).
+
+## 14. 2026-10-17 external audit: API hardening (off-chain only)
+
+`security-review/REPORT-v0.7.md` "External audit 2026-10-17" has the per-finding status. What changes for a deploy
+(none of these variables is set by the code change itself; set them in Railway yourself):
+
+| service | variable | value / note |
+|---|---|---|
+| `api` | `FIRST_COIN_CREATOR` | **required whenever `LAUNCH_FIRST_COIN=true`** (the api exits at boot otherwise): the only creator the first-coin config is prepared, pinned and offered for (S-2 / H-3). Mainnet: `EiwHzSkty4mD1463dvbr7o1fHMNaA8xQPgk4PyXpnVGc`. Devnet: the wallet that rehearses (`scripts/devnet/live-first-coin.ts` uses its `creator` key) |
+| `api` | `TRUST_PROXY_HOPS` | now defaults to **2** in production (Railway, S-4 / L-2). Keep `TRUST_PROXY_HOPS=2` set explicitly anyway; check `xffHops` in request logs after platform changes |
+| `api` | `LAUNCH_AUTH_LEGACY` | default `true`: the old five-line launch message is still accepted while apps from before L-3 are live. Deploy order: api → app (Vercel) → then `LAUNCH_AUTH_LEGACY=false` |
+| `api` | `LAUNCH_AUTH_DOMAINS` | optional; default = the `CORS_ORIGINS` hosts. A launch signed on a host not listed answers 401 "auth message is for another site" (the domain the first coin is launched from, e.g. `fumpad.vercel.app`, must be in `CORS_ORIGINS` anyway) |
+| `api` | `SOL_USD_FALLBACK` | **remove it if set** on devnet/mainnet: it is now an explicit opt-in fixed price (local stacks only). Without Pyth for `SOL_USD_MAX_STALE_SECS` (300) the USD routes answer 503 `price_unavailable` and the api logs `SOL/USD price unavailable` at error level: add a log alert on that line |
+| `api` | `SSR_RATE_LIMIT_PER_MIN` (6000), `WALLET_RPC_RATE_LIMIT_PER_MIN` (60), `LAUNCH_WALLET_RESERVATIONS_PER_HOUR` (6), `LAUNCH_IP_RESERVATIONS_PER_HOUR` (20), `IMG_MAX_CONCURRENT` (16), `IMG_MAX_PER_HOST` (2) | defaults are fine; tune only on evidence |
+
+The app change (seven-line launch message with `domain:` / `cluster:`, `/v1/launch/options?creator=`) needs a Vercel
+redeploy; the app's `NEXT_PUBLIC_FUMPAD_CLUSTER` (or the cluster inferred from its RPC) must equal the api's
+`FUMPAD_CLUSTER`, else launches answer 401 "auth message is for another cluster". No schema migration.

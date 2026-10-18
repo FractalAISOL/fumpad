@@ -27,10 +27,10 @@ import { LAUNCH_TX_MAX_BYTES, launchAltAddresses, launchInstructions, launchMeta
 
 import type { ApiConfig } from "../config.js";
 import { launchAltInUse } from "./alt.js";
-import { launchAuthError } from "./auth.js";
+import { checkLaunchAuth, NonceStore } from "./auth.js";
 import { checkLaunchImage, type CheckedImage, ImageCheckError, LAUNCH_IMAGE_MAX_BYTES } from "./image.js";
 import { LaunchError, withTimeout } from "./pool.js";
-import { assertLaunchAllowed, type LaunchConfigKind, PLACEHOLDER_URI, WindowLimiter } from "./routes.js";
+import { assertLaunchAllowed, firstCoinGate, launchAuthPolicy, type LaunchConfigKind, PLACEHOLDER_URI, WindowLimiter } from "./routes.js";
 
 /**
  * The gateway the on-chain `uri` (and the JSON's `image`) point at: our dedicated Pinata gateway (user decision
@@ -327,6 +327,8 @@ export interface MetadataDeps {
   pinner: IpfsPinner | null;
   /** Launches disabled on this server (no mint pool): uploads are refused too. */
   launchesEnabled: boolean;
+  /** L-3 single-use nonces (shared with prepare; scopes keep the two routes apart). Default: a store of its own. */
+  nonces?: NonceStore;
 }
 
 /** Log the metadata-upload mode once at boot (mainnet without Pinata is an error: launches can't work). */
@@ -339,52 +341,65 @@ export function logMetadataMode(cfg: ApiConfig, pinner: IpfsPinner | null, log: 
 export function registerMetadataRoute(app: FastifyInstance, cfg: ApiConfig, deps: MetadataDeps) {
   const perWalletMin = new WindowLimiter(cfg.launchMetadataWalletLimitPerMin);
   const perWalletHour = new WindowLimiter(cfg.launchMetadataWalletLimitPerHour, 3_600_000);
+  const firstCoin = firstCoinGate(cfg);
+  const nonces = deps.nonces ?? new NonceStore();
   app.post(
     "/v1/launch/metadata",
     { bodyLimit: METADATA_BODY_LIMIT, config: { rateLimit: { max: cfg.launchMetadataRateLimitPerMin, timeWindow: "1 minute" } } },
     async (req, reply): Promise<MetadataResponse> => {
       reply.header("cache-control", "no-store");
       const m = parseMetadataBody(req.body);
-      // Same gates as prepare, in the same order: nothing is stored for a launch that couldn't happen.
-      assertLaunchAllowed(m.launchConfig, cfg.launchesOpen);
-      if (m.launchConfig === "first_coin" && !cfg.launchFirstCoin) throw new LaunchError(403, "the first-coin launch config is not enabled on this server");
+      // Same gates as prepare, in the same order: nothing is stored for a launch that couldn't happen (S-2: the
+      // first-coin config only for FIRST_COIN_CREATOR).
+      assertLaunchAllowed(m.launchConfig, cfg.launchesOpen, firstCoin, m.creator.toBase58());
       if (!deps.launchesEnabled) throw new LaunchError(503, "launches are not enabled on this server");
       if (cfg.metadataDisabledReason) throw new LaunchError(503, "coin metadata uploads are not configured on this server");
       // Prepare refuses every launch without the required lookup table: don't pin for a launch that can't happen.
       if (cfg.launchAltRequired && !cfg.launchAlt) throw new LaunchError(503, "launches are not configured on this server (lookup table)");
+      // L-3: domain + cluster bound, nonce single use (this route's own use: the same signature then prepares).
+      let releaseNonce = () => {};
       if (cfg.launchRequireSignature) {
-        const err = launchAuthError(m.auth, { creator: m.creator, symbol: m.symbol }, { maxAgeSecs: cfg.launchSignatureMaxAgeSecs });
-        if (err) throw new LaunchError(401, err);
-      }
-      const alt = launchAltInUse(cfg);
-      assertMetadataFits({ ...m, alt });
-      const creator = m.creator.toBase58();
-      if (!perWalletMin.take(creator) || !perWalletHour.take(creator)) throw new LaunchError(429, "too many metadata uploads for this wallet, wait a bit", 60);
-      // Check the image before spending an RPC call or a pin on it.
-      let image: CheckedImage | undefined;
-      if (m.image) {
-        try {
-          image = checkLaunchImage(m.image);
-        } catch (e) {
-          if (e instanceof ImageCheckError) throw bad(e.message);
-          throw e;
-        }
-      }
-      if (cfg.launchMinBalanceLamports > 0n) {
-        const bal = BigInt(await withTimeout(deps.conn.getBalance(m.creator, "confirmed"), cfg.launchRpcTimeoutMs, "balance lookup"));
-        if (bal < cfg.launchMinBalanceLamports) throw bad(`wallet needs at least ${Number(cfg.launchMinBalanceLamports) / 1e9} SOL to launch`);
-      }
-      if (!deps.pinner) {
-        req.log.warn({ creator, symbol: m.symbol }, "launch metadata NOT pinned (PINATA_JWT unset): placeholder uri");
-        return { uri: PLACEHOLDER_URI, placeholder: true };
+        const a = checkLaunchAuth(nonces, "metadata", m.auth, { creator: m.creator, symbol: m.symbol }, launchAuthPolicy(cfg));
+        if (!a.ok) throw new LaunchError(401, a.error);
+        releaseNonce = a.release;
       }
       try {
-        const out = await pinLaunchMetadata(deps.pinner, m, image, alt);
-        req.log.info({ creator, symbol: m.symbol, uri: out.uri, image: !!image }, "launch metadata pinned");
-        return out;
+        return await upload();
       } catch (e) {
-        req.log.warn({ creator, err: e instanceof PinError ? e.message : e instanceof Error ? e.name : "error" }, "launch metadata pin failed");
-        throw new LaunchError(502, "couldn't store the coin's image and details right now, try again", 5);
+        releaseNonce(); // nothing was pinned: the app may retry with the same signature
+        throw e;
+      }
+      async function upload(): Promise<MetadataResponse> {
+        const alt = launchAltInUse(cfg);
+        assertMetadataFits({ ...m, alt });
+        const creator = m.creator.toBase58();
+        if (!perWalletMin.take(creator) || !perWalletHour.take(creator)) throw new LaunchError(429, "too many metadata uploads for this wallet, wait a bit", 60);
+        // Check the image before spending an RPC call or a pin on it.
+        let image: CheckedImage | undefined;
+        if (m.image) {
+          try {
+            image = checkLaunchImage(m.image);
+          } catch (e) {
+            if (e instanceof ImageCheckError) throw bad(e.message);
+            throw e;
+          }
+        }
+        if (cfg.launchMinBalanceLamports > 0n) {
+          const bal = BigInt(await withTimeout(deps.conn.getBalance(m.creator, "confirmed"), cfg.launchRpcTimeoutMs, "balance lookup"));
+          if (bal < cfg.launchMinBalanceLamports) throw bad(`wallet needs at least ${Number(cfg.launchMinBalanceLamports) / 1e9} SOL to launch`);
+        }
+        if (!deps.pinner) {
+          req.log.warn({ creator, symbol: m.symbol }, "launch metadata NOT pinned (PINATA_JWT unset): placeholder uri");
+          return { uri: PLACEHOLDER_URI, placeholder: true };
+        }
+        try {
+          const out = await pinLaunchMetadata(deps.pinner, m, image, alt);
+          req.log.info({ creator, symbol: m.symbol, uri: out.uri, image: !!image }, "launch metadata pinned");
+          return out;
+        } catch (e) {
+          req.log.warn({ creator, err: e instanceof PinError ? e.message : e instanceof Error ? e.name : "error" }, "launch metadata pin failed");
+          throw new LaunchError(502, "couldn't store the coin's image and details right now, try again", 5);
+        }
       }
     },
   );

@@ -11,7 +11,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { loadApiConfig } from "../src/config.js";
-import { ImageProxy, type ImageProxyOpts, sniffImage } from "../src/img.js";
+import { ImageProxy, type ImageProxyOpts, imageHostGroup, sniffImage } from "../src/img.js";
 import { buildServer } from "../src/server.js";
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 1)]);
@@ -75,7 +75,7 @@ afterAll(() => upstream.close());
 const url = (p: string) => `http://127.0.0.1:${(upstream.address() as AddressInfo).port}${p}`;
 /** 127.0.0.1 plays a public host; every other address keeps the real policy. */
 const testFetch: ImageProxyOpts["fetchOpts"] = { allowHttp: true, isAllowedAddress: (ip) => ip === "127.0.0.1" };
-const proxy = (images: Record<string, string | null>, o: ImageProxyOpts = {}) => new ImageProxy(async (m) => images[m] ?? null, { fetchOpts: testFetch, maxBytes: 32 * 1024, ...o });
+const proxy = (images: Record<string, string | null>, o: ImageProxyOpts = {}) => new ImageProxy(async (m) => images[m] ?? null, { fetchOpts: testFetch, maxBytes: 32 * 1024, maxPerHost: 8, ...o });
 
 describe("sniffImage", () => {
   it("accepts PNG / JPEG / GIF / WebP by magic bytes", () => {
@@ -178,6 +178,29 @@ describe("ImageProxy", () => {
     slowRelease?.();
     expect((await first).ok).toBe(true);
     expect((await p.get("other")).ok).toBe(true);
+  });
+
+  it("L-7: one slow host holds at most maxPerHost slots; other hosts still load", async () => {
+    const port = (upstream.address() as AddressInfo).port;
+    const p = proxy({ slow: url("/slow.png"), sameHost: url("/a.png?same"), otherHost: `http://localhost:${port}/a.png?other` }, { maxConcurrent: 8, maxPerHost: 1 });
+    const first = p.get("slow");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await p.get("sameHost")).toEqual({ ok: false, reason: "busy" }); // 127.0.0.1's one slot is taken
+    expect(await p.get("otherHost")).not.toEqual({ ok: false, reason: "busy" }); // a different host is not held up (it is fetched)
+    expect(p.stats.hostBusy).toBe(1);
+    slowRelease?.();
+    expect((await first).ok).toBe(true);
+    expect((await p.get("sameHost")).ok).toBe(true);
+  });
+
+  it("L-7: host groups: subdomains share one group, trusted gateways and ipfs:// get their own", () => {
+    const trusted = new Set(["scarlet-generous-armadillo-291.mypinata.cloud"]);
+    expect(imageHostGroup("https://a.evil.example/x.png", trusted)).toEqual({ key: "evil.example", trusted: false });
+    expect(imageHostGroup("https://b.c.evil.example/y.png", trusted)).toEqual({ key: "evil.example", trusted: false });
+    expect(imageHostGroup("https://other.mypinata.cloud/ipfs/x", trusted)).toEqual({ key: "mypinata.cloud", trusted: false });
+    expect(imageHostGroup("https://scarlet-generous-armadillo-291.mypinata.cloud/ipfs/x", trusted)).toEqual({ key: "scarlet-generous-armadillo-291.mypinata.cloud", trusted: true });
+    expect(imageHostGroup("ipfs://bafy", trusted)).toEqual({ key: "ipfs:", trusted: true });
+    expect(imageHostGroup("https://203.0.113.5/a.png", trusted)).toEqual({ key: "203.0.113.5", trusted: false });
   });
 });
 
