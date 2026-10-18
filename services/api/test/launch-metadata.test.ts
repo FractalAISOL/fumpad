@@ -308,8 +308,8 @@ describe("POST /v1/launch/metadata", () => {
     expect(pinner.files[0].keyvalues).toEqual({ app: "fumpad", creator, symbol: "PIGN", kind: "image" });
     expect(pinner.files[1].cidVersion).toBe("v0");
     // through the launch ALT a first buy (the default) still leaves room for the https form
-    expect(out.uri).toMatch(/^https:\/\/ipfs\.io\/ipfs\/Qm[1-9A-HJ-NP-Za-km-z]{44}$/);
-    expect(out.image).toMatch(/^https:\/\/ipfs\.io\/ipfs\/b[a-z2-7]+$/);
+    expect(out.uri).toMatch(/^https:\/\/scarlet-generous-armadillo-291\.mypinata\.cloud\/ipfs\/Qm[1-9A-HJ-NP-Za-km-z]{44}$/);
+    expect(out.image).toMatch(/^https:\/\/scarlet-generous-armadillo-291\.mypinata\.cloud\/ipfs\/b[a-z2-7]+$/);
     expect(out.placeholder).toBeUndefined();
     const json = JSON.parse(Buffer.from(pinner.files[1].bytes).toString("utf8"));
     expect(json).toMatchObject({
@@ -333,7 +333,7 @@ describe("POST /v1/launch/metadata", () => {
     const a = await server({}, { pinner });
     const r = await post(a, body({ firstBuy: false }));
     expect(r.statusCode).toBe(200);
-    expect(r.json().uri).toMatch(/^https:\/\/ipfs\.io\/ipfs\/Qm[1-9A-HJ-NP-Za-km-z]{44}$/); // room for the https form
+    expect(r.json().uri).toMatch(/^https:\/\/scarlet-generous-armadillo-291\.mypinata\.cloud\/ipfs\/Qm[1-9A-HJ-NP-Za-km-z]{44}$/); // room for the https form
     expect(pinner.files).toHaveLength(1);
     expect(r.json().image).toBeUndefined();
     const json = JSON.parse(Buffer.from(pinner.files[0].bytes).toString("utf8"));
@@ -401,7 +401,7 @@ describe("POST /v1/launch/metadata", () => {
     const a = await server({}, { pinner });
     const r = await post(a, body({ name: "W".repeat(32) }, "WWWWWWWWWW"));
     expect(r.statusCode).toBe(200);
-    expect(r.json().uri).toMatch(/^https:\/\/ipfs\.io\/ipfs\/Qm/);
+    expect(r.json().uri).toMatch(/^https:\/\/scarlet-generous-armadillo-291\.mypinata\.cloud\/ipfs\/Qm/);
   });
 
   it("LAUNCH_ALT missing where it's required (devnet / mainnet): 503 before anything is pinned", async () => {

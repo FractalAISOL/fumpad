@@ -32,7 +32,7 @@ function altAccountData(addresses: PublicKey[], o: { authority?: PublicKey; deac
 
 const NAME = "W".repeat(32);
 const SYMBOL = "W".repeat(10);
-const URI = "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+const URI = "https://scarlet-generous-armadillo-291.mypinata.cloud/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"; // our gateway (105 chars): the worst case must still fit
 
 describe("POST /v1/launch/prepare through the launch ALT", () => {
   const altKey = Keypair.generate().publicKey;

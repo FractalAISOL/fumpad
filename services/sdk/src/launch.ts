@@ -101,7 +101,7 @@ export function launchInstructions(p: LaunchParams): TransactionInstruction[] {
 /**
  * Solana's packet limit. A launch without a lookup table (every key inline) leaves name + symbol + uri ~77 bytes with
  * the launch co-signer and a first buy; with the FUMPAD launch ALT (11 keys loaded by a 1-byte index instead of 32
- * bytes each) a max-length name (32) + symbol (10) + `https://ipfs.io/ipfs/<CIDv0>` (67) + first buy + co-signer +
+ * bytes each) a max-length name (32) + symbol (10) + `https://<our Pinata gateway>/ipfs/<CIDv0>` (105) + first buy + co-signer +
  * priority fee still leaves ~129 bytes.
  */
 export const LAUNCH_TX_MAX_BYTES = 1_232;

@@ -9,7 +9,7 @@
  * prepare (M-2: one wallet signature covers both calls). Limits: per IP (route), per wallet (minute + hour),
  * funded wallets only, same LAUNCHES_OPEN / first-coin gate as prepare: nobody gets free IPFS hosting from us.
  *
- * Response: `{ uri, image?, placeholder? }`. `uri` is `https://ipfs.io/ipfs/<CIDv0 of the JSON>` when the launch
+ * Response: `{ uri, image?, placeholder? }`. `uri` is `https://<our Pinata gateway>/ipfs/<CIDv0 of the JSON>` when the launch
  * transaction has room for it, else the shorter `ipfs://<CIDv0>` (`metadataUriFor`: the launch tx must fit 1,232
  * bytes). Through the launch lookup table (LAUNCH_ALT, every cluster but localnet) the https form always fits: a
  * max-length name (32) + ticker (10) + https uri + first buy + launch co-signature + priority fee leave ~129 bytes.
@@ -33,15 +33,15 @@ import { LaunchError, withTimeout } from "./pool.js";
 import { assertLaunchAllowed, type LaunchConfigKind, PLACEHOLDER_URI, WindowLimiter } from "./routes.js";
 
 /**
- * The gateway the on-chain `uri` (and the JSON's `image`) point at. https, not `ipfs://`: Phantom, Solflare,
- * Jupiter, Dexscreener and most indexers fetch https URIs directly while `ipfs://` support is uneven, and pump.fun
- * (the convention every Solana aggregator is tuned for) uses exactly `https://ipfs.io/ipfs/<cid>`. ipfs.io is the
- * neutral public gateway (Protocol Labs), not tied to our Pinata account: if we ever move pinning provider or the
- * account lapses, the URI stays valid as long as someone pins the CID, and consumers that rewrite `/ipfs/<cid>`
- * paths to their own gateway (most do) keep working. Our own fetches (indexer, image proxy) prefer the dedicated
- * Pinata gateway for these same CIDs (`PINATA_GATEWAY`, safeFetch `ipfsGateways`).
+ * The gateway the on-chain `uri` (and the JSON's `image`) point at: our dedicated Pinata gateway (user decision
+ * 2026-10-18, option B). https, not `ipfs://`: Phantom, Solflare, Jupiter, Dexscreener and most indexers fetch https
+ * URIs directly while `ipfs://` support is uneven. Not ipfs.io: that public gateway was retired on 2026-09-21 (429s,
+ * `sunset` header), so direct fetches of ipfs.io URIs fail. Meteora DBC coins listed on Axiom use this same
+ * `https://<name>.mypinata.cloud/ipfs/<cid>` form. Trade-off accepted: the URI is permanent and tied to this Pinata
+ * account (keep it active and paid as needed); consumers that rewrite `/ipfs/<cid>` paths to their own gateway keep
+ * working regardless. Hard-coded, not env, so a deployment can't launch coins with a mistyped or missing gateway.
  */
-export const METADATA_URI_GATEWAY = "https://ipfs.io/ipfs/";
+export const METADATA_URI_GATEWAY = "https://scarlet-generous-armadillo-291.mypinata.cloud/ipfs/";
 /** Solana's packet limit for the launch transaction. */
 export { LAUNCH_TX_MAX_BYTES };
 export const METADATA_CREATED_ON = "https://fumpad.app";
@@ -222,7 +222,7 @@ export function launchTxSize(m: { name: string; symbol: string; uri: string; fir
 const SAMPLE_CID_V0 = "Qm" + "1".repeat(44);
 
 /**
- * The most compatible metadata URI that still fits the launch transaction: `https://ipfs.io/ipfs/<cid>` (fetched
+ * The most compatible metadata URI that still fits the launch transaction: `${METADATA_URI_GATEWAY}<cid>` (fetched
  * directly by every wallet / aggregator), else `ipfs://<cid>` (consumers must map it to a gateway themselves; our
  * indexer and image proxy do), else null (name + ticker too long to launch with any IPFS uri). Through the launch
  * ALT (`alt`, every cluster but localnet) the https form always fits, whatever the name / ticker / first buy; inline,
