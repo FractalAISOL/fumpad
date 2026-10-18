@@ -168,7 +168,7 @@ describe("watcher liveness alerts (L7)", () => {
     });
     await w.tick();
     expect(alerts.some((a) => a.startsWith("missing-sell:") && a.includes("expires in"))).toBe(true);
-    expect(alerts.some((a) => a.startsWith("issues:") && a.includes("negative_balance/wallet"))).toBe(true);
+    expect(alerts.some((a) => a.startsWith(`issues:${mint.toBase58()}:negative_balance `) && a.includes("wallet:"))).toBe(true); // L-6: key = mint + kind
     expect(w.stats.issues).toBe(1);
   });
 });

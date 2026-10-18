@@ -217,6 +217,28 @@ describe("fail closed", () => {
     expect(r.issues.every((i) => i.code === "no_stack_heights")).toBe(true);
   });
 
+  it("a swap event under an instruction outside our subset: no trade, but the issue names the pool and its exact post-swap price (audit M-2)", () => {
+    for (const name of ["damm_direct_sell", "dbc_direct_sell"]) {
+      const raw = clone(load(name));
+      const [t] = parseMeteoraTrades(raw).trades;
+      const tx = normalizeTx(raw);
+      const evIx = tx.flat.find((i) => (i.programId === DAMM_V2_PROGRAM_ID || i.programId === DBC_PROGRAM_ID) && i.accounts[0] && (i.accounts[0] === DAMM_V2_EVENT_AUTHORITY || i.accounts[0] === DBC_EVENT_AUTHORITY))!;
+      const parent = tx.flat[evIx.parent!];
+      // re-point the swap instruction to an unknown discriminator (a newer swap variant anyone could call)
+      const data = Uint8Array.from(parent.data!);
+      data.set([0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef], 0);
+      const target = parent.innerIx < 0 ? (raw.transaction.message as { instructions: { data: string }[] }).instructions[parent.topIx] : (raw.meta!.innerInstructions!.find((g) => g.index === parent.topIx)!.instructions[parent.innerIx] as { data: string });
+      target.data = bs58.encode(data);
+      const r = parseMeteoraTrades(raw);
+      expect(r.trades).toEqual([]);
+      expect(r.issues.map((i) => i.code)).toEqual(["event_without_swap_parent"]); // one issue per instruction (DBC also emits EvtSwap)
+      const is = r.issues[0];
+      expect(is).toBeDefined();
+      expect(is.pool).toBe(t.pool);
+      expect(is.price).toEqual({ pool: t.pool, nextSqrtPrice: t.nextSqrtPrice });
+    }
+  });
+
   it("garbage input is a tx_shape error", () => {
     const r = parseMeteoraTrades({ slot: 1, transaction: { signatures: ["x"], message: {} }, meta: { err: null } });
     expect(r.status).toBe("error");

@@ -100,6 +100,8 @@ export const ATTEST_BOARD_RLS = `
 CREATE TABLE IF NOT EXISTS attest_keeper_roles (db_role text PRIMARY KEY, keeper text NOT NULL UNIQUE);
 ALTER TABLE attest_signatures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attest_hints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attest_signatures FORCE ROW LEVEL SECURITY;
+ALTER TABLE attest_hints FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS board_read ON attest_signatures;
 DROP POLICY IF EXISTS board_own ON attest_signatures;
 DROP POLICY IF EXISTS hints_read ON attest_hints;
@@ -135,12 +137,55 @@ export class PgBoard implements SignatureBoard {
     }
   }
 
-  /** True when both board tables enforce row-level security (per-keeper roles, ATTEST_BOARD_RLS). */
+  /** True when row-level security on both board tables actually binds THIS connection's role (see rlsProblems). */
   async rowSecurity(): Promise<boolean> {
-    const r = await this.pool.query<{ relname: string; relrowsecurity: boolean }>(
-      "SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('attest_signatures','attest_hints')",
+    return (await this.rlsProblems()).length === 0;
+  }
+
+  /**
+   * Why row-level security would NOT bind this connection's role (S-8 / L-1); empty = effective. Checks, for both
+   * board tables (resolved through the search_path like every query here): RLS enabled; the role is not the table
+   * owner nor a member of it (owners bypass RLS unless it is FORCEd); the role is not a superuser and has no
+   * BYPASSRLS; the per-keeper write policies exist.
+   */
+  async rlsProblems(): Promise<string[]> {
+    const r = await this.pool.query<{
+      t: string;
+      oid: number | null;
+      rls: boolean | null;
+      force: boolean | null;
+      owner: string | null;
+      owns: boolean | null;
+      policies: number;
+      super: boolean;
+      bypass: boolean;
+      me: string;
+    }>(
+      `SELECT t, c.oid::int AS oid, c.relrowsecurity AS rls, c.relforcerowsecurity AS force,
+              pg_get_userbyid(c.relowner) AS owner,
+              CASE WHEN c.oid IS NULL THEN NULL ELSE pg_has_role(current_user, c.relowner, 'USAGE') END AS owns,
+              (SELECT count(*)::int FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname IN ('board_own', 'hints_own')) AS policies,
+              me.rolsuper AS super, me.rolbypassrls AS bypass, current_user AS me
+         FROM unnest(ARRAY['attest_signatures', 'attest_hints']) AS t
+         LEFT JOIN pg_class c ON c.oid = to_regclass(t)
+         CROSS JOIN (SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user) me`,
     );
-    return r.rows.length === 2 && r.rows.every((x) => x.relrowsecurity);
+    const out: string[] = [];
+    const me = r.rows[0]?.me ?? "?";
+    if (r.rows[0]?.super) out.push(`role ${me} is a superuser (bypasses RLS)`);
+    if (r.rows[0]?.bypass) out.push(`role ${me} has BYPASSRLS`);
+    for (const x of r.rows) {
+      if (x.oid === null) {
+        out.push(`${x.t} missing`);
+        continue;
+      }
+      if (!x.rls) out.push(`${x.t}: row-level security disabled`);
+      // an owner bypasses RLS unless FORCEd, and can always disable it or drop the policies
+      if (x.owns) out.push(`${x.t}: role ${me} owns it (owner ${x.owner}): it can disable RLS / drop the policies`);
+      if (!x.force) out.push(`${x.t}: RLS not FORCEd (re-run ATTEST_BOARD_RLS)`);
+      if (x.policies < 1) out.push(`${x.t}: per-keeper policy missing`);
+    }
+    return out;
   }
 
   async publish(id: string, kind: AttestKind, mint: string, message: Uint8Array, keeper: string, signature: Uint8Array): Promise<void> {

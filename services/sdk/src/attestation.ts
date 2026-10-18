@@ -63,6 +63,19 @@ export function signatureBytes(sig: string | Uint8Array): Uint8Array {
   return b;
 }
 
+const U64_MAX = (1n << 64n) - 1n;
+const U128_MAX = (1n << 128n) - 1n;
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
+
+function checkInt(kind: string, x: number, max: number): void {
+  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > max) throw new RangeError(`attestation ${kind} out of range: ${x}`);
+}
+
+function checkBig(kind: string, x: bigint, min: bigint, max: bigint): void {
+  if (typeof x !== "bigint" || x < min || x > max) throw new RangeError(`attestation ${kind} out of range: ${String(x)}`);
+}
+
 class W {
   private readonly b: Uint8Array;
   private readonly v: DataView;
@@ -76,28 +89,35 @@ class W {
     this.o += x.length;
     return this;
   }
+  // Range-checked (audit robustness gap): an out-of-range value throws instead of wrapping into a different,
+  // still valid-looking message (e.g. baseAmount 2^64 used to encode as 0).
   u8(x: number) {
+    checkInt("u8", x, 0xff);
     this.v.setUint8(this.o, x);
     this.o += 1;
     return this;
   }
   u32(x: number) {
-    this.v.setUint32(this.o, x >>> 0, true);
+    checkInt("u32", x, 0xffff_ffff);
+    this.v.setUint32(this.o, x, true);
     this.o += 4;
     return this;
   }
   u64(x: bigint) {
-    this.v.setBigUint64(this.o, BigInt.asUintN(64, x), true);
+    checkBig("u64", x, 0n, U64_MAX);
+    this.v.setBigUint64(this.o, x, true);
     this.o += 8;
     return this;
   }
   i64(x: bigint) {
-    this.v.setBigInt64(this.o, BigInt.asIntN(64, x), true);
+    checkBig("i64", x, I64_MIN, I64_MAX);
+    this.v.setBigInt64(this.o, x, true);
     this.o += 8;
     return this;
   }
   u128(x: bigint) {
-    this.u64(x & ((1n << 64n) - 1n));
+    checkBig("u128", x, 0n, U128_MAX);
+    this.u64(x & U64_MAX);
     return this.u64(x >> 64n);
   }
   done(): Uint8Array {

@@ -277,3 +277,37 @@ decision; each pins down something the spec left open or that the mainnet binari
 
 
 31. **Pyth max price age 120 s (user decision 2026-10-14).** `DEFAULT_MAX_PRICE_AGE_SECS` / SDK default 60 → 120 s: the on-chain Pyth SOL/USD feed used by keepers (PYTH_SOURCE=onchain) updates about every 53 s on average, so 60 s dropped honest sells; the price only gates the ≥ $50 check. Devnet Global set to 120 via queue_params → execute_params. Bounds unchanged (30–300 s).
+
+32. **Rebuy debits are aggregated per ticket (external audit 2026-10-17, H-1; engine rule, no program change).** Any
+   acquisition debits the wallet's in-window tickets exactly as before (engine-side, newest first), but a ticket's
+   debits are ATTESTED only once the debit accumulated since its previous attestation reaches ⌈ticket tokens ×
+   `min_rebuy_debit_bps` / 10,000⌉ (≥ 1 token; default 100 bps = 1% of the ticket's attested tokens), or when it voids
+   the ticket. One `attest_rebuy` then carries the sum (`debit_tokens`), anchored on the acquisition that crossed the
+   threshold (its signature / ix_key / slot / block_time — inside the rebuy window, like every acquisition debited), so
+   the program's checks are unchanged and pass (`debit_tokens > 0`, window, age, one marker per (trade, ticket)).
+   Rationale: every acquisition used to cost the attestors a transaction + ~0.0016 SOL marker rent per live ticket, and
+   anyone can transfer 1 token to a ticket holder. Now a ticket gets at most ⌈10,000 / bps⌉ + 1 rebuy attestations
+   (101 at the default) and each one needs ≥ 1% of the ticket actually acquired. The rule still binds every
+   meaningful rebuy: only a residual below 1% of the ticket that no later acquisition tops up inside the window goes
+   unattested, i.e. the claim is overstated by at most 0.1% of the ticket (10% × 1%) — against the ≥ $50 ticket rule
+   (§5.1) that is ≤ $0.05 per $50 of ticket at sell price. A consensus value: every attestor and the watcher use the
+   same `ENGINE_MIN_REBUY_DEBIT_BPS` (default; 0 = attest every acquisition, the previous rule). Keeper-side (not
+   consensus): each attestor submits at most 6 rebuy attestations per ticket and 120 per coin per rolling hour
+   (deferred, never dropped) and alerts on a low SOL balance.
+33. **Dust transfer-ins don't restart the hold clock (external audit 2026-10-17, M-1; engine rule).** A transfer-in
+   smaller than `dust_transfer_bps` (default 100 = 1%) of the wallet's current PENDING bucket (after settling it)
+   neither restarts that bucket's clock nor joins it: it stays untracked (an "unseen" arrival — sold first, never
+   ticketed, the v0.6 rule for unseen tokens). So an unsolicited 1-token transfer can no longer reset a holder's
+   whole pending bucket. Larger transfer-ins, buys and FUMPAD payouts behave as before (one pending bucket, its clock
+   restarts — clarification 21 unchanged). Rebuy purposes: dust still debits tickets 1:1 in the engine, but under
+   clarification 32 it creates no attestation by itself (the gifted tokens go to the victim; it can't drain anyone).
+   Consensus value `ENGINE_DUST_TRANSFER_BPS` (0 = previous rule).
+34. **Payout exemption per owner; price-only parse issues (external audit 2026-10-17, L-5 / M-2).** (a) An inflow is
+   exempt from rebuy debits only for the amount that owner received from a reward-pool token account in that
+   transaction (read from its Transfer / TransferChecked instructions); other inflows bundled into a claim
+   transaction — for the claimer or anyone else — are ordinary acquisitions. (b) Refines 22: a genuine swap event
+   (emitted through the pool program's event authority) under an instruction outside the parser's subset gives no trade
+   record, but its EvtSwap2 names the pool and its exact post-swap sqrt price. The engine then refuses that
+   transaction's sells only (`parse_issue_in_tx`) and keeps the D10 reference and pre-trade spot exact (no 10-min
+   price taint). Issues without such a price (event decode failures, unexplained vault movements, two swap events
+   under one unknown instruction) keep the fail-closed D10-window taint.

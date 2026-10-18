@@ -281,10 +281,32 @@ execute_buyback (median/±3% pre-checked), process_queue, skim+settle
   balance or an attested ticket the engine can't map blocks only that wallet until it fully exits; nothing freezes a
   coin. Vault donations / pool-program transfers / SyncNative in swap txs are accounted, owner changes follow the token
   account. Issues are alerted (attestor and watcher); see the runbook below.
-- **Liveness** (V7-M6): incremental crawl (per-address cursors, closed token accounts never re-asked), per-coin RPC
-  budget per tick (resumes next tick), `ATTEST_COIN_CONCURRENCY` coins in parallel, coins with recent sells first,
-  `ATTEST_TICK_BUDGET_MS` per tick, bounded caches. Hermes 404s for recent seconds are re-asked (V7-M5); with
-  `PYTH_SOURCE=onchain` a sell younger than ~65 s waits (PriceNotReady) until its price window is finalized.
+- **Liveness** (V7-M6, external audit S-1): incremental crawl (per-address cursors, closed token accounts never
+  re-asked). Every tick crawls only what has NEW activity: the mint, the Coin PDA, never-crawled accounts, and every
+  account that appears in a newly found tx plus all open accounts of its owner (transitively, in the same tick) — so
+  a wallet that trades or moves tokens has its whole history crawled before anything of it is attested. Dormant open
+  accounts (and attested ticket PDAs) are re-polled in rotation with at most half the budget, never past it; holders
+  of tickets inside their rebuy window go first. A plain `Transfer` between two dormant accounts (it lists neither the
+  mint nor an active account) is seen within one sweep cycle (⌈open accounts / (budget/2)⌉ ticks: 20,000 accounts →
+  8 ticks ≈ 2 min) and always before either wallet trades. Per-coin RPC budget per tick (`ATTEST_COIN_RPC_BUDGET`,
+  5,000) is adaptive: a coin that ran out gets twice the budget next tick, up to `ATTEST_COIN_RPC_BUDGET_MAX`
+  (4×), halving back after completions. A coin whose crawl runs out `ATTEST_CRAWL_ALERT_TICKS` (4) ticks in a row is
+  alerted (`crawl-budget:<mint>`, 1 h dedupe, attestor and watcher). `ATTEST_COIN_CONCURRENCY` coins in parallel, coins
+  with recent sells first, `ATTEST_TICK_BUDGET_MS` per tick, bounded caches. Hermes 404s for recent seconds are
+  re-asked (V7-M5); with `PYTH_SOURCE=onchain` a sell younger than ~65 s waits (PriceNotReady) until its price window
+  is finalized.
+- **Rebuy spend** (external audit H-1, SPEC Clarification 32): a ticket's rebuy debits accumulate in the engine and
+  are attested once they reach 1% of the ticket (`ENGINE_MIN_REBUY_DEBIT_BPS`, 100) or void it — one attestation
+  carries the sum, so dust spam costs the attestors nothing and a ticket gets at most ⌈10,000/bps⌉ + 1 rebuy
+  attestations. Keeper-side: each attestor submits at most `ATTEST_REBUY_PER_TICKET_HOUR` (6) per ticket and
+  `ATTEST_REBUY_PER_COIN_HOUR` (120) per coin per rolling hour (over budget: signed + published, own submission
+  deferred, alert `rebuy-budget:<mint>`), and alerts `balance` when its SOL is below `MIN_ATTESTOR_LAMPORTS`
+  (default `MIN_KEEPER_LAMPORTS` or 0.2 SOL; shown as `balanceLamports` on `/health`).
+- **Consensus knobs** — `ENGINE_MIN_REBUY_DEBIT_BPS` (100) and `ENGINE_DUST_TRANSFER_BPS` (100, M-1: a transfer-in
+  below 1% of the wallet's pending bucket doesn't restart its hold clock, SPEC Clarification 33) change the derived
+  messages: leave them unset, or set the SAME values on all three attestors and the watcher at once.
+- **Alerts never block a tick** (L-6): attestor and watcher fire alerts without awaiting Telegram; engine issues are
+  keyed `issues:<mint>:<kind>` (stable while the problem persists; a new kind alerts at once).
 - **History (L8)**: coins launched before the RPC's `getFirstAvailableBlock` are refused (use an archive RPC);
   `RPC_HISTORY_CHECK=off` disables it.
 - **Watcher alerts** (L7): attestation mismatches (until the guardian voids), sells with a derived ticket that never
@@ -312,8 +334,12 @@ GRANT SELECT ON attest_keeper_roles TO keeper_a;
 INSERT INTO attest_keeper_roles VALUES ('keeper_a', '<keeper A pubkey>');
 CREATE ROLE watcher LOGIN PASSWORD '…'; GRANT SELECT ON attest_signatures, attest_hints TO watcher;
 ```
-Each attestor's `DATABASE_URL` uses its own role. Attestors log and alert at startup when the board has no row-level
-security; `ATTEST_BOARD_REQUIRE_RLS=1` (set it for mainnet) refuses to start instead.
+Each attestor's `DATABASE_URL` uses its own role. At startup an attestor checks that row-level security actually
+binds ITS role (S-8 / L-1): RLS enabled **and FORCEd** on both tables, the per-keeper policies present, and the role
+neither owns the tables (nor is a member of the owner role), nor is a superuser, nor has `BYPASSRLS`. With
+`ATTEST_BOARD_REQUIRE_RLS` on — **the default when `NODE_ENV=production`** (`0` opts out, e.g. a devnet board
+without roles) — it refuses to start and names the reasons; otherwise it logs and alerts. `ATTEST_BOARD_RLS` now also
+FORCEs RLS: re-run it (idempotent) on an existing board before upgrading the attestors.
 
 ## Environment
 
@@ -358,8 +384,10 @@ local validator.
 | `FULL_RATE_SECS` (15), `HEARTBEAT_SECS` (480), `BUYBACK_MIN_LAMPORTS`, `SKIM_INTERVAL_SECS`, `PLATFORM_FEES_MIN_LAMPORTS`, `USE_LOOKUP_TABLE`, `JOB_*` (=false to disable), `MIN_KEEPER_LAMPORTS` | keeper | policy |
 | `JOB_AUTOCLAIM`, `AUTOCLAIM_INTERVAL_SECS` (15), `AUTOCLAIM_MAX_PER_RUN` (20) | keeper | D17 |
 | `BUYBACK_JITTER` (1), `PREGRAD_TWAP_SAMPLES` (8), `PREGRAD_TWAP_SPACING_SECS` (15) | keeper | L5 pre-grad buyback guard |
-| `ATTEST_COIN_CONCURRENCY` (4), `ATTEST_TICK_BUDGET_MS` (60000), `ATTEST_COIN_RPC_BUDGET` (5000), `ATTEST_TX_CACHE` (200k), `ATTEST_BLOCK_CACHE` (50k), `ATTEST_PRICE_CACHE` (100k) | attestor, watcher | V7-M6 liveness |
-| `ATTEST_BOARD_REQUIRE_RLS` | attestor | `1` = refuse to start without per-keeper roles (mainnet) |
+| `ATTEST_COIN_CONCURRENCY` (4), `ATTEST_TICK_BUDGET_MS` (60000), `ATTEST_COIN_RPC_BUDGET` (5000), `ATTEST_COIN_RPC_BUDGET_MAX` (4× budget), `ATTEST_CRAWL_ALERT_TICKS` (4), `ATTEST_TX_CACHE` (200k), `ATTEST_BLOCK_CACHE` (50k), `ATTEST_PRICE_CACHE` (100k) | attestor, watcher | V7-M6 / S-1 liveness |
+| `ATTEST_REBUY_PER_TICKET_HOUR` (6), `ATTEST_REBUY_PER_COIN_HOUR` (120), `MIN_ATTESTOR_LAMPORTS` (`MIN_KEEPER_LAMPORTS` or 200000000) | attestor | H-1 rebuy spend + low-balance alert |
+| `ENGINE_MIN_REBUY_DEBIT_BPS` (100), `ENGINE_DUST_TRANSFER_BPS` (100) | attestor, watcher | **consensus** (SPEC Clarifications 32–33): same value everywhere or unset |
+| `ATTEST_BOARD_REQUIRE_RLS` | attestor | refuse to start unless board RLS binds this role; **default on when `NODE_ENV=production`**, `0` opts out |
 | `PYTH_SOURCE` (`onchain` in production; `hermes`; `constant` local only) | attestor, watcher | SOL/USD source for the $50 minimum. **Same source on every attestor + the watcher** |
 | `PYTH_RPC_URL` (default `RPC_URL`), `PYTH_RPC_MIN_GAP_MS`, `PYTH_ONCHAIN_INDEX_LAG_SECS` (20), `PYTH_ONCHAIN_HEAD_TTL_MS` (15000), `PYTH_ONCHAIN_MAX_CANDIDATES` (100k) | attestor, watcher | `onchain` (free, engine/src/pyth-onchain.ts): writes to Pyth's SOL/USD push account `7UVim…pjLiE`, read on **Solana mainnet** on every cluster (refuses another genesis), so devnet keepers set `PYTH_RPC_URL` to a mainnet endpoint. Selection window (lookback 30 s, grace 30 s) is fixed in code: consensus |
 | `PYTH_API_KEY` (alias `HERMES_API_KEY`), `HERMES_URL`, `HERMES_API_KEY_HEADER` | attestor, watcher | `hermes` only (paid plan since 2026-10): **sealed** key, sent as `Authorization: Bearer`; production refuses to start without it |
@@ -472,9 +500,21 @@ graduation (new pool) or a Helius outage: update the Helius webhook's account li
 `/health`. Rotating `HELIUS_WEBHOOK_SECRET`: set the new value on Helius and the indexer at the same time (401s in
 between are harmless: the poller catches up).
 
-**Engine issue on a coin (attestor / watcher alert `issues:<mint>`).** Issues are scoped, nothing is frozen:
+**Engine issue on a coin (attestor / watcher alert `issues:<mint>:<kind>`).** Issues are scoped, nothing is frozen:
 `parse_issue/tx` → `SELECT * FROM meteora_parse_issues WHERE signature = …`; usually a new Meteora layout or an
-unaccounted vault movement: fix the parser, the tx's sells and one D10 window stay without tickets meanwhile.
+unaccounted vault movement: fix the parser, the tx's sells and one D10 window stay without tickets meanwhile. A swap
+event under an instruction outside the parser's subset (`event_without_swap_parent` / `unsupported_instruction`,
+e.g. a new Meteora swap variant anyone can call) carries the pool's exact post-swap price from its EvtSwap2 (M-2):
+only that tx's sells are refused, the D10 window is not tainted.
+
+**Crawl budget (`crawl-budget:<mint>`).** A coin's crawl ran out of RPC budget several ticks in a row: nothing of it
+is attested meanwhile. Usually a burst of thousands of new token accounts (catches up by itself) or a slow RPC.
+Raise `ATTEST_COIN_RPC_BUDGET_MAX` (or `ATTEST_COIN_RPC_BUDGET`) on the attestors, check the provider's rate limits.
+
+**Rebuy budget / low balance (`rebuy-budget:<mint>`, `balance`).** Rebuy attestations on a coin hit the per-ticket /
+per-coin hourly budget (spam or a real rebuy wave; deferred, not lost — they still expire at `max_attest_age`): raise
+`ATTEST_REBUY_PER_COIN_HOUR` if legitimate. Top up any attestor below `MIN_ATTESTOR_LAMPORTS`; consumed-marker rent
+comes back through `close_consumed` after the ticket closes.
 `negative_balance/wallet` → that wallet's history is incomplete on this RPC (or an unparsed movement): compare with a
 second provider (`crawlMintHistory` on both); it gets tickets again after a full exit. `unknown_ticket_status/wallet`
 → a ticket on chain the engine didn't derive: check the watcher's mismatch for it and void within the challenge window

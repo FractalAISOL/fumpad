@@ -91,6 +91,34 @@ describe("attestation encoding = contracts", () => {
     expect(bytesToHex(p.message)).toBe(V.sell);
     expect(p.signatures.map((s) => s.keeper.toBase58())).toEqual([pk(21).toBase58(), pk(22).toBase58()]);
   });
+  it("range-checks every numeric field: out-of-range values throw instead of wrapping (audit robustness gap)", () => {
+    const U64 = (1n << 64n) - 1n;
+    for (const [k, v] of [
+      ["baseAmount", U64 + 1n],
+      ["quoteGross", -1n],
+      ["ticketTokens", 1n << 70n],
+      ["usdCents", U64 + 1n],
+      ["slot", -1n],
+      ["ticketPriceQ64", 1n << 128n],
+      ["ticketPriceQ64", -1n],
+      ["pythPublishTime", 1n << 63n],
+      ["blockTime", -(1n << 63n) - 1n],
+      ["ixKey", 2 ** 32],
+      ["ixKey", -1],
+      ["ixKey", 1.5],
+      ["clusterTag", 256],
+    ] as const)
+      expect(() => encodeSellMessage({ ...SELL, [k]: v } as SellRecord), `${k}=${v}`).toThrow(RangeError);
+    for (const [k, v] of [
+      ["debitTokens", U64 + 1n],
+      ["blockTime", 1n << 63n],
+      ["ixKey", 2 ** 32],
+    ] as const)
+      expect(() => encodeRebuyMessage({ ...REBUY, [k]: v } as RebuyRecord), `${k}=${v}`).toThrow(RangeError);
+    // boundaries still encode exactly
+    const edge = { ...SELL, baseAmount: U64, ticketPriceQ64: (1n << 128n) - 1n, blockTime: -(1n << 63n), ixKey: 0xffff_ffff, clusterTag: 255 };
+    expect(decodeSellMessage(encodeSellMessage(edge))).toMatchObject({ baseAmount: U64, ticketPriceQ64: (1n << 128n) - 1n, blockTime: -(1n << 63n), ixKey: 0xffff_ffff, clusterTag: 255 });
+  });
   it("rejects bad venue bits and wrong lengths", () => {
     expect(() => encodeSellMessage({ ...SELL, venue: 0x02 })).toThrow();
     expect(decodeSellMessage(new Uint8Array(283))).toBe(null);

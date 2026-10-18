@@ -18,7 +18,23 @@ export interface EngineParams {
    */
   maxAttestAgeSecs: number;
   trackAttestations: boolean;
+  /**
+   * Audit H-1 (SPEC Clarification 32), CONSENSUS — every attestor and the watcher must use the same value: a
+   * ticket's rebuy debits accumulate and are emitted (attested) only once they reach this share of the ticket's
+   * attested tokens (bps, rounded up, ≥ 1 token), or when they void it. Bounds rebuy attestations to
+   * ⌈10,000 / bps⌉ + 1 per ticket. Default 100 (1%).
+   */
+  minRebuyDebitBps?: bigint;
+  /**
+   * Audit M-1 (SPEC Clarification 33), CONSENSUS: a transfer-in smaller than this share (bps) of the wallet's
+   * pending (not yet matured) bucket doesn't restart the bucket's hold clock; it stays untracked (sold first,
+   * never ticketed). Default 100 (1%). 0 = off.
+   */
+  dustTransferBps?: bigint;
 }
+
+export const DEFAULT_MIN_REBUY_DEBIT_BPS = 100n;
+export const DEFAULT_DUST_TRANSFER_BPS = 100n;
 
 export const DEFAULT_ENGINE_PARAMS: EngineParams = {
   minSellUsdCents: 5_000n,
@@ -29,6 +45,8 @@ export const DEFAULT_ENGINE_PARAMS: EngineParams = {
   maxPythDeltaSecs: 60,
   maxAttestAgeSecs: 86_400,
   trackAttestations: false,
+  minRebuyDebitBps: DEFAULT_MIN_REBUY_DEBIT_BPS,
+  dustTransferBps: DEFAULT_DUST_TRANSFER_BPS,
 };
 
 /** What the engine needs to know about one registered coin (all from finalized chain data). */
@@ -89,8 +107,13 @@ export interface TransferEvent {
   owner: string;
   /** Net change of the owner's balance of the mint not explained by our-pool swaps (≠ 0). */
   delta: bigint;
-  /** Paid out by FUMPAD (claim / escrow): an acquisition, never a rebuy. */
+  /** The whole inflow was paid out by FUMPAD (claim / escrow): an acquisition, never a rebuy. */
   payout: boolean;
+  /**
+   * Audit L-5: the part of a positive `delta` this owner received FROM a payout owner's token account in this tx
+   * (exempt from rebuy debits); the rest is an ordinary acquisition. Unset = `payout ? delta : 0`.
+   */
+  payoutAmount?: bigint;
 }
 
 /** DAMM v2 pool created by migration_damm_v2 from the coin's DBC pool (sqrt price at init). */
@@ -125,6 +148,12 @@ export interface ParseIssueEvent {
   message: string;
   /** The coin's pool the issue concerns; null = unknown (the tx touches one of the coin's pools). */
   pool?: string | null;
+  /**
+   * Audit M-2: the pool's exact post-swap sqrt price from the program's own authenticated EvtSwap2, when the swap
+   * itself couldn't be turned into a trade record. The D10 reference / pre-trade spot stay exact, so the issue
+   * blocks only this tx's sells (no coin-wide price taint).
+   */
+  priceTouch?: { pool: string; sqrtPrice: bigint };
 }
 
 /** The sell's ticket was attested on chain (TicketAttested); `ticket` = the ticket PDA. */
@@ -204,9 +233,12 @@ export interface RebuyDebit {
   ticket: TicketRef;
   /** On-chain ticket PDA when its TicketAttested is in the history (else null: attest the sell first). */
   ticketAddress: string | null;
+  /** Tokens this attestation debits: every acquisition's share accumulated since the ticket's previous debit (H-1). */
   debit: bigint;
   remaining: bigint;
   voided: boolean;
+  /** Acquisitions aggregated into this debit (≥ 1); signature / ixKey / slot / blockTime are the last one's (H-1). */
+  acquisitions?: number;
 }
 
 /** ixKey used for transfer-derived events (no single instruction; u32::MAX never collides with a swap key). */

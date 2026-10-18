@@ -22,7 +22,7 @@ import { type PublicKey, type TransactionInstruction, ComputeBudgetProgram } fro
 import { PublicKey as Pk } from "@solana/web3.js";
 import type { Logger } from "pino";
 
-import { CrawlBudgetExceeded, LruMap, PriceNotReady } from "@fumpad/engine";
+import { CrawlBudgetExceeded, type EngineIssue, LruMap, PriceNotReady } from "@fumpad/engine";
 import { createHash } from "node:crypto";
 
 import {
@@ -98,6 +98,18 @@ export interface AttestorOptions {
   recentActivitySecs?: number;
   /** Wall clock for the tick budget (ms; tests). */
   clockMs?: () => number;
+  /** S-1: alert (deduped, 1 h) once the same coin's crawl ran out of budget this many ticks in a row (default 4). */
+  crawlAlertTicks?: number;
+  /**
+   * H-1 (keeper-side, not consensus): rebuy attestations THIS keeper submits per ticket / per coin per rolling hour
+   * (defaults 6 / 120). Over budget the message is still signed and published (peers can submit) but this keeper
+   * defers its own submission (oldest first next time) and alerts once per coin per hour.
+   */
+  rebuyPerTicketPerHour?: number;
+  rebuyPerCoinPerHour?: number;
+  /** H-1: this keeper's SOL balance (lamports); with `minLamports`, a low balance alerts (deduped). */
+  balance?: () => Promise<number>;
+  minLamports?: number;
 }
 
 /** Program errors that mean "the program disagrees with the engine": never retried by THIS keeper, always alerted. */
@@ -132,10 +144,53 @@ export interface AttestorStats {
   errors: number;
   state: "idle" | "not_active_keeper" | "wrong_role" | "paused" | "running";
   lastTickAt: number;
+  /** S-1: derivations cut short by the crawl budget (they continue next tick). */
+  crawlBudgetExceeded: number;
+  /** H-1: rebuy submissions deferred by this keeper's per-ticket / per-coin budget. */
+  rebuyDeferred: number;
+  /** Last balance read (lamports), -1 = unknown. */
+  balanceLamports: number;
+}
+
+/** Sliding one-hour counter of submissions per key (bounded). */
+class HourlyBudget {
+  private hits = new LruMap<string, number[]>(100_000);
+  constructor(private readonly limit: number) {}
+  private live(key: string, now: number): number[] {
+    const l = (this.hits.get(key) ?? []).filter((t) => now - t < 3_600);
+    this.hits.set(key, l);
+    return l;
+  }
+  allows(key: string, now: number): boolean {
+    return this.live(key, now).length < this.limit;
+  }
+  record(key: string, now: number): void {
+    this.live(key, now).push(now);
+  }
 }
 
 export class Attestor {
-  stats: AttestorStats = { ticks: 0, coins: 0, coinsDerived: 0, candidates: 0, signed: 0, submitted: 0, landed: 0, dropped: 0, deferred: 0, errors: 0, state: "idle", lastTickAt: 0 };
+  stats: AttestorStats = {
+    ticks: 0,
+    coins: 0,
+    coinsDerived: 0,
+    candidates: 0,
+    signed: 0,
+    submitted: 0,
+    landed: 0,
+    dropped: 0,
+    deferred: 0,
+    errors: 0,
+    state: "idle",
+    lastTickAt: 0,
+    crawlBudgetExceeded: 0,
+    rebuyDeferred: 0,
+    balanceLamports: -1,
+  };
+  /** S-1: consecutive ticks each coin's crawl ran out of budget. */
+  private crawlMisses = new Map<string, number>();
+  private rebuyPerTicket: HourlyBudget;
+  private rebuyPerCoin: HourlyBudget;
   // per-message state is bounded (V7-M6): an evicted entry only costs a re-sign / re-check
   private signedIds = new LruMap<string, true>(200_000);
   private msgBackoff = new LruMap<string, { until: number; tries: number }>(200_000);
@@ -153,10 +208,37 @@ export class Attestor {
 
   constructor(private o: AttestorOptions) {
     this.me = o.keeper.publicKey.toBase58();
+    this.rebuyPerTicket = new HourlyBudget(o.rebuyPerTicketPerHour ?? 6);
+    this.rebuyPerCoin = new HourlyBudget(o.rebuyPerCoinPerHour ?? 120);
   }
 
   private now() {
     return this.o.now ? this.o.now() : Math.floor(Date.now() / 1000);
+  }
+
+  /**
+   * L-6: alerts are fire-and-forget in the hot loops (a slow Telegram API never stalls a tick); the Alerter dedupes
+   * synchronously and never throws.
+   */
+  private notify(key: string, text: string, opts?: { cooldownMs?: number }): void {
+    void Promise.resolve(this.o.alerts?.alert(key, text, opts)).catch(() => {});
+  }
+
+  /** H-1: low-balance alert (an attestor pays every attestation's fee and marker rent). */
+  private async checkBalance(): Promise<void> {
+    if (!this.o.balance || this.o.minLamports === undefined) return;
+    try {
+      const lamports = await this.o.balance();
+      this.stats.balanceLamports = lamports;
+      if (lamports < this.o.minLamports)
+        this.notify(
+          "balance",
+          `attestor ${this.me} balance low: ${lamports / 1e9} SOL (< ${this.o.minLamports / 1e9}); attestations stop when it can't pay fees + marker rent — top it up`,
+          { cooldownMs: 60 * 60_000 },
+        );
+    } catch (e) {
+      this.o.log.warn({ err: String(e).slice(0, 200) }, "attestor: balance check failed");
+    }
   }
 
   async tick(): Promise<void> {
@@ -186,7 +268,8 @@ export class Attestor {
       return;
     }
     this.stats.state = "running";
-    const coins = (await this.o.chain.coins()).filter((c) => !this.o.onlyMints || this.o.onlyMints.has(c.mint.toBase58()));
+    await this.checkBalance();
+    const coins =(await this.o.chain.coins()).filter((c) => !this.o.onlyMints || this.o.onlyMints.has(c.mint.toBase58()));
     this.stats.coins = coins.length;
     const recent = this.o.recentActivitySecs ?? 86_400;
     const order = coins
@@ -206,9 +289,22 @@ export class Attestor {
         try {
           await this.coin(c, g, active, now);
           this.stats.coinsDerived++;
+          if (this.crawlMisses.delete(m)) log.info({ mint: m }, "attestor: crawl completed again");
         } catch (e) {
           if (e instanceof CrawlBudgetExceeded) {
-            log.info({ mint: m }, "attestor: crawl budget reached; continuing next tick");
+            // S-1: progress is kept and the budget adapts; a coin that never completes is an incident (its sells
+            // and rebuys age toward max_attest_age) → alert after N ticks in a row, deduped per coin.
+            const n = (this.crawlMisses.get(m) ?? 0) + 1;
+            this.crawlMisses.set(m, n);
+            this.stats.crawlBudgetExceeded++;
+            const limit = this.o.crawlAlertTicks ?? 4;
+            log.warn({ mint: m, consecutive: n, budget: e.calls }, "attestor: crawl budget reached; continuing next tick");
+            if (n >= limit)
+              this.notify(
+                `crawl-budget:${m}`,
+                `attestor ${this.me.slice(0, 6)}: crawl of ${m} ran out of its RPC budget (${e.calls} calls) ${n} ticks in a row — nothing on this coin is attested until it completes; raise ATTEST_COIN_RPC_BUDGET(_MAX) or check the RPC`,
+                { cooldownMs: 60 * 60_000 },
+              );
             continue;
           }
           if (e instanceof PriceNotReady) {
@@ -220,7 +316,7 @@ export class Attestor {
           log.warn({ mint: m, err: String(e).slice(0, 300) }, "attestor: coin derivation failed");
           // once per hour per (coin, error signature); a new kind of failure alerts at once
           const a = deriveAlert("derive", m, e);
-          await this.o.alerts?.alert(a.key, `attestor ${this.me.slice(0, 6)}: derivation failed for ${m}: ${String(e).slice(0, 200)} (repeats muted 1 h)`, a.opts);
+          this.notify(a.key, `attestor ${this.me.slice(0, 6)}: derivation failed for ${m}: ${String(e).slice(0, 200)} (repeats muted 1 h)`, a.opts);
         }
       }
     };
@@ -232,16 +328,16 @@ export class Attestor {
     const der = await this.o.derive(coin, g);
     const newest = der.output.sells.reduce((m, s) => Math.max(m, s.blockTime), -1);
     if (newest >= 0) this.lastActivity.set(mint, newest);
-    if (der.output.issues.length) {
-      // V7-H2: issues are scoped (tx / wallet); alert per coin with the scopes so the runbook can be followed
-      await this.o.alerts?.alert(
-        `issues:${mint}`,
-        `attestor ${this.me.slice(0, 6)}: engine issues on ${mint}: ${der.output.issues
-          .map((i) => `${i.kind}/${i.scope}${i.wallet ? `:${i.wallet.slice(0, 6)}` : ""}@${i.slot}`)
+    // V7-H2: issues are scoped (tx / wallet); L-6: one alert key per (coin, issue kind) — stable while the same kind
+    // of problem persists (deduped by the Alerter), a new kind alerts at once; never awaited in the loop
+    for (const [kind, list] of groupIssues(der.output.issues))
+      this.notify(
+        issueAlertKey(mint, kind),
+        `attestor ${this.me.slice(0, 6)}: engine issues (${kind}) on ${mint}: ${list
+          .map((i) => `${i.scope}${i.wallet ? `:${i.wallet.slice(0, 6)}` : ""}@${i.slot}`)
           .join(", ")
           .slice(0, 300)}`,
       );
-    }
     const all = candidates(mint, der.output, { clusterTag: g.clusterTag, now, maxAttestAgeSecs: Number(g.params.maxAttestAgeSecs) });
     // V7-M2: a DAMM v2 sell is only valid on chain once `graduate` recorded Coin.damm_pool (finalized view).
     const graduated = !!coin.dammPool && !coin.dammPool.equals(Pk.default);
@@ -297,6 +393,22 @@ export class Attestor {
       if (!designated) {
         const first = await this.o.board.firstSeen(c.id);
         if (!first || now - Math.floor(first.getTime() / 1000) < (this.o.fallbackSubmitSecs ?? 60)) continue;
+      }
+      if (c.kind === "rebuy") {
+        // H-1: bounded spend per ticket / coin per hour (this keeper's own submissions; candidates are in chain
+        // order, so the oldest go first once the budget frees up). Peers still have our signature.
+        const tk = `${mint}:${c.rebuy!.ticket.toBase58()}`;
+        if (!this.rebuyPerTicket.allows(tk, now) || !this.rebuyPerCoin.allows(mint, now)) {
+          this.stats.rebuyDeferred++;
+          this.notify(
+            `rebuy-budget:${mint}`,
+            `attestor ${this.me.slice(0, 6)}: rebuy attestation budget reached on ${mint} (per ticket ${this.o.rebuyPerTicketPerHour ?? 6}/h, per coin ${this.o.rebuyPerCoinPerHour ?? 120}/h): submissions deferred — rebuy spam?`,
+            { cooldownMs: 60 * 60_000 },
+          );
+          continue;
+        }
+        this.rebuyPerTicket.record(tk, now);
+        this.rebuyPerCoin.record(mint, now);
       }
       await this.submit(c, pickTwo(valid, this.me));
     }
@@ -366,7 +478,7 @@ export class Attestor {
       this.stats.dropped++;
       this.dropped.set(c.id, name);
       await this.o.board.setStatus(c.id, this.me, "dropped", name);
-      await this.o.alerts?.alert(`drop:${c.id}`, `attestor: program rejected a derived ${c.kind} (${name}) for ${c.wallet} on ${c.mint} — engine/program mismatch, check`);
+      this.notify(`drop:${c.id}`, `attestor: program rejected a derived ${c.kind} (${name}) for ${c.wallet} on ${c.mint} — engine/program mismatch, check`);
       return "dropped";
     }
     if (name && RETRY_AFTER_RECHECK.has(name)) this.o.log.info({ kind: c.kind, mint: c.mint, name }, "attestation waits for chain state (graduate / open tickets); will re-check");
@@ -382,6 +494,16 @@ export class Attestor {
     return "retry";
   }
 }
+
+/** Engine issues grouped by kind (L-6: alert identity = mint + issue kind). */
+export function groupIssues(issues: readonly EngineIssue[]): Map<string, EngineIssue[]> {
+  const out = new Map<string, EngineIssue[]>();
+  for (const i of issues) out.set(i.kind, [...(out.get(i.kind) ?? []), i]);
+  return out;
+}
+
+/** L-6: stable alert key for a coin's engine issues of one kind (attestor and watcher). */
+export const issueAlertKey = (mint: string, kind: string) => `issues:${mint}:${kind}`;
 
 /** Two signatures for the Ed25519 instruction, our own first when we have one. */
 export function pickTwo(valid: KeeperSignature[], me: string): KeeperSignature[] {

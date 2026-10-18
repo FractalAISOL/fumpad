@@ -9,8 +9,11 @@
  *    owners are not wallets and produce no transfers. Third-party pools' trades therefore arrive as
  *    transfers (an acquisition there = a rebuy; a sale there never makes a ticket).
  *  - parser issues on our pools (fail closed for that tx's sells and the D10 window after it — V7-H2:
- *    never for the whole coin). Balances stay exact: an unparsed swap's base movement still shows up
- *    as the trader's transfer.
+ *    never for the whole coin; M-2: no D10 taint when the program's own EvtSwap2 gives the pool's
+ *    post-swap price). Balances stay exact: an unparsed swap's base movement still shows up as the
+ *    trader's transfer.
+ *  - payouts (L-5): an inflow is exempt from rebuy debits only for what that owner received from a
+ *    payout owner's token account in the tx (`payoutReceipts`).
  */
 import {
   DAMM_V2_POOL_AUTHORITY,
@@ -20,6 +23,8 @@ import {
   ownerDeltas,
   parseMeteoraTrades,
   parsePoolFacts,
+  type NormalizedTx,
+  tokenMovement,
 } from "@fumpad/meteora";
 
 import type { CoinFacts, EngineEvent, OrderKey } from "./types.js";
@@ -101,20 +106,65 @@ export function buildEvents(coin: CoinFacts, history: readonly HistoryTx[], opts
     const touchesOurs = norm.accountKeys.some((a) => ours(a));
     for (const is of parsed.issues) {
       if (ours(is.pool) || (!is.pool && touchesOurs))
-        out.push({ kind: "parse_issue", key: k(2, is.ixKey ?? 0), signature, blockTime, code: is.code, message: is.message, pool: is.pool ?? null });
+        out.push({
+          kind: "parse_issue",
+          key: k(2, is.ixKey ?? 0),
+          signature,
+          blockTime,
+          code: is.code,
+          message: is.message,
+          pool: is.pool ?? null,
+          ...(is.price && ours(is.price.pool) ? { priceTouch: { pool: is.price.pool, sqrtPrice: is.price.nextSqrtPrice } } : {}),
+        });
     }
 
     const deltas = ownerDeltas(norm, coin.mint);
     const owners = new Set<string>([...deltas.keys(), ...attributed.keys()]);
-    let payout = false;
-    for (const o of payoutOwners) if ((deltas.get(o) ?? 0n) < 0n) payout = true;
+    const paid = payoutReceipts(norm, coin.mint, payoutOwners, deltas);
     for (const owner of [...owners].sort()) {
       if (VAULT_AUTHORITIES.has(owner) || protocol.has(owner)) continue;
       const residual = (deltas.get(owner) ?? 0n) - (attributed.get(owner) ?? 0n);
       if (residual === 0n) continue;
-      out.push({ kind: "transfer", key: k(residual < 0n ? 3 : 0, TRANSFER_IX_KEY), signature, blockTime, owner, delta: residual, payout: residual > 0n && payout });
+      // L-5: per owner — only what this owner received from a payout account in this tx is a payout
+      const got = residual > 0n ? paid.get(owner) ?? 0n : 0n;
+      const payoutAmount = got < residual ? got : residual;
+      out.push({
+        kind: "transfer",
+        key: k(residual < 0n ? 3 : 0, TRANSFER_IX_KEY),
+        signature,
+        blockTime,
+        owner,
+        delta: residual,
+        payout: residual > 0n && payoutAmount === residual,
+        ...(payoutAmount > 0n && payoutAmount < residual ? { payoutAmount } : {}),
+      });
     }
     if (opts.extraEvents) out.push(...opts.extraEvents(tx, { slot: tx.slot, txIndex, signature, blockTime }));
+  }
+  return out;
+}
+
+/**
+ * Audit L-5: per owner, the amount of `mint` it received in this tx FROM token accounts of a payout owner (the
+ * reward pool PDA: claims, escrow withdrawals), read from the tx's token instructions (Transfer / TransferChecked /
+ * TransferCheckedWithFee, top level or CPI). The exemption is per owner and capped at what that owner got: a
+ * claimer can no longer bundle other transfer-ins into its claim tx to dodge rebuy debits. A movement we can't
+ * read exempts nothing (the inflow then counts as an ordinary acquisition — conservative).
+ */
+export function payoutReceipts(norm: NormalizedTx, mint: string, payoutOwners: ReadonlySet<string>, deltas: ReadonlyMap<string, bigint>): Map<string, bigint> {
+  const out = new Map<string, bigint>();
+  if (![...payoutOwners].some((o) => (deltas.get(o) ?? 0n) < 0n)) return out;
+  const from = new Set<string>();
+  for (const [acc, e] of norm.tokenBalances) {
+    const o = e.preOwner ?? e.owner;
+    if (e.mint === mint && o && payoutOwners.has(o)) from.add(acc);
+  }
+  for (const ix of norm.flat) {
+    const m = tokenMovement(ix);
+    if (m === null || m === "unknown" || !m.from || !m.to || !from.has(m.from)) continue;
+    const dest = norm.tokenBalances.get(m.to);
+    const owner = dest && dest.mint === mint ? dest.postOwner ?? dest.owner : null;
+    if (owner) out.set(owner, (out.get(owner) ?? 0n) + m.received);
   }
   return out;
 }

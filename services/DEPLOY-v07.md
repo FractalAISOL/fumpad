@@ -156,7 +156,7 @@ One image (`services/Dockerfile`, `SERVICE_ENTRY` picks the entry; `keeper/dist/
 | `api` | existing | `api/dist/main.js` | `DATABASE_URL`, `RPC_URL`★, `CORS_ORIGINS` (unchanged), `API_SSR_SECRET`★ (unchanged, `~/fumpad-keys/api_ssr_secret`), `TRUST_PROXY_HOPS=2`, `MINT_POOL_KEY`★ (unchanged), **`LAUNCH_SIGNER_KEY`★ (new: launch-signer)**, `LAUNCH_REQUIRE_SIGNATURE=true`, `LAUNCH_FIRST_COIN=false` (true only to launch the first coin, §11 / LAUNCH-DAY §5), `LAUNCHES_OPEN` (unset = open on devnet; **mainnet defaults to closed**: set `false` until the public opening, then `true`, LAUNCH-DAY §1/§5), `STATUS_KEEPER_URL=http://keeper.railway.internal:<PORT>/health` (optional), **`PINATA_JWT`★ (new: coin metadata to IPFS, `POST /v1/launch/metadata`; required with `FUMPAD_CLUSTER=mainnet`, else uploads answer 503 and the app can't launch; devnet without it = placeholder uri `ipfs://pending`)**, `PINATA_GATEWAY` (optional, dedicated gateway domain `<name>.mypinata.cloud`: our image proxy tries it before `IPFS_GATEWAY`), **`LAUNCH_ALT` (new: the launch lookup table, §13; required: unset = every launch 503)** | A | yes (`api-production-66441.up.railway.app`) |
 | `grinder` | existing | `grinder/Dockerfile` | unchanged (`DATABASE_URL`, `MINT_POOL_KEY`★, `POOL_TARGET`) | — | no |
 | `keeper` | existing | `keeper/dist/main.js`, `KEEPER_MODE=jobs` | `DATABASE_URL=${{Postgres.DATABASE_URL}}` (owner: `meta` table + advisory lock), `RPC_URL`★, **`KEEPER_SECRET_KEY`★ = operator** (never an attestor key: it refuses to start), `KEEPER_DAILY_BUDGET_SOL=3` (graduation setup ≈ 0.5 SOL/coin on devnet), `TELEGRAM_BOT_TOKEN`★/`TELEGRAM_CHAT_ID`, `PORT=8082` | A | no |
-| `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider B's **mainnet** endpoint), `ATTEST_BOARD_REQUIRE_RLS=1`, `TELEGRAM_*`, `PORT=8080` | **B** | no |
+| `attestor-1` | **new**, own project (§1 topology) | `keeper/dist/main.js`, `KEEPER_MODE=attestor` | `KEEPER_SECRET_KEY`★ = attestor-1, `DATABASE_URL`★ = role `fumpad_attestor_1` (`db-url … --public` from another project), `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider B's **mainnet** endpoint), `ATTEST_BOARD_REQUIRE_RLS=1` (the default with `NODE_ENV=production` since §14), `TELEGRAM_*` (also carries the S-1 `crawl-budget:*`, H-1 `rebuy-budget:*` and `balance` alerts), `PORT=8080`; optional §14 tuning: `ATTEST_COIN_RPC_BUDGET_MAX`, `ATTEST_REBUY_PER_*_HOUR`, `MIN_ATTESTOR_LAMPORTS` | **B** | no |
 | `attestor-2` | **new**, own project + account | same | attestor-2 key, role `fumpad_attestor_2`, … | **C** | no |
 | `attestor-3` | **new**, own project + account (+ cloud) | same | attestor-3 key, role `fumpad_attestor_3`, … | **D** | no |
 | `watcher` | **new** | `keeper/dist/main.js`, `KEEPER_MODE=watcher` | `RPC_URL`★, `PYTH_SOURCE=onchain`, `PYTH_RPC_URL`★ (provider E's mainnet endpoint), `TELEGRAM_*` (guardian's chat), `PORT=8790`; no key, no DB | **E** (5th, ≠ every attestor's) | optional (`/v1/verification` public feed) |
@@ -646,3 +646,31 @@ worker gateway", `sunset` header; dweb.link too, and Helius' CDN image proxy of 
 still writes `https://ipfs.io/ipfs/<cid>` uris today, so consumers that matter rewrite `/ipfs/<cid>` to their own
 gateway (Helius DAS resolved our JSON). Our own fetches must not depend on it: **set `PINATA_GATEWAY` on the indexer
 and api on every cluster** (without it the indexer stored no image/socials and `/v1/img/<mint>` answered 404).
+
+## 14. 2026-10-17 external audit fixes (attestors + watcher; off-chain only, no program change)
+
+What changes for operators (details: `services/README.md` "Attestors + watcher", `security-review/REPORT-v0.7.md`
+"External audit 2026-10-17", SPEC v0.7 Clarifications 32–34):
+- **S-1** the crawl only re-polls accounts with new activity (dormant ones rotate within half the budget); the per-coin
+  budget adapts up to `ATTEST_COIN_RPC_BUDGET_MAX`; a coin out of budget 4 ticks in a row alerts `crawl-budget:<mint>`.
+- **H-1 / M-1 consensus change**: rebuy debits below 1% of a ticket accumulate (one attestation for the sum), and dust
+  transfer-ins no longer restart a holder's hold clock. **Deploy the three attestors and the watcher together** (old
+  and new builds derive different rebuy messages: during a mixed rollout rebuy debits wait for 2 matching builds; sells
+  are unaffected; the watcher flags new-rule debits as mismatches until it runs the new build too).
+- **S-8 / L-1** `ATTEST_BOARD_REQUIRE_RLS` now defaults to ON with `NODE_ENV=production`, and the check is stricter
+  (RLS FORCEd, role not owner / member of owner / superuser / BYPASSRLS, policies present). **Before** deploying the
+  attestors, re-run the board RLS script as the DB owner — it now also FORCEs RLS (idempotent):
+  `npx tsx scripts/devnet/secrets-v07.ts db-sql` → `railway connect Postgres` → `\i …/roles.sql`; its last query must
+  show `relrowsecurity` and `relforcerowsecurity` both `t`. A board without per-keeper roles (e.g. a throwaway devnet
+  board) needs `ATTEST_BOARD_REQUIRE_RLS=0`, else the attestor refuses to start and logs the reasons.
+
+| service | variable | default | meaning |
+|---|---|---|---|
+| attestor-1/2/3, watcher | `ATTEST_COIN_RPC_BUDGET_MAX` | 4 × `ATTEST_COIN_RPC_BUDGET` | adaptive crawl budget ceiling per coin per tick (S-1) |
+| attestor-1/2/3, watcher | `ATTEST_CRAWL_ALERT_TICKS` | 4 | consecutive out-of-budget ticks before `crawl-budget:<mint>` alerts (S-1) |
+| attestor-1/2/3 | `ATTEST_REBUY_PER_TICKET_HOUR` | 6 | rebuy submissions per ticket per rolling hour, this keeper (H-1) |
+| attestor-1/2/3 | `ATTEST_REBUY_PER_COIN_HOUR` | 120 | rebuy submissions per coin per rolling hour, this keeper (H-1) |
+| attestor-1/2/3 | `MIN_ATTESTOR_LAMPORTS` | `MIN_KEEPER_LAMPORTS`, else 200000000 | `balance` alert threshold (H-1) |
+| attestor-1/2/3 | `ATTEST_BOARD_REQUIRE_RLS` | `1` in production, else `0` | refuse to start unless board RLS binds this role (S-8) |
+| attestor-1/2/3 **and** watcher | `ENGINE_MIN_REBUY_DEBIT_BPS` | 100 | **consensus**: leave unset, or the same value on all four (H-1, Clarification 32) |
+| attestor-1/2/3 **and** watcher | `ENGINE_DUST_TRANSFER_BPS` | 100 | **consensus**: leave unset, or the same value on all four (M-1, Clarification 33) |

@@ -93,7 +93,7 @@ try {
         ];
       }),
       "COMMIT;",
-      "SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('attest_signatures', 'attest_hints');",
+      "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname IN ('attest_signatures', 'attest_hints');",
       "SELECT * FROM attest_keeper_roles ORDER BY db_role;",
       "",
     ]
