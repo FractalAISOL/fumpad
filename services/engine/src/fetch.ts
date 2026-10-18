@@ -9,6 +9,10 @@
  * new account appears. Pool vaults (owned by the DBC / DAMM v2 pool authorities) are not crawled: every
  * swap / migration / leftover instruction lists the mint itself.
  *
+ * Bounded cost (audit S-1): only accounts with NEW activity are crawled every run (see `crawlMintHistory`);
+ * the others are re-polled in rotation with the budget that is left, so a coin with tens of thousands of
+ * open token accounts still completes a crawl every run.
+ *
  * Ordering: tx index in block from `getBlock(transactionDetails: "signatures")`, only for slots that
  * hold ≥ 2 of the coin's txs. Everything is fetched at `finalized` and bounded by a snapshot slot.
  */
@@ -31,30 +35,52 @@ export interface CrawlOptions {
    */
   state?: Map<string, MintCrawlState>;
   /**
-   * Extra addresses whose full finalized signature lists are part of the history (e.g. the fumpad Coin
-   * PDA — attest/claim/close txs reference it — and attested ticket PDAs, for guardian voids).
+   * Extra addresses whose full finalized signature lists are part of the history, crawled EVERY run (e.g. the
+   * fumpad Coin PDA — attest/claim/close/void txs reference it).
    */
   extraAddresses?: readonly string[];
+  /**
+   * Extra addresses crawled in the sweep rotation only (before dormant token accounts), e.g. attested ticket
+   * PDAs: belt and braces for txs that list only the ticket (every ticket lifecycle instruction also lists the
+   * Coin PDA, which is an `extraAddresses` entry).
+   */
+  sweepAddresses?: readonly string[];
+  /** Owners whose dormant accounts are swept first (e.g. wallets holding live tickets: rebuys show up sooner). */
+  priorityOwners?: ReadonlySet<string>;
+  /**
+   * Max RPC calls the sweep of dormant accounts may use per run (default: half of `maxRpcCalls`; all of them
+   * when there is no budget). The sweep never pushes a run past `maxRpcCalls` minus a 10% reserve.
+   */
+  sweepRpcCalls?: number;
   /** Hard cap on fetched transactions (safety for huge coins). */
   maxTxs?: number;
   /**
    * Per-crawl RPC budget (V7-M6). When exceeded the crawl throws `CrawlBudgetExceeded`; everything
    * fetched so far is kept in `state` / `txCache`, so the next crawl continues where this one stopped.
+   * Only REQUIRED work (new activity) can exceed it; the dormant-account sweep stops short of it.
    */
   maxRpcCalls?: number;
   onProgress?: (msg: string) => void;
 }
 
-/** Incremental crawl state of one mint (V7-M6). */
+/** Incremental crawl state of one mint (V7-M6, S-1). */
 export interface MintCrawlState {
   /** Newest finalized signature already collected, per crawled address (getSignaturesForAddress `until`). */
   cursors: Map<string, string>;
   /** Every successful signature of the mint's history (≤ the last snapshot slot). */
   sigs: Map<string, SignatureInfo>;
-  /** Token accounts of the mint → open (holds the mint after its latest tx) or closed. */
-  accounts: Map<string, { open: boolean; slot: number }>;
+  /** Token accounts of the mint → open (holds the mint after its latest tx) or closed, and the latest owner seen. */
+  accounts: Map<string, { open: boolean; slot: number; owner?: string | null }>;
   /** Signatures whose tx has been scanned for token accounts. */
   scanned: Set<string>;
+  /** Accounts that must be crawled before the next crawl completes (new activity seen; S-1). */
+  dirty: Set<string>;
+  /** Owner → its token accounts of the mint. */
+  owners: Map<string, Set<string>>;
+  /** Address → run number of its last completed poll (sweep rotation). */
+  polled: Map<string, number>;
+  /** Runs started on this mint. */
+  run: number;
 }
 
 export class CrawlBudgetExceeded extends Error {
@@ -63,9 +89,21 @@ export class CrawlBudgetExceeded extends Error {
   }
 }
 
-export const newMintCrawlState = (): MintCrawlState => ({ cursors: new Map(), sigs: new Map(), accounts: new Map(), scanned: new Set() });
+export const newMintCrawlState = (): MintCrawlState => ({
+  cursors: new Map(),
+  sigs: new Map(),
+  accounts: new Map(),
+  scanned: new Set(),
+  dirty: new Set(),
+  owners: new Map(),
+  polled: new Map(),
+  run: 0,
+});
 
 const attachedState = new WeakMap<object, Map<string, MintCrawlState>>();
+
+/** Sweep rotation: `sweepAddresses` and `priorityOwners`' accounts are re-polled as if last polled this many runs earlier. */
+export const PRIORITY_LEAD_RUNS = 3;
 
 export interface CrawlResult {
   history: HistoryTx[];
@@ -73,6 +111,8 @@ export interface CrawlResult {
   accounts: string[];
   /** RPC calls this crawl made. */
   rpcCalls: number;
+  /** Dormant open accounts this run did NOT re-poll (sweep rotation; 0 = every open account is current). */
+  unswept: number;
 }
 
 export async function getBlockSignatures(rpc: MeteoraRpc, slot: number): Promise<string[]> {
@@ -85,10 +125,26 @@ export async function getBlockSignatures(rpc: MeteoraRpc, slot: number): Promise
 }
 
 /**
- * Crawl (or continue crawling) a mint's finalized history. Incremental (V7-M6): each address is asked
- * only for signatures newer than its cursor, and token accounts that were CLOSED at their latest tx are
- * not asked at all — a closed account can only come back through an (Initialize | ATA create)
- * instruction, which lists the mint, so the mint's own crawl re-opens it.
+ * Crawl (or continue crawling) a mint's finalized history. Incremental (V7-M6) and bounded (audit S-1):
+ *
+ *  1. Required every run: the mint, `extraAddresses`, accounts never crawled to the end, and DIRTY accounts —
+ *     every account that appears in a newly found tx, plus every open account of its owner. Each address is
+ *     asked only for signatures newer than its cursor; the new txs dirty the accounts they touch,
+ *     transitively, within the same run. So a wallet with any activity seen (a swap, a TransferChecked or ATA
+ *     create — those list the mint — or a plain Transfer seen from either side) has ALL its token accounts
+ *     crawled up to the snapshot before the history is returned: its sells and rebuys are derived from its
+ *     complete history.
+ *  2. Sweep: open accounts with no activity seen ("dormant") are re-polled in rotation — `sweepAddresses` and
+ *     `priorityOwners`' accounts first, then least recently polled — with what is left of the budget, never
+ *     past it. A plain `Transfer` between two dormant accounts (the only balance change that lists neither the
+ *     mint nor an account with activity) is seen within one sweep cycle, and before either wallet can trade on
+ *     the coin's pools (that dirties the wallet first).
+ *
+ * Without a budget the sweep covers every open account every run (the pre-S-1 behaviour). Token accounts that
+ * were CLOSED at their latest tx are never swept: a closed account can only come back through an
+ * (Initialize | ATA create) instruction, which lists the mint, so the mint's own crawl re-opens it.
+ *
+ * Cost: O(new txs + polled addresses) per run (the pre-S-1 code rescanned every account after every address).
  */
 export async function crawlMintHistory(rpc: MeteoraRpc, mint: string, opts: CrawlOptions = {}): Promise<CrawlResult> {
   let calls = 0;
@@ -111,6 +167,12 @@ export async function crawlMintHistory(rpc: MeteoraRpc, mint: string, opts: Craw
     states.set(mint, st);
   }
   const state = st;
+  // states persisted by an older version of this module
+  state.dirty ??= new Set();
+  state.owners ??= new Map();
+  state.polled ??= new Map();
+  state.run = (state.run ?? 0) + 1;
+  const run = state.run;
 
   const fetchTx = async (sig: string): Promise<ConfirmedTx> => {
     let tx = txs.get(sig);
@@ -138,42 +200,65 @@ export async function crawlMintHistory(rpc: MeteoraRpc, mint: string, opts: Craw
     return out; // newest first
   };
 
-  /** Scan new txs (slot order) for token accounts of the mint and whether each is open after its latest tx. */
-  const scan = (sigs: string[]): void => {
+  /**
+   * Scan new txs (slot order) for token accounts of the mint, whether each is open after its latest tx and
+   * its owner. Returns every account of the mint the txs touch.
+   */
+  const scan = (sigs: string[]): Set<string> => {
+    const touched = new Set<string>();
     const list = sigs.filter((s) => !state.scanned.has(s)).map((s) => txs.get(s)!).sort((a, b) => a.slot - b.slot);
     for (const tx of list) {
       state.scanned.add(tx.transaction.signatures[0]);
       const keys = normalizeTx(tx).accountKeys;
       const post = new Set<string>();
-      const seen = new Set<string>();
+      const seen = new Map<string, string | null>(); // account → owner (post wins)
       for (const [which, bals] of [["pre", tx.meta?.preTokenBalances ?? []], ["post", tx.meta?.postTokenBalances ?? []]] as const) {
         for (const b of bals) {
           if (b.mint !== mint) continue;
           if (b.owner && (VAULT_AUTHORITIES.has(b.owner) || protocol.has(b.owner))) continue;
           const acc = keys[b.accountIndex];
-          seen.add(acc);
+          seen.set(acc, b.owner ?? seen.get(acc) ?? null);
           if (which === "post") post.add(acc);
         }
       }
-      for (const acc of seen) {
+      for (const [acc, owner] of seen) {
+        touched.add(acc);
         const prev = state.accounts.get(acc);
         // latest tx wins; within one slot (order unknown here) "open" wins, so we never skip a live account
-        if (!prev || tx.slot > prev.slot) state.accounts.set(acc, { open: post.has(acc), slot: tx.slot });
+        if (!prev || tx.slot > prev.slot) state.accounts.set(acc, { open: post.has(acc), slot: tx.slot, owner: owner ?? prev?.owner ?? null });
         else if (tx.slot === prev.slot && post.has(acc)) prev.open = true;
+        if (owner) {
+          const s = state.owners.get(owner) ?? new Set<string>();
+          s.add(acc);
+          state.owners.set(owner, s);
+        }
       }
+    }
+    return touched;
+  };
+
+  const queue: string[] = [];
+  let head = 0;
+  const queued = new Set<string>();
+  const crawled = new Set<string>();
+  const enqueue = (a: string) => {
+    if (queued.has(a) || crawled.has(a)) return;
+    queued.add(a);
+    queue.push(a);
+  };
+  /** New activity on `acc`: it and every open account of its owner must be crawled before this run completes. */
+  const markDirty = (acc: string) => {
+    const a = state.accounts.get(acc);
+    const group = a?.owner ? state.owners.get(a.owner) ?? new Set([acc]) : new Set([acc]);
+    for (const x of group) {
+      if (crawled.has(x)) continue;
+      if (x !== acc && !state.accounts.get(x)?.open) continue;
+      state.dirty.add(x);
+      enqueue(x);
     }
   };
 
-  // Every run: the mint, the extra addresses, open accounts and accounts never crawled to the end yet.
-  const pending = (acc: string, a: { open: boolean }) => a.open || !state.cursors.has(acc);
-  // Never-crawled accounts first, so a run cut short by the budget still makes progress.
-  const known = [...state.accounts].filter(([acc, a]) => pending(acc, a)).map(([acc]) => acc);
-  const queue = [mint, ...(opts.extraAddresses ?? []), ...known.filter((a) => !state.cursors.has(a)), ...known.filter((a) => state.cursors.has(a))];
-  const queued = new Set(queue);
-  const crawled = new Set<string>();
-  while (queue.length) {
-    const addr = queue.shift()!;
-    if (crawled.has(addr)) continue;
+  const crawlAddress = async (addr: string): Promise<void> => {
     crawled.add(addr);
     const fresh = await newSignatures(addr);
     const ok = fresh.filter((s) => s.err === null || s.err === undefined);
@@ -181,22 +266,65 @@ export async function crawlMintHistory(rpc: MeteoraRpc, mint: string, opts: Craw
     for (const s of ok) state.sigs.set(s.signature, s);
     // newest ≤ maxSlot, all fetched ("" = crawled, nothing yet: the next run asks from the start again)
     state.cursors.set(addr, fresh.length ? fresh[0].signature : state.cursors.get(addr) ?? "");
-    scan(ok.map((s) => s.signature));
-    // new accounts, and known ones re-opened by a tx found above (e.g. an ATA re-created): crawl them too
-    for (const [acc, a] of state.accounts) {
-      if (pending(acc, a) && !queued.has(acc)) {
-        queued.add(acc);
-        queue.push(acc);
-      }
+    state.dirty.delete(addr);
+    state.polled.set(addr, run);
+    for (const acc of scan(ok.map((s) => s.signature))) markDirty(acc);
+  };
+  const drain = async () => {
+    while (head < queue.length) {
+      const addr = queue[head++];
+      if (crawled.has(addr)) continue;
+      await crawlAddress(addr);
+      opts.onProgress?.(`crawled ${crawled.size}/${crawled.size + queue.length - head} addresses, ${state.sigs.size} txs`);
     }
-    opts.onProgress?.(`crawled ${crawled.size}/${crawled.size + queue.length} addresses, ${state.sigs.size} txs`);
+  };
+
+  // 1. Required: the mint, the extra addresses, never-crawled accounts (first, so a run cut short by the budget
+  //    still makes progress), then accounts left dirty by an earlier run.
+  enqueue(mint);
+  for (const a of opts.extraAddresses ?? []) enqueue(a);
+  for (const acc of state.accounts.keys()) if (!state.cursors.has(acc)) enqueue(acc);
+  for (const acc of state.dirty) enqueue(acc);
+  await drain();
+
+  // 2. Sweep dormant open accounts (rotation), within the budget.
+  const limited = Number.isFinite(budget);
+  const reserve = limited ? Math.max(2, Math.ceil(budget / 10)) : 0;
+  const sweepCap = opts.sweepRpcCalls ?? (limited ? Math.floor(budget / 2) : Number.POSITIVE_INFINITY);
+  const sweepStart = calls;
+  const prio = opts.priorityOwners ?? new Set<string>();
+  const sweepExtra = (opts.sweepAddresses ?? []).filter((a) => !crawled.has(a));
+  // Rotation by last poll; priority entries count as polled PRIORITY_LEAD_RUNS runs earlier (swept more often,
+  // never starving the rest).
+  const dormant: { a: string; p: number; key: number }[] = [];
+  for (const a of sweepExtra) dormant.push({ a, p: 0, key: (state.polled.get(a) ?? 0) - PRIORITY_LEAD_RUNS });
+  for (const [acc, x] of state.accounts) {
+    if (!x.open || crawled.has(acc)) continue;
+    const p = x.owner && prio.has(x.owner) ? 1 : 2;
+    dormant.push({ a: acc, p, key: (state.polled.get(acc) ?? 0) - (p < 2 ? PRIORITY_LEAD_RUNS : 0) });
+  }
+  dormant.sort((x, y) => x.key - y.key || x.p - y.p || (x.a < y.a ? -1 : x.a > y.a ? 1 : 0));
+  let unswept = 0;
+  for (let i = 0; i < dormant.length; i++) {
+    const { a } = dormant[i];
+    if (crawled.has(a)) continue;
+    if (calls - sweepStart >= sweepCap || calls + reserve >= budget) {
+      for (let j = i; j < dormant.length; j++) if (!crawled.has(dormant[j].a)) unswept++;
+      break;
+    }
+    enqueue(a);
+    await drain(); // new activity found by the sweep is required work (it dirties accounts)
   }
 
   const list: ConfirmedTx[] = [];
   for (const [sig, s] of state.sigs) if (s.slot <= maxSlot) list.push(await fetchTx(sig));
   const index = opts.blockIndexCache ?? new Map<number, Map<string, number>>();
   const bySlot = new Map<number, string[]>();
-  for (const tx of list) bySlot.set(tx.slot, [...(bySlot.get(tx.slot) ?? []), tx.transaction.signatures[0]]);
+  for (const tx of list) {
+    const l = bySlot.get(tx.slot);
+    if (l) l.push(tx.transaction.signatures[0]);
+    else bySlot.set(tx.slot, [tx.transaction.signatures[0]]);
+  }
   for (const slot of slotsNeedingIndex(list)) {
     const need = bySlot.get(slot)!;
     const have = index.get(slot);
@@ -216,8 +344,9 @@ export async function crawlMintHistory(rpc: MeteoraRpc, mint: string, opts: Craw
     return { tx, txIndex: i };
   });
   history.sort((a, b) => a.tx.slot - b.tx.slot || a.txIndex - b.txIndex);
-  return { history, maxSlot, accounts: [...state.accounts.keys()].sort(), rpcCalls: calls };
+  return { history, maxSlot, accounts: [...state.accounts.keys()].sort(), rpcCalls: calls, unswept };
 }
+
 
 /** DBC PoolConfig.sqrt_start_price: u128 LE at data offset 392 (incl. the 8-byte discriminator; DBC 0.2.1 layout, size 1048). */
 export const DBC_CONFIG_SQRT_START_PRICE_OFFSET = 392;

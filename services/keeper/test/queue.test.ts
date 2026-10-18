@@ -80,7 +80,7 @@ describe("H-4 process_queue planning", () => {
         }
       }
     }
-  });
+  }, 60_000); // ~1.6 s idle; 5 s default timed out under heavy load (external audit 2026-10-17)
 
   it("respects the per-tx entry limit (5 in a legacy tx) and the shrinking pool", () => {
     const q = Array.from({ length: 30 }, () => entry(1_000n));

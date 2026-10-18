@@ -9,6 +9,7 @@ import { PublicKey } from "@solana/web3.js";
 import {
   buildEvents,
   type CoinFacts,
+  CrawlBudgetExceeded,
   crawlMintHistory,
   type CrawlResult,
   DEFAULT_ENGINE_PARAMS,
@@ -44,11 +45,34 @@ export const PROTOCOL_OWNERS = (): Set<string> => new Set([rewardPoolPda(), buyb
 /** Reward-pool PDA outflows mark a tx's inflows as FUMPAD payouts (claims, escrow withdrawals). */
 export const PAYOUT_OWNERS = (): Set<string> => new Set([rewardPoolPda().toBase58()]);
 
+/**
+ * Consensus engine knobs that are not on chain (H-1 / M-1, SPEC Clarifications 32–33). Every attestor AND the
+ * watcher must run with the same values (different values → different rebuy messages → no 2-of-3, and watcher
+ * mismatches): change them on all of them together, or not at all.
+ */
+export type EngineOverrides = Pick<EngineParams, "minRebuyDebitBps" | "dustTransferBps">;
+
+export function engineOverridesFromEnv(env: Record<string, string | undefined> = process.env): EngineOverrides {
+  const bps = (k: string): bigint | undefined => {
+    const v = env[k];
+    if (v === undefined || v === "") return undefined;
+    if (!/^\d+$/.test(v) || BigInt(v) > 10_000n) throw new Error(`${k} must be an integer number of bps in [0, 10000]`);
+    return BigInt(v);
+  };
+  const o: EngineOverrides = {};
+  const r = bps("ENGINE_MIN_REBUY_DEBIT_BPS");
+  const d = bps("ENGINE_DUST_TRANSFER_BPS");
+  if (r !== undefined) o.minRebuyDebitBps = r;
+  if (d !== undefined) o.dustTransferBps = d;
+  return o;
+}
+
 /** Engine terms for a coin: its snapshotted reward terms + the global attestation params. */
-export function engineParamsFor(coin: Pick<CoinAccount, "rewards">, global: Pick<GlobalAccount, "params">): EngineParams {
+export function engineParamsFor(coin: Pick<CoinAccount, "rewards">, global: Pick<GlobalAccount, "params">, overrides: EngineOverrides = {}): EngineParams {
   const r = coin.rewards;
   return {
     ...DEFAULT_ENGINE_PARAMS,
+    ...overrides,
     minSellUsdCents: r.minSellUsdCents,
     minHoldSecs: r.minHoldSecs,
     rebuyWindowSecs: r.rebuyWindowSecs,
@@ -112,6 +136,10 @@ export interface DeriveCaches {
   tickets: Map<string, Set<string>>;
   /** Incremental crawl state per mint (cursors, closed accounts; V7-M6). */
   crawl: Map<string, MintCrawlState>;
+  /** Owners of tickets still inside their rebuy window, per mint: their dormant accounts are swept first (S-1). */
+  ticketOwners?: Map<string, Set<string>>;
+  /** Adaptive per-coin crawl budget (S-1): raised after a CrawlBudgetExceeded, decays back after completions. */
+  budgets?: Map<string, number>;
 }
 
 export interface CacheLimits {
@@ -127,6 +155,8 @@ export const newCaches = (l: CacheLimits = {}): DeriveCaches => ({
   blockIndexCache: new LruMap(l.blocks ?? 50_000),
   tickets: new Map(),
   crawl: new Map(),
+  ticketOwners: new Map(),
+  budgets: new Map(),
 });
 
 export interface Derivation {
@@ -146,30 +176,57 @@ export interface DeriveDeps {
   priceCache?: Map<number, PythPrice | null>;
   /** Per-coin RPC budget per derivation (V7-M6); exceeded → CrawlBudgetExceeded, progress kept for next tick. */
   maxRpcCalls?: number;
+  /**
+   * Adaptive budget ceiling (S-1): a coin whose crawl ran out of budget gets twice the budget next time, up to this
+   * (default 4 × maxRpcCalls); each completed derivation halves it back toward maxRpcCalls.
+   */
+  maxRpcCallsCeiling?: number;
+  /** Consensus engine knobs (H-1 / M-1); must be identical on every attestor and the watcher. */
+  engine?: EngineOverrides;
+}
+
+/** The budget the next derivation of `mint` may use (S-1 adaptive budget). */
+export function coinBudget(d: Pick<DeriveDeps, "maxRpcCalls" | "maxRpcCallsCeiling" | "caches">, mint: string): number {
+  const base = d.maxRpcCalls ?? Number.POSITIVE_INFINITY;
+  return d.caches.budgets?.get(mint) ?? base;
+}
+
+function adaptBudget(d: Pick<DeriveDeps, "maxRpcCalls" | "maxRpcCallsCeiling" | "caches">, mint: string, exceeded: boolean): void {
+  const base = d.maxRpcCalls;
+  if (base === undefined || !Number.isFinite(base)) return;
+  const budgets = (d.caches.budgets ??= new Map());
+  const cur = budgets.get(mint) ?? base;
+  const ceiling = d.maxRpcCallsCeiling ?? base * 4;
+  const next = exceeded ? Math.min(ceiling, cur * 2) : Math.max(base, Math.floor(cur / 2));
+  if (next === base) budgets.delete(mint);
+  else budgets.set(mint, next);
 }
 
 /** Derive one registered coin. Throws on any inconsistency between the Coin account and the chain history. */
 export async function deriveCoin(d: DeriveDeps, coin: CoinAccount, global: GlobalAccount, maxSlot?: number): Promise<Derivation> {
   const mint = coin.mint.toBase58();
   const known = d.caches.tickets.get(mint) ?? new Set<string>();
-  let budget = d.maxRpcCalls ?? Number.POSITIVE_INFINITY;
-  const crawlOnce = async (snapshot: number | undefined): Promise<CrawlResult> => {
-    const r = await crawlMintHistory(d.rpc, mint, {
-      maxSlot: snapshot,
+  // L3: `void_ticket` lists the Coin PDA and the mint (contracts, INTERFACE §8.2), so the first crawl
+  // after a restart already sees every guardian void; attested ticket PDAs are still crawled for anything else
+  // that lists only the ticket — in the sweep rotation (S-1: thousands of tickets must not eat the budget).
+  let crawl: CrawlResult;
+  try {
+    crawl = await crawlMintHistory(d.rpc, mint, {
+      maxSlot,
       protocolOwners: PROTOCOL_OWNERS(),
       txCache: d.caches.txCache,
       blockIndexCache: d.caches.blockIndexCache,
       state: d.caches.crawl,
-      extraAddresses: [coinPda(coin.mint).toBase58(), ...known],
-      maxRpcCalls: budget,
+      extraAddresses: [coinPda(coin.mint).toBase58()],
+      sweepAddresses: [...known],
+      priorityOwners: d.caches.ticketOwners?.get(mint),
+      maxRpcCalls: coinBudget(d, mint),
     });
-    budget -= r.rpcCalls;
-    return r;
-  };
-  // L3: `void_ticket` lists the Coin PDA and the mint (contracts, INTERFACE §8.2), so the first crawl
-  // after a restart already sees every guardian void; attested ticket PDAs are still crawled (cheap with
-  // cursors) for anything else that lists only the ticket.
-  const crawl = await crawlOnce(maxSlot);
+  } catch (e) {
+    if (e instanceof CrawlBudgetExceeded) adaptBudget(d, mint, true);
+    throw e;
+  }
+  adaptBudget(d, mint, false);
   // Pool creation tx: the DBC EvtInitializePool for this mint must match the Coin account.
   let launch: HistoryTx | undefined;
   for (const h of crawl.history) {
@@ -207,10 +264,16 @@ export async function deriveCoin(d: DeriveDeps, coin: CoinAccount, global: Globa
   ];
   for (const e of events) if (e.kind === "ticket_attested") known.add(e.ticket);
   d.caches.tickets.set(mint, known);
-  const params = engineParamsFor(coin, global);
+  const params = engineParamsFor(coin, global, d.engine);
   const output = await runEngineWithPrices(facts, events, params, (t) => d.fetchPrice(t, params.maxPythDeltaSecs), {
     protocolOwners: PROTOCOL_OWNERS(),
     cache: d.priceCache,
   });
+  // S-1: holders of tickets still inside their rebuy window are swept first (their rebuys are what we attest)
+  const window = Number(params.rebuyWindowSecs);
+  const newest = crawl.history.at(-1)?.tx.blockTime ?? 0;
+  const owners = new Set<string>();
+  for (const s of output.sells) if (s.ticket && s.trader && newest - s.blockTime <= window) owners.add(s.trader);
+  (d.caches.ticketOwners ??= new Map()).set(mint, owners);
   return { coin: facts, output, maxSlot: crawl.maxSlot, txCount: crawl.history.length, history: crawl.history };
 }

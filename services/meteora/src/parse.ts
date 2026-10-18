@@ -157,6 +157,21 @@ export interface ParseIssue {
   ixKey?: number;
   pool?: string;
   message: string;
+  /**
+   * The pool's post-swap sqrt price from the swap's own authenticated EvtSwap2 (emitted by the pool program via
+   * its event authority), when that swap could not be turned into a trade record for another reason (an
+   * instruction outside our subset, an unexplained vault movement). Lets consumers keep exact price tracking
+   * (audit M-2); never a trade.
+   */
+  price?: { pool: string; nextSqrtPrice: bigint };
+}
+
+/** EvtSwap2's pool + post-swap sqrt price, when the decoded event carries both. */
+function evtSwap2Price(ev: { name: string; data: Record<string, unknown> } | null): ParseIssue["price"] | undefined {
+  if (!ev || ev.name !== "EvtSwap2") return undefined;
+  const pool = ev.data.pool;
+  const next = (ev.data.swap_result as Record<string, unknown> | undefined)?.next_sqrt_price;
+  return typeof pool === "string" && typeof next === "bigint" ? { pool, nextSqrtPrice: next } : undefined;
 }
 
 export interface ParseResult {
@@ -221,6 +236,8 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
   const pendings = new Map<number, Pending>(); // by swap ordinal
   /** DBC pools created in this tx (authenticated EvtInitializePool): their base vault was minted into in-tx. */
   const initializedPools = new Set<string>();
+  /** Swap events under an instruction outside our subset, one issue per instruction (M-2). */
+  const orphans = new Map<number, ParseIssue>();
 
   for (const ix of tx.flat) {
     const venue = venueOf(ix.programId);
@@ -247,10 +264,29 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
     const parent = ix.parent === null ? null : tx.flat[ix.parent];
     const parentName = parent && parent.programId === ix.programId ? instructionName(venue, parent.data) : null;
     if (!parent || (parentName !== "swap" && parentName !== "swap2")) {
-      issues.push({
+      // M-2: a genuine swap event under an instruction outside our subset (e.g. a newer swap variant anyone can
+      // call): no trade record, but the event names its pool and the pool's post-swap price.
+      // One issue per such instruction (DBC emits EvtSwap + EvtSwap2 [+ EvtCurveComplete] under it).
+      const price = evtSwap2Price(ev);
+      const k = parent ? parent.ordinal : -1 - ix.ordinal;
+      const prev = orphans.get(k);
+      const is: ParseIssue = prev ?? {
         code: parentName === "swap2_with_transfer_hook" ? "unsupported_instruction" : "event_without_swap_parent",
+        ixKey: keyOf(parent ?? ix),
         message: `${venue} ${ev.name} at ${ix.topIx}.${ix.innerIx}: parent is ${parent ? `${parent.programId}:${parentName ?? "?"}` : "none"}`,
-      });
+      };
+      if (price) {
+        // two EvtSwap2 under one unknown instruction: we can't tell which state is final → no price (taint)
+        if (is.price || is.pool) {
+          delete is.price;
+          is.pool = is.pool ?? price.pool;
+          is.message += "; several EvtSwap2";
+        } else {
+          is.pool = price.pool;
+          is.price = price;
+        }
+      }
+      orphans.set(k, is);
       continue;
     }
     const p = pendings.get(parent.ordinal) ?? { venue, swapIx: parent, primary: null, legacy: null, curveComplete: null, issues: [] };
@@ -261,6 +297,8 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
     } else if (ev.name === "EvtSwap") p.legacy = ev;
     else p.curveComplete = { baseReserve: u(ev.data.base_reserve), quoteReserve: u(ev.data.quote_reserve) };
   }
+
+  for (const [, is] of [...orphans].sort((a, b) => a[0] - b[0])) issues.push(is);
 
   const trades: MeteoraTrade[] = [];
   for (const p of [...pendings.values()].sort((a, b) => a.swapIx.ordinal - b.swapIx.ordinal)) {
@@ -299,6 +337,7 @@ export function parseMeteoraTrades(input: ConfirmedTx, opts: ParseOptions = {}):
     // SyncNative only ever raises a WSOL account's amount (lamports sent by plain system transfers,
     // possibly in earlier txs), so with one on the vault the observed delta may exceed what we can read.
     const ok = !f.unknown && (f.synced ? observed >= explained : observed === explained);
+    // (no `price` here, M-2: an unexplained vault movement may be a price move we never saw — keep the taint)
     if (bal && bal.mint !== e.mint) {
       for (const k of e.keys) rejected.add(k);
       issues.push({ code: "vault_mint_mismatch", ixKey: e.keys[0], pool: e.pool, message: `vault ${vault} holds ${bal.mint}, swap expects ${e.mint}` });

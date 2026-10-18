@@ -8,6 +8,10 @@
  *   buy on our pool        → rebuy debits on the wallet's tickets (apply_rebuy), then observe_buy
  *   transfer in            → same as a buy (v0.6: an acquisition outside FUMPAD needed
  *                            register_holdings = observe_buy + rebuy); FUMPAD payouts: observe_buy only
+ *                            (L-5: only the part the owner received from a payout account); a dust
+ *                            transfer-in (< dustTransferBps of the pending bucket) stays untracked (M-1)
+ *   rebuy debits           → accumulated per ticket, emitted once ≥ minRebuyDebitBps of the ticket or
+ *                            voiding it (H-1, SPEC Clarification 32)
  *   transfer out           → settle, then cap_tracked to the new balance (matured removed first)
  *   sell on our pool       → plan_sell with the exact balance → ticket candidate; then D10/D12 price,
  *                            USD value (Pyth at block time) and the $ minimum (hooks::evaluate_sell)
@@ -23,6 +27,8 @@ import { newReference, REFERENCE_WINDOW_SECS, type ReferencePrice, ticketPriceQ6
 import { lamportsToUsdCents, validateAt } from "./rules/usd.js";
 import {
   type CoinFacts,
+  DEFAULT_DUST_TRANSFER_BPS,
+  DEFAULT_MIN_REBUY_DEBIT_BPS,
   type EngineEvent,
   type EngineIssue,
   type EngineOutput,
@@ -57,6 +63,11 @@ interface EngineTicket {
   address: string | null;
   /** Voided on chain by the guardian (TicketVoided): a reopened trade may be attested once more. */
   guardianVoided?: boolean;
+  /** Tokens at creation (the H-1 debit threshold is a share of them). */
+  original: bigint;
+  /** H-1: debited by the engine but not emitted yet (below the threshold), and how many acquisitions that is. */
+  pendingDebit: bigint;
+  pendingCount: number;
 }
 
 interface Wallet {
@@ -162,6 +173,18 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
     }
   };
 
+  /**
+   * H-1 (SPEC Clarification 32): a ticket's debits accumulate; one attestation is emitted when the accumulated
+   * debit reaches ⌈original × minRebuyDebitBps / 10,000⌉ (≥ 1 token) or voids the ticket, carrying the sum and
+   * the LAST acquisition's signature / ixKey / slot / block time (inside the rebuy window: every acquisition
+   * debited is). Spam below the threshold costs the attestors nothing; the rule still binds: only a residual
+   * below the threshold that no later acquisition tops up within the window goes unattested.
+   */
+  const minDebitBps = params.minRebuyDebitBps ?? DEFAULT_MIN_REBUY_DEBIT_BPS;
+  const debitThreshold = (t: EngineTicket) => {
+    const x = (t.original * minDebitBps + 9_999n) / 10_000n;
+    return x > 0n ? x : 1n;
+  };
   const rebuy = (w: string, x: Wallet, amount: bigint, e: EngineEvent, kind: RebuyDebit["kind"], ixKey: number) => {
     expireUnattested(x, BigInt(e.blockTime));
     const live = x.tickets.filter((t) => t.active);
@@ -177,15 +200,34 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
       const d = debits[i];
       if (d === 0n) return;
       t.tokens -= d;
+      t.pendingDebit += d;
+      t.pendingCount += 1;
       const voided = t.tokens === 0n || claimAmount(t.tokens, params.claimBps) === 0n;
       if (voided) {
         t.active = false;
         x.hold.openCount -= 1;
       }
-      rebuys.push({ signature: e.signature, ixKey, kind, slot: e.key.slot, blockTime: e.blockTime, wallet: w, ticket: t.ref, ticketAddress: null, debit: d, remaining: t.tokens, voided });
+      if (!voided && t.pendingDebit < debitThreshold(t)) return; // accumulated; attested with a later acquisition
+      rebuys.push({
+        signature: e.signature,
+        ixKey,
+        kind,
+        slot: e.key.slot,
+        blockTime: e.blockTime,
+        wallet: w,
+        ticket: t.ref,
+        ticketAddress: null,
+        debit: t.pendingDebit,
+        remaining: t.tokens,
+        voided,
+        acquisitions: t.pendingCount,
+      });
       rebuyTickets.push(t);
+      t.pendingDebit = 0n;
+      t.pendingCount = 0;
     });
   };
+  const dustBps = params.dustTransferBps ?? DEFAULT_DUST_TRANSFER_BPS;
 
   for (const e of sorted) {
     if (lastKey && compareKeys(lastKey, e.key) > 0) {
@@ -198,6 +240,16 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
       case "parse_issue": {
         // Scoped (V7-H2): this tx's sells get parse_issue_in_tx; the price is unverified for one D10 window.
         issue(e, "parse_issue", "tx", `${e.code}: ${e.message}`, { pool: e.pool ?? null });
+        const pt = e.priceTouch;
+        if (pt && (pt.pool === coin.dbcPool || pt.pool === dammPool)) {
+          // M-2: the program's own event gives the pool's exact post-swap price: the reference and the pool's
+          // spot stay exact, so only this tx's sells are refused (parse_issue_in_tx), not the coin's for 10 min.
+          const post = spotFromSqrtQ64(pt.sqrtPrice) ?? 0n;
+          reference = touch(reference, now, pools.get(pt.pool) ?? 0n, post, "curve");
+          pools.set(pt.pool, post);
+          stalePools.delete(pt.pool);
+          break;
+        }
         priceTaintUntil = Math.max(priceTaintUntil, e.blockTime + Number(REFERENCE_WINDOW_SECS));
         if (e.pool) stalePools.add(e.pool);
         else {
@@ -253,8 +305,15 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
         if (protocol.has(e.owner)) break;
         const x = wallet(e.owner);
         if (e.delta > 0n) {
-          if (!e.payout) rebuy(e.owner, x, e.delta, e, "transfer_in", TRANSFER_IX_KEY);
-          observeBuy(x.hold, holdParams, e.delta, x.balance, now);
+          // L-5: only what came from a FUMPAD payout account is exempt from rebuy debits
+          const exempt = e.payoutAmount ?? (e.payout ? e.delta : 0n);
+          const acquired = exempt >= e.delta ? 0n : e.delta - (exempt > 0n ? exempt : 0n);
+          if (acquired > 0n) rebuy(e.owner, x, acquired, e, "transfer_in", TRANSFER_IX_KEY);
+          // M-1 (SPEC Clarification 33): a dust transfer-in (anyone can send one) doesn't restart the hold clock of
+          // the wallet's whole pending bucket; it stays untracked (sold first, never ticketed).
+          settle(x.hold, now, params.minHoldSecs);
+          const dust = dustBps > 0n && x.hold.pending > 0n && e.delta * 10_000n < x.hold.pending * dustBps;
+          if (!dust) observeBuy(x.hold, holdParams, e.delta, x.balance, now);
           x.balance += e.delta;
         } else {
           x.balance += e.delta;
@@ -373,7 +432,18 @@ export function runEngine(coin: CoinFacts, events: readonly EngineEvent[], param
           referenceQ64: reference.avgQ64,
           preSpotQ64: pre,
         };
-        const t: EngineTicket = { ref: { signature: e.signature, ixKey: e.key.ixKey }, owner: w, seq: x.nextSeq, sellTs: now, tokens, active: true, address: null };
+        const t: EngineTicket = {
+          ref: { signature: e.signature, ixKey: e.key.ixKey },
+          owner: w,
+          seq: x.nextSeq,
+          sellTs: now,
+          tokens,
+          active: true,
+          address: null,
+          original: tokens,
+          pendingDebit: 0n,
+          pendingCount: 0,
+        };
         x.nextSeq += 1n;
         x.tickets.push(t);
         x.hold.openCount += 1;

@@ -213,9 +213,9 @@ describe("rebuy rule (7 days, newest first, buys and transfers in)", () => {
   it("transfers in debit like buys; FUMPAD payouts don't", () => {
     const { t, s2 } = twoTickets();
     t.wait(60).transfer(A, 1000n, { payout: true });
-    t.wait(60).transfer(A, 7n);
+    t.wait(60).transfer(A, 20n * SOL); // ≥ 1% of the ticket (H-1 threshold): attested at once
     const o = t.run();
-    expect(o.rebuys.map((r) => [r.ticket.signature, r.debit, r.kind])).toEqual([[s2, 7n, "transfer_in"]]);
+    expect(o.rebuys.map((r) => [r.ticket.signature, r.debit, r.kind])).toEqual([[s2, 20n * SOL, "transfer_in"]]);
   });
   it("exactly 7 days later still debits, 7 days + 1 s doesn't", () => {
     const mk = (after: number) => {

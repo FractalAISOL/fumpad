@@ -9,10 +9,15 @@
  * HERMES_API_KEY; sent as `Authorization: Bearer`), HERMES_API_KEY_HEADER (other header name, raw key);
  * PYTH_CONSTANT_USD for local chains only),
  * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID, PORT / HEALTH_PORT, DRY_RUN.
- * Liveness (V7-M6): ATTEST_COIN_CONCURRENCY (4), ATTEST_TICK_BUDGET_MS (60 s), ATTEST_COIN_RPC_BUDGET
- * (5,000 calls per coin per tick), ATTEST_TX_CACHE (200k txs), ATTEST_BLOCK_CACHE (50k slots).
- * Board (V7-M1): ATTEST_BOARD_REQUIRE_RLS=1 refuses to start unless per-keeper roles + row-level security
- * are set up (services/README.md "Keeper board"); otherwise a missing RLS setup is logged and alerted.
+ * Liveness (V7-M6, S-1): ATTEST_COIN_CONCURRENCY (4), ATTEST_TICK_BUDGET_MS (60 s), ATTEST_COIN_RPC_BUDGET
+ * (5,000 calls per coin per tick; adaptive up to ATTEST_COIN_RPC_BUDGET_MAX = 4×), ATTEST_CRAWL_ALERT_TICKS (4),
+ * ATTEST_TX_CACHE (200k txs), ATTEST_BLOCK_CACHE (50k slots).
+ * Rebuy spend (H-1): ATTEST_REBUY_PER_TICKET_HOUR (6), ATTEST_REBUY_PER_COIN_HOUR (120), MIN_ATTESTOR_LAMPORTS
+ * (low-balance alert; default MIN_KEEPER_LAMPORTS or 0.2 SOL). Consensus engine knobs (identical on all attestors
+ * + the watcher): ENGINE_MIN_REBUY_DEBIT_BPS (100), ENGINE_DUST_TRANSFER_BPS (100).
+ * Board (V7-M1, S-8): ATTEST_BOARD_REQUIRE_RLS (default 1 in production, 0 elsewhere) refuses to start unless
+ * per-keeper roles + effective row-level security are set up (services/README.md "Keeper board"); otherwise a
+ * missing RLS setup is logged and alerted.
  * History (L8): RPC_HISTORY_CHECK=off disables the first-available-block check.
  */
 import { createHash } from "node:crypto";
@@ -30,7 +35,7 @@ import { loadKeypair } from "../config.js";
 import { Attestor } from "./attestor.js";
 import { MemoryBoard, PgBoard, type SignatureBoard } from "./board.js";
 import { RpcChainView, RpcSubmitter } from "./chain.js";
-import { type DeriveCaches, deriveCoin, newCaches } from "./derive.js";
+import { type DeriveCaches, deriveCoin, type EngineOverrides, engineOverridesFromEnv, newCaches } from "./derive.js";
 import { guardHistory } from "./history-check.js";
 import { requireKeyRole } from "../role.js";
 
@@ -73,14 +78,38 @@ export async function checkPythSource(pyth: PythSource): Promise<void> {
 /** Session advisory lock id per keeper key: one process per attestor key, several keys per database. */
 export const lockIdFor = (mode: string, keeper: string) => createHash("sha256").update(`${mode}:${keeper}`).digest().readInt32LE(0);
 
-/** Bounded derive caches + per-coin crawl budget from env (V7-M6). */
-export function deriveLimitsFromEnv(env = process.env): { caches: DeriveCaches; maxRpcCalls: number; priceCache: Map<number, import("@fumpad/engine").PythPrice | null> } {
+/**
+ * Bounded derive caches + per-coin crawl budget from env (V7-M6, S-1) + the consensus engine knobs (H-1 / M-1:
+ * ENGINE_MIN_REBUY_DEBIT_BPS / ENGINE_DUST_TRANSFER_BPS — identical on every attestor and the watcher).
+ */
+export function deriveLimitsFromEnv(env = process.env): {
+  caches: DeriveCaches;
+  maxRpcCalls: number;
+  maxRpcCallsCeiling: number;
+  engine: EngineOverrides;
+  priceCache: Map<number, import("@fumpad/engine").PythPrice | null>;
+} {
+  const maxRpcCalls = Number(env.ATTEST_COIN_RPC_BUDGET ?? 5_000);
   return {
     caches: newCaches({ txs: Number(env.ATTEST_TX_CACHE ?? 200_000), blocks: Number(env.ATTEST_BLOCK_CACHE ?? 50_000) }),
-    maxRpcCalls: Number(env.ATTEST_COIN_RPC_BUDGET ?? 5_000),
+    maxRpcCalls,
+    maxRpcCallsCeiling: Math.max(maxRpcCalls, Number(env.ATTEST_COIN_RPC_BUDGET_MAX ?? maxRpcCalls * 4)),
+    engine: engineOverridesFromEnv(env),
     priceCache: new LruMap(Number(env.ATTEST_PRICE_CACHE ?? 100_000)),
   };
 }
+
+/** S-8 / L-1: refuse to start without board RLS — default ON in production (ATTEST_BOARD_REQUIRE_RLS=0 opts out). */
+export function boardRlsRequired(env: Record<string, string | undefined> = process.env): boolean {
+  const v = env.ATTEST_BOARD_REQUIRE_RLS;
+  if (v === "1" || v === "true") return true;
+  if (v === "0" || v === "false") return false;
+  return env.NODE_ENV === "production";
+}
+
+/** H-1: alert below this balance (MIN_ATTESTOR_LAMPORTS, else MIN_KEEPER_LAMPORTS, else 0.2 SOL). */
+export const minAttestorLamports = (env: Record<string, string | undefined> = process.env): number =>
+  Number(env.MIN_ATTESTOR_LAMPORTS ?? env.MIN_KEEPER_LAMPORTS ?? 200_000_000);
 
 export interface Running {
   stop(): Promise<void>;
@@ -102,9 +131,10 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
   if (pool) {
     const b = new PgBoard(pool);
     await b.init();
-    if (!(await b.rowSecurity())) {
-      const msg = "attest board has no row-level security: any keeper/DB writer can delete or squat peers' signatures (set up per-keeper roles, services/README.md 'Keeper board')";
-      if (env.ATTEST_BOARD_REQUIRE_RLS === "1") throw new Error(msg);
+    const problems = await b.rlsProblems();
+    if (problems.length) {
+      const msg = `attest board row-level security is not effective for this role (${problems.join("; ")}): any keeper/DB writer can delete or squat peers' signatures (set up per-keeper roles, services/README.md 'Keeper board')`;
+      if (boardRlsRequired(env)) throw new Error(`${msg}. Refusing to start (ATTEST_BOARD_REQUIRE_RLS; default on in production).`);
       log.error(msg);
       if (prod) await alerts.alert("board-rls", msg);
     }
@@ -124,10 +154,10 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
   }
   const pyth = pythSourceFromEnv(env);
   await checkPythSource(pyth);
-  const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
+  const { caches, maxRpcCalls, maxRpcCallsCeiling, engine, priceCache } = deriveLimitsFromEnv(env);
   const chain = new RpcChainView(conn);
   const derive = (coin: Parameters<typeof deriveCoin>[1], g: Parameters<typeof deriveCoin>[2]) =>
-    deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache, maxRpcCalls }, coin, g);
+    deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache, maxRpcCalls, maxRpcCallsCeiling, engine }, coin, g);
   const attestor = new Attestor({
     keeper,
     chain,
@@ -139,6 +169,11 @@ export async function runAttestor(env = process.env, keeper: Keypair = loadKeypa
     log,
     alerts,
     fallbackSubmitSecs: Number(env.ATTEST_FALLBACK_SUBMIT_SECS ?? 60),
+    crawlAlertTicks: Number(env.ATTEST_CRAWL_ALERT_TICKS ?? 4),
+    rebuyPerTicketPerHour: Number(env.ATTEST_REBUY_PER_TICKET_HOUR ?? 6),
+    rebuyPerCoinPerHour: Number(env.ATTEST_REBUY_PER_COIN_HOUR ?? 120),
+    balance: () => conn.getBalance(keeper.publicKey, "confirmed"),
+    minLamports: minAttestorLamports(env),
   });
   const loopMs = Number(env.ATTEST_LOOP_MS ?? 15_000);
   let stopped = false;

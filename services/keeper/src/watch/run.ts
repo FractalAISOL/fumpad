@@ -13,13 +13,14 @@
 import { createServer } from "node:http";
 
 import { Connection, PublicKey } from "@solana/web3.js";
-import pino from "pino";
+import pino, { type Logger } from "pino";
 
-import { PriceNotReady } from "@fumpad/engine";
+import { CrawlBudgetExceeded, PriceNotReady } from "@fumpad/engine";
 import { MeteoraRpc } from "@fumpad/meteora";
 import type { CoinAccount, GlobalAccount } from "@fumpad/sdk";
 
 import { Alerter, deriveAlert } from "../alerts.js";
+import { groupIssues, issueAlertKey } from "../attest/attestor.js";
 import { RpcChainView } from "../attest/chain.js";
 import { deriveCoin, type Derivation } from "../attest/derive.js";
 import { guardHistory } from "../attest/history-check.js";
@@ -34,15 +35,24 @@ export interface WatcherDeps {
   alerts?: Pick<Alerter, "alert">;
   now?: () => number;
   graceSecs?: number;
+  /** S-1: alert once the same coin's crawl ran out of budget this many ticks in a row (default 4). */
+  crawlAlertTicks?: number;
+  log?: Pick<Logger, "info">;
 }
 
 export class Watcher {
   results = new Map<string, CoinVerification & { checkedAt: number; error?: string }>();
   stats = { ticks: 0, coins: 0, matches: 0, mismatches: 0, missing: 0, issues: 0, errors: 0, governancePending: 0, lastTickAt: 0 };
+  private crawlMisses = new Map<string, number>();
   constructor(private d: WatcherDeps) {}
 
   private now() {
     return this.d.now ? this.d.now() : Math.floor(Date.now() / 1000);
+  }
+
+  /** L-6: fire-and-forget (the Alerter dedupes synchronously and never throws): a slow Telegram never stalls a tick. */
+  private notify(key: string, text: string, opts?: { cooldownMs?: number }): void {
+    void Promise.resolve(this.d.alerts?.alert(key, text, opts)).catch(() => {});
   }
 
   async tick(): Promise<void> {
@@ -51,7 +61,7 @@ export class Watcher {
     // C-TL: pending governance changes first (the guardian has 1 h / 6 h to cancel).
     const gov = governanceAlerts(g, this.now());
     this.stats.governancePending = gov.length;
-    for (const a of gov) await this.d.alerts?.alert(a.key, a.text);
+    for (const a of gov) this.notify(a.key, a.text);
     const coins = await this.d.coins();
     this.stats.coins = coins.length;
     let matches = 0;
@@ -72,7 +82,7 @@ export class Watcher {
           mismatches++;
           if (x.voided) continue; // the guardian already acted on it
           const challengeEnds = (x.effectiveAt ?? x.attestedAt) + Number(g.params.ticketChallengeSecs);
-          await this.d.alerts?.alert(
+          this.notify(
             `mismatch:${x.kind}:${x.ticket}:${x.signature}`,
             `ATTESTATION MISMATCH (${x.kind}) ticket ${x.ticket} owner ${x.owner} mint ${mint} tx ${x.attestedIn}: ${Object.entries(x.diffs)
               .map(([f, [a, b]]) => `${f} chain=${a} derived=${b}`)
@@ -83,33 +93,47 @@ export class Watcher {
         for (const m of v.missing) {
           missing++;
           if (m.kind === "rebuy")
-            await this.d.alerts?.alert(`missing:${m.ticket}:${m.signature}`, `rebuy debit not attested: ticket ${m.ticket} owner ${m.owner} mint ${mint} buy ${m.signature} (${m.ageSecs}s old)`);
+            this.notify(`missing:${m.ticket}:${m.signature}`, `rebuy debit not attested: ticket ${m.ticket} owner ${m.owner} mint ${mint} buy ${m.signature} (${m.ageSecs}s old)`);
           // L7: an honest sell that should have a ticket but none landed (keepers down / disagreeing /
           // suppressed). Actionable until max_attest_age; reported once more just after it expires.
           else if (m.ageSecs <= maxAge + 3_600)
-            await this.d.alerts?.alert(
+            this.notify(
               `missing-sell:${m.signature}:${m.ixKey}`,
               `sell not attested: ${m.owner} on ${mint} tx ${m.signature} (${m.ageSecs}s old; ${m.ageSecs > maxAge ? "EXPIRED — can no longer be attested" : `expires in ${maxAge - m.ageSecs}s`})`,
             );
         }
         // L7: engine issues (scoped per tx / wallet, V7-H2) — follow the runbook in services/README.md
         issues += der.output.issues.length;
-        if (der.output.issues.length)
-          await this.d.alerts?.alert(
-            `issues:${mint}:${der.output.issues.length}`,
-            `engine issues on ${mint}: ${der.output.issues
-              .map((i) => `${i.kind}/${i.scope}${i.wallet ? `:${i.wallet}` : ""} tx ${i.signature} slot ${i.slot}`)
+        // L-6: alert identity = (mint, issue kind) — stable while the problem persists (the count of issues used to be
+        // part of the key, so every new issue re-alerted); a new kind alerts at once
+        for (const [kind, list] of groupIssues(der.output.issues))
+          this.notify(
+            issueAlertKey(mint, kind),
+            `engine issues (${kind}) on ${mint}: ${list.length} — ${list
+              .slice(-10)
+              .map((i) => `${i.scope}${i.wallet ? `:${i.wallet}` : ""} tx ${i.signature} slot ${i.slot}`)
               .join("; ")
               .slice(0, 600)}`,
           );
+        if (this.crawlMisses.delete(mint)) this.d.log?.info({ mint }, "watcher: crawl completed again");
       } catch (e) {
         // a recent sell's SOL/USD window isn't finalized yet (PYTH_SOURCE=onchain): keep the last result, retry next tick
         if (e instanceof PriceNotReady) continue;
+        if (e instanceof CrawlBudgetExceeded) {
+          // S-1: progress is kept and the budget adapts; alert only when the same coin keeps failing
+          const n = (this.crawlMisses.get(mint) ?? 0) + 1;
+          this.crawlMisses.set(mint, n);
+          if (n >= (this.d.crawlAlertTicks ?? 4))
+            this.notify(`crawl-budget:${mint}`, `watcher: crawl of ${mint} ran out of its RPC budget (${e.calls} calls) ${n} ticks in a row — verification of this coin is stale`, {
+              cooldownMs: 60 * 60_000,
+            });
+          continue;
+        }
         this.stats.errors++;
         this.results.set(mint, { mint, verdicts: [], missing: [], checkedAt: this.now(), error: String(e).slice(0, 300) });
         // once per hour per (coin, error signature); a new kind of failure alerts at once
         const a = deriveAlert("watch", mint, e);
-        await this.d.alerts?.alert(a.key, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)} (repeats muted 1 h)`, a.opts);
+        this.notify(a.key, `watcher: derivation failed for ${mint}: ${String(e).slice(0, 200)} (repeats muted 1 h)`, a.opts);
       }
     }
     Object.assign(this.stats, { matches, mismatches, missing, issues, lastTickAt: this.now() });
@@ -137,16 +161,19 @@ export async function runWatcher(env = process.env): Promise<Running> {
   const chain = new RpcChainView(conn, "finalized");
   const pyth = pythSourceFromEnv(env);
   await checkPythSource(pyth);
-  const { caches, maxRpcCalls, priceCache } = deriveLimitsFromEnv(env);
+  const { caches, maxRpcCalls, maxRpcCallsCeiling, engine, priceCache } = deriveLimitsFromEnv(env);
   // L7: re-alert an unresolved item every 30 min (the challenge window is 6 h: one alert per window was too few)
   const alerts = new Alerter(log, { botToken: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID, prefix: "[fumpad-watcher]", cooldownMs: Number(env.WATCH_ALERT_COOLDOWN_MS ?? 30 * 60_000) });
-  const derive = (coin: CoinAccount, g: GlobalAccount) => deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache, maxRpcCalls }, coin, g);
+  const derive = (coin: CoinAccount, g: GlobalAccount) =>
+    deriveCoin({ rpc, fetchPrice: (t, d) => pyth.priceAt(t, d), caches, priceCache, maxRpcCalls, maxRpcCallsCeiling, engine }, coin, g);
   const w = new Watcher({
     coins: () => chain.coins(),
     global: () => chain.global(),
     derive: env.RPC_HISTORY_CHECK === "off" ? derive : guardHistory(rpc, derive),
     alerts,
     graceSecs: Number(env.WATCH_GRACE_SECS ?? 900),
+    crawlAlertTicks: Number(env.ATTEST_CRAWL_ALERT_TICKS ?? 4),
+    log,
   });
   let stopped = false;
   const loopMs = Number(env.WATCH_LOOP_MS ?? 30_000);
